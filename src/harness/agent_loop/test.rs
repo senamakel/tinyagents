@@ -24,7 +24,7 @@ use crate::harness::model::{
 };
 use crate::harness::providers::MockModel;
 use crate::harness::retry::{FallbackPolicy, RetryPolicy};
-use crate::harness::runtime::{AgentHarness, RunPolicy, UnknownToolPolicy};
+use crate::harness::runtime::{AgentHarness, RunPolicy, UnknownToolPolicy, ValidationPolicy};
 use crate::harness::tool::{Tool, ToolCall, ToolResult, ToolSchema};
 use crate::harness::usage::Usage;
 
@@ -567,6 +567,49 @@ async fn invalid_tool_arguments_fail_before_tool_execution() {
         *calls.lock().unwrap(),
         0,
         "tool implementation must not run"
+    );
+}
+
+#[tokio::test]
+async fn invalid_tool_arguments_return_tool_error_recovers() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    // First call is missing the required `query`; the recovered turn corrects it.
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("call-1", "strict_lookup", json!({ "q": "hello" })),
+            text_response("recovered", 1, 1),
+        ])),
+    );
+    let calls = Arc::new(Mutex::new(0));
+    harness.register_tool(Arc::new(StrictLookupTool {
+        calls: Arc::clone(&calls),
+    }));
+    harness.with_policy(RunPolicy {
+        validation: ValidationPolicy::ReturnToolError,
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("lookup")])
+        .await
+        .expect("invalid arguments are recoverable under ReturnToolError");
+
+    assert_eq!(run.final_response.unwrap().text(), "recovered");
+    // The offending tool implementation never ran on the malformed call.
+    assert_eq!(
+        *calls.lock().unwrap(),
+        0,
+        "tool implementation must not run for the invalid call"
+    );
+    // A descriptive, model-visible tool error was injected for repair.
+    let injected = run
+        .messages
+        .iter()
+        .any(|m| format!("{m:?}").contains("invalid arguments for `strict_lookup`"));
+    assert!(
+        injected,
+        "schema-error message should be injected into the transcript"
     );
 }
 

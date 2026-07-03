@@ -79,7 +79,7 @@ use crate::harness::model::{
     ResolvedModel, ResolvedModelBinding, ResponseFormat, StreamAccumulator, ToolChoice,
 };
 use crate::harness::retry::is_retryable;
-use crate::harness::runtime::{AgentHarness, UnknownToolPolicy};
+use crate::harness::runtime::{AgentHarness, UnknownToolPolicy, ValidationPolicy};
 use crate::harness::structured::{StructuredExtractor, StructuredStrategy};
 use crate::harness::tool::{Tool, ToolCall, ToolSchema};
 use futures::StreamExt;
@@ -617,7 +617,45 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         }
                     }
                 };
-                tool.schema().validate_call(&call)?;
+
+                // Schema-validate the model-supplied arguments before execution.
+                // Under the default `ValidationPolicy::Fail` a violation aborts the
+                // whole run (historical behavior). Under
+                // `ValidationPolicy::ReturnToolError` we instead inject a
+                // descriptive, model-visible tool error and continue the loop so
+                // the model can self-correct on the next turn — the argument
+                // analogue of the `UnknownToolPolicy::ReturnToolError` path above.
+                // Like that path, this consumes one tool-call budget slot, so
+                // `RunLimits::max_tool_calls` bounds any bad-argument loop.
+                if let Err(validation_err) = tool.schema().validate_call(&call) {
+                    match self.policy.validation {
+                        ValidationPolicy::Fail => return Err(validation_err),
+                        ValidationPolicy::ReturnToolError => {
+                            let call_id = CallId::new(call.id.clone());
+                            let args_repr = serde_json::to_string(&call.arguments)
+                                .unwrap_or_else(|_| "<unserializable>".to_string());
+                            let schema_repr =
+                                serde_json::to_string(&tool.schema().parameters)
+                                    .unwrap_or_else(|_| "<unserializable>".to_string());
+                            let message = format!(
+                                "invalid arguments for `{}`: {validation_err}. \
+                                 Provided arguments: {args_repr}. Expected schema: {schema_repr}",
+                                call.name
+                            );
+                            let record = ctx.emit(AgentEvent::UnknownToolCall {
+                                call_id,
+                                requested_name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                                recovery: "invalid_arguments".to_string(),
+                            });
+                            status.set_last_event(record.id);
+                            run.tool_calls += 1;
+                            status.tool_calls = run.tool_calls;
+                            messages.push(Message::tool(call.id.clone(), message));
+                            continue;
+                        }
+                    }
+                }
 
                 let tool_call_id = CallId::new(call.id.clone());
                 let tool_name = call.name.clone();

@@ -73,12 +73,40 @@ pub enum UnknownToolPolicy {
     },
 }
 
+/// How the agent loop reacts when a model-supplied tool call fails the
+/// registered tool's JSON-schema validation (`required`, type, `enum`, …).
+///
+/// The default is [`ValidationPolicy::Fail`], preserving the historical
+/// fail-fast behavior: a schema violation aborts the whole run with
+/// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
+/// [`ValidationPolicy::ReturnToolError`] instead injects a descriptive,
+/// model-visible tool error and continues the loop so the model can correct the
+/// arguments on the next turn — the argument-validation analogue of
+/// [`UnknownToolPolicy::ReturnToolError`]. Each recovery still consumes a
+/// tool-call budget slot, so [`RunLimits::max_tool_calls`] bounds any
+/// bad-argument loop.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ValidationPolicy {
+    /// Abort the run with
+    /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation]
+    /// (the default, historical behavior).
+    #[default]
+    Fail,
+    /// Inject a tool-error result describing the schema violation (naming the
+    /// tool, the offending arguments, and the expected schema) back into the
+    /// transcript and continue the loop, letting the model retry with corrected
+    /// arguments.
+    ReturnToolError,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunPolicy {
     /// Hard run limits enforced fail-closed by the agent loop.
     pub limits: RunLimits,
     /// How the loop reacts to a model call for an unregistered tool.
     pub unknown_tool: UnknownToolPolicy,
+    /// How the loop reacts to a tool call that fails schema validation.
+    pub validation: ValidationPolicy,
     /// Retry policy applied to each model call.
     pub retry: RetryPolicy,
     /// Optional ordered model fallback chain.
@@ -99,6 +127,7 @@ impl Default for RunPolicy {
         Self {
             limits: RunLimits::default(),
             unknown_tool: UnknownToolPolicy::default(),
+            validation: ValidationPolicy::default(),
             retry: RetryPolicy::default(),
             fallback: None,
             default_response_format: None,
