@@ -79,7 +79,7 @@ use crate::harness::model::{
     ResolvedModel, ResolvedModelBinding, ResponseFormat, StreamAccumulator, ToolChoice,
 };
 use crate::harness::retry::is_retryable;
-use crate::harness::runtime::{AgentHarness, UnknownToolPolicy};
+use crate::harness::runtime::{AgentHarness, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::harness::structured::{StructuredExtractor, StructuredStrategy};
 use crate::harness::tool::{Tool, ToolCall, ToolSchema};
 use futures::StreamExt;
@@ -617,7 +617,32 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         }
                     }
                 };
-                tool.schema().validate_call(&call)?;
+                // Pre-execution schema validation. On failure, apply the run's
+                // `InvalidArgsPolicy`: `Fail` aborts the whole run (historical
+                // behavior); `ReturnToolError` injects the validation error as a
+                // recoverable tool result and continues so the model can correct
+                // its arguments on the next iteration — mirroring the
+                // `UnknownToolPolicy::ReturnToolError` recovery above. Consuming a
+                // tool-call budget slot here bounds any malformed-args loop.
+                if let Err(validation_err) = tool.schema().validate_call(&call) {
+                    match self.policy.invalid_args {
+                        InvalidArgsPolicy::Fail => return Err(validation_err),
+                        InvalidArgsPolicy::ReturnToolError => {
+                            let detail = validation_err.to_string();
+                            let schema_repr = serde_json::to_string(&tool.schema().parameters)
+                                .unwrap_or_else(|_| "<unserializable>".to_string());
+                            let message = format!(
+                                "invalid arguments for tool `{}`: {detail}. \
+                                 Expected schema: {schema_repr}",
+                                call.name
+                            );
+                            run.tool_calls += 1;
+                            status.tool_calls = run.tool_calls;
+                            messages.push(Message::tool(call.id.clone(), message));
+                            continue;
+                        }
+                    }
+                }
 
                 let tool_call_id = CallId::new(call.id.clone());
                 let tool_name = call.name.clone();

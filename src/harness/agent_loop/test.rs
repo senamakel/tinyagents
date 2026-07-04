@@ -24,7 +24,7 @@ use crate::harness::model::{
 };
 use crate::harness::providers::MockModel;
 use crate::harness::retry::{FallbackPolicy, RetryPolicy};
-use crate::harness::runtime::{AgentHarness, RunPolicy, UnknownToolPolicy};
+use crate::harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
 use crate::harness::tool::{Tool, ToolCall, ToolResult, ToolSchema};
 use crate::harness::usage::Usage;
 
@@ -567,6 +567,55 @@ async fn invalid_tool_arguments_fail_before_tool_execution() {
         *calls.lock().unwrap(),
         0,
         "tool implementation must not run"
+    );
+}
+
+#[tokio::test]
+async fn invalid_tool_arguments_return_tool_error_recovers() {
+    // A malformed first tool call (missing the required `query` field) must not
+    // abort the turn under `InvalidArgsPolicy::ReturnToolError`: the loop injects
+    // a recoverable tool error and continues, and the corrected second call runs.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            // First: wrong type + missing required field -> schema violation.
+            tool_call_response("call-1", "strict_lookup", json!({ "filters": 5 })),
+            // Second: valid arguments -> the tool runs.
+            tool_call_response("call-2", "strict_lookup", json!({ "query": "ok" })),
+            text_response("recovered", 1, 1),
+        ])),
+    );
+    let calls = Arc::new(Mutex::new(0));
+    harness.register_tool(Arc::new(StrictLookupTool {
+        calls: Arc::clone(&calls),
+    }));
+    harness.with_policy(RunPolicy {
+        invalid_args: InvalidArgsPolicy::ReturnToolError,
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("lookup")])
+        .await
+        .expect("invalid arguments are recoverable under ReturnToolError");
+
+    assert_eq!(run.final_response.unwrap().text(), "recovered");
+    // The corrected second call executed the real tool exactly once.
+    assert_eq!(
+        *calls.lock().unwrap(),
+        1,
+        "only the corrected call runs the tool"
+    );
+    // The injected tool-error message names the tool and carries the schema so
+    // the model can self-correct.
+    let injected = run.messages.iter().any(|m| {
+        let repr = format!("{m:?}");
+        repr.contains("invalid arguments for tool `strict_lookup`")
+    });
+    assert!(
+        injected,
+        "recoverable validation error should be injected into transcript"
     );
 }
 

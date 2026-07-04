@@ -73,12 +73,39 @@ pub enum UnknownToolPolicy {
     },
 }
 
+/// How the agent loop reacts when a model-supplied tool call fails the tool's
+/// JSON-schema validation (missing `required` fields, wrong types, or a value
+/// outside an `enum`) *before* the tool executes.
+///
+/// The default is [`InvalidArgsPolicy::Fail`], preserving the historical
+/// fail-fast behavior where a schema violation aborts the whole run with
+/// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
+/// The recoverable variant lets the run keep going so the model can read the
+/// validation error as a tool result and self-correct — mirroring
+/// [`UnknownToolPolicy::ReturnToolError`]. Each recovery still consumes a
+/// tool-call budget slot, so [`RunLimits::max_tool_calls`] bounds any
+/// malformed-args loop.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum InvalidArgsPolicy {
+    /// Abort the run with
+    /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation]
+    /// (the default, historical behavior).
+    #[default]
+    Fail,
+    /// Inject a tool-error result describing the schema violation back into the
+    /// transcript and continue the loop, letting the model retry with corrected
+    /// arguments. No tool is executed for the offending call.
+    ReturnToolError,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunPolicy {
     /// Hard run limits enforced fail-closed by the agent loop.
     pub limits: RunLimits,
     /// How the loop reacts to a model call for an unregistered tool.
     pub unknown_tool: UnknownToolPolicy,
+    /// How the loop reacts to a tool call whose arguments fail schema validation.
+    pub invalid_args: InvalidArgsPolicy,
     /// Retry policy applied to each model call.
     pub retry: RetryPolicy,
     /// Optional ordered model fallback chain.
@@ -99,6 +126,7 @@ impl Default for RunPolicy {
         Self {
             limits: RunLimits::default(),
             unknown_tool: UnknownToolPolicy::default(),
+            invalid_args: InvalidArgsPolicy::default(),
             retry: RetryPolicy::default(),
             fallback: None,
             default_response_format: None,
