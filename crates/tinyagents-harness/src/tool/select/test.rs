@@ -91,8 +91,18 @@ fn ranking_order_matches_the_pre_extraction_snapshot() {
             ],
         ),
         (
+            // `GITHUB_GET_A_PULL_REQUEST` is a `Read` tool under a `List`
+            // query. It ranks last of the three: compatible intents earn a
+            // smaller bonus than an exact match, so the enumerating tools
+            // still lead. Before Read and List were compatible it was gated
+            // out entirely, which is what left a search surface unable to
+            // retrieve what it found.
             "list open PRs assigned to me",
-            &["GITHUB_FIND_PULL_REQUESTS", "GITHUB_LIST_ASSIGNEES"],
+            &[
+                "GITHUB_FIND_PULL_REQUESTS",
+                "GITHUB_LIST_ASSIGNEES",
+                "GITHUB_GET_A_PULL_REQUEST",
+            ],
         ),
         (
             "delete a review comment",
@@ -232,4 +242,101 @@ fn delete_query_excludes_create_tools() {
         );
     }
     assert!(idx.len() >= 3);
+}
+
+#[test]
+fn a_list_query_keeps_the_tool_that_retrieves_what_it_found() {
+    // Finding something and reading it are one task for the user and two
+    // verbs for the catalogue. A `List` query must not gate out every
+    // `Read` tool, or the surface can enumerate ids and never return
+    // content.
+    let tools = github_sample();
+    let got: Vec<&str> = rank_tools_by_prompt("find the pull requests about auth", &tools, 10)
+        .into_iter()
+        .map(|i| tools[i].name)
+        .collect();
+    assert!(
+        got.contains(&"GITHUB_GET_A_PULL_REQUEST"),
+        "a Read tool must survive a List query: {got:?}"
+    );
+}
+
+#[test]
+fn an_exact_verb_match_still_outranks_a_merely_compatible_one() {
+    let tools = github_sample();
+    let got: Vec<&str> = rank_tools_by_prompt("list open PRs assigned to me", &tools, 10)
+        .into_iter()
+        .map(|i| tools[i].name)
+        .collect();
+    let list_at = got
+        .iter()
+        .position(|n| *n == "GITHUB_FIND_PULL_REQUESTS")
+        .expect("the List tool is kept");
+    let read_at = got
+        .iter()
+        .position(|n| *n == "GITHUB_GET_A_PULL_REQUEST")
+        .expect("the Read tool is kept");
+    assert!(
+        list_at < read_at,
+        "compatibility must not promote a Read tool above an exact List match: {got:?}"
+    );
+}
+
+#[test]
+fn compatibility_is_one_directional_and_narrow() {
+    use super::verbs_are_compatible;
+    assert!(verbs_are_compatible(ToolVerb::List, ToolVerb::Read));
+    // Not the reverse: "read message 5" should not pull in every list tool.
+    assert!(!verbs_are_compatible(ToolVerb::Read, ToolVerb::List));
+    // And nothing else pairs up.
+    assert!(!verbs_are_compatible(ToolVerb::List, ToolVerb::Delete));
+    assert!(!verbs_are_compatible(ToolVerb::Create, ToolVerb::Read));
+    assert!(verbs_are_compatible(ToolVerb::Create, ToolVerb::Create));
+}
+
+#[test]
+fn strong_name_overlap_can_outrank_a_bare_verb_match_and_that_is_deliberate() {
+    // The score is `weighted_overlap + verb_bonus`, and the two bonuses
+    // differ by 2 — so a compatible `Read` tool whose *name* matches the
+    // query can rank above an exact-verb `List` tool that matches nothing
+    // else. That is the ranking working, not a defect: a name hit is worth
+    // 3 and is the stronger relevance signal. Sorting by verb class first
+    // would bury the tool the user actually named.
+    let tools = vec![
+        // Exact verb (List, +3), zero token overlap.
+        SelectableTool::new("GITHUB_LIST_GISTS", "List gists"),
+        // Compatible verb (Read, +1) but three name hits (3 * 3 = 9).
+        SelectableTool::new(
+            "GITHUB_GET_A_PULL_REQUEST_COMMENT",
+            "Get one review comment",
+        ),
+    ];
+    let got: Vec<&str> = rank_tools_by_prompt("find the pull request comment", &tools, 10)
+        .into_iter()
+        .map(|i| tools[i].name)
+        .collect();
+    assert_eq!(
+        got.first(),
+        Some(&"GITHUB_GET_A_PULL_REQUEST_COMMENT"),
+        "the tool the query names must lead: {got:?}"
+    );
+}
+
+#[test]
+fn with_overlap_equal_the_exact_verb_wins() {
+    // The companion to the case above: strip the overlap advantage and the
+    // verb bonus is what decides, so an exact match leads a compatible one.
+    let tools = vec![
+        SelectableTool::new("GITHUB_GET_PULL_REQUEST", "Get a pull request"),
+        SelectableTool::new("GITHUB_LIST_PULL_REQUEST", "List pull requests"),
+    ];
+    let got: Vec<&str> = rank_tools_by_prompt("find the pull request", &tools, 10)
+        .into_iter()
+        .map(|i| tools[i].name)
+        .collect();
+    assert_eq!(
+        got.first(),
+        Some(&"GITHUB_LIST_PULL_REQUEST"),
+        "equal overlap → the exact verb match leads: {got:?}"
+    );
 }

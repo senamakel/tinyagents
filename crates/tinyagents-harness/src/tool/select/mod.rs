@@ -83,7 +83,7 @@ pub fn rank_tools_by_prompt(
                 return true;
             }
             match tool_verb(t.name) {
-                Some(v) => verbs.contains(&v),
+                Some(v) => verbs.iter().any(|q| verbs_are_compatible(*q, v)),
                 None => true,
             }
         })
@@ -337,12 +337,28 @@ fn weighted_overlap(qt: &HashSet<String>, name: &str, desc: &str) -> i32 {
     3 * name_hits + desc_hits
 }
 
+/// Whether a tool carrying verb `tool` may answer a query asking for `query`.
+///
+/// Exact matches always may. The one cross-verb pair is `Read` and `List`:
+/// finding something and reading it are one task for the user and two verbs
+/// for the catalogue. "find the emails about X" is detected as `List`, and
+/// gating on that alone removes every `FETCH_*` / `GET_*` action — leaving a
+/// surface that can enumerate ids and never return content. Keeping the pair
+/// compatible is what lets a search prompt reach the thing it searched for.
+pub(crate) fn verbs_are_compatible(query: ToolVerb, tool: ToolVerb) -> bool {
+    query == tool || matches!((query, tool), (ToolVerb::List, ToolVerb::Read))
+}
+
 fn verb_bonus(name: &str, query_verbs: &HashSet<ToolVerb>) -> i32 {
     if query_verbs.is_empty() {
         return 0;
     }
     match tool_verb(name) {
+        // An exact intent match is the strongest signal.
         Some(v) if query_verbs.contains(&v) => 3,
+        // Compatible but not exact: worth keeping, ranked under an exact
+        // match rather than beside it.
+        Some(v) if query_verbs.iter().any(|q| verbs_are_compatible(*q, v)) => 1,
         Some(_) => -2,
         None => 0,
     }
