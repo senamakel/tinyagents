@@ -417,10 +417,17 @@ mod run_policy_breakpoints {
         assert!(key.starts_with("tap-"), "unexpected key shape: {key}");
     }
 
+    /// The run policy is authoritative in both directions: with protection
+    /// off, a middleware-declared prefix must not turn into breakpoints on
+    /// the wire, because an adapter treats declared segments alone as the
+    /// opt-in. The stamped `protect_prompt_prefix: false` is what vetoes it.
     #[tokio::test]
-    async fn an_unprotecting_run_policy_leaves_the_request_alone() {
+    async fn an_unprotecting_run_policy_vetoes_declared_segments() {
         let request = run_with(CachePolicy::default()).await;
-        assert!(request.cache_policy.is_none());
+        assert!(
+            request.cache_policy.as_ref().is_some_and(|p| !p.protect_prompt_prefix),
+            "the unprotecting policy is stamped so the adapter can see the veto"
+        );
         assert!(request.provider_options.get(PROMPT_CACHE_KEY_OPTION).is_none());
         assert!(!request.wants_prompt_cache_breakpoints());
     }
