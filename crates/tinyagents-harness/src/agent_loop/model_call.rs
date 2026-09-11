@@ -140,10 +140,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // derived (they mutate `provider_options`, which the key covers) and
         // only when the policy asks for prefix protection, so the common path
         // never pays for a request clone.
+        //
+        // The *effective* policy is stamped onto the clone first. A request
+        // that carries no `cache_policy` of its own inherits the harness-level
+        // `RunPolicy::cache`, but that inheritance used to stop here: both
+        // `apply_prompt_cache_breakpoints` and the provider adapters read
+        // `request.cache_policy`, so a host that set `protect_prompt_prefix` on
+        // its run policy — the documented way — got no `prompt_cache_key` and
+        // no `cache_control` markers on the wire, while the layout guard kept
+        // reporting the prefix as protected.
         let mut breakpointed;
         let effective_request = if policy.protect_prompt_prefix {
             breakpointed = request.clone();
-            apply_prompt_cache_breakpoints(&mut breakpointed);
+            if breakpointed.cache_policy.is_none() {
+                breakpointed.cache_policy = Some(policy.clone());
+            }
+            let injected = apply_prompt_cache_breakpoints(&mut breakpointed);
+            tinyagents_tracing::debug!(
+                call_id = %call_id.as_str(),
+                prompt_cache_key_injected = injected,
+                cacheable_segments = breakpointed.cacheable_prefix_ids().len(),
+                "[cache] prompt-prefix protection applied to the outgoing request"
+            );
             &breakpointed
         } else {
             request
