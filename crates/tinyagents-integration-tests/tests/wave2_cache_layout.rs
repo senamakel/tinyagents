@@ -307,3 +307,121 @@ async fn the_guard_still_reports_an_invalidation_inside_one_run() {
         "rewriting a stable segment's text inside one run is still an invalidation"
     );
 }
+
+/// The run-policy path: a host that sets `protect_prompt_prefix` on
+/// [`RunPolicy::cache`] — rather than stamping every request — must still get
+/// a `prompt_cache_key` on the wire, and the provider adapter must be able to
+/// see the policy it is acting under.
+///
+/// Before the fix both readers consulted `request.cache_policy` alone, which is
+/// `None` on every request the loop builds itself, so the harness-level flag
+/// produced no breakpoint anywhere: the layout guard reported the prefix as
+/// protected while the provider was told nothing.
+mod run_policy_breakpoints {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use tinyagents_harness::cache::PROMPT_CACHE_KEY_OPTION;
+    use tinyagents_harness::context::RunContext;
+    use tinyagents_harness::middleware::Middleware;
+    use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+    use tinyinference::cache::CachePolicy;
+    use tinyinference::message::Message;
+    use tinyinference::model::{
+        ChatModel, ModelRequest, ModelResponse, PromptSegment, SegmentRole,
+    };
+
+    struct RecordingModel {
+        seen: Mutex<Vec<ModelRequest>>,
+    }
+
+    #[async_trait]
+    impl ChatModel<()> for RecordingModel {
+        async fn invoke(
+            &self,
+            _state: &(),
+            request: ModelRequest,
+        ) -> tinyinference::Result<ModelResponse> {
+            self.seen.lock().expect("poisoned").push(request);
+            Ok(ModelResponse::assistant("ok"))
+        }
+    }
+
+    /// Declares the system prompt as the cacheable prefix, the way a host
+    /// that assembles its own messages (instead of using `PromptBuilder`) does.
+    struct DeclareSystemPrefix;
+
+    #[async_trait]
+    impl Middleware<()> for DeclareSystemPrefix {
+        fn name(&self) -> &str {
+            "declare_system_prefix"
+        }
+
+        async fn before_model(
+            &self,
+            _ctx: &mut RunContext<()>,
+            _state: &(),
+            request: &mut ModelRequest,
+        ) -> tinyagents_harness::Result<()> {
+            request.cache_segments = vec![PromptSegment {
+                id: "system".into(),
+                role: SegmentRole::System,
+                cacheable: true,
+            }];
+            request.prompt_fingerprint = Some("fp".into());
+            Ok(())
+        }
+    }
+
+    async fn run_with(policy: CachePolicy) -> ModelRequest {
+        let model = Arc::new(RecordingModel {
+            seen: Mutex::new(Vec::new()),
+        });
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model("rec", model.clone());
+        harness.push_middleware(Arc::new(DeclareSystemPrefix));
+        harness.with_policy(RunPolicy {
+            cache: policy,
+            ..RunPolicy::default()
+        });
+        harness
+            .invoke_default(
+                &(),
+                vec![Message::system("stable rules"), Message::user("go")],
+            )
+            .await
+            .expect("run succeeds");
+        let seen = model.seen.lock().expect("poisoned");
+        assert_eq!(seen.len(), 1);
+        seen[0].clone()
+    }
+
+    #[tokio::test]
+    async fn a_protecting_run_policy_reaches_the_provider_as_a_breakpoint() {
+        let request = run_with(CachePolicy {
+            protect_prompt_prefix: true,
+            ..CachePolicy::default()
+        })
+        .await;
+        assert!(
+            request.wants_prompt_cache_breakpoints(),
+            "the provider adapter must see the effective policy, not None"
+        );
+        assert!(
+            request.cache_policy.as_ref().is_some_and(|p| p.protect_prompt_prefix),
+            "the effective policy is stamped onto the outgoing request"
+        );
+        let key = request.provider_options[PROMPT_CACHE_KEY_OPTION]
+            .as_str()
+            .expect("a prompt_cache_key was injected");
+        assert!(key.starts_with("tap-"), "unexpected key shape: {key}");
+    }
+
+    #[tokio::test]
+    async fn an_unprotecting_run_policy_leaves_the_request_alone() {
+        let request = run_with(CachePolicy::default()).await;
+        assert!(request.cache_policy.is_none());
+        assert!(request.provider_options.get(PROMPT_CACHE_KEY_OPTION).is_none());
+        assert!(!request.wants_prompt_cache_breakpoints());
+    }
+}
