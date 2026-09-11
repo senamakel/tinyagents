@@ -125,6 +125,28 @@ the key and there is no minimum-prefix threshold.
 
 Unsafe or side-effecting tool calls should not be cached by default.
 
+### Where `protect_prompt_prefix` is read
+
+The effective policy is the request's own `cache_policy` when present,
+otherwise the harness-level `RunPolicy::cache`. The agent loop resolves that
+once per model call and **stamps it onto the outgoing request** (a clone —
+the original is what the response-cache key was derived from) before the
+provider adapter sees it, whenever protection is on or a middleware declared
+cacheable segments. Two readers depend on that stamp:
+
+- `apply_prompt_cache_breakpoints` injects the `prompt_cache_key` routing
+  hint into `provider_options`;
+- provider adapters decide whether to emit explicit `cache_control` markers
+  via `ModelRequest::wants_prompt_cache_breakpoints`, where declared
+  cacheable segments are the opt-in and a stamped `protect_prompt_prefix:
+  false` is the veto.
+
+Both used to read `request.cache_policy` alone, which the loop never set, so a
+host protecting the prefix on its run policy — the documented way — produced
+no breakpoint anywhere while the layout guard reported the prefix as
+protected. `wave2_cache_layout::run_policy_breakpoints` pins the fix in both
+directions.
+
 ### Key composition
 
 The key is a two-part composition, never the prompt alone:
