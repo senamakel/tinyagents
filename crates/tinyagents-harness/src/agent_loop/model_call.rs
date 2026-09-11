@@ -156,8 +156,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .cache_segments
             .iter()
             .any(|segment| segment.cacheable);
-        let needs_stamp = request.cache_policy.is_none()
-            && (policy.protect_prompt_prefix || declares_prefix);
+        let needs_stamp =
+            request.cache_policy.is_none() && (policy.protect_prompt_prefix || declares_prefix);
         let mut breakpointed;
         let effective_request = if policy.protect_prompt_prefix || needs_stamp {
             breakpointed = request.clone();

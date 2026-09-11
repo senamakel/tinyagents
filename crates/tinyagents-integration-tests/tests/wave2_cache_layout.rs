@@ -408,7 +408,10 @@ mod run_policy_breakpoints {
             "the provider adapter must see the effective policy, not None"
         );
         assert!(
-            request.cache_policy.as_ref().is_some_and(|p| p.protect_prompt_prefix),
+            request
+                .cache_policy
+                .as_ref()
+                .is_some_and(|p| p.protect_prompt_prefix),
             "the effective policy is stamped onto the outgoing request"
         );
         let key = request.provider_options[PROMPT_CACHE_KEY_OPTION]
@@ -425,10 +428,18 @@ mod run_policy_breakpoints {
     async fn an_unprotecting_run_policy_vetoes_declared_segments() {
         let request = run_with(CachePolicy::default()).await;
         assert!(
-            request.cache_policy.as_ref().is_some_and(|p| !p.protect_prompt_prefix),
+            request
+                .cache_policy
+                .as_ref()
+                .is_some_and(|p| !p.protect_prompt_prefix),
             "the unprotecting policy is stamped so the adapter can see the veto"
         );
-        assert!(request.provider_options.get(PROMPT_CACHE_KEY_OPTION).is_none());
+        assert!(
+            request
+                .provider_options
+                .get(PROMPT_CACHE_KEY_OPTION)
+                .is_none()
+        );
         assert!(!request.wants_prompt_cache_breakpoints());
     }
 }
