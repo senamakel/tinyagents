@@ -137,13 +137,42 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
 
         // Provider prompt-cache breakpoints are injected *after* the key is
-        // derived (they mutate `provider_options`, which the key covers) and
-        // only when the policy asks for prefix protection, so the common path
-        // never pays for a request clone.
+        // derived (they mutate `provider_options`, which the key covers), so
+        // the common path — no protection, no declared prefix — never pays for
+        // a request clone.
+        //
+        // The *effective* policy is stamped onto the clone. A request that
+        // carries no `cache_policy` of its own inherits the harness-level
+        // `RunPolicy::cache`, but that inheritance used to stop here: both
+        // `apply_prompt_cache_breakpoints` and the provider adapters read
+        // `request.cache_policy`, so a host that set `protect_prompt_prefix` on
+        // its run policy — the documented way — got no `prompt_cache_key` and
+        // no `cache_control` markers on the wire, while the layout guard kept
+        // reporting the prefix as protected. Stamping also runs when the run
+        // policy does *not* protect but a middleware declared cacheable
+        // segments: an adapter treats declared segments alone as the opt-in,
+        // and the run policy must be able to veto that.
+        let declares_prefix = request
+            .cache_segments
+            .iter()
+            .any(|segment| segment.cacheable);
+        let needs_stamp =
+            request.cache_policy.is_none() && (policy.protect_prompt_prefix || declares_prefix);
         let mut breakpointed;
-        let effective_request = if policy.protect_prompt_prefix {
+        let effective_request = if policy.protect_prompt_prefix || needs_stamp {
             breakpointed = request.clone();
-            apply_prompt_cache_breakpoints(&mut breakpointed);
+            if needs_stamp {
+                breakpointed.cache_policy = Some(policy.clone());
+            }
+            let injected =
+                policy.protect_prompt_prefix && apply_prompt_cache_breakpoints(&mut breakpointed);
+            tinyagents_tracing::debug!(
+                call_id = %call_id.as_str(),
+                protect_prompt_prefix = policy.protect_prompt_prefix,
+                prompt_cache_key_injected = injected,
+                cacheable_segments = breakpointed.cacheable_prefix_ids().len(),
+                "[cache] effective cache policy applied to the outgoing request"
+            );
             &breakpointed
         } else {
             request
