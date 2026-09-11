@@ -1,25 +1,24 @@
 # TinyAgents System Specification
 
-TinyAgents is a Rust-native LLM application framework inspired by LangChain and
-LangGraph. The system is organized around four modules:
+TinyAgents is a small, provider-neutral agent harness for Rust, plus a durable
+typed state-graph runtime. It takes its shape from LangChain (models, tools,
+middleware, structured output, streaming, usage/cost) and LangGraph
+(`START`/`END`, nodes, conditional edges, channels/reducers, checkpoints,
+interrupts, subgraphs, time travel) — rebuilt as ordinary, typed Rust. The
+system is organized as five public crates:
 
 1. the harness
 2. the graph
 3. the registry
 4. the expressive language
-
-Scripted, interpreter-backed orchestration (a CodeAct/REPL loop over
-model-written code cells) is deliberately a *host* concern built on top of these
-modules, not a surface this crate ships. See "Host-side surfaces" below.
+5. durable sessions
 
 The goal is to make agent systems easy to define, inspect, run, test, and
-eventually serialize without hiding the Rust types that make production systems
-reliable.
+serialize without hiding the Rust types that make production systems reliable.
 
 ## Reference Positioning
 
-TinyAgents should synthesize the reference systems rather than clone any one of
-them:
+TinyAgents synthesizes the reference systems rather than cloning either one:
 
 - LangGraph contributes the durable execution model: explicit state graphs,
   virtual `START` and `END`, Pregel-style supersteps, reducers/channels,
@@ -28,42 +27,12 @@ them:
 - LangChain contributes the harness model: provider-neutral models, tools,
   middleware, runtime context, memory, retrieval, structured output, tracing,
   usage, cost, and conformance tests for integrations.
-- `rust-langgraph` shows the Rust-facing precedent for a stateful graph runtime
-  with nodes, conditional edges, checkpoints, streaming, optional model
-  adapters, and ReAct/tool helpers. TinyAgents should go deeper on typed state,
-  harness composition, registries, and language-backed graph definitions.
-- OpenHuman PR #4261 contributes the closest product-shaped precedent: a
-  harness-decoupled graph engine, persistent checkpoints, HITL, graph
-  observability, blueprints, JSON-RPC run control, and a behavior-preserving
-  cutover from an implicit turn loop to an explicit phase machine.
-- CodeAct/recursive-language-model runtimes contribute the recursion model:
-  context and prompts as runtime values, recursive sub-model or sub-agent calls
-  as functions, persistent session variables, and trajectory logging. TinyAgents
-  provides the primitives (registry capabilities, sub-agents, session/cell/call
-  ids, event journals); the interpreter and its sandbox stay host-side.
 
-The target architecture is therefore layered: the harness owns model/tool
-execution and policies, the graph owns deterministic state transition and
-durability, the registry owns named capabilities, and `.rag` owns serializable
-graph blueprints. No layer should bypass another layer's safety, policy,
+The target architecture is layered: the harness owns model/tool execution and
+policies, the graph owns deterministic state transition and durability, the
+registry owns named capabilities, and `.rag` owns serializable graph
+blueprints. No layer should bypass another layer's safety, policy,
 observability, or test contracts.
-
-## Host-side surfaces
-
-Some things a recursive agent system needs are intentionally *not* implemented
-here, because a host can implement them on top of the four modules and because
-shipping them would drag an embedded interpreter into every dependent's build:
-
-- the scripted CodeAct/REPL session loop (an embedded Rhai / Python / JavaScript
-  interpreter running model-written code cells)
-- the driver loop that prompts a model for the next code cell and feeds the
-  cell's output back in
-
-What this crate provides for those hosts: the capability `registry` (so a script
-can only reach named `llm` / `tool` / `agent` capabilities), the harness and its
-sub-agent recursion accounting, typed `SessionId` / `CellId` / `CallId`, the
-event journal, and the `.rag` `repl_agent` node kind, which binds a
-host-provided scripted node to a registered `Script` component by name.
 
 ## Detailed Module Docs
 
@@ -171,26 +140,27 @@ for implementation status.
 
 ## Package Layout
 
-The crate is a single library at the repository root (`Cargo.toml`), with
-`src/lib.rs` re-exporting the public surface and `src/error.rs` holding the
-crate-wide error type. Each of the four surfaces lives in its own module
-directory:
+The repository root is a virtual Cargo workspace. There is no `tinyagents`
+compatibility facade: applications depend directly on the packages whose APIs
+they use. Shared runtime errors live in `tinyagents-harness`.
 
 ```text
-src/
-  error.rs
-  lib.rs
-  graph/       # durable typed state graphs (checkpoint, interrupt, streaming, ...)
-  harness/     # provider-neutral model calls, tools, middleware, streaming, ...
-  language/    # the declarative `.rag` blueprint format (lexer/parser/compiler)
-  registry/    # the named capability catalog (models, tools, agents, stores, ...)
+crates/
+  tinyagents-harness/           # models, tools, middleware, providers, runtime
+  tinyagents-language/          # .rag lexer, parser, compiler, and resolver
+  tinyagents-graph/             # durable typed state graphs
+  tinyagents-registry/          # named capabilities and model catalog
+  tinyagents-session/           # durable session history and run ledger
+  tinyagents-tracing/           # shared opt-in tracing macros
+  tinyagents-integration-tests/ # cross-crate tests and runnable examples
 ```
 
 Provider implementations (OpenAI and the OpenAI-compatible endpoints for
 Anthropic, Ollama, DeepSeek, Groq, xAI, OpenRouter, Together, and Mistral)
-live inside `src/harness/providers/` and are compiled in unconditionally.
-Two Cargo features gate optional dependencies: `sqlite` (embedded SQLite
-checkpointer) and `tools` (the builtin generic tool family).
+live inside `crates/tinyagents-harness/src/providers/` and are compiled in
+unconditionally. Optional features are owned by their packages. Tracing calls
+and the direct `tracing` dependency are disabled unless a package's `tracing`
+feature is enabled.
 
 ## Milestones
 
@@ -211,7 +181,7 @@ projections, and mock model/tool testkit utilities.
 
 The `.rag` AST, lexer, parser, compiler into the graph runtime, parse/
 validation diagnostics with source spans, and example `.rag` workflow files
-(see `examples/rag_blueprint.rs`, `examples/openai_self_blueprint.rs`).
+(see the examples in `crates/tinyagents-integration-tests/examples/`).
 
 ### Milestone 4: Provider Integrations (shipped)
 
@@ -234,8 +204,8 @@ Historical decisions that have since been settled, kept for context:
   removed from this crate as a host concern.
 - State schemas remain Rust-owned; `.rag` binds to them by name through the
   registry rather than declaring schemas itself.
-- Provider crates live in this crate as always-compiled modules behind
-  `src/harness/providers/`, not separate crates or feature flags.
+- Providers remain always-compiled modules of `tinyagents-harness`, rather
+  than becoming one crate per provider.
 - Memory and embeddings are async, matching the rest of the harness surface.
 
 Remaining open question:
