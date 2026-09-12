@@ -292,9 +292,9 @@ pub fn parse_call(body: &str, registry: &PFormatRegistry) -> Option<(String, Val
         tinyagents_tracing::debug!(
             tool = name,
             tokens = tokens.len(),
-            "[pformat] odd token count — trying legacy positional syntax"
+            "[pformat] odd token count — not index/value pairs, refusing to parse"
         );
-        return parse_legacy_call(name, &tokens, params);
+        return None;
     }
 
     let mut args = Map::with_capacity(tokens.len() / 2);
@@ -306,14 +306,14 @@ pub fn parse_call(body: &str, registry: &PFormatRegistry) -> Option<(String, Val
         let raw_index = raw_index.trim();
         let Ok(slot) = raw_index.parse::<usize>() else {
             // A non-numeric index is a call in the old bare-positional form (or
-            // simply malformed). Try the bounded legacy fallback; indexed calls
-            // remain the preferred syntax for all newly rendered prompts.
+            // simply malformed). Refusing is deliberate: parsing it positionally
+            // would silently resurrect the off-by-one this format exists to end.
             tinyagents_tracing::debug!(
                 tool = name,
                 index = raw_index,
-                "[pformat] slot index is not a number — trying legacy positional syntax"
+                "[pformat] slot index is not a number — refusing to parse"
             );
-            return parse_legacy_call(name, &tokens, params);
+            return None;
         };
         let Some(param_name) = params.names.get(slot) else {
             tinyagents_tracing::debug!(
@@ -322,7 +322,7 @@ pub fn parse_call(body: &str, registry: &PFormatRegistry) -> Option<(String, Val
                 slots = params.names.len(),
                 "[pformat] slot index out of range — refusing to parse"
             );
-            return parse_legacy_call(name, &tokens, params);
+            return None;
         };
         // An empty value is an argument the model did not send, so the key is
         // left out entirely rather than set to `""`. Inserting `""` makes every
@@ -358,37 +358,6 @@ pub fn parse_call(body: &str, registry: &PFormatRegistry) -> Option<(String, Val
         args.insert(param_name.clone(), coerced);
     }
 
-    Some((name.to_string(), Value::Object(args)))
-}
-
-/// Parse the pre-indexed positional form (`tool[value|value]`) for sessions
-/// whose persisted prompt still describes that grammar. The registry bounds
-/// the number of values and supplies the same schema-based coercion as the
-/// indexed form; no names or extra arguments are invented.
-fn parse_legacy_call(
-    name: &str,
-    tokens: &[String],
-    params: &PFormatToolParams,
-) -> Option<(String, Value)> {
-    if tokens.len() > params.names.len() {
-        return None;
-    }
-
-    let mut args = Map::with_capacity(tokens.len());
-    for (slot, raw) in tokens.iter().enumerate() {
-        if raw.trim().is_empty() {
-            continue;
-        }
-        let coerced = coerce_value(
-            raw,
-            params
-                .types
-                .get(slot)
-                .copied()
-                .unwrap_or(PFormatParamType::String),
-        );
-        args.insert(params.names[slot].clone(), coerced);
-    }
     Some((name.to_string(), Value::Object(args)))
 }
 
@@ -530,21 +499,6 @@ mod tests {
         let (name, args) = parse_call("get_weather[0|London|1|metric]", &reg).unwrap();
         assert_eq!(name, "get_weather");
         assert_eq!(args, json!({"location": "London", "unit": "metric"}));
-    }
-
-    #[test]
-    fn parses_legacy_bare_positional_call() {
-        let reg = make_registry();
-        let (name, args) = parse_call("get_weather[London|metric]", &reg).unwrap();
-        assert_eq!(name, "get_weather");
-        assert_eq!(args, json!({"location": "London", "unit": "metric"}));
-    }
-
-    #[test]
-    fn parses_legacy_sparse_call() {
-        let reg = make_registry();
-        let (_, args) = parse_call("get_weather[|metric]", &reg).unwrap();
-        assert_eq!(args, json!({"unit": "metric"}));
     }
 
     #[test]
