@@ -147,6 +147,13 @@ pub struct PromptAssembly {
     pub truncation: Option<PromptTruncation>,
 }
 
+/// Caller-supplied byte and token ceilings for pure prompt assembly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PromptBudget {
+    pub max_bytes: usize,
+    pub max_tokens: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Private internals
 // ---------------------------------------------------------------------------

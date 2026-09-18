@@ -40,6 +40,20 @@ async fn retrieval_contract_propagates_cancellation() {
 }
 
 #[tokio::test]
+async fn context_composition_preserves_retriever_order_scores_and_metadata() {
+    let retriever = RecordingRetriever::default();
+    let section =
+        compose_retrieval_context(&retriever, RetrievalRequest::new("query", 2), "retrieved")
+            .await
+            .unwrap();
+    assert_eq!(section.name, "retrieved");
+    assert_eq!(
+        section.content,
+        "[first score=0.9]\nfirst result\n\n[second score=0.2]\nsecond result"
+    );
+}
+
+#[tokio::test]
 async fn retrieval_contract_preserves_limit_score_metadata_and_request_shape() {
     let retriever = RecordingRetriever::default();
     let request =

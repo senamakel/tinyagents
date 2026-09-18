@@ -10,5 +10,22 @@ mod types;
 
 pub use types::*;
 
+/// Retrieves ranked context and returns one caller-insertable prompt section.
+///
+/// The caller owns source policy and where the returned section is placed; this
+/// function only preserves retriever order and uses the request's cancellation
+/// and limit unchanged.
+pub async fn compose_retrieval_context(
+    retriever: &dyn Retriever,
+    request: RetrievalRequest,
+    section_name: impl Into<String>,
+) -> crate::Result<crate::prompt::PromptSection> {
+    let documents = retriever.retrieve(request).await?;
+    Ok(crate::prompt::PromptSection::new(
+        section_name,
+        crate::prompt::render_retrieved_documents(&documents),
+    ))
+}
+
 #[cfg(test)]
 mod test;

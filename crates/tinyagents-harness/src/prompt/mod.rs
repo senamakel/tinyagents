@@ -79,6 +79,62 @@ pub fn assemble_sections(sections: &[PromptSection], max_bytes: usize) -> Prompt
     output
 }
 
+/// Assembles sections under both caller-supplied byte and token budgets.
+pub fn assemble_sections_with_budget(
+    sections: &[PromptSection],
+    budget: PromptBudget,
+    tokenize: impl Fn(&str) -> usize,
+) -> PromptAssembly {
+    let mut accepted = Vec::new();
+    let mut bytes = 0;
+    let mut tokens = 0;
+    let mut truncated = None;
+    for section in sections {
+        let sep = if accepted.is_empty() { 0 } else { 2 };
+        let section_tokens = tokenize(&section.content);
+        if bytes + sep + section.content.len() <= budget.max_bytes
+            && tokens + section_tokens <= budget.max_tokens
+        {
+            bytes += sep + section.content.len();
+            tokens += section_tokens;
+            accepted.push(section.clone());
+        } else {
+            truncated = Some(PromptTruncation {
+                section: section.name.clone(),
+                omitted_bytes: section.content.len(),
+            });
+            break;
+        }
+    }
+    let mut assembled = assemble_sections(&accepted, budget.max_bytes);
+    if truncated.is_some() {
+        assembled.truncation = truncated;
+    }
+    assembled
+}
+
+/// Renders a stable Markdown heading.
+pub fn render_heading(title: &str) -> String {
+    format!("## {title}")
+}
+
+/// Renders an optional named section; blank bodies produce no bytes.
+pub fn render_optional_section(title: &str, body: Option<&str>) -> String {
+    body.filter(|body| !body.trim().is_empty())
+        .map(|body| format!("{}\n\n{}", render_heading(title), body))
+        .unwrap_or_default()
+}
+
+/// Renders a stable, name-sorted catalogue from caller-owned rows.
+pub fn render_tool_catalogue(rows: &[(String, String)]) -> String {
+    let mut rows = rows.to_vec();
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    rows.into_iter()
+        .map(|(name, description)| format!("- `{name}`: {description}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Renders generic retrieved documents in ranked order for context composition.
 pub fn render_retrieved_documents(documents: &[crate::retriever::RetrievedDocument]) -> String {
     documents

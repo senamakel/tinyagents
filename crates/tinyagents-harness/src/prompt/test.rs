@@ -26,6 +26,34 @@ fn section_assembly_preserves_order_budget_and_truncation_provenance() {
 }
 
 #[test]
+fn reusable_render_helpers_are_exact_and_stable() {
+    assert_eq!(render_heading("Tools"), "## Tools");
+    assert_eq!(render_optional_section("Empty", Some("  ")), "");
+    assert_eq!(
+        render_optional_section("Notes", Some("keep")),
+        "## Notes\n\nkeep"
+    );
+    assert_eq!(
+        render_tool_catalogue(&[("z".into(), "last".into()), ("a".into(), "first".into())]),
+        "- `a`: first\n- `z`: last"
+    );
+    let sections = [
+        PromptSection::new("one", "one two"),
+        PromptSection::new("two", "three"),
+    ];
+    let assembled = assemble_sections_with_budget(
+        &sections,
+        PromptBudget {
+            max_bytes: 64,
+            max_tokens: 2,
+        },
+        |text| text.split_whitespace().count(),
+    );
+    assert_eq!(assembled.text, "one two");
+    assert_eq!(assembled.truncation.unwrap().section, "two");
+}
+
+#[test]
 fn renders_simple_placeholder() {
     let tpl = PromptTemplate::new("Hello, {name}!");
     let mut vars = Map::new();

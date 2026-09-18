@@ -25,6 +25,38 @@ fn child_data_policy_transforms_parent_data_explicitly() {
     let policy = ChildDataPolicy::new(|parent: &String| format!("{parent}/child"));
     assert_eq!(policy.child_data(&"root".to_string()), "root/child");
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NonDefaultContext(String);
+
+#[tokio::test]
+async fn typed_parent_dispatch_supports_non_default_context_and_parent_depth_cap() {
+    let mut harness: AgentHarness<(), NonDefaultContext> = AgentHarness::new();
+    harness.register_model("child-model", Arc::new(MockModel::constant("done")));
+    let tool = SubAgentTool::new(
+        Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
+        ChildDataPolicy::new(|parent: &NonDefaultContext| {
+            NonDefaultContext(format!("{}:child", parent.0))
+        }),
+    );
+    let parent = RunContext::new(
+        RunConfig::new("parent").with_max_depth(0),
+        NonDefaultContext("parent-data".into()),
+    );
+    let result = tool
+        .invoke_in_parent_context(
+            &(),
+            json!({"input": "go"}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+        .await
+        .unwrap();
+    assert!(
+        result.is_error,
+        "depth rejection is a recoverable tool result"
+    );
+}
 use crate::testkit::ScriptedModel;
 use crate::tool::{Tool, ToolCall, ToolExecutionContext, ToolResult, ToolSchema};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};

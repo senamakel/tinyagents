@@ -514,10 +514,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
         args: Value,
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
-    ) -> Result<tinytools::ToolResult>
-    where
-        Ctx: Default,
-    {
+    ) -> Result<tinytools::ToolResult> {
         let input = Self::extract_input(&args);
         let child_depth = match RunConfig::checked_child_depth(
             parent.depth(),
@@ -532,10 +529,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
             }
         };
         let child_data = self.child_data.child_data(&parent.data);
-        let child = parent.child(
+        let child = match parent.child(
             RunConfig::new(self.subagent.child_run_id(child_depth)),
             child_data,
-        )?;
+        ) {
+            Ok(child) => child,
+            Err(TinyAgentsError::SubAgentDepth(_)) => {
+                return Ok(tinytools::ToolResult::error(format!(
+                    "Sub-agent `{}` stopped before completing because it hit its recursion depth limit. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
+                    self.tool_name
+                )));
+            }
+            Err(error) => return Err(error),
+        };
         let run = match self
             .subagent
             .run_child(state, child, input, parent.streaming)
@@ -571,7 +577,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
 impl<State, Ctx> ToolDispatch<State, Ctx> for SubAgentTool<State, Ctx>
 where
     State: Send + Sync,
-    Ctx: Send + Sync + Default,
+    Ctx: Send + Sync,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
         Arc::new(SubAgentToolDeclaration {
