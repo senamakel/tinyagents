@@ -21,14 +21,14 @@ use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, Trajectory};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::{
+use tinyinference_core::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_core::model::{
     CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
     ModelResponse,
 };
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_core::providers::MockModel;
+use tinyinference_core::tool::ToolCall;
+use tinyinference_core::usage::Usage;
 
 /// Middleware that subscribes a shared [`RecordingListener`] to the run's event
 /// sink so the test can reconstruct a [`Trajectory`] afterwards.
@@ -107,7 +107,7 @@ impl ChatModel<()> for ProfiledIntegrationModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         Ok(ModelResponse::assistant(self.text))
     }
 }

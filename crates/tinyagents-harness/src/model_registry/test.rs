@@ -1,7 +1,7 @@
 //! Model registry unit tests.
 
 use async_trait::async_trait;
-use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_core::model::{ChatModel, ModelRequest, ModelResponse};
 
 use super::*;
 
@@ -13,7 +13,7 @@ impl ChatModel<()> for StaticModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         Ok(ModelResponse::assistant("ok"))
     }
 }

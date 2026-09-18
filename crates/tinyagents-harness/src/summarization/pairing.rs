@@ -46,7 +46,7 @@
 
 use std::collections::HashSet;
 
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 /// Returns the tool-call ids declared by an assistant message, or an empty set
 /// for every other message kind.

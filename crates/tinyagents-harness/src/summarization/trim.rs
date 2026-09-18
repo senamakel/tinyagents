@@ -21,7 +21,7 @@ use super::pairing::{
 };
 use super::types::{MessageRole, TokenTrimPolicy, TrimOptions, TrimStrategy};
 use crate::token_estimation::estimate_message_tokens;
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 /// Partition `messages` into system and non-system messages, preserving order.
 ///

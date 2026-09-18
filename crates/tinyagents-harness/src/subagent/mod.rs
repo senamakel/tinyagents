@@ -85,7 +85,7 @@ use crate::ids::{ThreadId, next_seq};
 use crate::middleware::AgentRun;
 use crate::runtime::AgentHarness;
 use crate::tool::{Tool, ToolCall, ToolExecutionContext, ToolResult, ToolSchema};
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
     /// Creates a sub-agent wrapping `harness` with a stable `name` and

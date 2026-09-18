@@ -24,13 +24,13 @@ use tinyagents_harness::middleware::{ContextualToolSelectionMiddleware, ToolSele
 use tinyagents_harness::model_registry::{ModelRegistry, ModelSelection};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, StreamingMock};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
-use tinyinference::model::{
+use tinyinference_core::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
+use tinyinference_core::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResolutionSource, ModelResponse, ModelStatus,
     ModelStreamItem, StreamAccumulator,
 };
-use tinyinference::tool::ToolSchema;
-use tinyinference::usage::Usage;
+use tinyinference_core::tool::ToolSchema;
+use tinyinference_core::usage::Usage;
 
 /// Builds a plain-text [`ModelResponse`] so a [`ScriptedModel`] can answer a run
 /// in a single model call (no tool execution needed).
@@ -324,7 +324,7 @@ impl ChatModel<()> for ProfiledModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         Ok(text_response("ok"))
     }
 }

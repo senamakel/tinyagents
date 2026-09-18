@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::store::InMemoryStore;
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 #[tokio::test]
 async fn in_memory_history_round_trips() {

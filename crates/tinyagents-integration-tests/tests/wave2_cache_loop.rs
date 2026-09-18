@@ -21,9 +21,9 @@ use tinyagents_harness::testkit::EventRecorder;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference::usage::Usage;
+use tinyinference_core::message::Message;
+use tinyinference_core::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_core::usage::Usage;
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -56,7 +56,7 @@ impl ChatModel<()> for FixedModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let mut response = ModelResponse::assistant(self.answer);
         response.usage = self.usage;
@@ -80,9 +80,9 @@ impl ChatModel<()> for AlwaysFailing {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(tinyinference::Error::Model(
+        Err(tinyinference_core::Error::Model(
             "openai returned HTTP 503: service unavailable".to_string(),
         ))
     }

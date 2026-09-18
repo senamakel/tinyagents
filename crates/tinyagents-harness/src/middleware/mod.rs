@@ -40,7 +40,7 @@ use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use crate::tool::{ToolCall, ToolDelta, ToolResult};
-use tinyinference::model::{ModelDelta, ModelRequest, ModelResponse};
+use tinyinference_core::model::{ModelDelta, ModelRequest, ModelResponse};
 
 /// Runs one per-middleware lifecycle hook across the whole stack, bracketing
 /// each call with `MiddlewareStarted`/`MiddlewareCompleted` events and fanning

@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tinyagents_harness::cache::{InMemoryResponseCache, ResponseCache, SingleFlight};
-use tinyinference::cache::CachePolicy;
-use tinyinference::model::ModelResponse;
+use tinyinference_core::cache::CachePolicy;
+use tinyinference_core::model::ModelResponse;
 
 // ── C-TTL ────────────────────────────────────────────────────────────────────
 

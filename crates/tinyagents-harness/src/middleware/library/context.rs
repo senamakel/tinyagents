@@ -53,7 +53,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for MessageTri
 /// budget gate never tripped on exactly the transcripts it exists to shrink.
 /// The shared estimator charges every content block, tool call, and tool-call
 /// id, and calibrates against reported usage metadata when it is present.
-fn total_message_tokens(messages: &[tinyinference::message::Message]) -> u64 {
+fn total_message_tokens(messages: &[tinyinference_core::message::Message]) -> u64 {
     crate::token_estimation::count_tokens_approximately(messages)
 }
 
@@ -192,7 +192,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         // recent turns, in chronological position.
         let system_prefix = to_keep
             .iter()
-            .take_while(|m| matches!(m, tinyinference::message::Message::System(_)))
+            .take_while(|m| matches!(m, tinyinference_core::message::Message::System(_)))
             .count();
         let recent = to_keep.split_off(system_prefix);
         let mut new_messages = Vec::with_capacity(to_keep.len() + recent.len() + 1);

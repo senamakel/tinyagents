@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
 use crate::Result;
-use tinyinference::model::ModelResponse;
+use tinyinference_core::model::ModelResponse;
 
 /// What a leader broadcasts to its followers when it finishes.
 #[derive(Clone, Debug)]

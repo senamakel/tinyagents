@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use tinyagents_harness::testkit::FakeTool;
 use tinyagents_registry::{AliasBinding, CapabilityRegistry, ComponentKind, DiagnosticSeverity};
-use tinyinference::providers::MockModel;
+use tinyinference_core::providers::MockModel;
 
 #[test]
 fn name_only_descriptor_kinds_register_alias_and_resolve() {

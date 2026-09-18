@@ -16,7 +16,7 @@
 //! A free function [`is_retryable`] classifies a [`TinyAgentsError`] so callers
 //! can decide whether to retry or propagate immediately.
 //! Provider error taxonomy and `Retry-After` parsing are consumed directly
-//! from [`tinyinference::failure`]; this module owns only harness retry policy.
+//! from [`tinyinference_core::failure`]; this module owns only harness retry policy.
 //!
 //! # Testability note
 //!
@@ -33,7 +33,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::error::TinyAgentsError;
-use tinyinference::failure::{classify_provider_failure, parse_retry_after_ms};
+use tinyinference_core::failure::{classify_provider_failure, parse_retry_after_ms};
 
 /// Fraction of the base backoff the additive jitter band spans in each
 /// direction: with jitter enabled the effective delay lands uniformly in
@@ -299,7 +299,7 @@ impl RetryPolicy {
 /// # Two sources, in priority order
 ///
 /// 1. **The structured field.**
-///    [`ProviderError::retry_after_ms`][tinyinference::model::ProviderError::retry_after_ms]
+///    [`ProviderError::retry_after_ms`][tinyinference_core::model::ProviderError::retry_after_ms]
 ///    is populated by the provider adapter directly from the HTTP `Retry-After`
 ///    response header (both the delta-seconds and HTTP-date forms). This is the
 ///    contract; it is read first.
@@ -330,7 +330,7 @@ pub fn retry_after_hint(error: &TinyAgentsError) -> Option<Duration> {
 ///
 /// | Variant | Retryable | Rationale |
 /// |---|---|---|
-/// | `Provider` | depends | Classified from [`tinyinference::model::ProviderError::retryable`] — a 429/408/409/5xx is retryable, a 4xx like 401/400 is not. |
+/// | `Provider` | depends | Classified from [`tinyinference_core::model::ProviderError::retryable`] — a 429/408/409/5xx is retryable, a 4xx like 401/400 is not. |
 /// | `Model` | depends | No structured `ProviderError` to read, so the message text is run through [`classify_provider_failure`] — a 5xx / 429 / timeout is retryable, an `invalid api key` or `model not found` is not. |
 /// | `Tool` | yes | Tool execution may have hit a transient dependency. |
 /// | `Validation` | **no** | Caller-side schema or policy error; retrying will not help. |

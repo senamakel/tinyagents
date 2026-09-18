@@ -15,8 +15,8 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
-use tinyinference::providers::openai::OpenAiModel;
+use tinyinference_core::message::Message;
+use tinyinference_core::providers::openai::OpenAiModel;
 
 #[tokio::test]
 async fn orchestrator_steers_a_real_openai_run() {

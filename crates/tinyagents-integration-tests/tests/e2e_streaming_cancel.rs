@@ -20,8 +20,8 @@ use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, StreamingMock};
-use tinyinference::message::Message;
-use tinyinference::model::ModelDelta;
+use tinyinference_core::message::Message;
+use tinyinference_core::model::ModelDelta;
 
 /// Middleware that records the text of every `on_model_delta` it observes.
 struct DeltaRecorder {

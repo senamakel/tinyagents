@@ -19,7 +19,7 @@ use tinyagents_harness::store::{
     AppendStore, FileStore, InMemoryAppendStore, InMemoryStore, JsonlAppendStore, Store,
     StoreRegistry,
 };
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 /// A process-unique temp directory for file-backed cases.
 fn temp_dir(tag: &str) -> PathBuf {

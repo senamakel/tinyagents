@@ -13,9 +13,9 @@ use serde_json::json;
 
 use tinyagents_harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
 use tinyagents_harness::tool::{Tool, ToolResult};
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference::tool::{ToolCall, ToolSchema};
+use tinyinference_core::message::Message;
+use tinyinference_core::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_core::tool::{ToolCall, ToolSchema};
 
 /// The defaults are the whole point of this file, so pin them directly too.
 #[test]
@@ -57,7 +57,7 @@ impl ChatModel<()> for TwoTurnModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         match self.call.lock().expect("poisoned").take() {
             Some(call) => {
                 let mut response = ModelResponse::assistant("");

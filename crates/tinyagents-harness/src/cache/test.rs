@@ -7,8 +7,8 @@
 use super::*;
 use crate::tool::ToolSchema;
 use serde_json::json;
-use tinyinference::message::Message;
-use tinyinference::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_core::message::Message;
+use tinyinference_core::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
 
 #[tokio::test]
 async fn response_cache_put_get() {

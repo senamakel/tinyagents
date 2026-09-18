@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cost::CostTotals;
 use crate::ids::{CallId, ComponentId, EventId, ExecutionStatus, HarnessPhase, RunId, ThreadId};
-use tinyinference::message::MessageDelta;
-use tinyinference::usage::{Usage, UsageTotals};
+use tinyinference_core::message::MessageDelta;
+use tinyinference_core::usage::{Usage, UsageTotals};
 
 // ---------------------------------------------------------------------------
 // AgentEvent

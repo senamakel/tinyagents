@@ -18,7 +18,7 @@ pub(super) const PER_CALL_BOUND_LABEL: &str = "per-model-call ceiling";
 
 use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
-use tinyinference::cache::CachePolicy;
+use tinyinference_core::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Invokes a model, consulting the local response cache around the
@@ -37,7 +37,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// The key is **not** the request hash alone. [`Self::response_cache_decision`]
     /// produces the request half ([`cache_key`]); this method folds in the
     /// *resolved* model's
-    /// [`cache_identity`][tinyinference::model::ChatModel::cache_identity], the
+    /// [`cache_identity`][tinyinference_core::model::ChatModel::cache_identity], the
     /// `streaming` flag, and the policy namespace via
     /// [`scoped_cache_key`][crate::cache::scoped_cache_key]. All three
     /// were previously absent from the key:
@@ -652,13 +652,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Drives one streaming model call to completion.
     ///
-    /// Consumes [`tinyinference::model::ChatModel::stream`], emitting an
+    /// Consumes [`tinyinference_core::model::ChatModel::stream`], emitting an
     /// [`AgentEvent::ModelDelta`] and running every middleware's
     /// [`on_model_delta`][crate::middleware::Middleware::on_model_delta]
     /// hook for each [`ModelStreamItem::MessageDelta`] (and standalone
     /// [`ModelStreamItem::ToolCallDelta`]), then folds the items into the final
     /// [`ModelResponse`] via [`StreamAccumulator`]. The merged response is
-    /// equivalent to what the unary [`tinyinference::model::ChatModel::invoke`]
+    /// equivalent to what the unary [`tinyinference_core::model::ChatModel::invoke`]
     /// path would have produced, so the rest of the loop is unaffected.
     ///
     /// `deltas_emitted` is incremented for every delta actually handed to

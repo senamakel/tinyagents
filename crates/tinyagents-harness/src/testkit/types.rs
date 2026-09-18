@@ -10,19 +10,19 @@ use std::time::Duration;
 
 use crate::events::{AgentEvent, EventSink, RecordingListener};
 use crate::tool::ToolCall;
-use tinyinference::model::{ModelRequest, ModelResponse, ModelStreamItem};
+use tinyinference_core::model::{ModelRequest, ModelResponse, ModelStreamItem};
 
 // ---------------------------------------------------------------------------
 // StreamingMock
 // ---------------------------------------------------------------------------
 
-/// A [`tinyinference::model::ChatModel`] that yields a scripted sequence of
+/// A [`tinyinference_core::model::ChatModel`] that yields a scripted sequence of
 /// [`ModelStreamItem`]s, exercising the real streaming pipeline deterministically.
 ///
-/// Each call to [`tinyinference::model::ChatModel::stream`] replays the same
-/// scripted items, and [`tinyinference::model::ChatModel::invoke`] returns the
+/// Each call to [`tinyinference_core::model::ChatModel::stream`] replays the same
+/// scripted items, and [`tinyinference_core::model::ChatModel::invoke`] returns the
 /// merged response those items fold into (via
-/// [`tinyinference::model::StreamAccumulator`]), so the mock behaves
+/// [`tinyinference_core::model::StreamAccumulator`]), so the mock behaves
 /// consistently on both the streaming and unary paths.
 ///
 /// # Example
@@ -44,12 +44,12 @@ pub struct StreamingMock {
 // SlowModel
 // ---------------------------------------------------------------------------
 
-/// A [`tinyinference::model::ChatModel`] that sleeps for a fixed delay before
+/// A [`tinyinference_core::model::ChatModel`] that sleeps for a fixed delay before
 /// replying, used to deterministically trigger the agent loop's per-model-call
 /// wall-clock timeout.
 ///
-/// Both [`tinyinference::model::ChatModel::invoke`] and
-/// [`tinyinference::model::ChatModel::stream`] first
+/// Both [`tinyinference_core::model::ChatModel::invoke`] and
+/// [`tinyinference_core::model::ChatModel::stream`] first
 /// `tokio::time::sleep(delay).await` and then return a fixed assistant reply.
 /// (The `stream` path inherits the delay because the default trait
 /// implementation delegates to `invoke`.) Configure the run with a wall-clock
@@ -66,7 +66,7 @@ pub struct StreamingMock {
 /// let model = SlowModel::new(Duration::from_millis(200), "slow reply");
 /// ```
 pub struct SlowModel {
-    /// How long [`tinyinference::model::ChatModel::invoke`] sleeps before
+    /// How long [`tinyinference_core::model::ChatModel::invoke`] sleeps before
     /// replying.
     pub(crate) delay: Duration,
     /// The fixed assistant text returned after the delay.
@@ -79,7 +79,7 @@ pub struct SlowModel {
 // ScriptedModel
 // ---------------------------------------------------------------------------
 
-/// A [`tinyinference::model::ChatModel`] that returns pre-loaded responses in
+/// A [`tinyinference_core::model::ChatModel`] that returns pre-loaded responses in
 /// order, making model behavior fully deterministic in tests.
 ///
 /// Responses are consumed from the front of the queue one per `invoke` call.
@@ -91,7 +91,7 @@ pub struct SlowModel {
 ///
 /// ```rust
 /// # use tinyagents_harness::testkit::ScriptedModel;
-/// # use tinyinference::model::ModelResponse;
+/// # use tinyinference_core::model::ModelResponse;
 /// let model = ScriptedModel::replies(vec!["Hello", "World"]);
 /// // Use in tests as a ChatModel<()>.
 /// ```

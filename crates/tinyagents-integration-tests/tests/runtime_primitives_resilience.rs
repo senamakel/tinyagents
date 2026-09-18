@@ -33,7 +33,7 @@ use tinyagents_harness::steering::{
     apply_pending_steering,
 };
 use tinyagents_harness::stream::{StreamChunk, StreamMode, StreamSink, project_event};
-use tinyinference::message::{Message, MessageDelta};
+use tinyinference_core::message::{Message, MessageDelta};
 
 // ── LOOP-2: jitter must never collapse the backoff ───────────────────────────
 

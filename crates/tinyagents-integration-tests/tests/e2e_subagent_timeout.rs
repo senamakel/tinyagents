@@ -18,13 +18,13 @@ use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::SlowModel;
-use tinyinference::providers::MockModel;
+use tinyinference_core::providers::MockModel;
 
 /// Builds a child harness whose policy caps wall-clock time at `timeout_ms` and
 /// whose registered model is `model`.
 fn capped_child_harness<M>(model: M, timeout_ms: u64) -> AgentHarness<()>
 where
-    M: tinyinference::model::ChatModel<()> + 'static,
+    M: tinyinference_core::model::ChatModel<()> + 'static,
 {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("model", Arc::new(model));

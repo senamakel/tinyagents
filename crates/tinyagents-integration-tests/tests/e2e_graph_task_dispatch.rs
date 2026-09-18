@@ -23,11 +23,11 @@ use tinyagents_harness::store::{InMemoryStore, Store};
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_core::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_core::model::ModelResponse;
+use tinyinference_core::providers::MockModel;
+use tinyinference_core::tool::ToolCall;
+use tinyinference_core::usage::Usage;
 
 const THREAD: &str = "user-tasks";
 

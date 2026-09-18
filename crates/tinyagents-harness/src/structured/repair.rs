@@ -10,8 +10,8 @@
 //! [`recover_tool_arguments`][rta] over
 //! [`relaxed_json`][rj]. Structured output got none of it.
 //!
-//! [rta]: tinyinference::providers::openai
-//! [rj]: tinyinference::providers::openai::relaxed_json
+//! [rta]: tinyinference_core::providers::openai
+//! [rj]: tinyinference_core::providers::openai::relaxed_json
 //!
 //! # The ladder
 //!

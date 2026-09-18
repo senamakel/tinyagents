@@ -19,7 +19,7 @@ use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 #[tokio::test]
 async fn orchestrator_reuses_subagent_with_human_input_between() {

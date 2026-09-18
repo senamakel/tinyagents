@@ -15,11 +15,11 @@ use std::time::{Duration, Instant};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::limits::{LimitTracker, RunLimits};
 use tinyagents_harness::retry::{FallbackPolicy, RateLimiter, RetryPolicy, is_retryable};
-use tinyinference::failure::{
+use tinyinference_core::failure::{
     ProviderFailureClass, classify_provider_error, classify_provider_failure, parse_retry_after_ms,
     provider_error_is_retryable, structured_http_status,
 };
-use tinyinference::model::ProviderError;
+use tinyinference_core::model::ProviderError;
 
 // ── RetryPolicy backoff ─────────────────────────────────────────────────────
 

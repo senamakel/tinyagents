@@ -7,7 +7,7 @@ use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer, FileCheckpointer};
 use tinyagents_harness::ids::NodeId;
 use tinyagents_harness::memory::{ChatHistory, StoreChatHistory};
 use tinyagents_harness::store::{AppendStore, FileStore, JsonlAppendStore};
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 fn checkpoint(thread: &str, id: &str) -> Checkpoint<i32> {
     Checkpoint {

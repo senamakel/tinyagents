@@ -35,8 +35,8 @@ use serde_json::json;
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventSink, RecordingListener};
 use crate::tool::{Tool, ToolCall, ToolResult, ToolSchema};
-use tinyinference::message::MessageDelta;
-use tinyinference::model::{
+use tinyinference_core::message::MessageDelta;
+use tinyinference_core::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem, StreamAccumulator,
 };
 
@@ -90,7 +90,7 @@ impl StreamingMock {
     }
 
     /// Folds the scripted items into the response they merge to.
-    fn merged_response(&self) -> tinyinference::Result<ModelResponse> {
+    fn merged_response(&self) -> tinyinference_core::Result<ModelResponse> {
         let mut accumulator = StreamAccumulator::new();
         for item in &self.items {
             accumulator.push(item);
@@ -106,7 +106,7 @@ impl<State: Send + Sync> ChatModel<State> for StreamingMock {
         &self,
         _state: &State,
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         *self
             .calls
             .lock()
@@ -119,7 +119,7 @@ impl<State: Send + Sync> ChatModel<State> for StreamingMock {
         &self,
         _state: &State,
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelStream> {
+    ) -> tinyinference_core::Result<ModelStream> {
         *self
             .calls
             .lock()
@@ -156,7 +156,7 @@ impl<State: Send + Sync> ChatModel<State> for SlowModel {
         &self,
         _state: &State,
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         {
             // Bump the counter in its own scope so the guard is dropped before
             // the `.await` (a `MutexGuard` is not `Send`).
@@ -219,7 +219,7 @@ impl<State: Send + Sync> ChatModel<State> for ScriptedModel {
         &self,
         _state: &State,
         request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         self.received
             .lock()
             .expect("ScriptedModel received lock poisoned")
@@ -230,7 +230,7 @@ impl<State: Send + Sync> ChatModel<State> for ScriptedModel {
             .expect("ScriptedModel queue lock poisoned")
             .pop_front()
             .ok_or_else(|| {
-                tinyinference::Error::Model(
+                tinyinference_core::Error::Model(
                     "ScriptedModel: response queue is exhausted; no more scripted responses"
                         .to_string(),
                 )

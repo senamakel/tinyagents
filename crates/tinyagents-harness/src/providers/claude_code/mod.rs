@@ -17,11 +17,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
-use tinyinference::model::{
+use tinyinference_core::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
+use tinyinference_core::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
 };
-use tinyinference::usage::Usage;
+use tinyinference_core::usage::Usage;
 use tokio::sync::Semaphore;
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -258,16 +258,16 @@ fn model_response(response: ChatResponse) -> ModelResponse {
     }
 }
 
-fn map_error(error: anyhow::Error) -> tinyinference::Error {
+fn map_error(error: anyhow::Error) -> tinyinference_core::Error {
     let message = format!("claude-code model call failed: {error}");
     if !matches!(
-        tinyinference::classify_provider_failure(None, None, &message),
-        tinyinference::ProviderFailureClass::NonRetryable
-            | tinyinference::ProviderFailureClass::NonRetryableRateLimit
+        tinyinference_core::classify_provider_failure(None, None, &message),
+        tinyinference_core::ProviderFailureClass::NonRetryable
+            | tinyinference_core::ProviderFailureClass::NonRetryableRateLimit
     ) {
-        tinyinference::Error::Model(message)
+        tinyinference_core::Error::Model(message)
     } else {
-        tinyinference::Error::Validation(message)
+        tinyinference_core::Error::Validation(message)
     }
 }
 
@@ -287,7 +287,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
         &self,
         _state: &(),
         request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_core::Result<ModelResponse> {
         let messages = request_messages(&request);
         self.run_chat(&messages, None, None)
             .await
@@ -298,7 +298,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
         &self,
         _state: &(),
         request: ModelRequest,
-    ) -> tinyinference::Result<ModelStream> {
+    ) -> tinyinference_core::Result<ModelStream> {
         let provider = self.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = AbortOnDrop(tokio::spawn(async move {

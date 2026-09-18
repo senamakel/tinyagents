@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::store::Store;
-use tinyinference::message::Message;
+use tinyinference_core::message::Message;
 
 /// Distinguishes the two conceptual layers of harness memory.
 ///

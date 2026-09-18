@@ -23,7 +23,7 @@
 //!
 //! ```
 //! use tinyagents_harness::tool::{CleaningStrategy, SchemaPreparation, prepare_tool_schemas};
-//! use tinyinference::tool::ToolSchema;
+//! use tinyinference_core::tool::ToolSchema;
 //! use serde_json::json;
 //!
 //! let declared = vec![ToolSchema::new(

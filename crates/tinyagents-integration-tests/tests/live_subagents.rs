@@ -23,8 +23,8 @@ async fn live_openai_parent_composes_child_subagent() {
     use tinyagents_harness::*;
     use tinyagents_language::*;
     use tinyagents_registry::*;
-    use tinyinference::message::Message;
-    use tinyinference::providers::openai::OpenAiModel;
+    use tinyinference_core::message::Message;
+    use tinyinference_core::providers::openai::OpenAiModel;
 
     // Load .env so `cargo test` picks up local credentials.
     let _ = dotenvy::dotenv();

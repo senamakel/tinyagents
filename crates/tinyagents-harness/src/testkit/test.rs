@@ -13,10 +13,10 @@ use crate::testkit::{
     Trajectory,
 };
 use crate::tool::{Tool, ToolCall};
-use tinyinference::model::{
+use tinyinference_core::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStreamItem, collect_model_stream,
 };
-use tinyinference::usage::Usage;
+use tinyinference_core::usage::Usage;
 
 // ---------------------------------------------------------------------------
 // StreamingMock
@@ -97,8 +97,8 @@ async fn scripted_model_records_received_requests() {
     let model = ScriptedModel::replies(vec!["a", "b"]);
     let state = ();
 
-    let req1 = ModelRequest::new(vec![tinyinference::message::Message::user("hello")]);
-    let req2 = ModelRequest::new(vec![tinyinference::message::Message::user("world")]);
+    let req1 = ModelRequest::new(vec![tinyinference_core::message::Message::user("hello")]);
+    let req2 = ModelRequest::new(vec![tinyinference_core::message::Message::user("world")]);
 
     model.invoke(&state, req1).await.unwrap();
     model.invoke(&state, req2).await.unwrap();

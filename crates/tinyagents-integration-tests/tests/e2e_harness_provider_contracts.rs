@@ -13,15 +13,15 @@ use tinyagents_registry::catalog::{
     ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
     ModelPricing,
 };
-use tinyinference::message::{Message, MessageDelta};
-use tinyinference::model::{
+use tinyinference_core::message::{Message, MessageDelta};
+use tinyinference_core::model::{
     CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
     ModelResponse, ModelStreamItem, PromptSegment, ProviderError, ResponseFormat, SegmentRole,
     StreamAccumulator, ToolChoice, collect_model_stream,
 };
-use tinyinference::providers::{MockModel, ProviderKind, ProviderSpec};
-use tinyinference::tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
-use tinyinference::usage::{Usage, UsageTotals};
+use tinyinference_core::providers::{MockModel, ProviderKind, ProviderSpec};
+use tinyinference_core::tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
+use tinyinference_core::usage::{Usage, UsageTotals};
 
 #[tokio::test]
 async fn mock_provider_invokes_streams_and_reports_usage() {
@@ -169,7 +169,7 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
     assert_eq!(request.provider_options["reasoning"], "low");
     assert_eq!(request.provider_options["seed_control"], true);
 
-    let resolved = tinyinference::model::ResolvedModel {
+    let resolved = tinyinference_core::model::ResolvedModel {
         name: "direct".into(),
         requested: Some("direct".into()),
         source: ModelResolutionSource::RequestOverride,
@@ -440,7 +440,7 @@ fn structured_output_supports_provider_schema_and_tool_fallbacks() {
     );
 
     let tool_response = ModelResponse {
-        message: tinyinference::message::AssistantMessage {
+        message: tinyinference_core::message::AssistantMessage {
             id: None,
             content: Vec::new(),
             tool_calls: vec![ToolCall {

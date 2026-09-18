@@ -44,8 +44,8 @@ use crate::middleware::{Middleware, MiddlewareModelOutcome, ModelHandler, ModelM
 use crate::retry::{RateLimiter, RetryPolicy, is_retryable};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use crate::tool::{ToolCall, ToolDelta, ToolResult, ToolSchema};
-use tinyinference::message::{ContentBlock, Message};
-use tinyinference::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_core::message::{ContentBlock, Message};
+use tinyinference_core::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
 
 mod budget;
 mod context;

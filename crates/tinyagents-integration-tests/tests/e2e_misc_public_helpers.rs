@@ -21,7 +21,7 @@ use tinyagents_harness::ids::{
 use tinyagents_harness::limits::{LimitTracker, RunLimits};
 use tinyagents_harness::store::{AppendStore, InMemoryAppendStore};
 use tinyagents_harness::tool::ToolResult;
-use tinyinference::tool::{ToolCall, ToolFormat, ToolSchema};
+use tinyinference_core::tool::{ToolCall, ToolFormat, ToolSchema};
 
 #[tokio::test]
 async fn graph_reducers_streams_observability_and_status_helpers_work() {

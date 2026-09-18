@@ -31,11 +31,11 @@ use tinyagents_harness::workspace::WorkspaceDescriptor;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::tool::ToolCall as TC;
-use tinyinference::tool::{ToolCall, ToolSchema};
-use tinyinference::usage::Usage;
+use tinyinference_core::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_core::model::ModelResponse;
+use tinyinference_core::tool::ToolCall as TC;
+use tinyinference_core::tool::{ToolCall, ToolSchema};
+use tinyinference_core::usage::Usage;
 
 // ── Model response builders (verbatim from the task spec) ─────────────────────
 

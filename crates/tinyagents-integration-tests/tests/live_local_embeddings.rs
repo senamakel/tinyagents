@@ -47,12 +47,12 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use tinyinference::embeddings::{
+use tinyinference_core::embeddings::{
     EmbeddingModel, InMemoryVectorStore, OllamaEmbeddingModel, OpenAiEmbeddingModel,
     RECOMMENDED_OLLAMA_CONTEXT_TOKENS, Retriever, cosine_similarity,
 };
-use tinyinference::providers::openai::OpenAiModel;
-use tinyinference::providers::{ProviderKind, ProviderSpec};
+use tinyinference_core::providers::openai::OpenAiModel;
+use tinyinference_core::providers::{ProviderKind, ProviderSpec};
 
 /// A local embedding backend under test, behind the provider-neutral trait so
 /// every assertion below is written once and runs against both.

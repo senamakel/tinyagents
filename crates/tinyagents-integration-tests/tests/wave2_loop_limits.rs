@@ -17,8 +17,8 @@ use tinyagents_harness::context::RunConfig;
 use tinyagents_harness::limits::{LimitBehavior, RunLimits};
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::FakeTool;
-use tinyinference::message::Message;
-use tinyinference::providers::MockModel;
+use tinyinference_core::message::Message;
+use tinyinference_core::providers::MockModel;
 
 /// A harness whose model always asks for the same tool, so the loop only ever
 /// stops because a cap stops it.

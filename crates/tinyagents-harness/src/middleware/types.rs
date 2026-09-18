@@ -28,8 +28,8 @@ use crate::error::{Result, TinyAgentsError};
 use crate::ids::RunId;
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
 use crate::tool::{ToolCall, ToolDelta, ToolResult};
-use tinyinference::model::{ModelDelta, ModelRequest, ModelResponse};
-use tinyinference::usage::UsageTotals;
+use tinyinference_core::model::{ModelDelta, ModelRequest, ModelResponse};
+use tinyinference_core::usage::UsageTotals;
 
 // ── AgentRun ────────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ use tinyinference::usage::UsageTotals;
 #[derive(Clone, Debug, Default)]
 pub struct AgentRun {
     /// The full conversation transcript produced by the run, in order.
-    pub messages: Vec<tinyinference::message::Message>,
+    pub messages: Vec<tinyinference_core::message::Message>,
     /// The final model response, when the run produced one.
     pub final_response: Option<ModelResponse>,
     /// Parsed structured output, when the run requested a structured format.

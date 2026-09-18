@@ -19,7 +19,7 @@ async fn live_openai_subagent_surfaces_tool_failure() {
     use tinyagents_harness::error::TinyAgentsError;
     use tinyagents_harness::runtime::AgentHarness;
     use tinyagents_harness::testkit::FakeTool;
-    use tinyinference::providers::openai::OpenAiModel;
+    use tinyinference_core::providers::openai::OpenAiModel;
 
     let _ = dotenvy::dotenv();
     if std::env::var("OPENAI_API_KEY").is_err() {

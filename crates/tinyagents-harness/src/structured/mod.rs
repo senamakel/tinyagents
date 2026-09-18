@@ -46,7 +46,7 @@
 //! use tinyagents_harness::structured::{
 //!     StructuredExtractor, StructuredStrategy, response_format_for_strategy,
 //! };
-//! use tinyinference::model::ModelResponse;
+//! use tinyinference_core::model::ModelResponse;
 //! use serde_json::json;
 //!
 //! let schema = json!({ "type": "object", "properties": { "score": { "type": "number" } } });
@@ -69,7 +69,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{Result, TinyAgentsError};
-use tinyinference::model::{ModelProfile, ModelResponse, ResponseFormat};
+use tinyinference_core::model::{ModelProfile, ModelResponse, ResponseFormat};
 
 // ---------------------------------------------------------------------------
 // Strategy selection
@@ -97,13 +97,13 @@ impl StructuredStrategy {
     /// ladder in [`super::structured::repair`], parses what a JSON-mode model
     /// actually returns.
     ///
-    /// [tc]: tinyinference::model::ToolChoice::Tool
+    /// [tc]: tinyinference_core::model::ToolChoice::Tool
     ///
     /// # Example
     ///
     /// ```rust
     /// use tinyagents_harness::structured::StructuredStrategy;
-    /// use tinyinference::model::ModelProfile;
+    /// use tinyinference_core::model::ModelProfile;
     ///
     /// // No profile -> provider-native schema mode.
     /// assert_eq!(

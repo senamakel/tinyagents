@@ -16,9 +16,9 @@ use tinyagents_harness::cache::{
 use tinyagents_harness::summarization::{
     ConcatSummarizer, SummarizationPolicy, Summarizer, TrimStrategy, estimate_tokens, trim_messages,
 };
-use tinyinference::cache::CachePolicy;
-use tinyinference::message::Message;
-use tinyinference::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_core::cache::CachePolicy;
+use tinyinference_core::message::Message;
+use tinyinference_core::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
 
 // ── Summarization: token estimation + trimming ──────────────────────────────
 
