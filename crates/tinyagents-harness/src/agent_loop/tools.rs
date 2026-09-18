@@ -189,7 +189,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
     ) -> Result<()> {
-        let canonical_parallel_safe = batch_is_canonical_parallel_safe(&self.tools, &tool_calls);
+        // Injection and argument normalization change the model payload before
+        // execution. Until admission has produced those authoritative values,
+        // a declaration cannot safely make a parallel decision from raw model
+        // input, so such batches deliberately retain serial semantics.
+        let canonical_parallel_safe =
+            !matches!(
+                self.policy.invalid_args,
+                InvalidArgsPolicy::NormalizeThenReturnToolError
+            ) && batch_is_canonical_parallel_safe(&self.tools, &tool_calls);
         if tool_calls.len() > 1
             && canonical_parallel_safe
             && self.middleware.tool_middleware_len() == 0
@@ -808,16 +816,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 }
 
 /// A batch may leave the serial path only when every registered declaration
-/// opts in for its actual arguments. Unknown calls remain serial so recovery
-/// behavior is identical to a single-call turn.
+/// opts in for raw arguments that need no host-owned preparation. Unknown
+/// calls and injected arguments remain serial: injection is performed at
+/// admission, and an untrusted model value must not select concurrency before
+/// its authoritative replacement exists.
 fn batch_is_canonical_parallel_safe<State: Send + Sync, Ctx: Send + Sync>(
     tools: &crate::tool::ToolRegistry<State, Ctx>,
     calls: &[ToolCall],
 ) -> bool {
     calls.iter().all(|call| {
-        tools
-            .get(&call.name)
-            .is_some_and(|tool| tool.is_concurrency_safe(&call.arguments))
+        tools.get(&call.name).is_some_and(|tool| {
+            tool.injected_arguments().is_empty() && tool.is_concurrency_safe(&call.arguments)
+        })
     })
 }
 
@@ -871,15 +881,13 @@ fn tool_message_from_result(
         "tinytools_content": result.content,
         "markdown_formatted": result.markdown_formatted,
         "is_error": result.is_error,
+        "trusted_verbatim": result.trusted_verbatim,
     });
 
     tinyinference_llm::message::ToolMessage {
         tool_call_id,
         content,
-        // TinyTools 0.2 deliberately has no trusted-verbatim result flag.
-        // This required provider field therefore stays false; see the handoff
-        // note in the migration report rather than inventing a side channel.
-        trusted_verbatim: false,
+        trusted_verbatim: result.trusted_verbatim,
         artifact: Some(artifact),
     }
 }
@@ -1090,6 +1098,7 @@ mod canonical_result_tests {
 
     struct DeclaredParallelTool {
         parallel: bool,
+        injected_risk: bool,
     }
 
     #[async_trait]
@@ -1110,8 +1119,14 @@ mod canonical_result_tests {
             Ok(ToolResult::success("ok"))
         }
 
-        fn is_concurrency_safe(&self, _arguments: &serde_json::Value) -> bool {
-            self.parallel
+        fn is_concurrency_safe(&self, arguments: &serde_json::Value) -> bool {
+            self.parallel && arguments["risk"].as_str().is_none_or(|risk| risk == "safe")
+        }
+
+        fn injected_arguments(&self) -> Vec<tinytools::ToolInjectedArgument> {
+            self.injected_risk
+                .then(|| vec![tinytools::ToolInjectedArgument::host("risk")])
+                .unwrap_or_default()
         }
     }
 
@@ -1126,6 +1141,7 @@ mod canonical_result_tests {
                 },
             ],
             is_error: true,
+            trusted_verbatim: true,
             markdown_formatted: Some("## compact failure".to_string()),
         }
     }
@@ -1145,6 +1161,7 @@ mod canonical_result_tests {
                 vec![ContentBlock::Text("## compact failure".to_string())]
             );
             assert_eq!(message.artifact.as_ref().unwrap()["is_error"], true);
+            assert!(message.trusted_verbatim);
             assert_eq!(
                 message.artifact.as_ref().unwrap()["tinytools_content"],
                 serde_json::json!([
@@ -1188,11 +1205,56 @@ mod canonical_result_tests {
             tinyinference_llm::tool::ToolCall::new("call", "parallel", serde_json::json!({}));
 
         let mut serial: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
-        serial.register(Arc::new(DeclaredParallelTool { parallel: false }));
+        serial.register(Arc::new(DeclaredParallelTool {
+            parallel: false,
+            injected_risk: false,
+        }));
         assert!(!batch_is_canonical_parallel_safe(&serial, &[call.clone()]));
 
         let mut concurrent: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
-        concurrent.register(Arc::new(DeclaredParallelTool { parallel: true }));
+        concurrent.register(Arc::new(DeclaredParallelTool {
+            parallel: true,
+            injected_risk: false,
+        }));
         assert!(batch_is_canonical_parallel_safe(&concurrent, &[call]));
+    }
+
+    #[test]
+    fn forged_safe_injected_value_cannot_select_parallel_execution() {
+        let mut registry: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
+        registry.register(Arc::new(DeclaredParallelTool {
+            parallel: true,
+            injected_risk: true,
+        }));
+
+        // A model can claim `safe`; admission will strip this and inject the
+        // host's real (potentially unsafe) value. The raw value must therefore
+        // never be considered a parallelization proof.
+        let forged_safe = tinyinference_llm::tool::ToolCall::new(
+            "call",
+            "parallel",
+            serde_json::json!({"risk": "safe"}),
+        );
+        let canonical = tinytools::ToolCall::new(
+            tinytools::ToolCallId::new("call"),
+            "parallel",
+            forged_safe.arguments.clone(),
+        );
+        let mut host_values = tinytools::InjectedToolArguments::new();
+        host_values.insert("risk", serde_json::json!("unsafe"));
+        let authoritative = tinytools::prepare_tool_arguments(
+            &canonical,
+            &registry.get("parallel").unwrap().injected_arguments(),
+            &host_values,
+        )
+        .unwrap();
+        assert!(
+            !registry
+                .get("parallel")
+                .unwrap()
+                .is_concurrency_safe(&authoritative),
+            "the host value is the one that makes this call unsafe"
+        );
+        assert!(!batch_is_canonical_parallel_safe(&registry, &[forged_safe]));
     }
 }

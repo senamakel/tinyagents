@@ -42,7 +42,7 @@ impl ToolExecutionContext {
         Self {
             run_id: ctx.config.run_id.clone(),
             thread_id: ctx.config.thread_id.clone(),
-            depth: ctx.config.depth,
+            depth: ctx.depth(),
             max_turn_output_tokens: ctx.config.max_turn_output_tokens,
             events: ctx.events.clone(),
             cancellation: ctx.cancellation.clone(),
