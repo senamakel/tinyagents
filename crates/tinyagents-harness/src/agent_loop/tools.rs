@@ -90,7 +90,7 @@
 
 use super::model_call::ToolCallBase;
 use super::*;
-use crate::tool::{ToolDispatch, ToolErrorPolicy, provider_schema};
+use crate::tool::{ToolDispatch, provider_schema};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
@@ -567,11 +567,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         });
         status.set_last_event(record.id);
 
-        messages.push(tool_message_from_result(
+        messages.push(Message::Tool(tool_message_from_result(
             transcript_call_id,
             &result,
             prepared.options,
-        ));
+        )));
         Ok(())
     }
 
@@ -607,8 +607,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // crate-owned tool policy returns a recoverable tool error; the
             // outer run budget still aborts when the whole run is exhausted.
             let run_budget = self.call_budget(ctx);
-            let error_policy = tool.error_policy();
-            let policy_call = call.clone();
             let base = ToolCallBase {
                 dispatch,
                 options,
@@ -616,13 +614,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
             let run_id = ctx.run_id().as_str().to_string();
             let fut = self.middleware.run_wrapped_tool(ctx, state, call, &base);
-            // The policy is applied *inside* the run-budget wrapper so that
-            // exhausting the run's wall clock stays fatal (it is the run
-            // ending, not the tool failing) while a tool error is routed.
-            let guarded = async move {
-                let outcome = fut.await.map(|wrapped| wrapped.into_result());
-                apply_tool_error_policy(&error_policy, &policy_call, outcome)
-            };
+            // TinyTools distinguishes a fatal execution `Err` from a
+            // recoverable `ToolResult::error`; no harness error-policy facade
+            // rewrites that canonical distinction.
+            let guarded = async move { fut.await.map(|wrapped| wrapped.into_result()) };
             let outcome = Self::with_call_budget(
                 run_budget,
                 &run_id,
@@ -725,6 +720,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut slots: Vec<ToolSlot> = Vec::with_capacity(admitted.len());
         let mut prepared: Vec<PreparedToolCall> = Vec::new();
         let mut futures: Vec<_> = Vec::new();
+        // Concurrent dispatch receives a shared parent snapshot; the mutable
+        // run context stays with the fold phase after all futures complete.
+        let parent_ctx: &RunContext<Ctx> = ctx;
         for entry in admitted {
             let (dispatch, tool, call) = match entry {
                 AdmittedCall::Execute {
@@ -751,20 +749,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let timeout_result = timeout_result(&call, tool_timeout);
             let run_budget = self.call_budget(ctx);
             let run_id = ctx.run_id().as_str().to_string();
-            let error_policy = tool.error_policy();
-            let policy_call = call.clone();
             futures.push(async move {
                 let fut = async move {
                     dispatch
-                        .execute(state, call.arguments, options, ctx)
+                        .execute(state, call.arguments, options, parent_ctx)
                         .await
                         .map_err(map_tool_dispatch_error)
                 };
                 let fut = Self::with_tool_policy_timeout(tool_timeout, timeout_result, fut);
-                // As in serial mode: the error policy routes the *tool's*
-                // failure, inside the run-budget wrapper that stays fatal.
-                let guarded =
-                    async move { apply_tool_error_policy(&error_policy, &policy_call, fut.await) };
+                // As in serial mode, canonical execution errors remain fatal;
+                // reported tool errors travel in `ToolResult::is_error`.
+                let guarded = async move { fut.await };
                 Self::with_call_budget(
                     run_budget,
                     &run_id,
@@ -918,25 +913,6 @@ pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
         Ok(error) => error,
         Err(error) => TinyAgentsError::Tool(format!("{error:#}")),
     }
-}
-
-/// Routes a tool invocation outcome through `policy`, keeping middleware
-/// refusals fatal.
-///
-/// [`ToolErrorPolicy::apply`] already re-raises cancellation and interruption.
-/// This adds one more class the policy must not swallow: an error raised by
-/// *middleware* wrapping the call. That is how an approval gate or an allowlist
-/// refuses a call, and converting a refusal into "the tool failed, try
-/// something else" would let the loop continue past a gate that said no.
-fn apply_tool_error_policy(
-    policy: &ToolErrorPolicy,
-    call: &ToolCall,
-    outcome: Result<tinytools::ToolResult>,
-) -> Result<tinytools::ToolResult> {
-    if let Err(TinyAgentsError::Middleware(_)) = &outcome {
-        return outcome;
-    }
-    policy.apply(&call.name, outcome)
 }
 
 /// Repairs provider-neutral argument shape defects before schema validation.
