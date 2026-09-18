@@ -47,6 +47,18 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
         Ok(tinytools::InjectedToolArguments::new())
     }
 
+    /// Returns the output shape requested for one invocation.
+    ///
+    /// The default asks markdown-capable canonical tools for their compact
+    /// rendering. A host that needs a different policy supplies a dispatch
+    /// implementation with its own per-call choice; the loop passes this same
+    /// value to execution and transcript rendering.
+    fn call_options(&self, _arguments: &Value) -> tinytools::ToolCallOptions {
+        tinytools::ToolCallOptions {
+            prefer_markdown: self.tool().supports_markdown(),
+        }
+    }
+
     /// Executes with the full typed parent run when the dispatch needs it.
     async fn execute(
         &self,

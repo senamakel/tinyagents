@@ -856,6 +856,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
 /// invocation.
 pub(super) struct ToolCallBase<State: Send + Sync, Ctx: Send + Sync> {
     pub(super) dispatch: Arc<dyn crate::tool::ToolDispatch<State, Ctx>>,
+    pub(super) options: tinytools::ToolCallOptions,
     pub(super) timeout_settings: Option<crate::tool::ToolTimeoutSettings>,
 }
 
@@ -871,12 +872,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
                 settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
             });
             let timeout_result = super::tools::timeout_result(&call, timeout);
-            let future = self.dispatch.execute(
-                state,
-                call.arguments,
-                tinytools::ToolCallOptions::default(),
-                ctx,
-            );
+            let future = async {
+                self.dispatch
+                    .execute(state, call.arguments, self.options, ctx)
+                    .await
+                    .map_err(super::tools::map_tool_dispatch_error)
+            };
             match timeout.and_then(|resolved| resolved.deadline) {
                 Some(deadline) => match tokio::time::timeout(deadline, future).await {
                     Ok(result) => result,

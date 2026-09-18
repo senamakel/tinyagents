@@ -138,6 +138,7 @@ enum ToolSlot {
 struct PreparedToolCall {
     call_id: CallId,
     tool_name: String,
+    options: ToolCallOptions,
     captured_input: Option<Value>,
     started_at_ms: u64,
 }
@@ -153,7 +154,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Option<crate::tool::ResolvedToolTimeout> {
         self.tool_timeouts
             .as_ref()
-            .map(|settings| settings.resolve(tool.timeout_policy(call)))
+            .map(|settings| settings.resolve(tool.timeout_policy(&call.arguments)))
     }
 
     async fn with_tool_policy_timeout<T, F>(
@@ -188,7 +189,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
     ) -> Result<()> {
-        if tool_calls.len() > 1 && self.middleware.tool_middleware_len() == 0 {
+        let canonical_parallel_safe = batch_is_canonical_parallel_safe(&self.tools, &tool_calls);
+        if tool_calls.len() > 1
+            && canonical_parallel_safe
+            && self.middleware.tool_middleware_len() == 0
+        {
             self.execute_tools_concurrently(state, ctx, run, status, messages, tool_calls)
                 .await
         } else {
@@ -425,6 +430,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &RunContext<Ctx>,
         status: &mut HarnessRunStatus,
         call: &ToolCall,
+        options: ToolCallOptions,
     ) -> PreparedToolCall {
         let call_id = CallId::new(call.id.clone());
         let tool_name = call.name.clone();
@@ -443,6 +449,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         PreparedToolCall {
             call_id,
             tool_name,
+            options,
             captured_input,
             started_at_ms,
         }
@@ -519,22 +526,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         run.tool_calls += 1;
         status.tool_calls = run.tool_calls;
         release_active_tool_call(status, &prepared.call_id);
+        let model_output = result.output_for_llm(prepared.options.prefer_markdown);
         let captured_output = self
             .policy
             .capture
             .tool_io
-            .then(|| Value::String(result.output()));
+            .then(|| Value::String(model_output.clone()));
         // Outcome fields carried on the event itself (not a side-channel) so
         // journal-backed exporters render duration/size/success without the
         // live run's state. Duration is wall-clock (completion minus start);
         // `is_error` is a reported tool failure, distinct from execution Err.
         let duration_ms = crate::ids::now_ms().saturating_sub(prepared.started_at_ms);
-        let output = result.output();
-        let output_bytes = output.len() as u64;
-        let error = result.is_error.then_some(output.clone());
+        let output_bytes = model_output.len() as u64;
+        let error = result.is_error.then_some(model_output.clone());
+        // The transcript and event both answer the admitted call, never a
+        // tool-owned id. Clone before the event consumes its fields so the two
+        // records cannot drift.
+        let transcript_call_id = prepared.call_id.to_string();
+        let event_call_id = prepared.call_id.clone();
+        let event_tool_name = prepared.tool_name.clone();
         let record = ctx.emit(AgentEvent::ToolCompleted {
-            call_id: prepared.call_id,
-            tool_name: prepared.tool_name,
+            call_id: event_call_id,
+            tool_name: event_tool_name,
             started_at_ms: Some(prepared.started_at_ms),
             input: prepared.captured_input,
             output: captured_output,
@@ -544,19 +557,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         });
         status.set_last_event(record.id);
 
-        messages.push(Message::Tool(tinyinference_llm::message::ToolMessage {
-            tool_call_id: prepared.call_id.to_string(),
-            content: result
-                .content
-                .into_iter()
-                .map(|block| match block {
-                    tinytools::ToolContent::Text { text } => ContentBlock::Text(text),
-                    tinytools::ToolContent::Json { data } => ContentBlock::Json(data),
-                })
-                .collect(),
-            trusted_verbatim: false,
-            artifact: None,
-        }));
+        messages.push(tool_message_from_result(
+            transcript_call_id,
+            &result,
+            prepared.options,
+        ));
         Ok(())
     }
 
@@ -582,7 +587,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             };
 
-            let prepared = self.start_tool_call(ctx, status, &call);
+            let options = dispatch.call_options(&call.arguments);
+            let prepared = self.start_tool_call(ctx, status, &call, options);
 
             // The real tool call is the innermost base of the tool-wrap
             // onion (same before -> wrap -> after ordering as the model
@@ -595,6 +601,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let policy_call = call.clone();
             let base = ToolCallBase {
                 dispatch,
+                options,
                 timeout_settings: self.tool_timeouts.clone(),
             };
             let run_id = ctx.run_id().as_str().to_string();
@@ -663,7 +670,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             call.id,
             call.name
         );
-        let prepared = self.start_tool_call(ctx, status, call);
+        let prepared = self.start_tool_call(ctx, status, call, ToolCallOptions::default());
         let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
@@ -721,7 +728,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             };
 
-            prepared.push(self.start_tool_call(ctx, status, &call));
+            let options = dispatch.call_options(&call.arguments);
+            prepared.push(self.start_tool_call(ctx, status, &call, options));
             slots.push(ToolSlot::Execute);
 
             // Each call is bounded by its recoverable tool policy inside the
@@ -736,7 +744,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let error_policy = tool.error_policy();
             let policy_call = call.clone();
             futures.push(async move {
-                let fut = dispatch.execute(state, call.arguments, ToolCallOptions::default(), ctx);
+                let fut = async move {
+                    dispatch
+                        .execute(state, call.arguments, options, ctx)
+                        .await
+                        .map_err(map_tool_dispatch_error)
+                };
                 let fut = Self::with_tool_policy_timeout(tool_timeout, timeout_result, fut);
                 // As in serial mode: the error policy routes the *tool's*
                 // failure, inside the run-budget wrapper that stays fatal.
@@ -794,6 +807,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     }
 }
 
+/// A batch may leave the serial path only when every registered declaration
+/// opts in for its actual arguments. Unknown calls remain serial so recovery
+/// behavior is identical to a single-call turn.
+fn batch_is_canonical_parallel_safe<State: Send + Sync, Ctx: Send + Sync>(
+    tools: &crate::tool::ToolRegistry<State, Ctx>,
+    calls: &[ToolCall],
+) -> bool {
+    calls.iter().all(|call| {
+        tools
+            .get(&call.name)
+            .is_some_and(|tool| tool.is_concurrency_safe(&call.arguments))
+    })
+}
+
 /// Removes **one** occurrence of `call_id` from the in-flight list.
 ///
 /// Positional, not `retain`: a provider can emit two calls in one turn that
@@ -808,6 +835,64 @@ fn release_active_tool_call(status: &mut HarnessRunStatus, call_id: &CallId) {
         .position(|active| active == call_id)
     {
         status.active_tool_calls.remove(position);
+    }
+}
+
+/// Converts the canonical block result into the provider-neutral transcript
+/// shape without discarding its richer host-side representation.
+///
+/// A preferred markdown rendering is model-facing, so it replaces the provider
+/// message body only when it is non-blank. The complete ordered TinyTools block
+/// list, optional markdown, and reported-error bit remain in the artifact for
+/// host consumers and transcript persistence.
+fn tool_message_from_result(
+    tool_call_id: String,
+    result: &tinytools::ToolResult,
+    options: ToolCallOptions,
+) -> tinyinference_llm::message::ToolMessage {
+    let markdown_selected = options.prefer_markdown
+        && result
+            .markdown_formatted
+            .as_deref()
+            .is_some_and(|markdown| !markdown.trim().is_empty());
+    let content = if markdown_selected {
+        vec![ContentBlock::Text(result.output_for_llm(true))]
+    } else {
+        result
+            .content
+            .iter()
+            .map(|block| match block {
+                tinytools::ToolContent::Text { text } => ContentBlock::Text(text.clone()),
+                tinytools::ToolContent::Json { data } => ContentBlock::Json(data.clone()),
+            })
+            .collect()
+    };
+    let artifact = serde_json::json!({
+        "tinytools_content": result.content,
+        "markdown_formatted": result.markdown_formatted,
+        "is_error": result.is_error,
+    });
+
+    tinyinference_llm::message::ToolMessage {
+        tool_call_id,
+        content,
+        // TinyTools 0.2 deliberately has no trusted-verbatim result flag.
+        // This required provider field therefore stays false; see the handoff
+        // note in the migration report rather than inventing a side channel.
+        trusted_verbatim: false,
+        artifact: Some(artifact),
+    }
+}
+
+/// Maps a canonical-dispatch failure back to the harness error surface.
+///
+/// Typed harness errors retain their original classification (cancellation,
+/// timeout, middleware refusal, etc.). Foreign errors preserve their complete
+/// causal display chain in the tool-failure detail.
+pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
+    match error.downcast::<TinyAgentsError>() {
+        Ok(error) => error,
+        Err(error) => TinyAgentsError::Tool(format!("{error:#}")),
     }
 }
 
@@ -988,4 +1073,126 @@ pub(super) fn timeout_result(
         "tool `{}` timed out after {budget_ms} ms",
         call.name
     ))
+}
+
+#[cfg(test)]
+mod canonical_result_tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
+    use super::{
+        batch_is_canonical_parallel_safe, map_tool_dispatch_error, tool_message_from_result,
+    };
+    use crate::error::TinyAgentsError;
+    use tinyinference_llm::message::ContentBlock;
+    use tinytools::{ToolCallOptions, ToolContent, ToolResult};
+
+    struct DeclaredParallelTool {
+        parallel: bool,
+    }
+
+    #[async_trait]
+    impl tinytools::Tool for DeclaredParallelTool {
+        fn name(&self) -> &str {
+            "parallel"
+        }
+
+        fn description(&self) -> &str {
+            "test tool"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+
+        async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::success("ok"))
+        }
+
+        fn is_concurrency_safe(&self, _arguments: &serde_json::Value) -> bool {
+            self.parallel
+        }
+    }
+
+    fn markdown_result() -> ToolResult {
+        ToolResult {
+            content: vec![
+                ToolContent::Text {
+                    text: "plain summary".to_string(),
+                },
+                ToolContent::Json {
+                    data: serde_json::json!({"ordered": 2}),
+                },
+            ],
+            is_error: true,
+            markdown_formatted: Some("## compact failure".to_string()),
+        }
+    }
+
+    #[test]
+    fn serial_and_concurrent_folds_select_the_same_markdown_and_preserve_blocks() {
+        let result = markdown_result();
+        let options = ToolCallOptions::prefer_markdown();
+
+        // Both execution modes converge through this fold helper.
+        let serial = tool_message_from_result("serial-call".to_string(), &result, options);
+        let concurrent = tool_message_from_result("concurrent-call".to_string(), &result, options);
+
+        for message in [&serial, &concurrent] {
+            assert_eq!(
+                message.content,
+                vec![ContentBlock::Text("## compact failure".to_string())]
+            );
+            assert_eq!(message.artifact.as_ref().unwrap()["is_error"], true);
+            assert_eq!(
+                message.artifact.as_ref().unwrap()["tinytools_content"],
+                serde_json::json!([
+                    {"type":"text", "text":"plain summary"},
+                    {"type":"json", "data":{"ordered":2}}
+                ])
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_result_keeps_ordered_blocks_when_markdown_is_not_preferred() {
+        let message = tool_message_from_result(
+            "call".to_string(),
+            &markdown_result(),
+            ToolCallOptions::default(),
+        );
+        assert_eq!(
+            message.content,
+            vec![
+                ContentBlock::Text("plain summary".to_string()),
+                ContentBlock::Json(serde_json::json!({"ordered": 2})),
+            ]
+        );
+    }
+
+    #[test]
+    fn dispatch_error_mapping_preserves_harness_classification_and_foreign_chain() {
+        let cancelled = map_tool_dispatch_error(anyhow::Error::new(TinyAgentsError::Cancelled));
+        assert!(matches!(cancelled, TinyAgentsError::Cancelled));
+
+        let foreign = map_tool_dispatch_error(anyhow::anyhow!("outer: {}", "root cause"));
+        assert!(
+            matches!(foreign, TinyAgentsError::Tool(message) if message.contains("root cause"))
+        );
+    }
+
+    #[test]
+    fn canonical_concurrency_declaration_gates_the_parallel_path() {
+        let call =
+            tinyinference_llm::tool::ToolCall::new("call", "parallel", serde_json::json!({}));
+
+        let mut serial: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
+        serial.register(Arc::new(DeclaredParallelTool { parallel: false }));
+        assert!(!batch_is_canonical_parallel_safe(&serial, &[call.clone()]));
+
+        let mut concurrent: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
+        concurrent.register(Arc::new(DeclaredParallelTool { parallel: true }));
+        assert!(batch_is_canonical_parallel_safe(&concurrent, &[call]));
+    }
 }
