@@ -1,0 +1,273 @@
+//! Portable agent definitions and their deterministic in-memory catalogue.
+//!
+//! These are catalogue data, not executable harness agents: the host owns
+//! prompt construction, authorization, and model/tool resolution. Keeping the
+//! definition here lets registries, graph planners, and hosts share one serde
+//! contract without importing an OpenHuman or harness configuration type.
+
+use std::collections::{HashMap, HashSet};
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::Result;
+
+/// Declarative description of an agent a host may make available.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDefinition {
+    /// Stable, host-assigned opaque identifier.
+    pub id: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// Concise capability summary shown to a delegating parent.
+    pub description: String,
+    /// Preferred model identifier, if this agent pins one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Agent ids this agent declares as eligible delegates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<String>,
+    /// Canonical tool names this agent may use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+}
+
+impl AgentDefinition {
+    /// Creates a minimally valid definition.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            model: None,
+            subagents: Vec::new(),
+            tools: Vec::new(),
+        }
+    }
+
+    /// Sets the model preference.
+    #[must_use]
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Sets declared delegate ids.
+    #[must_use]
+    pub fn with_subagents<I, S>(mut self, subagents: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.subagents = subagents.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets permitted tool names.
+    #[must_use]
+    pub fn with_tools<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tools = tools.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Returns deterministic diagnostics for malformed or ambiguous data.
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<AgentDefinitionDiagnostic> {
+        let mut diagnostics = Vec::new();
+        required_field(&mut diagnostics, "id", &self.id);
+        required_field(&mut diagnostics, "name", &self.name);
+        required_field(&mut diagnostics, "description", &self.description);
+        duplicate_values(&mut diagnostics, "subagents", &self.subagents);
+        duplicate_values(&mut diagnostics, "tools", &self.tools);
+        for (field, values) in [("subagents", &self.subagents), ("tools", &self.tools)] {
+            for value in values {
+                if value.trim().is_empty() {
+                    diagnostics.push(AgentDefinitionDiagnostic::empty_entry(field));
+                }
+            }
+        }
+        diagnostics
+    }
+
+    /// Whether every required field and declared list entry is valid.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.diagnostics().is_empty()
+    }
+}
+
+/// A deterministic, machine-readable definition validation finding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentDefinitionDiagnostic {
+    /// Field containing the invalid value.
+    pub field: String,
+    /// Stable machine-oriented validation code.
+    pub code: String,
+    /// Explanation appropriate for a configuration diagnostic.
+    pub message: String,
+}
+
+impl AgentDefinitionDiagnostic {
+    fn required(field: &str) -> Self {
+        Self {
+            field: field.to_string(),
+            code: "required".to_string(),
+            message: format!("agent definition field `{field}` must not be blank"),
+        }
+    }
+
+    fn duplicate(field: &str, value: &str) -> Self {
+        Self {
+            field: field.to_string(),
+            code: "duplicate".to_string(),
+            message: format!("agent definition field `{field}` repeats `{value}`"),
+        }
+    }
+
+    fn empty_entry(field: &str) -> Self {
+        Self {
+            field: field.to_string(),
+            code: "empty_entry".to_string(),
+            message: format!("agent definition field `{field}` contains a blank entry"),
+        }
+    }
+}
+
+fn required_field(diagnostics: &mut Vec<AgentDefinitionDiagnostic>, field: &str, value: &str) {
+    if value.trim().is_empty() {
+        diagnostics.push(AgentDefinitionDiagnostic::required(field));
+    }
+}
+
+fn duplicate_values(
+    diagnostics: &mut Vec<AgentDefinitionDiagnostic>,
+    field: &str,
+    values: &[String],
+) {
+    let mut seen = HashSet::new();
+    for value in values {
+        if !seen.insert(value.as_str()) {
+            diagnostics.push(AgentDefinitionDiagnostic::duplicate(field, value));
+        }
+    }
+}
+
+/// Required, host-owned definition lookup capability.
+///
+/// `Ok(None)` is the normal absence outcome. Errors are reserved for a backing
+/// catalogue that could not answer; callers must not turn feature-gated or
+/// otherwise absent agent definitions into failed runs.
+#[async_trait]
+pub trait DefinitionRegistry: Send + Sync {
+    /// Resolves an id or returns normal absence.
+    async fn resolve(&self, id: &str) -> Result<Option<AgentDefinition>>;
+    /// Lists definitions in stable catalogue order.
+    async fn list(&self) -> Result<Vec<AgentDefinition>>;
+    /// Returns the host-authorized delegate ids, not merely the declaration.
+    async fn delegates_for(&self, id: &str) -> Result<Vec<String>>;
+}
+
+/// A fixed, insertion-ordered definition catalogue.
+#[derive(Clone, Debug, Default)]
+pub struct InMemoryAgentDefinitionRegistry {
+    definitions: Vec<AgentDefinition>,
+    index: HashMap<String, usize>,
+}
+
+impl InMemoryAgentDefinitionRegistry {
+    /// Retains the first definition for each id, preserving insertion order.
+    #[must_use]
+    pub fn new(definitions: Vec<AgentDefinition>) -> Self {
+        let mut registry = Self::default();
+        for definition in definitions {
+            if registry.index.contains_key(&definition.id) {
+                continue;
+            }
+            registry.index.insert(definition.id.clone(), registry.definitions.len());
+            registry.definitions.push(definition);
+        }
+        registry
+    }
+
+    /// Returns diagnostics from every retained definition, in catalogue order.
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<AgentDefinitionDiagnostic> {
+        self.definitions
+            .iter()
+            .flat_map(AgentDefinition::diagnostics)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl DefinitionRegistry for InMemoryAgentDefinitionRegistry {
+    async fn resolve(&self, id: &str) -> Result<Option<AgentDefinition>> {
+        Ok(self
+            .index
+            .get(id)
+            .and_then(|position| self.definitions.get(*position))
+            .cloned())
+    }
+
+    async fn list(&self) -> Result<Vec<AgentDefinition>> {
+        Ok(self.definitions.clone())
+    }
+
+    async fn delegates_for(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .index
+            .get(id)
+            .and_then(|position| self.definitions.get(*position))
+            .map(|definition| definition.subagents.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+            .into_iter()
+            .map(str::to_owned)
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn definition_round_trips_and_reports_specific_invalid_fields() {
+        let definition: AgentDefinition = serde_json::from_value(serde_json::json!({
+            "id": "planner",
+            "name": "Planner",
+            "description": "Plans work",
+            "model": "small",
+            "subagents": ["research", "research", ""],
+            "tools": ["search", ""],
+        }))
+        .unwrap();
+        assert_eq!(serde_json::to_value(&definition).unwrap()["id"], "planner");
+        let diagnostics = definition.diagnostics();
+        assert!(diagnostics.iter().any(|d| d.code == "duplicate" && d.field == "subagents"));
+        assert_eq!(diagnostics.iter().filter(|d| d.code == "empty_entry").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn catalogue_is_stable_first_wins_and_absence_is_not_an_error() {
+        let registry = InMemoryAgentDefinitionRegistry::new(vec![
+            AgentDefinition::new("planner", "Planner", "first").with_subagents(["research"]),
+            AgentDefinition::new("planner", "Other", "ignored"),
+            AgentDefinition::new("research", "Research", "second"),
+        ]);
+        assert_eq!(registry.resolve("planner").await.unwrap().unwrap().description, "first");
+        assert_eq!(registry.list().await.unwrap().len(), 2);
+        assert_eq!(registry.delegates_for("planner").await.unwrap(), vec!["research"]);
+        assert!(registry.resolve("missing").await.unwrap().is_none());
+        assert!(registry.delegates_for("missing").await.unwrap().is_empty());
+    }
+}

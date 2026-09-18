@@ -12,11 +12,30 @@ use crate::builder::{GraphBuilder, NodeContext};
 use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
 use crate::command::NodeResult;
 use crate::reducer::ClosureStateReducer;
+use async_trait::async_trait;
 use tinyagents_harness::ids::{NodeId, RunId};
+
+#[derive(Default)]
+struct NestedRecordingInvoker(std::sync::Mutex<Vec<crate::subagent_node::AgentInvocation>>);
+
+#[async_trait]
+impl crate::subagent_node::AgentInvoker for NestedRecordingInvoker {
+    async fn invoke(
+        &self,
+        request: crate::subagent_node::AgentInvocation,
+    ) -> crate::Result<crate::subagent_node::SubAgentOutput> {
+        self.0.lock().unwrap().push(request.clone());
+        Ok(crate::subagent_node::SubAgentOutput {
+            text: request.input.prompt,
+            ..Default::default()
+        })
+    }
+}
 
 /// Builds a minimal [`NodeContext`] standing in for the embedding node `id`.
 fn ctx_for(id: &str) -> NodeContext {
     NodeContext {
+        graph_id: tinyagents_harness::ids::GraphId::new("graph-test"),
         node_id: NodeId::from(id),
         run_id: RunId::new("run-test"),
         thread_id: None,
@@ -27,6 +46,9 @@ fn ctx_for(id: &str) -> NodeContext {
         root_run_id: None,
         recursion_frames: Vec::new(),
         child_runs: None,
+        agent_invoker: None,
+        agent_events: None,
+        agent_cancellation: None,
     }
 }
 
@@ -59,6 +81,42 @@ async fn shared_state_subgraph() {
     // 0 -> pre(+1) -> child(+10) = 11
     let run = parent.run(0).await.unwrap();
     assert_eq!(run.state, 11);
+}
+
+#[tokio::test]
+async fn embedded_graph_propagates_the_host_agent_invoker() {
+    let invoker = Arc::new(NestedRecordingInvoker::default());
+    let child = GraphBuilder::<String, String>::overwrite()
+        .add_node(
+            "delegate",
+            crate::subagent_node::subagent_node(crate::subagent_node::SubAgentNode::from_fns(
+                "researcher",
+                |state: &String| crate::subagent_node::SubAgentInput::prompt(state.clone()),
+                |out: crate::subagent_node::SubAgentOutput| out.text,
+            )),
+        )
+        .set_entry("delegate")
+        .set_finish("delegate")
+        .compile()
+        .unwrap();
+    let parent = GraphBuilder::<String, String>::overwrite()
+        .add_node("child", shared_subgraph_node(child))
+        .set_entry("child")
+        .set_finish("child")
+        .compile()
+        .unwrap()
+        .with_agent_invoker(
+            invoker.clone(),
+            tinyagents_harness::events::EventSink::new(),
+            tinyagents_harness::cancel::CancellationToken::new(),
+        );
+
+    let run = parent.run("nested".to_string()).await.unwrap();
+    let requests = invoker.0.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].root_run_id, run.root_run_id);
+    assert_ne!(requests[0].parent_run_id, run.run_id);
+    assert_eq!(requests[0].input.prompt, "nested");
 }
 
 #[derive(Clone, Debug, PartialEq)]

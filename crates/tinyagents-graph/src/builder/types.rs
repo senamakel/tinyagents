@@ -63,6 +63,8 @@ impl ForkId {
 /// to the value carried by the resume command.
 #[derive(Clone, Debug)]
 pub struct NodeContext {
+    /// The graph currently executing this node.
+    pub graph_id: GraphId,
     /// The node being executed.
     pub node_id: NodeId,
     /// The current run id.
@@ -95,6 +97,13 @@ pub struct NodeContext {
     /// the [`ChildRun`](crate::ChildRun) it spawned back to the enclosing
     /// run; `None` when no executor sink is attached (e.g. a hand-built context).
     pub child_runs: Option<crate::recursion::ChildRunSink>,
+    /// Host-bound recursive agent entry point, if this graph was invoked from
+    /// a harness parent context.
+    pub agent_invoker: Option<Arc<dyn crate::subagent_node::AgentInvoker>>,
+    /// Parent event sink forwarded explicitly into recursive agent requests.
+    pub agent_events: Option<tinyagents_harness::events::EventSink>,
+    /// Parent cancellation forwarded explicitly into recursive agent requests.
+    pub agent_cancellation: Option<tinyagents_harness::cancel::CancellationToken>,
 }
 
 /// Behavior-free, introspectable metadata attached to a node by the builder.

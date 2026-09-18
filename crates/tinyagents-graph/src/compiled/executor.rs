@@ -1117,6 +1117,7 @@ where
         child_runs: &ChildRunSink,
     ) -> NodeContext {
         NodeContext {
+            graph_id: self.graph_id.clone(),
             node_id: node_id.clone(),
             run_id: run_id.clone(),
             thread_id: thread_id.clone(),
@@ -1127,6 +1128,9 @@ where
             root_run_id: Some(root_run_id.clone()),
             recursion_frames: frames.to_vec(),
             child_runs: Some(child_runs.clone()),
+            agent_invoker: self.agent_invoker.clone(),
+            agent_events: self.agent_events.clone(),
+            agent_cancellation: self.agent_cancellation.clone(),
         }
     }
 

@@ -49,6 +49,11 @@ pub struct CompiledGraph<State, Update> {
     /// as the `node_id` of this run's root recursion frame so the run tree names
     /// the embedding node. `None` for a top-level run.
     pub(crate) recursion_node: Option<NodeId>,
+    /// Host-bound recursive-agent entry point copied into each node context.
+    pub(crate) agent_invoker: Option<Arc<dyn crate::subagent_node::AgentInvoker>>,
+    /// Explicit parent capabilities supplied with the recursive-agent entry point.
+    pub(crate) agent_events: Option<tinyagents_harness::events::EventSink>,
+    pub(crate) agent_cancellation: Option<tinyagents_harness::cancel::CancellationToken>,
     pub(crate) checkpointer: Option<Arc<dyn Checkpointer<State>>>,
     pub(crate) event_sink: Option<Arc<dyn GraphEventSink>>,
     /// Optional durable observation journal (opt-in via
@@ -114,6 +119,9 @@ impl<State, Update> Clone for CompiledGraph<State, Update> {
             recursion_policy: self.recursion_policy,
             recursion_frames: self.recursion_frames.clone(),
             recursion_node: self.recursion_node.clone(),
+            agent_invoker: self.agent_invoker.clone(),
+            agent_events: self.agent_events.clone(),
+            agent_cancellation: self.agent_cancellation.clone(),
             checkpointer: self.checkpointer.clone(),
             event_sink: self.event_sink.clone(),
             journal: self.journal.clone(),

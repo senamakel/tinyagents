@@ -495,53 +495,44 @@ mod tool_tests {
 
     use super::super::tool::{TodoTool, todo_tools};
     use super::super::types::TaskCardStatus;
-    use tinyagents_harness::events::EventSink;
-    use tinyagents_harness::ids::{RunId, ThreadId};
     use tinyagents_harness::store::{InMemoryStore, Store};
-    use tinyagents_harness::tool::{Tool, ToolExecutionContext};
-    use tinyinference_llm::tool::ToolCall;
+    use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
 
     fn store() -> Arc<dyn Store> {
         Arc::new(InMemoryStore::default())
     }
 
-    fn ctx(thread_id: Option<&str>) -> ToolExecutionContext {
-        ToolExecutionContext {
-            run_id: RunId::new("run-1"),
-            thread_id: thread_id.map(ThreadId::new),
-            depth: 0,
-            max_turn_output_tokens: None,
-            events: EventSink::new(),
-            cancellation: tinyagents_harness::cancel::CancellationToken::new(),
-            streaming: false,
-            workspace: None,
+    struct ThreadContext(Option<String>);
+
+    impl ToolRunContext for ThreadContext {
+        fn thread_id(&self) -> Option<&str> {
+            self.0.as_deref()
         }
     }
 
-    fn call(args: serde_json::Value) -> ToolCall {
-        ToolCall {
-            id: "c1".to_string(),
-            name: "todo".to_string(),
-            arguments: args,
-            invalid: None,
-        }
-    }
-
-    async fn run(
-        tool: &TodoTool,
-        thread: Option<&str>,
-        args: serde_json::Value,
-    ) -> tinyagents_harness::tool::ToolResult {
-        Tool::<()>::call_with_context(tool, &(), call(args), ctx(thread))
+    async fn run(tool: &TodoTool, thread: Option<&str>, args: serde_json::Value) -> ToolResult {
+        let context = ThreadContext(thread.map(str::to_owned));
+        tool.execute_with_context(args, Default::default(), Some(&context))
             .await
             .unwrap()
+    }
+
+    fn raw(result: &ToolResult) -> &serde_json::Value {
+        result
+            .content
+            .iter()
+            .find_map(|block| match block {
+                ToolContent::Json { data } => Some(data),
+                ToolContent::Text { .. } => None,
+            })
+            .expect("successful todo result has a JSON payload")
     }
 
     #[test]
     fn todo_tools_builds_a_single_tool() {
         let tools = todo_tools(store());
         assert_eq!(tools.len(), 1);
-        assert_eq!(Tool::<()>::name(tools[0].as_ref()), "todo");
+        assert_eq!(Tool::name(tools[0].as_ref()), "todo");
     }
 
     #[tokio::test]
@@ -553,62 +544,58 @@ mod tool_tests {
             json!({ "op": "add", "content": "Write tests" }),
         )
         .await;
-        assert!(res.error.is_none(), "{res:?}");
-        let raw = res.raw.unwrap();
-        assert_eq!(raw["threadId"], "t");
-        assert!(raw["markdown"].as_str().unwrap().contains("Write tests"));
+        assert!(!res.is_error, "{res:?}");
+        assert_eq!(raw(&res)["threadId"], "t");
+        assert!(
+            raw(&res)["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("Write tests")
+        );
 
         let res = run(&tool, Some("t"), json!({ "op": "list" })).await;
-        assert_eq!(res.raw.unwrap()["cards"].as_array().unwrap().len(), 1);
+        assert_eq!(raw(&res)["cards"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn add_then_update_status() {
         let tool = TodoTool::new(store());
         let res = run(&tool, Some("t"), json!({ "op": "add", "content": "Task" })).await;
-        let id = res.raw.unwrap()["cards"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let id = raw(&res)["cards"][0]["id"].as_str().unwrap().to_string();
         let res = run(
             &tool,
             Some("t"),
             json!({ "op": "update_status", "id": id, "status": "in_progress" }),
         )
         .await;
-        assert_eq!(res.raw.unwrap()["cards"][0]["status"], "in_progress");
+        assert_eq!(raw(&res)["cards"][0]["status"], "in_progress");
     }
 
     #[tokio::test]
     async fn tool_requires_a_thread() {
         let tool = TodoTool::new(store());
         // Bare call (no context).
-        let res = Tool::<()>::call(&tool, &(), call(json!({ "op": "list" })))
-            .await
-            .unwrap();
-        assert!(res.error.unwrap().contains("active thread"));
+        let res = tool.execute(json!({ "op": "list" })).await.unwrap();
+        assert!(res.is_error && res.output().contains("active thread"));
         // Context without a thread id.
         let res = run(&tool, None, json!({ "op": "list" })).await;
-        assert!(res.error.is_some());
+        assert!(res.is_error);
     }
 
     #[tokio::test]
     async fn unknown_op_and_missing_field_are_soft_errors() {
         let tool = TodoTool::new(store());
         let res = run(&tool, Some("t"), json!({ "op": "frobnicate" })).await;
-        assert!(res.error.unwrap().contains("unknown op"));
+        assert!(res.is_error && res.output().contains("unknown op"));
         let res = run(&tool, Some("t"), json!({ "op": "add" })).await;
-        assert!(res.error.unwrap().contains("content"));
+        assert!(res.is_error && res.output().contains("content"));
     }
 
     #[tokio::test]
     async fn invariant_violation_is_a_soft_error() {
         let tool = TodoTool::new(store());
         let a = run(&tool, Some("t"), json!({ "op": "add", "content": "A" })).await;
-        let a_id = a.raw.unwrap()["cards"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let a_id = raw(&a)["cards"][0]["id"].as_str().unwrap().to_string();
         run(&tool, Some("t"), json!({ "op": "add", "content": "B" })).await;
         run(
             &tool,
@@ -618,17 +605,14 @@ mod tool_tests {
         .await;
         // Second in-progress via replace/update is surfaced as an error, run continues.
         let b = run(&tool, Some("t"), json!({ "op": "list" })).await;
-        let b_id = b.raw.unwrap()["cards"][1]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let b_id = raw(&b)["cards"][1]["id"].as_str().unwrap().to_string();
         let res = run(
             &tool,
             Some("t"),
             json!({ "op": "update_status", "id": b_id, "status": "in_progress" }),
         )
         .await;
-        assert!(res.error.unwrap().contains("in_progress"));
+        assert!(res.is_error && res.output().contains("in_progress"));
     }
 
     #[tokio::test]
@@ -640,10 +624,7 @@ mod tool_tests {
             json!({ "op": "add", "content": "Gated", "status": "awaiting_approval" }),
         )
         .await;
-        let id = res.raw.unwrap()["cards"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let id = raw(&res)["cards"][0]["id"].as_str().unwrap().to_string();
         let res = run(
             &tool,
             Some("t"),
@@ -651,7 +632,7 @@ mod tool_tests {
         )
         .await;
         assert_eq!(
-            res.raw.unwrap()["cards"][0]["status"],
+            raw(&res)["cards"][0]["status"],
             TaskCardStatus::Ready.as_str()
         );
     }

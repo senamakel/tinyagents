@@ -116,9 +116,19 @@ fn namespaced<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledG
 /// extends the parent's recursion tree rather than starting a fresh one), and
 /// records the embedding node so the child's root frame names it.
 fn child_for<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledGraph<S, U> {
-    namespaced(child, ctx)
+    let child = namespaced(child, ctx)
         .with_recursion_frames(ctx.recursion_frames.clone())
-        .with_recursion_node(ctx.node_id.clone())
+        .with_recursion_node(ctx.node_id.clone());
+    match (
+        ctx.agent_invoker.clone(),
+        ctx.agent_events.clone(),
+        ctx.agent_cancellation.clone(),
+    ) {
+        (Some(invoker), Some(events), Some(cancellation)) => {
+            child.with_agent_invoker(invoker, events, cancellation)
+        }
+        _ => child,
+    }
 }
 
 /// Drives an embedded child graph for one parent-node activation.

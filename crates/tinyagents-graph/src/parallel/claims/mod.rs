@@ -37,7 +37,7 @@ pub use types::{ClaimConflict, ClaimPathError, DispatchMode, DispatchPlan, Works
 
 use std::path::{Component, Path, PathBuf};
 
-use tinyagents_harness::tool::ToolSideEffects;
+use tinytools::ToolSideEffects;
 
 /// Parses a claim list into safe, sorted, deduplicated relative paths.
 ///
