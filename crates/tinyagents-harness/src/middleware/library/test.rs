@@ -12,9 +12,10 @@ use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall};
 use crate::retry::{RateLimiter, RetryPolicy};
-use crate::tool::{ToolCall, ToolResult, ToolSchema};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
+use tinytools::{SandboxMode, ToolAccess, ToolPolicy, ToolResult, ToolRuntime, ToolSideEffects};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -438,7 +439,7 @@ fn schema_named(name: &str) -> ToolSchema {
         name: name.to_string(),
         description: String::new(),
         parameters: json!({}),
-        format: crate::tool::ToolFormat::Json,
+        format: ToolFormat::Json,
     }
 }
 
@@ -977,7 +978,7 @@ async fn dynamic_tool_selection_filters_request_tools() {
         name: name.to_string(),
         description: String::new(),
         parameters: json!({}),
-        format: crate::tool::ToolFormat::Json,
+        format: ToolFormat::Json,
     };
     let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
         schema("keep"),
@@ -997,7 +998,6 @@ async fn dynamic_tool_selection_filters_request_tools() {
 
 #[tokio::test]
 async fn tool_policy_strict_hides_and_rejects_unclassified() {
-    use crate::tool::ToolPolicy;
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert("safe".to_string(), ToolPolicy::read_only());
@@ -1012,7 +1012,7 @@ async fn tool_policy_strict_hides_and_rejects_unclassified() {
         name: name.to_string(),
         description: String::new(),
         parameters: json!({}),
-        format: crate::tool::ToolFormat::Json,
+        format: ToolFormat::Json,
     };
     let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
         schema("safe"),
@@ -1043,7 +1043,6 @@ async fn tool_policy_strict_hides_and_rejects_unclassified() {
 
 #[tokio::test]
 async fn tool_policy_denies_declared_side_effect() {
-    use crate::tool::{ToolPolicy, ToolSideEffects};
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(
@@ -1070,7 +1069,6 @@ async fn tool_policy_denies_declared_side_effect() {
 
 #[tokio::test]
 async fn tool_policy_blocks_unapproved_approval_required_tool() {
-    use crate::tool::{ToolAccess, ToolPolicy};
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(
@@ -1096,7 +1094,6 @@ async fn tool_policy_blocks_unapproved_approval_required_tool() {
 #[tokio::test]
 async fn tool_policy_requires_sandbox_for_sandboxed_tool() {
     use crate::context::{RunConfig, RunContext};
-    use crate::tool::{SandboxMode, ToolPolicy, ToolRuntime};
     use crate::workspace::WorkspaceDescriptor;
 
     let mut policies = std::collections::HashMap::new();
@@ -1133,7 +1130,6 @@ async fn tool_policy_requires_sandbox_for_sandboxed_tool() {
 
 #[tokio::test]
 async fn tool_policy_truncates_oversized_results() {
-    use crate::tool::{ToolPolicy, ToolResult, ToolRuntime};
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(

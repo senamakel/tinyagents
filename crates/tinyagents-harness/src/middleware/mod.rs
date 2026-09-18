@@ -39,8 +39,9 @@ use std::sync::Arc;
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
-use crate::tool::{ToolCall, ToolDelta, ToolResult};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::{ToolCall, ToolDelta};
+use tinytools::ToolResult;
 
 /// Runs one per-middleware lifecycle hook across the whole stack, bracketing
 /// each call with `MiddlewareStarted`/`MiddlewareCompleted` events and fanning

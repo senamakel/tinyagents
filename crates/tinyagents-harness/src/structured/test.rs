@@ -6,9 +6,9 @@
 //! [`StructuredOutput::parse`] deserialisation.
 
 use super::*;
-use crate::tool::ToolCall;
 use serde_json::json;
 use tinyinference_llm::model::{ModelProfile, ModelResponse, ResponseFormat};
+use tinyinference_llm::tool::ToolCall;
 
 #[test]
 fn auto_strategy_defaults_to_provider_schema_without_profile() {

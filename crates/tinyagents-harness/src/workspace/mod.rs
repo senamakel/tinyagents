@@ -23,7 +23,7 @@ use async_trait::async_trait;
 
 use crate::Result;
 use crate::events::{AgentEvent, EventSink};
-use crate::tool::SandboxMode;
+use tinytools::SandboxMode;
 
 /// Prepares a per-agent environment through `isolation` and emits an
 /// [`AgentEvent::WorkspacePrepared`] on the run's event sink so late observers

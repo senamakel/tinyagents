@@ -32,7 +32,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tool::ToolResult;
+use tinytools::ToolResult;
 
 // ── OutcomeClass ──────────────────────────────────────────────────────────────
 
@@ -152,10 +152,10 @@ impl ErrorFieldClassifier {
 
 impl ToolOutcomeClassifier for ErrorFieldClassifier {
     fn classify(&self, _name: &str, result: &ToolResult) -> OutcomeClass {
-        match result.error {
-            Some(_) => OutcomeClass::PermanentFailure,
-            None => OutcomeClass::Success,
-        }
+        result
+            .is_error
+            .then_some(OutcomeClass::PermanentFailure)
+            .unwrap_or(OutcomeClass::Success)
     }
 }
 

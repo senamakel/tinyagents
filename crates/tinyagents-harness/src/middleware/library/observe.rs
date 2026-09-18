@@ -9,6 +9,7 @@ use serde_json::Value;
 use super::*;
 use crate::middleware::{AgentRun, HookCounts, LoggingMiddleware, UsageAccountingMiddleware};
 use tinyinference_llm::usage::UsageTotals;
+use tinytools::ToolContent;
 
 // ── StructuredOutputValidatorMiddleware ───────────────────────────────────────
 
@@ -252,20 +253,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for RedactionM
         _state: &State,
         result: &mut ToolResult,
     ) -> Result<()> {
-        let (redacted, mut hits) = self.redact(&result.content);
-        if hits > 0 {
-            result.content = redacted;
+        let mut hits = 0;
+        for content in &mut result.content {
+            match content {
+                ToolContent::Text { text } => {
+                    let (redacted, count) = self.redact(text);
+                    if count > 0 {
+                        *text = redacted;
+                        hits += count;
+                    }
+                }
+                ToolContent::Json { data } => hits += self.redact_value(data),
+            }
         }
-        // The structured `raw` payload duplicates (or extends) the content, so
-        // it must be scrubbed as well.
-        if let Some(raw) = &mut result.raw {
-            hits += self.redact_value(raw);
-        }
-        if let Some(error) = &mut result.error {
-            let (redacted, n) = self.redact(error);
-            if n > 0 {
-                *error = redacted;
-                hits += n;
+        if let Some(markdown) = &mut result.markdown_formatted {
+            let (redacted, count) = self.redact(markdown);
+            if count > 0 {
+                *markdown = redacted;
+                hits += count;
             }
         }
         self.record(hits);

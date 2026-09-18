@@ -39,6 +39,7 @@ pub mod observability;
 pub mod prompt;
 pub mod providers;
 pub(crate) mod relaxed_json;
+pub mod retriever;
 pub mod retry;
 pub mod run_queue;
 pub mod runtime;
@@ -51,7 +52,6 @@ pub mod summarization;
 pub mod testkit;
 pub mod token_estimation;
 pub mod tool;
-pub mod tool_calling;
 #[cfg(feature = "tools")]
 pub mod tools;
 pub mod workspace;
@@ -77,5 +77,5 @@ pub use steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringOutcome, SteeringPolicy,
 };
 pub use subagent::{SubAgent, SubAgentSession, SubAgentTool};
-pub use tool::{Tool as HarnessTool, ToolRegistry, ToolResult as HarnessToolResult};
+pub use tool::ToolRegistry;
 pub use workspace::{SharedRootWorkspace, WorkspaceDescriptor, WorkspaceIsolation};

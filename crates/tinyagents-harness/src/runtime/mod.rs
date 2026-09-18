@@ -34,8 +34,9 @@ use std::sync::Arc;
 use crate::cache::ResponseCache;
 use crate::middleware::{Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware};
 use crate::model_registry::ModelRegistry;
-use crate::tool::{Tool, ToolRegistry, ToolTimeoutSettings};
+use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::model::ChatModel;
+use tinytools::Tool;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
@@ -71,8 +72,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Registers a tool, keyed by its [`Tool::name`]. Returns `&mut Self` for
     /// chaining.
-    pub fn register_tool(&mut self, tool: Arc<dyn Tool<State>>) -> &mut Self {
+    pub fn register_tool(&mut self, tool: Arc<dyn Tool>) -> &mut Self {
         self.tools.register(tool);
+        self
+    }
+
+    /// Registers a tool whose execution needs the typed parent run.
+    pub fn register_tool_dispatch(
+        &mut self,
+        dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
+    ) -> &mut Self {
+        self.tools.register_dispatch(dispatch);
         self
     }
 
@@ -159,7 +169,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     }
 
     /// Returns a reference to the tool registry.
-    pub fn tools(&self) -> &ToolRegistry<State> {
+    pub fn tools(&self) -> &ToolRegistry<State, Ctx> {
         &self.tools
     }
 

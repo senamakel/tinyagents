@@ -2,13 +2,12 @@
 
 use std::sync::Arc;
 
-use crate::Result;
 use crate::limits::RunLimits;
 use crate::middleware::LoggingMiddleware;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, RunPolicy};
-use crate::tool::{Tool, ToolCall, ToolResult, ToolSchema};
 use tinyinference_llm::providers::MockModel;
+use tinytools::{Tool, ToolResult};
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -16,18 +15,18 @@ use serde_json::json;
 struct NoopTool;
 
 #[async_trait]
-impl Tool<()> for NoopTool {
+impl Tool for NoopTool {
     fn name(&self) -> &str {
         "noop"
     }
     fn description(&self) -> &str {
         "does nothing"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new("noop", "does nothing", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-        Ok(ToolResult::text(call.id, "noop", "ok"))
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
     }
 }
 

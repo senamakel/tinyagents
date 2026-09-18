@@ -27,9 +27,10 @@ use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::ids::RunId;
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
-use crate::tool::{ToolCall, ToolDelta, ToolResult};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::{ToolCall, ToolDelta};
 use tinyinference_llm::usage::UsageTotals;
+use tinytools::ToolResult;
 
 // ── AgentRun ────────────────────────────────────────────────────────────────
 

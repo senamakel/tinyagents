@@ -1484,6 +1484,7 @@ dependencies = [
 name = "tinyagents-integration-tests"
 version = "2.1.2"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
  "dotenvy",

@@ -273,7 +273,7 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// Name-keyed registry of chat models with an optional default.
     pub(crate) models: ModelRegistry<State>,
     /// Name-keyed registry of tools exposed to the model.
-    pub(crate) tools: ToolRegistry<State>,
+    pub(crate) tools: ToolRegistry<State, Ctx>,
     /// Ordered middleware stack wrapping agent, model, and tool execution.
     pub(crate) middleware: MiddlewareStack<State, Ctx>,
     /// Cross-cutting run policy (limits, retry, fallback, response format).

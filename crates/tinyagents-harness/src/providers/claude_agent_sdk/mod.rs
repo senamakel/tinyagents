@@ -2,11 +2,13 @@
 
 mod protocol;
 
-use crate::tool::{coalesce_prompt_tool_results, with_prompt_tool_instructions};
 use anyhow::Context;
 use async_trait::async_trait;
-use tinyinference_llm::message::Message;
+use tinyinference_llm::message::{ContentBlock, Message};
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::ToolSpec;
+use tinytools_agent::dialect::{ToolDialect, XmlDialect};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -300,8 +302,7 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        let messages = coalesce_prompt_tool_results(&request.messages);
-        let messages = with_prompt_tool_instructions(&messages, &request.tools);
+        let messages = prepare_prompt_messages(&request.messages, &request.tools);
         let system = coalesce_system_prompt(&messages);
         let last_user = messages
             .iter()
@@ -321,13 +322,54 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
             .await
             .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
 
-        let response = ModelResponse::assistant(output);
-        Ok(if request.tools.is_empty() {
-            response
-        } else {
-            crate::tool::apply_prompt_tool_calls(response)
-        })
+        let mut response = ModelResponse::assistant(output);
+        if !request.tools.is_empty() {
+            let (text, calls) = XmlDialect::parse_text(&response.text());
+            response.message.content = vec![ContentBlock::Text(text)];
+            response.message.tool_calls = calls
+                .into_iter()
+                .enumerate()
+                .map(|(index, call)| ToolCall {
+                    id: call.id.unwrap_or_else(|| format!("claude-sdk-{index}")),
+                    name: call.name,
+                    arguments: call.arguments,
+                    invalid: None,
+                })
+                .collect();
+        }
+        Ok(response)
     }
+}
+
+fn prepare_prompt_messages(
+    messages: &[Message],
+    tools: &[tinyinference_llm::tool::ToolSchema],
+) -> Vec<Message> {
+    let dialect = XmlDialect;
+    let specs = tools
+        .iter()
+        .map(|tool| ToolSpec {
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        })
+        .collect::<Vec<_>>();
+    let instructions = dialect.prompt_instructions(&specs);
+    let mut prepared = messages.to_vec();
+    if specs.is_empty() {
+        return prepared;
+    }
+    if let Some(Message::System(system)) = prepared
+        .iter_mut()
+        .find(|message| matches!(message, Message::System(_)))
+    {
+        system
+            .content
+            .push(ContentBlock::Text(format!("\n\n{instructions}")));
+    } else {
+        prepared.insert(0, Message::system(instructions));
+    }
+    prepared
 }
 
 /// Join every system message into the one system prompt the CLI accepts.

@@ -5,10 +5,10 @@
 //! [`super::PromptCacheLayout`] correctly detects stable vs. changed prefixes.
 
 use super::*;
-use crate::tool::ToolSchema;
 use serde_json::json;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_llm::tool::ToolSchema;
 
 #[tokio::test]
 async fn response_cache_put_get() {

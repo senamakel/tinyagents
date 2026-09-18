@@ -120,6 +120,8 @@ fn cache_key_envelope(request: &ModelRequest) -> Value {
         tool_choice,
         response_format,
         model,
+        // Requested routing is observability metadata, not model input.
+        requested_route: _,
         model_hints,
         reuse_previous_model,
         temperature,
@@ -144,6 +146,8 @@ fn cache_key_envelope(request: &ModelRequest) -> Value {
         prompt_fingerprint: _,
         // Selects *whether* to cache, never what is answered.
         cache_policy: _,
+        // Correlation ties the request to host lifecycle records only.
+        correlation: _,
     } = request;
 
     serde_json::json!({

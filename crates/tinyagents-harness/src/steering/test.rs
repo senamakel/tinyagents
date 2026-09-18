@@ -23,7 +23,9 @@ use crate::testkit::{EventRecorder, Trajectory};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
 use tinyinference_llm::usage::Usage;
+use tinytools::{Tool, ToolResult};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -44,6 +46,8 @@ fn text_response(text: &str) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -81,7 +85,7 @@ impl ChatModel<()> for RecordingModel {
                 message: tinyinference_llm::message::AssistantMessage {
                     id: Some("m1".to_string()),
                     content: Vec::new(),
-                    tool_calls: vec![crate::tool::ToolCall::new("c1", "noop", json!({}))],
+                    tool_calls: vec![ToolCall::new("c1", "noop", json!({}))],
                     usage: Some(Usage::new(1, 1)),
                 },
                 usage: Some(Usage::new(1, 1)),
@@ -90,6 +94,8 @@ impl ChatModel<()> for RecordingModel {
                 resolved_model: None,
                 continue_turn: None,
                 served_from_cache: false,
+                correlation: None,
+                resolved_route: None,
             })
         } else {
             Ok(text_response("done"))
@@ -101,22 +107,18 @@ impl ChatModel<()> for RecordingModel {
 struct NoopTool;
 
 #[async_trait]
-impl crate::tool::Tool<()> for NoopTool {
+impl Tool for NoopTool {
     fn name(&self) -> &str {
         "noop"
     }
     fn description(&self) -> &str {
         "noop"
     }
-    fn schema(&self) -> crate::tool::ToolSchema {
-        crate::tool::ToolSchema::new("noop", "noop", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(
-        &self,
-        _state: &(),
-        call: crate::tool::ToolCall,
-    ) -> Result<crate::tool::ToolResult> {
-        Ok(crate::tool::ToolResult::text(call.id, "noop", "ok"))
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
     }
 }
 

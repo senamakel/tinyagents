@@ -238,6 +238,8 @@ fn model_response(response: ChatResponse) -> ModelResponse {
         cache_read_tokens: value.cached_input_tokens,
         cache_creation_tokens: value.cache_creation_tokens,
         reasoning_tokens: value.reasoning_tokens,
+        charged_amount: None,
+        context_window_tokens: None,
     });
     ModelResponse {
         message: AssistantMessage {
@@ -255,6 +257,8 @@ fn model_response(response: ChatResponse) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -323,7 +327,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
             futures::stream::unfold((rx, Some(handle)), |(mut receiver, handle)| async move {
                 receiver.recv().await.map(|item| (item, (receiver, handle)))
             });
-        Ok(Box::pin(stream))
+        Ok(ModelStream::new(Box::pin(stream)))
     }
 }
 

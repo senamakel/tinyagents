@@ -6,6 +6,7 @@
 //! full built-in middleware library overview.
 
 use super::*;
+use tinytools::{SandboxMode, ToolPolicy, ToolSideEffects};
 
 // ── ToolAllowlistMiddleware ───────────────────────────────────────────────────
 
@@ -54,13 +55,13 @@ impl ToolPolicyMiddleware {
     ///
     /// Defaults are permissive: nothing is required or denied until configured.
     /// Use [`strict`](Self::strict) for a fail-closed baseline.
-    pub fn new(policies: std::collections::HashMap<String, crate::tool::ToolPolicy>) -> Self {
+    pub fn new(policies: std::collections::HashMap<String, ToolPolicy>) -> Self {
         Self {
             label: "tool_policy",
             policies,
             require_classification: false,
             require_background_safe: false,
-            deny: crate::tool::ToolSideEffects::default(),
+            deny: ToolSideEffects::default(),
             require_sandbox: false,
             require_approval: false,
             approved: std::collections::HashSet::new(),
@@ -70,16 +71,16 @@ impl ToolPolicyMiddleware {
 
     /// Creates a fail-closed policy middleware: unclassified tools are rejected,
     /// and tools declaring `destructive` or `payment` side effects are denied.
-    pub fn strict(policies: std::collections::HashMap<String, crate::tool::ToolPolicy>) -> Self {
+    pub fn strict(policies: std::collections::HashMap<String, ToolPolicy>) -> Self {
         Self {
             label: "tool_policy",
             policies,
             require_classification: true,
             require_background_safe: false,
-            deny: crate::tool::ToolSideEffects {
+            deny: ToolSideEffects {
                 destructive: true,
                 payment: true,
-                ..crate::tool::ToolSideEffects::default()
+                ..ToolSideEffects::default()
             },
             require_sandbox: false,
             require_approval: false,
@@ -102,7 +103,7 @@ impl ToolPolicyMiddleware {
     }
 
     /// Denies tools declaring any side effect present in `mask`.
-    pub fn deny_side_effects(mut self, mask: crate::tool::ToolSideEffects) -> Self {
+    pub fn deny_side_effects(mut self, mask: ToolSideEffects) -> Self {
         self.deny = mask;
         self
     }
@@ -183,13 +184,13 @@ impl ToolPolicyMiddleware {
         let Some(policy) = self.policies.get(name) else {
             return Ok(());
         };
-        if policy.runtime.sandbox != crate::tool::SandboxMode::Required {
+        if policy.runtime.sandbox != SandboxMode::Required {
             return Ok(());
         }
         let sandboxed = ctx
             .workspace
             .as_ref()
-            .is_some_and(|ws| ws.sandbox == crate::tool::SandboxMode::Required);
+            .is_some_and(|ws| ws.sandbox == SandboxMode::Required);
         if sandboxed {
             Ok(())
         } else {
@@ -238,23 +239,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolPolicy
         if !self.enforce_result_bytes {
             return Ok(());
         }
-        if let Some(policy) = self.policies.get(&result.name)
-            && let Some(limit) = policy.runtime.max_result_bytes
-            && result.content.len() > limit
-        {
-            // Truncate on a char boundary at or below the byte limit so the
-            // enforced payload is still valid UTF-8.
-            let mut end = limit;
-            while end > 0 && !result.content.is_char_boundary(end) {
-                end -= 1;
-            }
-            result.content.truncate(end);
-            let note = format!("tool result exceeded max_result_bytes ({limit}); truncated");
-            result.error = Some(match result.error.take() {
-                Some(existing) => format!("{existing}; {note}"),
-                None => note,
-            });
-        }
+        // `tinytools::ToolResult` intentionally contains only tool-owned
+        // output; it has no tool name. The agent-loop execution seam still has
+        // the canonical declaration and enforces `max_result_bytes` there
+        // before this lifecycle hook observes the result.
         Ok(())
     }
 }
@@ -390,7 +378,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
     ) -> Result<()> {
         let selection = ToolSelectionContext {
             run_id: ctx.config.run_id.as_str().to_string(),
-            depth: ctx.config.depth,
+            depth: ctx.config.depth(),
             tags: ctx.config.tags.clone(),
             requested_model: request.model.clone(),
         };

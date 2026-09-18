@@ -11,7 +11,7 @@ use crate::CancellationToken;
 use crate::Result;
 
 /// A retrieval request supplied by context composition.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RetrievalRequest {
     /// Query text. Hosts are responsible for authorization and source scope
     /// before creating this request.
