@@ -853,21 +853,34 @@ fn apply_host_budget_compression<Ctx>(
         .iter()
         .filter(|message| !matches!(message, Message::System(_)))
         .count();
-    let strategy = match hint {
+    let reduced = match hint {
         CompressionHint::None => return Ok(()),
         // Preserve a recent working window without perturbing a short prompt.
         CompressionHint::Soft if non_system < 3 => return Ok(()),
-        CompressionHint::Soft => TrimStrategy::KeepLast((non_system / 2).max(1)),
-        // A hard hint must create real headroom.  The generic trimmer keeps
-        // tool-call/result pairing intact while shedding oldest material.
-        CompressionHint::Hard => TrimStrategy::MaxTokens((from_tokens / 2).max(1)),
+        CompressionHint::Soft => {
+            trim_messages(messages, &TrimStrategy::KeepLast((non_system / 2).max(1)))
+        }
+        // A hard hint must create real headroom without ever treating system
+        // instructions as expendable. The token trimmer removes oldest
+        // conversational messages, preserves every system message verbatim,
+        // and clears an orphaned tool-result prefix after its owning assistant
+        // call was evicted.
+        CompressionHint::Hard => crate::summarization::trim_messages_to_token_budget_with(
+            messages,
+            crate::summarization::TokenTrimPolicy::strict((from_tokens / 2).max(1))
+                .preserve_system()
+                .drop_leading_orphan_tools(),
+            crate::token_estimation::estimate_message_tokens,
+        ),
     };
-    let reduced = trim_messages(messages, &strategy);
     let to_tokens = crate::token_estimation::estimate_slice_tokens(&reduced);
-    if to_tokens >= from_tokens || reduced.is_empty() {
+    let has_conversation = reduced
+        .iter()
+        .any(|message| !matches!(message, Message::System(_)));
+    if to_tokens >= from_tokens || reduced.is_empty() || (hint.is_required() && !has_conversation) {
         if hint.is_required() {
             return Err(TinyAgentsError::Validation(
-                "host budget requires reducible context before provider call".into(),
+                "host budget requires reducible conversational context before provider call".into(),
             ));
         }
         return Ok(());

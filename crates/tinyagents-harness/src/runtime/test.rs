@@ -947,17 +947,26 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
     .with_budget(budget.clone());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_host_capabilities(host);
+    let mut prior_tool_call = ModelResponse::assistant("");
+    prior_tool_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "prior-lookup",
+            "lookup",
+            json!({"query": "old context"}),
+        ));
+    let original_messages = vec![
+        tinyinference_llm::message::Message::system("system instruction one: preserve exactly"),
+        tinyinference_llm::message::Message::system("system instruction two: preserve exactly"),
+        tinyinference_llm::message::Message::user("old context ".repeat(80)),
+        tinyinference_llm::message::Message::Assistant(prior_tool_call.message),
+        tinyinference_llm::message::Message::tool("prior-lookup", "old lookup result ".repeat(4)),
+        tinyinference_llm::message::Message::user("current task ".repeat(20)),
+    ];
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![
-                    tinyinference_llm::message::Message::user("old context ".repeat(20)),
-                    tinyinference_llm::message::Message::assistant("older response ".repeat(20)),
-                    tinyinference_llm::message::Message::user("new context ".repeat(20)),
-                    tinyinference_llm::message::Message::assistant("latest response ".repeat(20)),
-                ],
-            ),
+            AgentTurnRequest::new("helper", original_messages.clone()),
             RunContext::new(RunConfig::new("hard-compression"), ()),
             &(),
         )
@@ -966,10 +975,73 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
     assert_eq!(run.text().as_deref(), Some("reduced"));
     let request = model.requests().pop().expect("provider was called once");
     assert!(
-        request.messages.len() < 4,
+        request.messages.len() < original_messages.len(),
         "hard compression sent fewer messages to the provider"
     );
+    let preserved_system: Vec<_> = request
+        .messages
+        .iter()
+        .filter(|message| matches!(message, tinyinference_llm::message::Message::System(_)))
+        .cloned()
+        .collect();
+    assert_eq!(
+        preserved_system,
+        original_messages[..2],
+        "every system instruction survives byte-for-byte"
+    );
+    assert!(
+        crate::summarization::tool_pairing_is_intact(&request.messages),
+        "hard budget trimming leaves a provider-valid tool transcript"
+    );
+    assert!(
+        request.messages.iter().any(|message| {
+            matches!(message, tinyinference_llm::message::Message::Assistant(assistant) if !assistant.tool_calls.is_empty())
+        }) && request
+            .messages
+            .iter()
+            .any(|message| matches!(message, tinyinference_llm::message::Message::Tool(_))),
+        "the reduced request retains a complete user/tool conversational payload"
+    );
     assert_eq!(budget.records.lock().expect("budget lock").len(), 1);
+}
+
+#[tokio::test]
+async fn hard_budget_compression_fails_closed_when_only_system_instructions_remain() {
+    let model = Arc::new(ScriptedModel::replies(vec!["must not run"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_budget(Arc::new(RecordingBudget::hard()));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+
+    let error = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![
+                    tinyinference_llm::message::Message::system("do not remove this instruction"),
+                    tinyinference_llm::message::Message::system("nor this instruction"),
+                ],
+            ),
+            RunContext::new(RunConfig::new("hard-system-only"), ()),
+            &(),
+        )
+        .await
+        .expect_err("hard pressure cannot discard sole system instructions");
+    assert!(
+        error
+            .to_string()
+            .contains("reducible conversational context")
+    );
+    assert!(model.requests().is_empty(), "provider was never called");
 }
 
 #[tokio::test]
