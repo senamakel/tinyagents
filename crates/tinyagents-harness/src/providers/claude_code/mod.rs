@@ -17,7 +17,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::tool::{
-    apply_prompt_tool_calls, coalesce_prompt_tool_results, with_prompt_tool_instructions,
+    ToolCallStreamScrubber, apply_prompt_tool_calls, coalesce_prompt_tool_results,
+    with_prompt_tool_instructions,
 };
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
@@ -428,6 +429,11 @@ impl ChatModel<()> for ClaudeCodeProvider {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = AbortOnDrop(tokio::spawn(async move {
             let _ = tx.send(ModelStreamItem::Started);
+            // Claude Code is prompt-guided whenever tools are present, so its
+            // text deltas can split `<tool_call>` markup across arbitrary CLI
+            // chunks. Hold that markup back from live consumers; terminal
+            // parsing below still turns the complete block into a ToolCall.
+            let mut tool_call_scrubber = has_tools.then(ToolCallStreamScrubber::new);
             let messages = request_messages(&request);
             let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(64);
             let call = provider.run_chat(
@@ -438,11 +444,12 @@ impl ChatModel<()> for ClaudeCodeProvider {
             );
             tokio::pin!(call);
             let response = loop {
-                tokio::select! { delta = delta_rx.recv() => if let Some(delta) = delta { forward_delta(&tx, delta); }, response = &mut call => break response }
+                tokio::select! { delta = delta_rx.recv() => if let Some(delta) = delta { forward_delta(&tx, delta, tool_call_scrubber.as_mut()); }, response = &mut call => break response }
             };
             while let Ok(delta) = delta_rx.try_recv() {
-                forward_delta(&tx, delta);
+                forward_delta(&tx, delta, tool_call_scrubber.as_mut());
             }
+            flush_tool_call_scrubber(&tx, tool_call_scrubber.as_mut());
             let terminal = response
                 .map(|response| model_response_with_tools(response, has_tools))
                 .map(ModelStreamItem::Completed)
@@ -460,12 +467,34 @@ impl ChatModel<()> for ClaudeCodeProvider {
 fn forward_delta(
     sender: &tokio::sync::mpsc::UnboundedSender<ModelStreamItem>,
     delta: ProviderDelta,
+    tool_call_scrubber: Option<&mut ToolCallStreamScrubber>,
 ) {
     let item = match delta {
-        ProviderDelta::TextDelta { delta } => MessageDelta::text(delta),
-        ProviderDelta::ThinkingDelta { delta } => MessageDelta::reasoning(delta),
+        ProviderDelta::TextDelta { delta } => {
+            let text = match tool_call_scrubber {
+                Some(scrubber) => scrubber.feed(&delta),
+                None => delta,
+            };
+            (!text.is_empty()).then(|| MessageDelta::text(text))
+        }
+        ProviderDelta::ThinkingDelta { delta } => Some(MessageDelta::reasoning(delta)),
     };
-    let _ = sender.send(ModelStreamItem::MessageDelta(item));
+    if let Some(item) = item {
+        let _ = sender.send(ModelStreamItem::MessageDelta(item));
+    }
+}
+
+fn flush_tool_call_scrubber(
+    sender: &tokio::sync::mpsc::UnboundedSender<ModelStreamItem>,
+    tool_call_scrubber: Option<&mut ToolCallStreamScrubber>,
+) {
+    let Some(scrubber) = tool_call_scrubber else {
+        return;
+    };
+    let text = scrubber.flush();
+    if !text.is_empty() {
+        let _ = sender.send(ModelStreamItem::MessageDelta(MessageDelta::text(text)));
+    }
 }
 
 #[cfg(test)]
