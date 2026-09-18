@@ -13,7 +13,7 @@
 //! same-family fallback ordering that go with them. Hosts have historically
 //! re-implemented that projection by hand (OpenHuman's `RouterProvider` +
 //! `routes.rs`): register a model per tier alias, build a `FallbackPolicy`, stamp
-//! a required [`CapabilitySet`](tinyinference::model::CapabilitySet) per turn.
+//! a required [`CapabilitySet`](tinyinference_llm::model::CapabilitySet) per turn.
 //!
 //! [`ModelRouter`] is the crate-owned home for exactly that policy. A host
 //! *declares* its tier table once — each [`WorkloadRoute`] names the model an
@@ -36,7 +36,7 @@
 //! # Example
 //!
 //! ```
-//! use tinyinference::model::CapabilitySet;
+//! use tinyinference_llm::model::CapabilitySet;
 //! use tinyagents_registry::router::{ModelRouter, WorkloadRoute};
 //!
 //! let router = ModelRouter::new()
@@ -66,7 +66,7 @@ pub use types::WorkloadRoute;
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::retry::FallbackPolicy;
-use tinyinference::model::CapabilitySet;
+use tinyinference_llm::model::CapabilitySet;
 
 /// A declarative, name-addressable router over registered models: it maps named
 /// workload tiers to concrete registered model names and owns the per-tier

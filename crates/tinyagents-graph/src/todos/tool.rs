@@ -20,7 +20,7 @@ use tinyagents_harness::store::Store;
 use tinyagents_harness::tool::{
     Tool, ToolExecutionContext, ToolPolicy, ToolRegistry, ToolResult, ToolSideEffects,
 };
-use tinyinference::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 const TODO_TOOL_NAME: &str = "todo";
 

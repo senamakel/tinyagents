@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 use crate::context::RunConfig;
 use crate::retry::RateLimiter;
 use crate::tool::{ToolCall, ToolSchema};
-use tinyinference::model::ResponseFormat;
+use tinyinference_llm::model::ResponseFormat;
 
 // ── RetryMiddleware ───────────────────────────────────────────────────────────
 
@@ -85,7 +85,7 @@ pub struct TimeoutMiddleware {
 ///
 /// Implements [`ModelMiddleware`][crate::middleware::ModelMiddleware]:
 /// it calls `next` with the request as-is; on error it sets
-/// [`ModelRequest::model`][tinyinference::model::ModelRequest::model] to each
+/// [`ModelRequest::model`][tinyinference_llm::model::ModelRequest::model] to each
 /// fallback name in order, emitting
 /// [`AgentEvent::FallbackSelected`][crate::events::AgentEvent::FallbackSelected]
 /// before each attempt, and returns the first success.
@@ -204,7 +204,7 @@ pub struct BudgetTracker {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BudgetSpend {
     /// Accumulated token usage.
-    pub usage: tinyinference::usage::UsageTotals,
+    pub usage: tinyinference_llm::usage::UsageTotals,
     /// Accumulated estimated cost.
     pub cost: crate::cost::CostTotals,
     /// Whether a warning has already been emitted (warn-once).
@@ -315,7 +315,7 @@ pub type ToolPredicate = Arc<dyn Fn(&ToolSchema) -> bool + Send + Sync>;
 ///
 /// Implements [`Middleware`][crate::middleware::Middleware]'s
 /// `before_model` hook: it retains only the
-/// [`ModelRequest::tools`][tinyinference::model::ModelRequest::tools] for which
+/// [`ModelRequest::tools`][tinyinference_llm::model::ModelRequest::tools] for which
 /// the configured [`ToolPredicate`] returns `true`, implementing dynamic tool
 /// exposure (for example narrowing the toolset based on state or run tags).
 ///
@@ -429,7 +429,7 @@ pub type PromptFn<State> = Arc<dyn Fn(&State, &RunConfig) -> Option<String> + Se
 /// `before_model` hook: it calls the configured [`PromptFn`] with the shared
 /// `&State` and the run's [`RunConfig`]; when it returns `Some(text)` a
 /// [`Message::system`] is inserted at the front of
-/// [`ModelRequest::messages`][tinyinference::model::ModelRequest::messages].
+/// [`ModelRequest::messages`][tinyinference_llm::model::ModelRequest::messages].
 ///
 /// Generic over `State`/`Ctx` because the closure reads application state.
 pub struct DynamicPromptMiddleware<State, Ctx = ()> {

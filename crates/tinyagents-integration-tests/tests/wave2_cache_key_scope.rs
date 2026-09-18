@@ -16,9 +16,9 @@ use tinyagents_harness::cache::{
     scoped_cache_key,
 };
 use tinyagents_harness::runtime::AgentHarness;
-use tinyinference::cache::CachePolicy;
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_llm::cache::CachePolicy;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ impl ChatModel<()> for IdentifiedModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(ModelResponse::assistant(self.answer.clone()))
     }

@@ -8,15 +8,18 @@ repository.workspace = true
 description = "Provider-neutral model, tool, middleware, and agent-loop runtime."
 
 [dependencies]
+anyhow = "1"
 async-trait = "0.1"
-# Keep this aligned with reqwest's transitive version so consumers do not
-# resolve a second base64 package solely for multimodal data URIs.
-base64 = { version = "0.22", optional = true }
+# Keep this aligned with reqwest's transitive version. Claude Code request
+# rendering and multimodal data URIs both require it.
+base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", optional = true }
 flate2 = { version = "1", optional = true }
 futures = "0.3"
+dirs = "5"
+log = "0.4"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
 rusqlite = { version = "0.40", features = ["bundled"], optional = true }
@@ -26,15 +29,19 @@ sha2 = "0.11"
 thiserror = "2"
 tinyagents-tracing = { path = "../tinyagents-tracing", version = "2.1.2", default-features = false }
 tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", version = "0.1.0", default-features = false }
-tinyinference = { path = "../../vendor/tinyinference/crates/tinyinference", version = "0.2.1" }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.2.1" }
+tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.2.1" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.1.0" }
-tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs", "io-util", "process"] }
+tempfile = "3"
+wait-timeout = "0.2"
+uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = []
 sqlite = ["dep:rusqlite"]
 tools = ["dep:chrono-tz"]
-multimodal = ["dep:base64", "dep:flate2"]
+multimodal = ["dep:flate2"]
 tracing = ["tinyagents-tracing/tracing", "tinytools-agent/tracing"]
 
 [dev-dependencies]

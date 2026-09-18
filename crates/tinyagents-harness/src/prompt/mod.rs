@@ -40,8 +40,8 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{Result, TinyAgentsError};
 use crate::tool::ToolSchema;
-use tinyinference::message::Message;
-use tinyinference::model::{ModelRequest, PromptSegment, ResponseFormat, SegmentRole};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelRequest, PromptSegment, ResponseFormat, SegmentRole};
 
 // ---------------------------------------------------------------------------
 // PromptTemplate

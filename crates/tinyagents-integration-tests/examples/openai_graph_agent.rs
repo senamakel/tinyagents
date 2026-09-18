@@ -20,8 +20,8 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
-use tinyinference::providers::openai::OpenAiModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::openai::OpenAiModel;
 
 /// State threaded through the graph: the question to ask and the answer the
 /// agent node fills in.

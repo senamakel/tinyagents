@@ -18,7 +18,7 @@ pub(super) const PER_CALL_BOUND_LABEL: &str = "per-model-call ceiling";
 
 use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
-use tinyinference::cache::CachePolicy;
+use tinyinference_llm::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Invokes a model, consulting the local response cache around the
@@ -37,7 +37,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// The key is **not** the request hash alone. [`Self::response_cache_decision`]
     /// produces the request half ([`cache_key`]); this method folds in the
     /// *resolved* model's
-    /// [`cache_identity`][tinyinference::model::ChatModel::cache_identity], the
+    /// [`cache_identity`][tinyinference_llm::model::ChatModel::cache_identity], the
     /// `streaming` flag, and the policy namespace via
     /// [`scoped_cache_key`][crate::cache::scoped_cache_key]. All three
     /// were previously absent from the key:
@@ -80,17 +80,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let identity = binding.model.cache_identity();
         let primary_name = binding.resolved.name.clone();
 
-        let decision = self.response_cache_decision(request).map(|(cache, base)| {
-            let key = scoped_cache_key(
-                &base,
-                identity.as_deref(),
-                streaming,
-                policy.namespace.as_deref(),
-            );
-            (cache, key)
-        });
+        // Claude Code executes file and shell tools inside the provider turn.
+        // Replaying a cached first turn would skip those side effects entirely,
+        // so this provider is never response-cacheable. Other providers retain
+        // the normal request-policy behavior.
+        let side_effecting_provider = binding
+            .model
+            .profile()
+            .and_then(|profile| profile.provider.as_deref())
+            == Some("claude-code");
+        let decision = (!side_effecting_provider)
+            .then(|| self.response_cache_decision(request))
+            .flatten()
+            .map(|(cache, base)| {
+                let key = scoped_cache_key(
+                    &base,
+                    identity.as_deref(),
+                    streaming,
+                    policy.namespace.as_deref(),
+                );
+                (cache, key)
+            });
 
-        if decision.is_none() {
+        if side_effecting_provider {
+            tinyagents_tracing::debug!(
+                call_id = %call_id.as_str(),
+                provider = "claude-code",
+                "[cache] response cache disabled for side-effecting provider"
+            );
+        } else if decision.is_none() {
             let reason = self.cache_skip_reason(request);
             tinyagents_tracing::debug!(
                 call_id = %call_id.as_str(),
@@ -652,13 +670,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Drives one streaming model call to completion.
     ///
-    /// Consumes [`tinyinference::model::ChatModel::stream`], emitting an
+    /// Consumes [`tinyinference_llm::model::ChatModel::stream`], emitting an
     /// [`AgentEvent::ModelDelta`] and running every middleware's
     /// [`on_model_delta`][crate::middleware::Middleware::on_model_delta]
     /// hook for each [`ModelStreamItem::MessageDelta`] (and standalone
     /// [`ModelStreamItem::ToolCallDelta`]), then folds the items into the final
     /// [`ModelResponse`] via [`StreamAccumulator`]. The merged response is
-    /// equivalent to what the unary [`tinyinference::model::ChatModel::invoke`]
+    /// equivalent to what the unary [`tinyinference_llm::model::ChatModel::invoke`]
     /// path would have produced, so the rest of the loop is unaffected.
     ///
     /// `deltas_emitted` is incremented for every delta actually handed to

@@ -27,7 +27,9 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
 
 - **`tinyagents-harness`** — provider-neutral model calls, typed tools,
   middleware, structured output, streaming, usage/cost accounting, retries,
-  caching, and memory. Features: `sqlite`, `tools`, `multimodal`, `tracing`.
+  caching, memory, and a Claude Code CLI model adapter with stream-json,
+  session, authentication, and MCP endpoint support. Features: `sqlite`,
+  `tools`, `multimodal`, `tracing`.
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
@@ -59,7 +61,7 @@ tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", pack
 # The code samples below build `Message` and provider types directly from
 # TinyInference, the message/model crate TinyAgents is built on. It is a
 # separate git dependency, not re-exported by the crates above.
-tinyinference = { git = "https://github.com/tinyhumansai/tinyinference", package = "tinyinference" }
+tinyinference-llm = { git = "https://github.com/tinyhumansai/tinyinference", package = "tinyinference-llm" }
 ```
 
 A minimal typed graph — a whole-state agent/tool loop (trimmed from
@@ -67,7 +69,7 @@ A minimal typed graph — a whole-state agent/tool loop (trimmed from
 
 ```rust
 use tinyagents_graph::*;
-use tinyinference::message::Message;
+use tinyinference_llm::message::Message;
 
 #[derive(Clone, Debug)]
 struct AgentState {
@@ -111,8 +113,8 @@ A one-shot model call through the harness (`export OPENAI_API_KEY=...` then
 ```rust
 use std::sync::Arc;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyinference::message::Message;
-use tinyinference::providers::openai::OpenAiModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::openai::OpenAiModel;
 
 let model = OpenAiModel::from_env()?;
 let mut harness: AgentHarness<()> = AgentHarness::new();

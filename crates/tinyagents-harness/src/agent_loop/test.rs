@@ -24,13 +24,13 @@ use crate::middleware::{
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
 use crate::tool::{Tool, ToolCall, ToolResult, ToolSchema, ToolTimeout, ToolTimeoutSettings};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
-use tinyinference::model::{
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
+use tinyinference_llm::model::{
     CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStreamItem,
     ResponseFormat, ToolChoice,
 };
-use tinyinference::providers::MockModel;
-use tinyinference::usage::Usage;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::usage::Usage;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -468,7 +468,7 @@ impl ChatModel<()> for ToolStructuredModel {
         &self,
         _state: &(),
         request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         // The loop appends an artificial structured tool and forces the choice
         // to it; the tool name is the schema name.
         assert_eq!(request.tool_choice, ToolChoice::Tool("answer".to_string()));
@@ -496,9 +496,11 @@ impl ChatModel<()> for FailingModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         *self.attempts.lock().unwrap() += 1;
-        Err(tinyinference::Error::Model("transient boom".to_string()))
+        Err(tinyinference_llm::Error::Model(
+            "transient boom".to_string(),
+        ))
     }
 }
 
@@ -516,12 +518,14 @@ impl ChatModel<()> for TimestampingFailingModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.timestamps
             .lock()
             .unwrap()
             .push(tokio::time::Instant::now());
-        Err(tinyinference::Error::Model("transient boom".to_string()))
+        Err(tinyinference_llm::Error::Model(
+            "transient boom".to_string(),
+        ))
     }
 }
 
@@ -541,16 +545,16 @@ impl ChatModel<()> for ProviderFailingModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         *self.attempts.lock().unwrap() += 1;
-        Err(tinyinference::Error::Provider(Box::new(
-            tinyinference::model::ProviderError {
+        Err(tinyinference_llm::Error::Provider(Box::new(
+            tinyinference_llm::model::ProviderError {
                 provider: "test-provider".to_string(),
                 status: Some(self.status),
                 retryable: self.retryable,
                 retry_after_ms: None,
                 message: "boom".to_string(),
-                ..tinyinference::model::ProviderError::default()
+                ..tinyinference_llm::model::ProviderError::default()
             },
         )))
     }
@@ -1941,9 +1945,11 @@ impl ChatModel<()> for ProfiledFailingModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         *self.attempts.lock().unwrap() += 1;
-        Err(tinyinference::Error::Model("transient boom".to_string()))
+        Err(tinyinference_llm::Error::Model(
+            "transient boom".to_string(),
+        ))
     }
 }
 
@@ -1965,7 +1971,7 @@ impl ChatModel<()> for ProfiledTextModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         *self.attempts.lock().unwrap() += 1;
         Ok(ModelResponse::assistant(self.text))
     }
@@ -2122,7 +2128,7 @@ impl Middleware<(), ()> for DeltaRecorder {
         &self,
         _ctx: &mut RunContext<()>,
         _state: &(),
-        delta: &mut tinyinference::model::ModelDelta,
+        delta: &mut tinyinference_llm::model::ModelDelta,
     ) -> Result<()> {
         *self.count.lock().unwrap() += 1;
         self.texts.lock().unwrap().push(delta.content.clone());
@@ -2290,7 +2296,7 @@ impl ChatModel<()> for CountingToolModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         *self.invocations.lock().unwrap() += 1;
         Ok(tool_call_response("call-1", self.name, json!({})))
     }
@@ -2389,7 +2395,7 @@ impl ChatModel<()> for BlockForeverModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.started.notify_one();
         // Simulate a long buffered (non-streamed) provider call that only ends
         // when the caller drops this future. Without the loop racing
@@ -2912,7 +2918,7 @@ async fn no_cache_attached_invokes_model_each_run() {
 #[tokio::test]
 async fn request_cache_policy_overrides_run_policy_to_disable_caching() {
     use crate::cache::InMemoryResponseCache;
-    use tinyinference::cache::CachePolicy;
+    use tinyinference_llm::cache::CachePolicy;
 
     // A middleware that disables caching for the call via the request-level
     // cache policy, overriding the harness default (which is enabled).
@@ -3104,10 +3110,10 @@ impl ChatModel<()> for ToolCapturingModel {
         &self,
         _state: &(),
         request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.seen_tools.lock().unwrap().push(request.tools.clone());
         let next = self.responses.lock().unwrap().pop_front();
-        next.ok_or_else(|| tinyinference::Error::Validation("no scripted response left".into()))
+        next.ok_or_else(|| tinyinference_llm::Error::Validation("no scripted response left".into()))
     }
 }
 

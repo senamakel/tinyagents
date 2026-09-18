@@ -21,8 +21,8 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle, SteeringPolicy};
 use tinyagents_harness::testkit::FakeTool;
 use tinyagents_harness::tool::ToolResult;
-use tinyinference::message::Message;
-use tinyinference::providers::MockModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::MockModel;
 
 /// Requests a control outcome from `after_tool` — the natural place for a
 /// post-hoc guardrail or a budget stop that only knows once the result is in.

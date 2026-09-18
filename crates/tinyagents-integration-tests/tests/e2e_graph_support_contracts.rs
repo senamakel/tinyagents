@@ -15,7 +15,7 @@ use tinyagents_harness::ids::ExecutionStatus;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::usage::UsageTotals;
+use tinyinference_llm::usage::UsageTotals;
 
 fn temp_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(

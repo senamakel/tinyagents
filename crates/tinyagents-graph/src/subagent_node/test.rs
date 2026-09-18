@@ -19,11 +19,11 @@ use crate::builder::GraphBuilder;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::subagent::SubAgent;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel};
-use tinyinference::message::AssistantMessage;
-use tinyinference::model::ModelResponse;
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::AssistantMessage;
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 #[derive(Default)]
 struct TestAgentRegistry {

@@ -7,7 +7,7 @@ mod types;
 
 use std::sync::Arc;
 
-use tinyinference::model::{
+use tinyinference_llm::model::{
     CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResolutionSource, ResolvedModel,
 };
 

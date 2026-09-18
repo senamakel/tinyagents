@@ -14,9 +14,9 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
-use tinyinference::message::{ContentBlock, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::message::{ContentBlock, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 /// Opening / closing delimiters for a text-mode tool call.
 const OPEN_TAG: &str = "<tool_call>";
@@ -367,7 +367,7 @@ fn hold_from(buf: &str) -> usize {
 ///
 /// The terminal-response recovery ([`apply_prompt_tool_calls`]) only cleans the
 /// aggregated answer, so a consumer that renders live
-/// [`MessageDelta`](tinyinference::message::MessageDelta) text would
+/// [`MessageDelta`](tinyinference_llm::message::MessageDelta) text would
 /// still see raw markup stream through. This scrubber closes that gap: it emits
 /// only the text that is provably not part of a tool-call block, holding back any
 /// tail that could still become one (a partial `<tool_call`, an open tag whose

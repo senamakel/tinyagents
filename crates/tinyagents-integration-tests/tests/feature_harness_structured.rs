@@ -25,11 +25,11 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::structured::{
     StructuredExtractor, StructuredStrategy, response_format_for_strategy,
 };
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::{ModelProfile, ModelResponse, ResponseFormat};
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::{ModelProfile, ModelResponse, ResponseFormat};
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 /// A typed target used to prove `StructuredOutput::parse::<T>()` round-trips.
 #[derive(Debug, Deserialize, PartialEq)]

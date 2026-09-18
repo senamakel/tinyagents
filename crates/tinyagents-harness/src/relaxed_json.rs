@@ -17,7 +17,7 @@
 //!     Kimi-family models served via GMI).
 //!
 //! Strict `serde_json::from_str` rejects all of these, so the call is marked
-//! [`tinyinference::tool::ToolCall::invalid`] and fed back to the model, which
+//! [`tinyinference_llm::tool::ToolCall::invalid`] and fed back to the model, which
 //! "repairs" it by adding *another* brace — an infinite retry that burns the
 //! step budget without ever executing the tool. A zero-argument call
 //! (`NAME{}`) is the only shape that survives, because `{}` is valid strict

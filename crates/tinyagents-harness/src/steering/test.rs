@@ -20,19 +20,21 @@ use crate::steering::{
     apply_pending_steering,
 };
 use crate::testkit::{EventRecorder, Trajectory};
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference::providers::MockModel;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::usage::Usage;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Builds a plain-text assistant response.
 fn text_response(text: &str) -> ModelResponse {
     ModelResponse {
-        message: tinyinference::message::AssistantMessage {
+        message: tinyinference_llm::message::AssistantMessage {
             id: None,
-            content: vec![tinyinference::message::ContentBlock::Text(text.to_string())],
+            content: vec![tinyinference_llm::message::ContentBlock::Text(
+                text.to_string(),
+            )],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(1, 1)),
         },
@@ -62,7 +64,7 @@ impl ChatModel<()> for RecordingModel {
         &self,
         _state: &(),
         request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.requests.lock().unwrap().push(request);
         let mut calls = self.calls.lock().unwrap();
         *calls += 1;
@@ -76,7 +78,7 @@ impl ChatModel<()> for RecordingModel {
             // Ask for a tool so the loop runs another model call after the
             // steering checkpoint drains the queued command.
             Ok(ModelResponse {
-                message: tinyinference::message::AssistantMessage {
+                message: tinyinference_llm::message::AssistantMessage {
                     id: Some("m1".to_string()),
                     content: Vec::new(),
                     tool_calls: vec![crate::tool::ToolCall::new("c1", "noop", json!({}))],

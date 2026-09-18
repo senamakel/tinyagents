@@ -22,7 +22,7 @@
 //!
 //! ```
 //! use tinyagents_harness::memory::{ChatHistory, InMemoryChatHistory};
-//! use tinyinference::message::Message;
+//! use tinyinference_llm::message::Message;
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! let history = InMemoryChatHistory::new();
@@ -41,7 +41,7 @@ use async_trait::async_trait;
 
 use crate::error::{Result, TinyAgentsError};
 use crate::store::Store;
-use tinyinference::message::Message;
+use tinyinference_llm::message::Message;
 
 // ── InMemoryChatHistory ───────────────────────────────────────────────────────
 

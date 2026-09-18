@@ -27,10 +27,10 @@ use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, Trajec
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 /// State threaded through the graph: the question to answer and the agent's
 /// final text once the `agent` node has run.

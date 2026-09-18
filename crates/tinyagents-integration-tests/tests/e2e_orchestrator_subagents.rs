@@ -34,9 +34,9 @@ use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
-use tinyinference::model::ResponseFormat;
-use tinyinference::tool::ToolCall;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::ResponseFormat;
+use tinyinference_llm::tool::ToolCall;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

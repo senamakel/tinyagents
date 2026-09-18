@@ -11,7 +11,7 @@ use tinyagents_language::capability_resolver::CapabilityResolver;
 use tinyagents_language::resolver::{Resolver, resolve_source};
 use tinyagents_language::{Blueprint, ChannelSpec, EdgeSpec, Literal, NodeSpec, Routing, parser};
 use tinyagents_registry::{CapabilityRegistry, ComponentKind};
-use tinyinference::providers::MockModel;
+use tinyinference_llm::providers::MockModel;
 
 #[tokio::test]
 async fn graph_builder_validates_topology_and_exports_metadata() {

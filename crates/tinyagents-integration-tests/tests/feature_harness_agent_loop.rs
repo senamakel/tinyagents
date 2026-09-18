@@ -24,11 +24,11 @@ use tinyagents_harness::ids::ExecutionStatus;
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, Trajectory};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

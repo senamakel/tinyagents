@@ -22,8 +22,8 @@ use tinyagents_harness::testkit::EventRecorder;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
-use tinyinference::providers::MockModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::MockModel;
 
 // ---------------------------------------------------------------------------
 // Helpers

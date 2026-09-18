@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::cost::ModelPricing;
-use tinyinference::usage::Usage;
+use tinyinference_llm::usage::Usage;
 
 fn pricing() -> ModelPricing {
     ModelPricing {

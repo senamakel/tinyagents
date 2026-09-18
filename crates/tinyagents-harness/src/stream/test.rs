@@ -7,7 +7,7 @@
 use serde_json::json;
 
 use crate::stream::{StreamChunk, StreamMode, StreamSink, stream};
-use tinyinference::message::MessageDelta;
+use tinyinference_llm::message::MessageDelta;
 
 #[test]
 fn smoke_sink_filters_by_mode() {
@@ -177,7 +177,7 @@ mod project {
     use crate::stream::{
         StreamChunk, StreamMode, StreamSink, project_event, project_event_for_modes, projected_mode,
     };
-    use tinyinference::message::MessageDelta;
+    use tinyinference_llm::message::MessageDelta;
 
     fn delta_event() -> AgentEvent {
         AgentEvent::ModelDelta {

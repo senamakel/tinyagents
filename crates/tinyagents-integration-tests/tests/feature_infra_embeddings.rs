@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use tinyinference::embeddings::{
+use tinyinference_embeddings::{
     EmbeddingModel, InMemoryVectorStore, MockEmbeddingModel, Retriever, VectorStore,
     cosine_similarity,
 };

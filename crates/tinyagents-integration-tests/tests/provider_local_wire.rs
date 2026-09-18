@@ -23,10 +23,12 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest, ReasoningEffort, ResponseFormat, ToolChoice};
-use tinyinference::providers::openai::OpenAiModel;
-use tinyinference::tool::ToolSchema;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{
+    ChatModel, ModelRequest, ReasoningEffort, ResponseFormat, ToolChoice,
+};
+use tinyinference_llm::providers::openai::OpenAiModel;
+use tinyinference_llm::tool::ToolSchema;
 
 // ---------------------------------------------------------------------------
 // Minimal recording HTTP server
@@ -807,7 +809,7 @@ async fn a_context_overflow_is_classified_with_a_stable_code() {
     let error = ChatModel::<()>::invoke(&model, &(), user("hi"))
         .await
         .expect_err("a 400 fails the call");
-    let tinyinference::Error::Provider(error) = error else {
+    let tinyinference_llm::Error::Provider(error) = error else {
         panic!("expected a typed provider error");
     };
     assert_eq!(error.provider, "ollama");
@@ -911,7 +913,7 @@ async fn the_responses_path_reads_reasoning_and_cache_usage() {
         .content
         .iter()
         .find_map(|block| match block {
-            tinyinference::message::ContentBlock::Thinking { text, signature } => {
+            tinyinference_llm::message::ContentBlock::Thinking { text, signature } => {
                 Some((text.clone(), signature.clone()))
             }
             _ => None,

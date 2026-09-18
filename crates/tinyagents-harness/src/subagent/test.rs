@@ -21,10 +21,10 @@ use crate::runtime::{AgentHarness, RunPolicy};
 use crate::subagent::{SubAgent, SubAgentSession, SubAgentTool};
 use crate::testkit::ScriptedModel;
 use crate::tool::{Tool, ToolCall, ToolExecutionContext, ToolResult, ToolSchema};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::providers::MockModel;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::usage::Usage;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -18,8 +18,8 @@ use tinyagents_harness::tool::{
     SchemaPreparation, Tool, ToolErrorPolicy, ToolRegistry, ToolResult,
     parse_prompt_tool_calls_from_text, prepare_tool_schemas, strip_injected_arguments,
 };
-use tinyinference::message::Message;
-use tinyinference::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 // ---------------------------------------------------------------------------
 // TOOL-2 — synthetic call ids

@@ -5,10 +5,10 @@
 //! under the same large cacheable system prefix, then requires the second
 //! response to report provider cache-read tokens. No credential is logged.
 
-use tinyinference::cache::CachePolicy;
-use tinyinference::message::Message;
-use tinyinference::model::{ChatModel, ModelRequest, PromptSegment, SegmentRole};
-use tinyinference::providers::anthropic::AnthropicModel;
+use tinyinference_llm::cache::CachePolicy;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, PromptSegment, SegmentRole};
+use tinyinference_llm::providers::anthropic::AnthropicModel;
 
 const LADDER_URL: &str = "http://127.0.0.1:6969/v1";
 

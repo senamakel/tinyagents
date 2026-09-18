@@ -13,8 +13,8 @@ use crate::Result;
 use crate::component::ComponentKind;
 use tinyagents_harness::tool::{Tool, ToolResult};
 use tinyagents_language::Blueprint;
-use tinyinference::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 struct FakeModel(&'static str);
 
@@ -24,7 +24,7 @@ impl ChatModel<()> for FakeModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         Ok(ModelResponse::assistant(self.0))
     }
 }

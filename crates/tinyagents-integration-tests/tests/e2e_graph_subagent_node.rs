@@ -16,11 +16,11 @@ use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel};
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::{AssistantMessage, Message};
-use tinyinference::model::ModelResponse;
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 fn tool_call_response(id: &str, name: &str) -> ModelResponse {
     ModelResponse {

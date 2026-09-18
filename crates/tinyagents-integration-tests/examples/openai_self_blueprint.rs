@@ -36,8 +36,8 @@ use tinyagents_language::parser::parse_str;
 use tinyagents_language::types::{NodeSpec, Routing};
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
-use tinyinference::providers::openai::OpenAiModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::openai::OpenAiModel;
 
 /// Grammar + worked example handed to the model so it emits valid `.rag`.
 const SYSTEM_PROMPT: &str = r#"

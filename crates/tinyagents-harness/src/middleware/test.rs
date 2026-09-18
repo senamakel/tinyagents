@@ -10,9 +10,9 @@ use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, RecordingListener};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
 use crate::tool::{ToolCall, ToolResult};
-use tinyinference::message::{AssistantMessage, ContentBlock, Message, UserMessage};
-use tinyinference::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, UserMessage};
+use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_llm::usage::Usage;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 

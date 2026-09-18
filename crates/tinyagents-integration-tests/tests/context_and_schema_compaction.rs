@@ -23,8 +23,8 @@
 use tinyagents_harness::summarization::{
     ConcatSummarizer, SummarizationPolicy, Summarizer, TrimStrategy, trim_messages,
 };
-use tinyinference::message::{AssistantMessage, Message};
-use tinyinference::tool::ToolCall;
+use tinyinference_llm::message::{AssistantMessage, Message};
+use tinyinference_llm::tool::ToolCall;
 
 /// The provider invariant, checked locally so this file depends on no new
 /// crate surface: every `tool` message must be preceded by an assistant turn
@@ -127,7 +127,7 @@ fn max_tokens_never_orphans_a_tool_result() {
     // front-dropping token trim can orphan one.
     let narrating_call = Message::Assistant(AssistantMessage {
         id: None,
-        content: vec![tinyinference::message::ContentBlock::Text(
+        content: vec![tinyinference_llm::message::ContentBlock::Text(
             "Let me look that up. ".repeat(20),
         )],
         tool_calls: vec![ToolCall::new(

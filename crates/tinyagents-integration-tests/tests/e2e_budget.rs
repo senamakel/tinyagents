@@ -35,11 +35,11 @@ use tinyagents_harness::middleware::{
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool};
 use tinyagents_registry::catalog::ModelPricing;
-use tinyinference::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference::model::{ModelRequest, ModelResolutionSource, ModelResponse, ResolvedModel};
-use tinyinference::providers::MockModel;
-use tinyinference::tool::ToolCall;
-use tinyinference::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::{ModelRequest, ModelResolutionSource, ModelResponse, ResolvedModel};
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 // ── Helpers (copied verbatim per the task brief) ──────────────────────────────
 

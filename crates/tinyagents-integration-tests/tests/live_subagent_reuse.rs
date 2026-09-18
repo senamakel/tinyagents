@@ -20,8 +20,8 @@ async fn live_openai_subagent_reused_with_carried_context() {
     use tinyagents_harness::*;
     use tinyagents_language::*;
     use tinyagents_registry::*;
-    use tinyinference::message::Message;
-    use tinyinference::providers::openai::OpenAiModel;
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::providers::openai::OpenAiModel;
 
     let _ = dotenvy::dotenv();
     if std::env::var("OPENAI_API_KEY").is_err() {

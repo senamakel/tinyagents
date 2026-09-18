@@ -17,7 +17,7 @@ use tinyagents_graph::*;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference::message::Message;
+use tinyinference_llm::message::Message;
 
 #[derive(Clone, Debug)]
 struct AgentState {

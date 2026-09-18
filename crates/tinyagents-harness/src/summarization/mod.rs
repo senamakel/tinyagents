@@ -35,7 +35,7 @@ pub use types::*;
 use crate::error::{Result, TinyAgentsError};
 use crate::token_estimation::estimate_slice_tokens;
 use async_trait::async_trait;
-use tinyinference::message::Message;
+use tinyinference_llm::message::Message;
 use trim::partition_system;
 
 // ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ impl Summarizer for ConcatSummarizer {
 
 impl SummarizationPolicy {
     /// Builds a policy from a model [`ModelProfile`], reading its
-    /// [`max_input_tokens`][tinyinference::model::ModelProfile::max_input_tokens]
+    /// [`max_input_tokens`][tinyinference_llm::model::ModelProfile::max_input_tokens]
     /// as the context window and using `threshold` as the trigger fraction.
     ///
     /// All other fields take their [`Default`] values (`trigger_tokens = 0`,
@@ -141,7 +141,7 @@ impl SummarizationPolicy {
     /// not advertise `max_input_tokens` the resulting `context_window` is
     /// `None`, so [`should_summarize`][Self::should_summarize] falls back to the
     /// raw `trigger_tokens` threshold.
-    pub fn from_profile(profile: &tinyinference::model::ModelProfile, threshold: f64) -> Self {
+    pub fn from_profile(profile: &tinyinference_llm::model::ModelProfile, threshold: f64) -> Self {
         Self {
             context_window: profile.max_input_tokens,
             threshold_fraction: threshold,
