@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::Result;
 use crate::CancellationToken;
+use crate::Result;
 
 /// A retrieval request supplied by context composition.
 #[derive(Clone, Debug, PartialEq)]

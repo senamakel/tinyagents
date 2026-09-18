@@ -16,10 +16,13 @@ fn section_assembly_preserves_order_budget_and_truncation_provenance() {
     let assembled = assemble_sections(&sections, "α\n\nse".len());
     assert_eq!(assembled.text, "α\n\nse");
     assert_eq!(assembled.included_sections, vec!["first"]);
-    assert_eq!(assembled.truncation, Some(PromptTruncation {
-        section: "second".into(),
-        omitted_bytes: "cond section".len(),
-    }));
+    assert_eq!(
+        assembled.truncation,
+        Some(PromptTruncation {
+            section: "second".into(),
+            omitted_bytes: "cond section".len(),
+        })
+    );
 }
 
 #[test]
@@ -121,7 +124,7 @@ fn messages_template_propagates_render_error() {
 
 #[test]
 fn builder_cacheability_by_segment_type() {
-    use crate::tool::ToolSchema;
+    use tinyinference_llm::tool::ToolSchema;
 
     let mut builder = PromptBuilder::new();
     builder
@@ -193,7 +196,7 @@ fn fingerprint_is_64_hex_and_deterministic() {
 
 #[test]
 fn fingerprint_changes_with_tool_schema_not_just_name() {
-    use crate::tool::ToolSchema;
+    use tinyinference_llm::tool::ToolSchema;
 
     let tool_v1 = ToolSchema::new("calc", "adds numbers", json!({"type": "object"}));
     let mut tool_v2 = tool_v1.clone();

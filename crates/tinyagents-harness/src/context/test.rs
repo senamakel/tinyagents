@@ -53,6 +53,19 @@ fn run_config_round_trips_through_json() {
 }
 
 #[test]
+fn run_config_reads_legacy_depth_fields_into_lineage() {
+    let config: RunConfig = serde_json::from_value(serde_json::json!({
+        "run_id": "legacy",
+        "depth": 3,
+        "max_depth": 5
+    }))
+    .unwrap();
+    assert_eq!(config.lineage.root_run_id.as_str(), "legacy");
+    assert_eq!(config.depth(), 3);
+    assert_eq!(config.max_depth(), 5);
+}
+
+#[test]
 fn context_exposes_run_and_thread_ids() {
     let config = RunConfig::new("run-4").with_thread("thread-4");
     let ctx: RunContext = RunContext::new(config, ());
@@ -204,6 +217,27 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
 }
 
 #[test]
+fn child_accepts_its_own_tags_timeout_and_call_caps() {
+    let parent: RunContext<()> =
+        RunContext::new(RunConfig::new("parent").with_thread("thread"), ());
+    let child = parent
+        .child(
+            RunConfig::new("child")
+                .with_tag("delegated")
+                .with_timeout_ms(40)
+                .with_max_model_calls(3)
+                .with_max_tool_calls(4),
+            (),
+        )
+        .unwrap();
+    assert_eq!(child.config.tags, vec!["delegated"]);
+    assert_eq!(child.config.timeout_ms, Some(40));
+    assert_eq!(child.config.max_model_calls, Some(3));
+    assert_eq!(child.config.max_tool_calls, Some(4));
+    assert_eq!(child.thread_id().unwrap().as_str(), "thread");
+}
+
+#[test]
 fn child_inherits_recursive_capabilities_but_not_mutable_run_state() {
     let cancellation = crate::CancellationToken::new();
     let events = EventSink::new();
@@ -228,7 +262,8 @@ fn child_inherits_recursive_capabilities_but_not_mutable_run_state() {
 
     let child = parent
         .child(
-            RunConfig::new("child").with_metadata(serde_json::json!({"replace": "child", "new": 1})),
+            RunConfig::new("child")
+                .with_metadata(serde_json::json!({"replace": "child", "new": 1})),
             (),
         )
         .unwrap();
@@ -272,6 +307,34 @@ fn sibling_children_are_isolated_while_sharing_tree_signals() {
     assert_ne!(first.run_id(), second.run_id());
 }
 
+#[tokio::test]
+async fn child_store_values_are_shared_but_registry_membership_is_snapshotted() {
+    use crate::store::{InMemoryStore, Store};
+
+    let mut parent: RunContext<()> = RunContext::new(RunConfig::new("parent"), ());
+    let child = parent.child(RunConfig::new("child"), ()).unwrap();
+    parent
+        .stores
+        .register("added-later", Arc::new(InMemoryStore::new()));
+    assert!(child.stores.get("added-later").is_none());
+
+    parent
+        .stores
+        .default_store()
+        .put("scope", "key", serde_json::json!("shared"))
+        .await
+        .unwrap();
+    assert_eq!(
+        child
+            .stores
+            .default_store()
+            .get("scope", "key")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("shared"))
+    );
+}
+
 #[test]
 fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
     use tinyinference_llm::message::{ContentBlock, ImageRef, Message, UserMessage};
@@ -308,5 +371,15 @@ fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
             tool_results: 1,
             paired_tool_results: 1,
         }
+    );
+}
+
+#[test]
+fn token_estimation_uses_the_callers_tokenizer() {
+    use tinyinference_llm::message::Message;
+    let messages = vec![Message::system("one two"), Message::user("three")];
+    assert_eq!(
+        estimate_context_tokens(&messages, |text| text.split_whitespace().count()),
+        3
     );
 }

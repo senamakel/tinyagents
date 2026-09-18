@@ -73,7 +73,9 @@ struct RunConfigWire {
 }
 
 impl<'de> serde::Deserialize<'de> for RunConfig {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let wire = RunConfigWire::deserialize(deserializer)?;
         let lineage = wire.lineage.unwrap_or_else(|| RunLineage {
             root_run_id: wire.run_id.clone(),

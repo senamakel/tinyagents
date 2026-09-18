@@ -18,7 +18,13 @@ use crate::error::TinyAgentsError;
 use crate::events::{AgentEvent, EventSink, RecordingListener};
 use crate::limits::RunLimits;
 use crate::runtime::{AgentHarness, RunPolicy};
-use crate::subagent::{SubAgent, SubAgentSession, SubAgentTool};
+use crate::subagent::{ChildDataPolicy, SubAgent, SubAgentSession, SubAgentTool};
+
+#[test]
+fn child_data_policy_transforms_parent_data_explicitly() {
+    let policy = ChildDataPolicy::new(|parent: &String| format!("{parent}/child"));
+    assert_eq!(policy.child_data(&"root".to_string()), "root/child");
+}
 use crate::testkit::ScriptedModel;
 use crate::tool::{Tool, ToolCall, ToolExecutionContext, ToolResult, ToolSchema};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};

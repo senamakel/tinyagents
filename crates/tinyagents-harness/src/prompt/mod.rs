@@ -39,9 +39,9 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Result, TinyAgentsError};
-use crate::tool::ToolSchema;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, PromptSegment, ResponseFormat, SegmentRole};
+use tinyinference_llm::tool::ToolSchema;
 
 /// Renders supplied sections in order without product prompt selection.
 ///
@@ -83,15 +83,24 @@ pub fn assemble_sections(sections: &[PromptSection], max_bytes: usize) -> Prompt
 pub fn render_retrieved_documents(documents: &[crate::retriever::RetrievedDocument]) -> String {
     documents
         .iter()
-        .map(|document| format!("[{} score={}]\n{}", document.id, document.score, document.content))
+        .map(|document| {
+            format!(
+                "[{} score={}]\n{}",
+                document.id, document.score, document.content
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
 fn utf8_prefix(text: &str, max_bytes: usize) -> usize {
-    if text.len() <= max_bytes { return text.len(); }
+    if text.len() <= max_bytes {
+        return text.len();
+    }
     let mut end = max_bytes;
-    while end > 0 && !text.is_char_boundary(end) { end -= 1; }
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
     end
 }
 

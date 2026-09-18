@@ -45,9 +45,9 @@ pub fn parse_data_uri(source: &str) -> Result<ParsedDataUri, String> {
     };
 
     let header = &source[..comma_idx];
-    let payload = source[comma_idx + 1..].trim();
+    let payload = &source[comma_idx + 1..];
 
-    if !header.trim_start().starts_with("data:") {
+    if !header.starts_with("data:") {
         return Err("data URI must start with `data:`".to_string());
     }
 

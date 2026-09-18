@@ -59,3 +59,15 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
     }
     stats
 }
+
+/// Estimates transcript tokens through a caller-supplied tokenizer.
+///
+/// The harness deliberately does not choose a tokenizer: providers vary, and
+/// callers can account for their exact model dialect without importing host
+/// policy into this crate.
+pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> usize) -> usize {
+    messages
+        .iter()
+        .map(|message| tokenize(&message.text()))
+        .sum()
+}

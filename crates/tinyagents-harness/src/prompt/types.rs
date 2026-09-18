@@ -10,9 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tool::ToolSchema;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{PromptSegment, ResponseFormat};
+use tinyinference_llm::tool::ToolSchema;
 
 /// The role a rendered message will take in the conversation.
 ///
@@ -120,7 +120,10 @@ pub struct PromptSection {
 impl PromptSection {
     /// Creates a named section.
     pub fn new(name: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { name: name.into(), content: content.into() }
+        Self {
+            name: name.into(),
+            content: content.into(),
+        }
     }
 }
 
