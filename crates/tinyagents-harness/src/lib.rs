@@ -37,6 +37,7 @@ pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
 pub mod prompt;
+pub mod providers;
 pub(crate) mod relaxed_json;
 pub mod retry;
 pub mod run_queue;

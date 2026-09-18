@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Provider-neutral model, tool, middleware, and agent-loop runtime."
 
 [dependencies]
+anyhow = "1"
 async-trait = "0.1"
 # Keep this aligned with reqwest's transitive version so consumers do not
 # resolve a second base64 package solely for multimodal data URIs.
@@ -27,7 +28,7 @@ thiserror = "2"
 tinyagents-tracing = { path = "../tinyagents-tracing", version = "2.1.2", default-features = false }
 tinyinference = { path = "../../vendor/tinyinference/crates/tinyinference", version = "0.2.1" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.1.0" }
-tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs"] }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs", "io-util", "process"] }
 
 [features]
 default = []
