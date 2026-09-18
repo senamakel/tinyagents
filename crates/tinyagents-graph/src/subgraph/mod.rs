@@ -118,10 +118,9 @@ fn namespaced<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledG
 /// extends the parent's recursion tree rather than starting a fresh one), and
 /// records the embedding node so the child's root frame names it.
 fn child_for<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledGraph<S, U> {
-    let child = namespaced(child, ctx)
+    namespaced(child, ctx)
         .with_recursion_frames(ctx.recursion_frames.clone())
-        .with_recursion_node(ctx.node_id.clone());
-    child
+        .with_recursion_node(ctx.node_id.clone())
 }
 
 /// Drives an embedded child graph for one parent-node activation.
@@ -151,7 +150,14 @@ where
                 .await
         }
         (None, _, Some(binding)) => child.run_with_agent_binding(state, binding).await,
-        (Some(thread_id), Some(value), _) => child.resume(thread_id, Command::resume(value)).await,
+        (Some(thread_id), Some(value), Some(binding)) => {
+            child
+                .resume_with_agent_binding(thread_id, Command::resume(value), binding)
+                .await
+        }
+        (Some(thread_id), Some(value), None) => {
+            child.resume(thread_id, Command::resume(value)).await
+        }
         (Some(thread_id), None, None) => child.run_with_thread(thread_id, state).await,
         (None, _, None) => child.run(state).await,
     }

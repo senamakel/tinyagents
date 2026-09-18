@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use super::*;
 use crate::builder::GraphBuilder;
 use tinyagents_harness::cancel::CancellationToken;
-use tinyagents_harness::events::EventSink;
+use tinyagents_harness::events::{AgentEvent, EventSink, RecordingListener};
 
 #[derive(Clone, Default)]
 struct RecordingInvoker {
@@ -24,11 +24,23 @@ impl RecordingInvoker {
 impl AgentInvoker for RecordingInvoker {
     async fn invoke(&self, request: AgentInvocation) -> crate::Result<SubAgentOutput> {
         self.requests.lock().unwrap().push(request.clone());
+        request.events.emit(AgentEvent::StateUpdate);
         Ok(SubAgentOutput {
             text: format!("done:{}", request.input.prompt),
             model_calls: 1,
             ..SubAgentOutput::default()
         })
+    }
+}
+
+struct FailingInvoker;
+
+#[async_trait]
+impl AgentInvoker for FailingInvoker {
+    async fn invoke(&self, _request: AgentInvocation) -> crate::Result<SubAgentOutput> {
+        Err(crate::TinyAgentsError::Model(
+            "temporary failure".to_string(),
+        ))
     }
 }
 
@@ -131,4 +143,110 @@ async fn missing_host_invoker_is_an_explicit_capability_error() {
 
     let error = graph.run("question".to_string()).await.unwrap_err();
     assert!(matches!(error, crate::TinyAgentsError::Capability(_)));
+}
+
+#[tokio::test]
+async fn resume_binding_reaches_a_later_subagent_with_host_signals() {
+    // The initial invocation pauses before reaching the sub-agent, so the
+    // continuation must supply a fresh execution-scoped binding rather than
+    // relying on mutable state retained by the compiled graph.
+    let checkpointer = Arc::new(crate::checkpoint::InMemoryCheckpointer::<String>::new());
+    let graph = GraphBuilder::<String, String>::overwrite()
+        .add_node(
+            "gate",
+            |state: String, ctx: crate::builder::NodeContext| async move {
+                if ctx.resume.is_some() {
+                    Ok(crate::command::NodeResult::Update(state))
+                } else {
+                    Ok(crate::command::NodeResult::Interrupt(
+                        crate::command::Interrupt::new("gate", serde_json::json!({ "ask": "go?" })),
+                    ))
+                }
+            },
+        )
+        .add_node(
+            "delegate",
+            subagent_node(SubAgentNode::from_fns(
+                "researcher",
+                |state: &String| SubAgentInput::prompt(state.clone()),
+                |output: SubAgentOutput| output.text,
+            )),
+        )
+        .set_entry("gate")
+        .add_edge("gate", "delegate")
+        .set_finish("delegate")
+        .compile()
+        .unwrap()
+        .with_checkpointer(checkpointer);
+
+    let paused = graph
+        .run_with_thread("resume", "question".to_string())
+        .await
+        .unwrap();
+    assert!(paused.is_interrupted());
+
+    let invoker = Arc::new(RecordingInvoker::default());
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone());
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    let resumed = graph
+        .resume_with_agent_binding(
+            "resume",
+            crate::command::Command::resume(serde_json::json!("approved")),
+            AgentInvocationBinding::new(invoker.clone(), events, cancellation),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resumed.state, "done:question");
+    let request = invoker.requests().pop().expect("resumed sub-agent ran");
+    assert_eq!(request.parent_run_id, resumed.run_id);
+    assert_eq!(request.root_run_id, resumed.root_run_id);
+    assert!(
+        request
+            .cancellation
+            .expect("binding has cancellation")
+            .is_cancelled()
+    );
+    assert_eq!(
+        listener.len(),
+        1,
+        "the resumed sub-agent used the supplied event sink"
+    );
+}
+
+#[tokio::test]
+async fn retry_binding_is_fresh_and_reaches_the_failed_subagent() {
+    // A durable failure from one execution must not capture that execution's
+    // host capability. Retrying with a different binding reaches the node and
+    // succeeds through the new invoker.
+    let checkpointer = Arc::new(crate::checkpoint::InMemoryCheckpointer::<String>::new());
+    let graph = graph().with_checkpointer(checkpointer);
+
+    let failed = graph
+        .run_with_thread_agent_binding(
+            "retry",
+            "question".to_string(),
+            binding(Arc::new(FailingInvoker)),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(failed, crate::TinyAgentsError::Model(_)));
+
+    let replacement = Arc::new(RecordingInvoker::default());
+    let retried = graph
+        .retry_with_agent_binding("retry", binding(replacement.clone()))
+        .await
+        .unwrap();
+
+    assert_eq!(retried.state, "done:question");
+    let request = replacement
+        .requests()
+        .pop()
+        .expect("retry used replacement binding");
+    assert_eq!(request.parent_run_id, retried.run_id);
+    assert_eq!(request.root_run_id, retried.root_run_id);
 }

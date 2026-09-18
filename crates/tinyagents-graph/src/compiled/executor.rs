@@ -149,6 +149,22 @@ where
             .await
     }
 
+    /// Resumes an interrupted run with a host-bound recursive-agent binding.
+    ///
+    /// Like [`Self::resume`], this reloads the latest checkpoint for `thread_id`.
+    /// The binding is scoped solely to the resumed execution and is propagated
+    /// to every resumed node and nested subgraph; it is never retained by this
+    /// reusable graph value.
+    pub async fn resume_with_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        command: Command<Update>,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_with_agent_binding(thread_id, ResumeTarget::Latest, command, binding)
+            .await
+    }
+
     /// Retries a failed run from its latest (failure-boundary) checkpoint,
     /// re-running the node that failed and the not-yet-run tail of that step.
     ///
@@ -170,6 +186,24 @@ where
             .await
     }
 
+    /// Retries a failed run with a host-bound recursive-agent binding.
+    ///
+    /// This is the binding-aware counterpart to [`Self::retry`]. The supplied
+    /// binding is available only to this retry and any descendants it spawns.
+    pub async fn retry_with_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_with_agent_binding(
+            thread_id,
+            ResumeTarget::Latest,
+            Command::new(),
+            binding,
+        )
+        .await
+    }
+
     /// Resumes a run from a specific checkpoint (time-travel resume).
     ///
     /// [`ResumeTarget::Latest`] behaves exactly like [`CompiledGraph::resume`];
@@ -187,11 +221,39 @@ where
         target: ResumeTarget,
         command: Command<Update>,
     ) -> Result<GraphExecution<State>> {
+        self.resume_from_inner(thread_id.into(), target, command, None)
+            .await
+    }
+
+    /// Resumes a run from `target` with a host-bound recursive-agent binding.
+    ///
+    /// This is the binding-aware counterpart to [`Self::resume_from`]. It is
+    /// useful when a durable continuation reaches a
+    /// [`SubAgentNode`](crate::SubAgentNode) after an interrupt or retry.
+    /// The binding remains execution-scoped, including for resumed nested
+    /// subgraphs, and is not stored on [`CompiledGraph`](crate::CompiledGraph).
+    pub async fn resume_from_with_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        target: ResumeTarget,
+        command: Command<Update>,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_inner(thread_id.into(), target, command, Some(binding))
+            .await
+    }
+
+    async fn resume_from_inner(
+        &self,
+        thread_id: ThreadId,
+        target: ResumeTarget,
+        command: Command<Update>,
+        binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    ) -> Result<GraphExecution<State>> {
         let checkpointer = self
             .checkpointer
             .as_ref()
             .ok_or_else(|| TinyAgentsError::Resume("no checkpointer configured".to_string()))?;
-        let thread_id = thread_id.into();
 
         let checkpoint_id = match &target {
             ResumeTarget::Latest => None,
@@ -324,7 +386,7 @@ where
             resume_map,
             initial_barriers,
             initial_parent,
-            None,
+            binding,
         )
         .await
     }
@@ -365,6 +427,7 @@ where
 
     /// Returns the configured checkpointer or a [`TinyAgentsError::Checkpoint`]
     /// when inspection is attempted on a graph without durability.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         state: State,
