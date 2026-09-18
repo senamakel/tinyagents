@@ -13,8 +13,8 @@ use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall};
 use crate::retry::{RateLimiter, RetryPolicy};
 use crate::tool::{ToolCall, ToolResult, ToolSchema};
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -548,8 +548,8 @@ async fn contextual_selection_varies_by_depth() {
 // ── BudgetMiddleware ────────────────────────────────────────────────────────
 
 fn response_with_usage(model: &str, input: u64, output: u64) -> ModelResponse {
-    use tinyinference_core::model::{ModelResolutionSource, ResolvedModel};
-    use tinyinference_core::usage::Usage;
+    use tinyinference_llm::model::{ModelResolutionSource, ResolvedModel};
+    use tinyinference_llm::usage::Usage;
     let mut response = ModelResponse::assistant("ok");
     response.usage = Some(Usage::new(input, output));
     response.resolved_model = Some(ResolvedModel {
@@ -655,7 +655,7 @@ async fn budget_prices_usage_and_enforces_cost() {
 
 #[tokio::test]
 async fn budget_enforces_cached_input_token_limit() {
-    use tinyinference_core::usage::Usage;
+    use tinyinference_llm::usage::Usage;
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mw = BudgetMiddleware::new(BudgetLimits {
         max_cached_input_tokens: Some(10),
@@ -864,7 +864,7 @@ fn poisoned_tracker_stays_fail_closed() {
     // (fail-open). Recovering the poisoned guard must keep the previously
     // accumulated spend intact.
     use crate::cost::CostTotals;
-    use tinyinference_core::usage::Usage;
+    use tinyinference_llm::usage::Usage;
 
     let tracker = BudgetTracker::new();
     tracker.record(Usage::new(100, 100), CostTotals::default());

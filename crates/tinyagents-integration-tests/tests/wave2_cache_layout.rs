@@ -9,10 +9,10 @@ use tinyagents_harness::cache::{
     prompt_cache_key,
 };
 use tinyagents_harness::prompt::PromptBuilder;
-use tinyinference_core::cache::CachePolicy;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ModelRequest, PromptSegment, SegmentRole};
-use tinyinference_core::tool::{ToolFormat, ToolSchema};
+use tinyinference_llm::cache::CachePolicy;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
+use tinyinference_llm::tool::{ToolFormat, ToolSchema};
 
 fn segment(id: &str, role: SegmentRole, cacheable: bool) -> PromptSegment {
     PromptSegment {
@@ -325,9 +325,9 @@ mod run_policy_breakpoints {
     use tinyagents_harness::context::RunContext;
     use tinyagents_harness::middleware::Middleware;
     use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-    use tinyinference_core::cache::CachePolicy;
-    use tinyinference_core::message::Message;
-    use tinyinference_core::model::{
+    use tinyinference_llm::cache::CachePolicy;
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::{
         ChatModel, ModelRequest, ModelResponse, PromptSegment, SegmentRole,
     };
 
@@ -341,7 +341,7 @@ mod run_policy_breakpoints {
             &self,
             _state: &(),
             request: ModelRequest,
-        ) -> tinyinference_core::Result<ModelResponse> {
+        ) -> tinyinference_llm::Result<ModelResponse> {
             self.seen.lock().expect("poisoned").push(request);
             Ok(ModelResponse::assistant("ok"))
         }

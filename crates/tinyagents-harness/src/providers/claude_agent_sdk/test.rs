@@ -141,7 +141,7 @@ async fn provider_spawn_error_includes_the_os_source() {
 #[tokio::test]
 async fn chat_model_uses_prompt_guided_protocol_and_model_override() {
     use std::os::unix::fs::PermissionsExt;
-    use tinyinference_core::tool::ToolSchema;
+    use tinyinference_llm::tool::ToolSchema;
 
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("claude");

@@ -26,7 +26,7 @@ use tinyagents_harness::store::Store;
 use tinyagents_harness::tool::{
     Tool, ToolExecutionContext, ToolPolicy, ToolRegistry, ToolResult, ToolSideEffects,
 };
-use tinyinference_core::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 /// Which thread-goal control a [`GoalTool`] implements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

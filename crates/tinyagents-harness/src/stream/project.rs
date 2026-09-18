@@ -61,7 +61,7 @@ const INTERRUPTING_CONTROLS: [&str; 1] = ["interrupt"];
 /// ```
 /// use tinyagents_harness::events::AgentEvent;
 /// use tinyagents_harness::ids::{CallId, RunId};
-/// use tinyinference_core::message::MessageDelta;
+/// use tinyinference_llm::message::MessageDelta;
 /// use tinyagents_harness::stream::{project_event, StreamChunk};
 ///
 /// let event = AgentEvent::ModelDelta {

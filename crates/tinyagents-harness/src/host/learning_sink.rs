@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::ids::ThreadId;
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::usage::Usage;
 
 // ── TurnSummary ───────────────────────────────────────────────────────────────
 
@@ -72,7 +72,7 @@ pub struct TurnSummary {
 
     /// The turn's inbound text as the agent received it.
     ///
-    /// Plain text, not [`tinyinference_core::message::Message`]: a sink wants the
+    /// Plain text, not [`tinyinference_llm::message::Message`]: a sink wants the
     /// human-readable turn, and pinning the structured message shape here would
     /// make every transcript-format change a breaking change for stored
     /// summaries.

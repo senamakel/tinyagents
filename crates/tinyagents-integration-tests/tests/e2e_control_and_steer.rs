@@ -34,10 +34,10 @@ use tinyagents_harness::tool::Tool;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::ModelResponse;
-use tinyinference_core::providers::MockModel;
-use tinyinference_core::tool::ToolCall;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
 
 // ── Part A: MiddlewareControl ────────────────────────────────────────────────
 

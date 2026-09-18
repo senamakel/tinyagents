@@ -28,7 +28,7 @@ use tinyagents_harness::model_registry::ModelRegistry;
 use tinyagents_harness::tool::{Tool, ToolRegistry};
 use tinyagents_language::Blueprint;
 use tinyagents_language::capability_resolver::CapabilityResolver;
-use tinyinference_core::model::ChatModel;
+use tinyinference_llm::model::ChatModel;
 
 pub use types::*;
 

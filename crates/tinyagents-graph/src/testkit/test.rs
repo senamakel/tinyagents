@@ -10,7 +10,7 @@ use crate::checkpoint::InMemoryCheckpointer;
 use crate::command::{Command, NodeResult};
 use crate::reducer::ClosureStateReducer;
 use tinyagents_harness::ids::NodeId;
-use tinyinference_core::usage::UsageTotals;
+use tinyinference_llm::usage::UsageTotals;
 
 fn ids(values: &[&str]) -> Vec<NodeId> {
     values.iter().map(|v| NodeId::from(*v)).collect()

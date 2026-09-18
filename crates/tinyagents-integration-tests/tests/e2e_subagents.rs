@@ -29,11 +29,11 @@ use tinyagents_harness::tool::Tool;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference_core::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference_core::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
-use tinyinference_core::providers::MockModel;
-use tinyinference_core::tool::ToolCall;
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

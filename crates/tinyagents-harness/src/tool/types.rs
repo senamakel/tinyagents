@@ -22,7 +22,7 @@ use crate::events::EventSink;
 use crate::ids::{RunId, ThreadId};
 use crate::tool::{ToolErrorPolicy, context_detail_from_args, humanize_tool_name};
 
-pub(crate) use tinyinference_core::tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
+pub(crate) use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
 
 /// The outcome of executing a [`ToolCall`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,7 +62,7 @@ impl ToolResult {
     /// and is wrong.
     ///
     /// Advisory: the crate carries the flag to [`super::super::message::ToolMessage`]
-    /// via [`tinyinference_core::message::Message::tool_from_result`]; honouring it
+    /// via [`tinyinference_llm::message::Message::tool_from_result`]; honouring it
     /// is the host's job.
     /// # Returns
     ///

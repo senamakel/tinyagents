@@ -17,9 +17,9 @@ use serde_json::json;
 
 use tinyagents_harness::Result;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyinference_core::message::Message;
-use tinyinference_core::model::ResponseFormat;
-use tinyinference_core::providers::openai::OpenAiModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::ResponseFormat;
+use tinyinference_llm::providers::openai::OpenAiModel;
 
 #[tokio::main]
 async fn main() -> Result<()> {

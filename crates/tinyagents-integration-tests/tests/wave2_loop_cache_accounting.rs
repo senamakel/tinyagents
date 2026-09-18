@@ -11,9 +11,9 @@ use async_trait::async_trait;
 
 use tinyagents_harness::middleware::{BudgetLimits, BudgetMiddleware};
 use tinyagents_harness::runtime::AgentHarness;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_llm::usage::Usage;
 
 /// A model that answers with a fixed response, optionally flagged as a replay.
 struct FlaggedModel {
@@ -26,14 +26,14 @@ impl ChatModel<()> for FlaggedModel {
         &self,
         _state: &(),
         _request: ModelRequest,
-    ) -> tinyinference_core::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         let mut response = ModelResponse::assistant("done").with_usage(Usage::new(100, 50));
         response.served_from_cache = self.served_from_cache;
         Ok(response)
     }
 }
 
-async fn run_usage(served_from_cache: bool) -> tinyinference_core::usage::UsageTotals {
+async fn run_usage(served_from_cache: bool) -> tinyinference_llm::usage::UsageTotals {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("m", Arc::new(FlaggedModel { served_from_cache }));
     harness

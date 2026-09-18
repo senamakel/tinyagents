@@ -16,9 +16,9 @@ use serde_json::json;
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::FakeTool;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse, ToolChoice};
-use tinyinference_core::tool::ToolCall;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse, ToolChoice};
+use tinyinference_llm::tool::ToolCall;
 
 /// The schema the tests ask the model to fill in.
 fn schema() -> serde_json::Value {
@@ -72,7 +72,7 @@ impl ChatModel<()> for RecordingModel {
         &self,
         _state: &(),
         request: ModelRequest,
-    ) -> tinyinference_core::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.seen.lock().expect("poisoned").push(request);
         let mut script = self.script.lock().expect("poisoned");
         if script.len() > 1 {
@@ -109,7 +109,7 @@ async fn structured_tool_strategy_does_not_force_the_schema_tool_when_real_tools
     harness.register_model("rec", model.clone());
     harness.register_tool(Arc::new(FakeTool::returning("search", "hits")));
     harness.with_policy(RunPolicy {
-        default_response_format: Some(tinyinference_core::model::ResponseFormat::auto(
+        default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
             "result",
             schema(),
         )),
@@ -151,7 +151,7 @@ async fn structured_tool_strategy_still_forces_the_schema_tool_with_no_real_tool
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("rec", model.clone());
     harness.with_policy(RunPolicy {
-        default_response_format: Some(tinyinference_core::model::ResponseFormat::auto(
+        default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
             "result",
             schema(),
         )),
@@ -197,7 +197,7 @@ async fn a_structured_hit_does_not_discard_sibling_real_tool_calls() {
     harness.register_model("rec", model.clone());
     harness.register_tool(search.clone());
     harness.with_policy(RunPolicy {
-        default_response_format: Some(tinyinference_core::model::ResponseFormat::auto(
+        default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
             "result",
             schema(),
         )),
@@ -228,7 +228,7 @@ async fn a_schema_name_colliding_with_a_registered_tool_fails_closed() {
     harness.register_model("rec", model);
     harness.register_tool(Arc::new(FakeTool::returning("result", "hits")));
     harness.with_policy(RunPolicy {
-        default_response_format: Some(tinyinference_core::model::ResponseFormat::auto(
+        default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
             "result",
             schema(),
         )),

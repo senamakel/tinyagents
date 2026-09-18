@@ -86,15 +86,15 @@ pub enum TinyAgentsError {
     ///
     /// Real provider adapters (for example the OpenAI unary and streaming
     /// paths) raise this instead of [`TinyAgentsError::Model`] whenever they
-    /// have a [`tinyinference_core::model::ProviderError`] in hand, so
+    /// have a [`tinyinference_llm::model::ProviderError`] in hand, so
     /// [`crate::retry::is_retryable`] can classify retryability from
-    /// [`tinyinference_core::model::ProviderError::retryable`] (a 429 is
+    /// [`tinyinference_llm::model::ProviderError::retryable`] (a 429 is
     /// retryable; a 401 is not) rather than retrying every provider failure
     /// indiscriminately. Boxed so this one variant's larger payload does not
     /// inflate every `Result<T, TinyAgentsError>` in the crate
     /// (`clippy::result_large_err`).
     #[error("model error: {0}")]
-    Provider(Box<tinyinference_core::model::ProviderError>),
+    Provider(Box<tinyinference_llm::model::ProviderError>),
 
     /// The request did not fit in the model's context window.
     ///
@@ -109,11 +109,11 @@ pub enum TinyAgentsError {
     /// # Detection is best-effort, and asymmetric
     ///
     /// Hosted providers raise an explicit 400 for this, which
-    /// [`tinyinference_core::providers::openai::CONTEXT_OVERFLOW_CODE`] classifies.
+    /// [`tinyinference_llm::providers::openai::CONTEXT_OVERFLOW_CODE`] classifies.
     /// **Local servers usually truncate the front of the prompt silently
     /// instead**, so the absence of this error is not evidence that the prompt
     /// fitted — pair it with a probed real context window
-    /// ([`tinyinference_core::providers::openai::LocalProbe`]) rather than relying
+    /// ([`tinyinference_llm::providers::openai::LocalProbe`]) rather than relying
     /// on it alone.
     #[error("context overflow: {message}")]
     ContextOverflow {
@@ -264,15 +264,24 @@ pub enum TinyAgentsError {
     Storage(String),
 }
 
-impl From<tinyinference_core::Error> for TinyAgentsError {
-    fn from(error: tinyinference_core::Error) -> Self {
+impl From<tinyinference_llm::Error> for TinyAgentsError {
+    fn from(error: tinyinference_llm::Error) -> Self {
         match error {
-            tinyinference_core::Error::Model(message) => Self::Model(message),
-            tinyinference_core::Error::Provider(error) => Self::from_provider_error(*error),
-            tinyinference_core::Error::Validation(message) => Self::Validation(message),
-            tinyinference_core::Error::Serialization(error) => Self::Serialization(error),
-            tinyinference_core::Error::Embedding(message) => Self::Embedding(message),
-            tinyinference_core::Error::Catalog(message) => Self::Model(message),
+            tinyinference_llm::Error::Model(message) => Self::Model(message),
+            tinyinference_llm::Error::Provider(error) => Self::from_provider_error(*error),
+            tinyinference_llm::Error::Validation(message) => Self::Validation(message),
+            tinyinference_llm::Error::Serialization(error) => Self::Serialization(error),
+            tinyinference_llm::Error::Catalog(message) => Self::Model(message),
+        }
+    }
+}
+
+impl From<tinyinference_embeddings::Error> for TinyAgentsError {
+    fn from(error: tinyinference_embeddings::Error) -> Self {
+        match error {
+            tinyinference_embeddings::Error::Validation(message) => Self::Validation(message),
+            tinyinference_embeddings::Error::Serialization(error) => Self::Serialization(error),
+            tinyinference_embeddings::Error::Embedding(message) => Self::Embedding(message),
         }
     }
 }
@@ -289,11 +298,11 @@ impl TinyAgentsError {
     /// correct for everything else, and is what this returns when the code is
     /// absent or unrecognised.
     ///
-    /// [code]: tinyinference_core::providers::openai::CONTEXT_OVERFLOW_CODE
-    /// [pc]: tinyinference_core::model::ProviderError::code
-    pub fn from_provider_error(error: tinyinference_core::model::ProviderError) -> Self {
+    /// [code]: tinyinference_llm::providers::openai::CONTEXT_OVERFLOW_CODE
+    /// [pc]: tinyinference_llm::model::ProviderError::code
+    pub fn from_provider_error(error: tinyinference_llm::model::ProviderError) -> Self {
         if error.code.as_deref()
-            == Some(tinyinference_core::providers::openai::CONTEXT_OVERFLOW_CODE)
+            == Some(tinyinference_llm::providers::openai::CONTEXT_OVERFLOW_CODE)
         {
             tinyagents_tracing::debug!(
                 "[error] promoting provider `{}` context-overflow code to a typed error",
@@ -322,7 +331,7 @@ impl TinyAgentsError {
             Self::ContextOverflow { .. } => true,
             Self::Provider(error) => {
                 error.code.as_deref()
-                    == Some(tinyinference_core::providers::openai::CONTEXT_OVERFLOW_CODE)
+                    == Some(tinyinference_llm::providers::openai::CONTEXT_OVERFLOW_CODE)
             }
             _ => false,
         }

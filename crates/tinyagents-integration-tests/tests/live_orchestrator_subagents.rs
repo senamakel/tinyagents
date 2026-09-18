@@ -27,10 +27,10 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
     use tinyagents_harness::*;
     use tinyagents_language::*;
     use tinyagents_registry::*;
-    use tinyinference_core::message::Message;
-    use tinyinference_core::model::{ChatModel, ResponseFormat};
-    use tinyinference_core::providers::openai::OpenAiModel;
-    use tinyinference_core::tool::ToolCall;
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::{ChatModel, ResponseFormat};
+    use tinyinference_llm::providers::openai::OpenAiModel;
+    use tinyinference_llm::tool::ToolCall;
 
     let _ = dotenvy::dotenv();
     if std::env::var("OPENAI_API_KEY").is_err() {

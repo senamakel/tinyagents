@@ -8,7 +8,7 @@ use crate::middleware::LoggingMiddleware;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, RunPolicy};
 use crate::tool::{Tool, ToolCall, ToolResult, ToolSchema};
-use tinyinference_core::providers::MockModel;
+use tinyinference_llm::providers::MockModel;
 
 use async_trait::async_trait;
 use serde_json::json;

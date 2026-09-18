@@ -3,7 +3,7 @@
 //! A host that meters model spend — token budgets, per-tenant quotas, a global
 //! concurrency ceiling on in-flight completions — supplies a [`BudgetGate`].
 //! The runtime consults it immediately before each model call, reports realised
-//! [`Usage`](tinyinference_core::usage::Usage) afterwards, and asks it (cheaply,
+//! [`Usage`](tinyinference_llm::usage::Usage) afterwards, and asks it (cheaply,
 //! synchronously) whether context should be compressed before the next call.
 //!
 //! **This capability is optional.** A host that does not meter spend passes
@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::ids::ThreadId;
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::usage::Usage;
 
 // ── CallEstimate ──────────────────────────────────────────────────────────────
 

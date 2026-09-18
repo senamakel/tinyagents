@@ -1,6 +1,6 @@
 //! Host capability: choosing *which* model answers a turn.
 //!
-//! [`tinyinference_core::model::ChatModel`] already covers *how* a model is called.
+//! [`tinyinference_llm::model::ChatModel`] already covers *how* a model is called.
 //! What the runtime cannot supply is the decision of **which** model a given
 //! turn should use. That decision is product policy — route the lead agent to a
 //! frontier model and its subagents to a cheap one, send background/"thinking"
@@ -26,7 +26,7 @@
 //!
 //! # Naming hazard — read before "fixing" this
 //!
-//! The crate already has [`tinyinference_core::model::ModelRequest`], and it is a
+//! The crate already has [`tinyinference_llm::model::ModelRequest`], and it is a
 //! **different thing**: that type is the provider call payload (messages,
 //! tools, sampling parameters) handed to a model that has already been chosen.
 //! The type here, [`ModelResolveRequest`], is the *routing question* asked
@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use tinyinference_core::model::ChatModel;
+use tinyinference_llm::model::ChatModel;
 
 // ── ModelResolveRequest ───────────────────────────────────────────────────────
 
@@ -259,7 +259,7 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
 mod tests {
     use super::*;
 
-    use tinyinference_core::model::{ModelRequest, ModelResponse};
+    use tinyinference_llm::model::{ModelRequest, ModelResponse};
 
     /// Minimal model double: replies with a fixed string so a resolved model can
     /// be identified by the text it produces as well as by pointer identity.
@@ -271,7 +271,7 @@ mod tests {
             &self,
             _state: &State,
             _request: ModelRequest,
-        ) -> tinyinference_core::Result<ModelResponse> {
+        ) -> tinyinference_llm::Result<ModelResponse> {
             Ok(ModelResponse::assistant(self.0))
         }
     }

@@ -15,7 +15,7 @@ use tinyagents_graph::*;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference_core::embeddings::{InMemoryVectorStore, MockEmbeddingModel, Retriever};
+use tinyinference_embeddings::{InMemoryVectorStore, MockEmbeddingModel, Retriever};
 
 /// Builds a retriever over a small, topically-distinct corpus.
 async fn indexed_retriever() -> Retriever {

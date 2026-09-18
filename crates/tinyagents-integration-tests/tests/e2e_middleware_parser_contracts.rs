@@ -16,9 +16,9 @@ use tinyagents_harness::middleware::{
 };
 use tinyagents_harness::tool::ToolResult;
 use tinyagents_language::{lexer, parser};
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
-use tinyinference_core::tool::{ToolCall, ToolDelta, ToolSchema};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolSchema};
 
 struct ModelBase {
     seen_models: Mutex<Vec<Option<String>>>,

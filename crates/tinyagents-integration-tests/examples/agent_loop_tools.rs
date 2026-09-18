@@ -19,10 +19,10 @@ use tinyagents_harness::Result;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::ScriptedModel;
 use tinyagents_harness::tool::{Tool, ToolResult};
-use tinyinference_core::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference_core::model::ModelResponse;
-use tinyinference_core::tool::{ToolCall, ToolSchema};
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::usage::Usage;
 
 /// A tiny calculator tool that adds two numbers from its JSON arguments.
 struct CalculatorTool;

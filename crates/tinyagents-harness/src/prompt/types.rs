@@ -11,8 +11,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::tool::ToolSchema;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{PromptSegment, ResponseFormat};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{PromptSegment, ResponseFormat};
 
 /// The role a rendered message will take in the conversation.
 ///
@@ -93,7 +93,7 @@ pub struct MessagesTemplate {
 /// [`push_instructions`]: PromptBuilder::push_instructions
 /// [`push_history`]: PromptBuilder::push_history
 /// [`push_volatile`]: PromptBuilder::push_volatile
-/// [`SegmentRole`]: tinyinference_core::model::SegmentRole
+/// [`SegmentRole`]: tinyinference_llm::model::SegmentRole
 #[derive(Clone, Debug, Default)]
 pub struct PromptBuilder {
     /// Accumulated segments, in push order.

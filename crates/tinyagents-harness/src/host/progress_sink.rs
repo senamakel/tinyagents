@@ -77,7 +77,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{CallId, RunId, ThreadId};
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::usage::Usage;
 
 // ── ProgressEvent ─────────────────────────────────────────────────────────────
 

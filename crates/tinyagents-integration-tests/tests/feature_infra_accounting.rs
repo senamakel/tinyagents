@@ -10,7 +10,7 @@
 
 use tinyagents_harness::cost::{CostTotals, estimate_cost};
 use tinyagents_registry::catalog::ModelPricing;
-use tinyinference_core::usage::{Usage, UsageTotals};
+use tinyinference_llm::usage::{Usage, UsageTotals};
 
 // ── Usage accumulation ─────────────────────────────────────────────────────
 

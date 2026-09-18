@@ -26,11 +26,9 @@ use tinyagents_harness::cache::InMemoryResponseCache;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::EventRecorder;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{
-    ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream,
-};
-use tinyinference_core::providers::openai::OpenAiModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream};
+use tinyinference_llm::providers::openai::OpenAiModel;
 
 /// Wraps an inner [`ChatModel`] and counts how many times the *underlying*
 /// provider is actually contacted via `invoke` or `stream`.
@@ -49,7 +47,7 @@ impl<State: Send + Sync> ChatModel<State> for CountingModel<State> {
         &self,
         state: &State,
         request: ModelRequest,
-    ) -> tinyinference_core::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.inner.invoke(state, request).await
     }
@@ -58,7 +56,7 @@ impl<State: Send + Sync> ChatModel<State> for CountingModel<State> {
         &self,
         state: &State,
         request: ModelRequest,
-    ) -> tinyinference_core::Result<ModelStream> {
+    ) -> tinyinference_llm::Result<ModelStream> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.inner.stream(state, request).await
     }

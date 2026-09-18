@@ -466,12 +466,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hex"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
-
-[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1449,7 +1443,7 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-language",
  "tinyagents-tracing",
- "tinyinference-core",
+ "tinyinference-llm",
  "tokio",
 ]
 
@@ -1476,7 +1470,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tinyagents-tracing",
- "tinyinference-core",
+ "tinyinference-embeddings",
+ "tinyinference-llm",
  "tinytools",
  "tinytools-agent",
  "tokio",
@@ -1502,7 +1497,8 @@ dependencies = [
  "tinyagents-language",
  "tinyagents-registry",
  "tinyagents-session",
- "tinyinference-core",
+ "tinyinference-embeddings",
+ "tinyinference-llm",
  "tinytools",
  "tokio",
 ]
@@ -1526,7 +1522,7 @@ dependencies = [
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-language",
- "tinyinference-core",
+ "tinyinference-llm",
  "tokio",
 ]
 
@@ -1555,16 +1551,38 @@ name = "tinyinference-core"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "httpdate",
+ "url",
+]
+
+[[package]]
+name = "tinyinference-embeddings"
+version = "0.2.1"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tinyinference-core",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "tinyinference-llm"
+version = "0.2.1"
+dependencies = [
  "async-trait",
  "bytes",
  "futures",
- "hex",
- "httpdate",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
+ "tinyinference-core",
  "tokio",
  "tracing",
  "url",

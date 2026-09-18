@@ -13,7 +13,7 @@ mod types;
 
 use std::ops::{Add, AddAssign};
 
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::usage::Usage;
 pub use types::*;
 
 impl CostTotals {

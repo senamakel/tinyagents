@@ -40,10 +40,10 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{ChatModel, ResponseFormat};
-use tinyinference_core::providers::openai::OpenAiModel;
-use tinyinference_core::tool::ToolCall;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ResponseFormat};
+use tinyinference_llm::providers::openai::OpenAiModel;
+use tinyinference_llm::tool::ToolCall;
 
 /// A specialized sub-agent's static identity.
 struct AgentSpec {

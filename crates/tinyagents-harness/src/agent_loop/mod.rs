@@ -109,8 +109,8 @@ use crate::structured::{StructuredExtractor, StructuredStrategy};
 use crate::tool::{Tool, ToolCall, ToolSchema};
 use futures::StreamExt;
 use serde_json::Value;
-use tinyinference_core::message::{Message, MessageDelta};
-use tinyinference_core::model::{
+use tinyinference_llm::message::{Message, MessageDelta};
+use tinyinference_llm::model::{
     ChatModel, ModelDelta, ModelRequest, ModelResolutionSource, ModelResponse, ModelStreamItem,
     ResolvedModel, ResponseFormat, StreamAccumulator, ToolChoice,
 };

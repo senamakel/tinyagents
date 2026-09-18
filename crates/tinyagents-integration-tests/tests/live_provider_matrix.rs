@@ -61,13 +61,13 @@ use std::time::Instant;
 
 use futures::StreamExt;
 use serde_json::json;
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelStreamItem, StreamAccumulator, ToolChoice,
 };
-use tinyinference_core::providers::openai::OpenAiModel;
-use tinyinference_core::providers::{ProviderKind, ProviderSpec};
-use tinyinference_core::tool::ToolSchema;
+use tinyinference_llm::providers::openai::OpenAiModel;
+use tinyinference_llm::providers::{ProviderKind, ProviderSpec};
+use tinyinference_llm::tool::ToolSchema;
 
 /// Prefix every matrix variable in `providers.env` carries.
 const VAR_PREFIX: &str = "PROVIDER_";

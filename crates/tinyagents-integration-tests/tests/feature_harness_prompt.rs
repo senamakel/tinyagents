@@ -15,8 +15,8 @@ use serde_json::{Map, Value, json};
 
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::prompt::{MessagesTemplate, PromptBuilder, PromptTemplate, TemplateRole};
-use tinyinference_core::message::Message;
-use tinyinference_core::tool::ToolSchema;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::tool::ToolSchema;
 
 fn vars(pairs: &[(&str, Value)]) -> Map<String, Value> {
     let mut map = Map::new();

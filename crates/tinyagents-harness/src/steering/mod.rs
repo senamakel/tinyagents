@@ -31,7 +31,7 @@
 //!
 //! ```
 //! use tinyagents_harness::context::{RunConfig, RunContext};
-//! use tinyinference_core::message::Message;
+//! use tinyinference_llm::message::Message;
 //! use tinyagents_harness::steering::{
 //!     apply_pending_steering, SteeringCommand, SteeringCommandKind, SteeringHandle,
 //!     SteeringOutcome, SteeringPolicy,
@@ -61,7 +61,7 @@ use std::sync::{Arc, Mutex};
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
-use tinyinference_core::message::Message;
+use tinyinference_llm::message::Message;
 
 // ── SteeringPolicy ────────────────────────────────────────────────────────────
 

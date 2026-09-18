@@ -11,7 +11,7 @@ use tinyagents_language::parser::parse_str;
 use tinyagents_language::types::{Origin, Routing, Token};
 use tinyagents_language::*;
 use tinyagents_registry::*;
-use tinyinference_core::providers::MockModel;
+use tinyinference_llm::providers::MockModel;
 
 const BASE: &str = r#"
 graph review_flow {

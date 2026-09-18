@@ -39,10 +39,10 @@ pub use tinytools::{
 pub use types::*;
 
 /// Converts a runtime [`ToolResult`] into a provider-neutral tool message.
-pub fn message_from_result(result: &ToolResult) -> tinyinference_core::message::Message {
-    tinyinference_core::message::Message::Tool(tinyinference_core::message::ToolMessage {
+pub fn message_from_result(result: &ToolResult) -> tinyinference_llm::message::Message {
+    tinyinference_llm::message::Message::Tool(tinyinference_llm::message::ToolMessage {
         tool_call_id: result.call_id.clone(),
-        content: vec![tinyinference_core::message::ContentBlock::Text(
+        content: vec![tinyinference_llm::message::ContentBlock::Text(
             result.content.clone(),
         )],
         trusted_verbatim: result.is_trusted_verbatim(),

@@ -154,7 +154,7 @@ impl StreamSink {
 ///
 /// ```
 /// use tinyagents_harness::stream::{stream, StreamChunk, StreamMode};
-/// use tinyinference_core::message::MessageDelta;
+/// use tinyinference_llm::message::MessageDelta;
 ///
 /// let chunks = vec![
 ///     StreamChunk::Message(MessageDelta::text("hi")),

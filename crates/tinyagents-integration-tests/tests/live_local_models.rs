@@ -57,13 +57,13 @@ use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy};
 use tinyagents_harness::testkit::{EventRecorder, Trajectory};
 use tinyagents_harness::tool::{Tool, ToolResult};
-use tinyinference_core::message::Message;
-use tinyinference_core::model::{
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelStreamItem, ResponseFormat, StreamAccumulator, ToolChoice,
 };
-use tinyinference_core::providers::openai::OpenAiModel;
-use tinyinference_core::providers::{ProviderKind, ProviderSpec};
-use tinyinference_core::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::providers::openai::OpenAiModel;
+use tinyinference_llm::providers::{ProviderKind, ProviderSpec};
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 /// Per-call ceiling. A cold local model has to load several GB off disk before
 /// it emits its first token, so this is deliberately generous.

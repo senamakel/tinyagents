@@ -8,7 +8,7 @@
 use super::*;
 use crate::tool::ToolCall;
 use serde_json::json;
-use tinyinference_core::model::{ModelProfile, ModelResponse, ResponseFormat};
+use tinyinference_llm::model::{ModelProfile, ModelResponse, ResponseFormat};
 
 #[test]
 fn auto_strategy_defaults_to_provider_schema_without_profile() {

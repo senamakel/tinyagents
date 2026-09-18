@@ -61,7 +61,7 @@ tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", pack
 # The code samples below build `Message` and provider types directly from
 # TinyInference, the message/model crate TinyAgents is built on. It is a
 # separate git dependency, not re-exported by the crates above.
-tinyinference-core = { git = "https://github.com/tinyhumansai/tinyinference", package = "tinyinference-core" }
+tinyinference-llm = { git = "https://github.com/tinyhumansai/tinyinference", package = "tinyinference-llm" }
 ```
 
 A minimal typed graph — a whole-state agent/tool loop (trimmed from
@@ -69,7 +69,7 @@ A minimal typed graph — a whole-state agent/tool loop (trimmed from
 
 ```rust
 use tinyagents_graph::*;
-use tinyinference_core::message::Message;
+use tinyinference_llm::message::Message;
 
 #[derive(Clone, Debug)]
 struct AgentState {
@@ -113,8 +113,8 @@ A one-shot model call through the harness (`export OPENAI_API_KEY=...` then
 ```rust
 use std::sync::Arc;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyinference_core::message::Message;
-use tinyinference_core::providers::openai::OpenAiModel;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::openai::OpenAiModel;
 
 let model = OpenAiModel::from_env()?;
 let mut harness: AgentHarness<()> = AgentHarness::new();

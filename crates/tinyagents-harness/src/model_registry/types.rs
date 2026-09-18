@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tinyinference_core::model::{CapabilitySet, ChatModel, ModelHint, ResolvedModel};
+use tinyinference_llm::model::{CapabilitySet, ChatModel, ModelHint, ResolvedModel};
 
 /// Input policy for resolving one registered model.
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -333,7 +333,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // silently substituting a different model.
             if let Some(requested) = &request.model
                 && binding.resolved.source
-                    != tinyinference_core::model::ModelResolutionSource::RequestOverride
+                    != tinyinference_llm::model::ModelResolutionSource::RequestOverride
             {
                 ctx.emit(AgentEvent::ModelOverrideSkipped {
                     requested: requested.clone(),

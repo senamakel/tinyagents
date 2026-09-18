@@ -36,10 +36,10 @@ use tinyagents_harness::retry::RetryPolicy;
 use tinyagents_harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy};
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, Trajectory};
 use tinyagents_harness::tool::{Tool, ToolResult};
-use tinyinference_core::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference_core::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference_core::tool::{ToolCall, ToolSchema};
-use tinyinference_core::usage::Usage;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::usage::Usage;
 
 // ── Test doubles ──────────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ impl ChatModel<()> for FlakyModel {
         &self,
         state: &(),
         request: ModelRequest,
-    ) -> tinyinference_core::Result<ModelResponse> {
+    ) -> tinyinference_llm::Result<ModelResponse> {
         let n = {
             // Scope the guard so it is dropped before the `.await` below
             // (a `MutexGuard` is not `Send`).
@@ -124,7 +124,7 @@ impl ChatModel<()> for FlakyModel {
             *calls
         };
         if n <= self.fail_first {
-            return Err(tinyinference_core::Error::Model(format!(
+            return Err(tinyinference_llm::Error::Model(format!(
                 "flaky transient failure #{n}"
             )));
         }

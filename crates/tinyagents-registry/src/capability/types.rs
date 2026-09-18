@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_harness::tool::Tool;
 use tinyagents_language::Blueprint;
-use tinyinference_core::model::ChatModel;
+use tinyinference_llm::model::ChatModel;
 
 /// A name-addressable catalog of registered capabilities.
 ///

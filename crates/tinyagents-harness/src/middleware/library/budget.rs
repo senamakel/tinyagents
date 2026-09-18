@@ -34,7 +34,7 @@ impl BudgetTracker {
     }
 
     /// Folds a model call's usage and estimated cost into the tracker.
-    pub fn record(&self, usage: tinyinference_core::usage::Usage, cost: crate::cost::CostTotals) {
+    pub fn record(&self, usage: tinyinference_llm::usage::Usage, cost: crate::cost::CostTotals) {
         let mut guard = self.lock_recovering();
         guard.usage += usage;
         guard.cost += cost;
