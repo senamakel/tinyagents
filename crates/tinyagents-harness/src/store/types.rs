@@ -261,6 +261,7 @@ pub struct JsonlAppendStore {
 /// reg.register("events", Arc::new(FileStore::new("./data/events")));
 /// reg.register("cache", Arc::new(InMemoryStore::new()));
 /// ```
+#[derive(Clone)]
 pub struct StoreRegistry {
     /// Named stores keyed by their registration name.
     pub(crate) stores: HashMap<String, Arc<dyn Store>>,

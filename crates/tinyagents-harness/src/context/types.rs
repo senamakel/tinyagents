@@ -23,6 +23,26 @@ use crate::limits::LimitTracker;
 use crate::steering::SteeringHandle;
 use crate::store::StoreRegistry;
 
+/// The immutable ancestry of a run in a recursive harness invocation tree.
+///
+/// A lineage names the root run, the immediate parent (when this is a child),
+/// and the depth cap shared by the complete tree.  It is deliberately data-only
+/// so hosts can persist, display, or replay ancestry without retaining a live
+/// [`RunContext`].  The live context remains the authority for cancellation,
+/// stores, events, and other process-local capabilities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunLineage {
+    /// The top-level run that began this recursive tree.
+    pub root_run_id: RunId,
+    /// The run that directly created this run, or `None` for the root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<RunId>,
+    /// This run's zero-based depth in the tree.
+    pub depth: usize,
+    /// Inclusive maximum permitted child depth for the tree.
+    pub max_depth: usize,
+}
+
 /// Declarative, serializable configuration for a single harness run.
 ///
 /// `RunConfig` captures everything that defines a run independent of live
@@ -116,6 +136,10 @@ pub struct RunConfig {
     /// [`crate::limits::RunLimits::DEFAULT_MAX_DEPTH`].
     #[serde(default = "default_max_depth")]
     pub max_depth: usize,
+    /// Recursive ancestry for this run.  `depth` and `max_depth` remain
+    /// compatibility fields for existing consumers; constructors and builders
+    /// keep them synchronized with this canonical lineage record.
+    pub lineage: RunLineage,
 }
 
 /// Serde default for [`RunConfig::max_depth`]: the crate-wide depth cap.

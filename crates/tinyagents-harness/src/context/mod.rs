@@ -33,8 +33,10 @@
 //! assert_eq!(ctx.limits.model_calls(), 1);
 //! ```
 
+mod stats;
 mod types;
 
+pub use stats::*;
 pub use types::*;
 
 use crate::cancel::CancellationToken;
@@ -61,8 +63,15 @@ impl RunConfig {
     /// is what lets a harness-wide `RunPolicy` raise them; see
     /// [`RunConfig::max_model_calls`].
     pub fn new(run_id: impl Into<String>) -> Self {
+        let run_id = RunId::new(run_id);
         Self {
-            run_id: RunId::new(run_id),
+            lineage: RunLineage {
+                root_run_id: run_id.clone(),
+                parent_run_id: None,
+                depth: 0,
+                max_depth: RunLimits::default().max_depth,
+            },
+            run_id,
             thread_id: None,
             tags: Vec::new(),
             metadata: serde_json::Value::Null,
@@ -144,12 +153,14 @@ impl RunConfig {
     /// [`crate::subagent::SubAgent`] carry the parent depth plus one.
     pub fn with_depth(mut self, depth: usize) -> Self {
         self.depth = depth;
+        self.lineage.depth = depth;
         self
     }
 
     /// Sets the maximum sub-agent / recursion depth permitted for this run tree.
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
         self.max_depth = max_depth;
+        self.lineage.max_depth = max_depth;
         self
     }
 
@@ -174,13 +185,20 @@ impl RunConfig {
     /// The returned config keeps this config's `max_depth` and thread, sets
     /// `depth = self.depth + 1`, and uses `child_run_id` as the run identity.
     /// It does **not** copy tags or metadata, which are run-specific.
-    pub fn child(&self, child_run_id: impl Into<String>) -> Self {
+    pub fn child(&self, child_run_id: impl Into<String>) -> Result<Self> {
+        let child_depth = Self::checked_child_depth(self.depth, self.max_depth)?;
         let mut config = Self::new(child_run_id);
-        config.depth = self.depth + 1;
+        config.depth = child_depth;
         config.max_depth = self.max_depth;
+        config.lineage = RunLineage {
+            root_run_id: self.lineage.root_run_id.clone(),
+            parent_run_id: Some(self.run_id.clone()),
+            depth: child_depth,
+            max_depth: self.max_depth,
+        };
         config.thread_id = self.thread_id.clone();
         config.max_turn_output_tokens = self.max_turn_output_tokens;
-        config
+        Ok(config)
     }
 
     /// Builds the [`RunLimits`] policy implied by this config.
@@ -228,6 +246,50 @@ impl<Ctx> RunContext<Ctx> {
         }
     }
 
+    /// Builds an isolated child context from this live parent context.
+    ///
+    /// A child gets a new run id, lineage record, [`LimitTracker`], control
+    /// slot, and instance id.  It deliberately shares the capabilities that
+    /// describe one recursive operation: cancellation, events, stores,
+    /// workspace policy, steering, streaming mode, thread identity, output
+    /// cap, and depth cap.  The child starts with the parent's metadata; use
+    /// [`Self::child_with_metadata`] to shallowly overlay child-specific keys.
+    pub fn child<ChildCtx>(
+        &self,
+        child_run_id: impl Into<String>,
+        data: ChildCtx,
+    ) -> Result<RunContext<ChildCtx>> {
+        self.child_with_metadata(child_run_id, data, serde_json::Value::Null)
+    }
+
+    /// Like [`Self::child`], with a shallow metadata overlay.
+    ///
+    /// When both metadata values are objects, child keys replace parent keys
+    /// and untouched parent keys remain.  A non-object child value replaces a
+    /// non-null parent value; JSON `null` means no child override and preserves
+    /// the parent metadata.
+    pub fn child_with_metadata<ChildCtx>(
+        &self,
+        child_run_id: impl Into<String>,
+        data: ChildCtx,
+        child_metadata: serde_json::Value,
+    ) -> Result<RunContext<ChildCtx>> {
+        let mut config = self.config.child(child_run_id)?;
+        config.metadata = shallow_merge_metadata(&self.config.metadata, child_metadata);
+        Ok(RunContext::new(config, data)
+            .with_stores(self.stores.clone())
+            .with_events(self.events.clone())
+            .with_cancellation(self.cancellation.clone())
+            .with_optional_steering(self.steering.clone())
+            .with_optional_workspace(self.workspace.clone())
+            .with_streaming(self.streaming))
+    }
+
+    /// Returns this run's recursive ancestry.
+    pub fn lineage(&self) -> &RunLineage {
+        &self.config.lineage
+    }
+
     /// Returns this context's process-unique instance id.
     ///
     /// Two concurrent runs can carry the same [`RunConfig::run_id`] (it is a
@@ -261,6 +323,24 @@ impl<Ctx> RunContext<Ctx> {
     /// first.
     pub fn with_workspace(mut self, workspace: crate::workspace::WorkspaceDescriptor) -> Self {
         self.workspace = Some(workspace);
+        self
+    }
+
+    fn with_optional_workspace(
+        mut self,
+        workspace: Option<crate::workspace::WorkspaceDescriptor>,
+    ) -> Self {
+        self.workspace = workspace;
+        self
+    }
+
+    fn with_optional_steering(mut self, steering: Option<crate::steering::SteeringHandle>) -> Self {
+        self.steering = steering;
+        self
+    }
+
+    fn with_streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
         self
     }
 
@@ -343,13 +423,13 @@ impl<Ctx> RunContext<Ctx> {
 
     /// Returns this run's depth in the sub-agent / recursion tree.
     pub fn depth(&self) -> usize {
-        self.config.depth
+        self.config.lineage.depth
     }
 
     /// Returns the maximum sub-agent / recursion depth permitted for this run
     /// tree.
     pub fn max_depth(&self) -> usize {
-        self.config.max_depth
+        self.config.lineage.max_depth
     }
 
     /// Records one model call against the run's limits.
@@ -382,6 +462,24 @@ impl<Ctx> RunContext<Ctx> {
     /// this to bound each individual model call.
     pub fn remaining_wall_clock(&self) -> Option<std::time::Duration> {
         self.limits.remaining_wall_clock()
+    }
+}
+
+/// Applies the child metadata semantics used by [`RunContext::child_with_metadata`].
+fn shallow_merge_metadata(
+    parent: &serde_json::Value,
+    child: serde_json::Value,
+) -> serde_json::Value {
+    if child.is_null() {
+        return parent.clone();
+    }
+    match (parent, child) {
+        (serde_json::Value::Object(parent), serde_json::Value::Object(child)) => {
+            let mut merged = parent.clone();
+            merged.extend(child);
+            serde_json::Value::Object(merged)
+        }
+        (_, child) => child,
     }
 }
 

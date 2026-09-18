@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::events::{AgentEvent, RecordingListener};
+use crate::steering::SteeringHandle;
+use crate::workspace::WorkspaceDescriptor;
 use std::sync::Arc;
 
 #[test]
@@ -160,4 +162,152 @@ fn checked_child_depth_is_the_shared_depth_guard() {
         Err(TinyAgentsError::SubAgentDepth(cap)) => assert_eq!(cap, 8),
         other => panic!("expected SubAgentDepth(8), got {other:?}"),
     }
+}
+
+#[test]
+fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
+    let parent: RunContext<()> = RunContext::new(
+        RunConfig::new("root")
+            .with_thread("thread")
+            .with_max_depth(2)
+            .with_max_turn_output_tokens(123),
+        (),
+    );
+    let child = parent.child("child", "child-data").unwrap();
+    let grandchild = child.child("grandchild", ()).unwrap();
+
+    assert_eq!(parent.lineage().root_run_id.as_str(), "root");
+    assert_eq!(parent.lineage().parent_run_id, None);
+    assert_eq!(child.lineage().root_run_id.as_str(), "root");
+    assert_eq!(
+        child.lineage().parent_run_id.as_ref().unwrap().as_str(),
+        "root"
+    );
+    assert_eq!(child.depth(), 1);
+    assert_eq!(
+        grandchild
+            .lineage()
+            .parent_run_id
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "child"
+    );
+    assert_eq!(grandchild.depth(), 2);
+    assert_eq!(grandchild.max_depth(), 2);
+    assert_eq!(grandchild.thread_id().unwrap().as_str(), "thread");
+    assert_eq!(grandchild.config.max_turn_output_tokens, Some(123));
+    assert!(matches!(
+        grandchild.child("too-deep", ()),
+        Err(crate::TinyAgentsError::SubAgentDepth(2))
+    ));
+}
+
+#[test]
+fn child_inherits_recursive_capabilities_but_not_mutable_run_state() {
+    let cancellation = crate::CancellationToken::new();
+    let events = EventSink::new();
+    let recorder = Arc::new(RecordingListener::new());
+    events.subscribe(recorder.clone());
+    let steering = SteeringHandle::allow_all();
+    let workspace = WorkspaceDescriptor::new("/workspace/child-contract");
+    let mut parent: RunContext<()> = RunContext::new(
+        RunConfig::new("parent")
+            .with_metadata(serde_json::json!({"keep": true, "replace": "parent"}))
+            .with_max_model_calls(2)
+            .with_max_tool_calls(2),
+        (),
+    )
+    .with_cancellation(cancellation.clone())
+    .with_events(events.clone())
+    .with_steering(steering.clone())
+    .with_workspace(workspace.clone());
+    parent.streaming = true;
+    parent.record_model_call().unwrap();
+    parent.request_control(MiddlewareControl::StopWithFinal("parent-only".into()));
+
+    let child = parent
+        .child_with_metadata(
+            "child",
+            (),
+            serde_json::json!({"replace": "child", "new": 1}),
+        )
+        .unwrap();
+
+    assert_eq!(
+        child.config.metadata,
+        serde_json::json!({"keep": true, "replace": "child", "new": 1})
+    );
+    assert_eq!(child.limits.model_calls(), 0, "limits begin independently");
+    assert!(
+        child.take_control().is_none(),
+        "control slots are not shared"
+    );
+    assert_ne!(parent.instance_id(), child.instance_id());
+    assert!(child.streaming);
+    assert_eq!(child.workspace.as_ref(), Some(&workspace));
+    assert!(child.steering.is_some());
+    child.emit(AgentEvent::StateUpdate);
+    assert_eq!(recorder.events().len(), 1, "child emits on the parent sink");
+    cancellation.cancel();
+    assert!(child.cancellation.is_cancelled());
+}
+
+#[test]
+fn sibling_children_are_isolated_while_sharing_tree_signals() {
+    let events = EventSink::new();
+    let parent: RunContext<()> = RunContext::new(RunConfig::new("root"), ()).with_events(events);
+    let mut first = parent.child("first", ()).unwrap();
+    let second = parent.child("second", ()).unwrap();
+
+    first.record_tool_call().unwrap();
+    first.request_control(MiddlewareControl::StopWithFinal("first".into()));
+    assert_eq!(second.limits.tool_calls(), 0);
+    assert!(second.take_control().is_none());
+    assert_ne!(first.instance_id(), second.instance_id());
+    assert_eq!(first.lineage().root_run_id, second.lineage().root_run_id);
+    assert_eq!(
+        first.lineage().parent_run_id,
+        second.lineage().parent_run_id
+    );
+    assert_ne!(first.run_id(), second.run_id());
+}
+
+#[test]
+fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
+    use tinyinference_llm::message::{ContentBlock, ImageRef, UserMessage};
+    use tinyinference_llm::tool::ToolCall;
+
+    let messages = vec![
+        Message::Assistant(tinyinference_llm::message::AssistantMessage {
+            id: None,
+            content: vec![ContentBlock::Text("call it".into())],
+            tool_calls: vec![ToolCall::new("call-1", "lookup", serde_json::json!({}))],
+            usage: None,
+        }),
+        Message::Tool(tinyinference_llm::message::ToolMessage {
+            tool_call_id: "call-1".into(),
+            content: vec![ContentBlock::Text("answer".into())],
+            trusted_verbatim: false,
+            artifact: None,
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,AA==".into(),
+                mime_type: Some("image/png".into()),
+            })],
+        }),
+    ];
+
+    assert_eq!(
+        context_statistics(&messages),
+        ContextStatistics {
+            messages: 3,
+            text_chars: 13,
+            images: 1,
+            tool_calls: 1,
+            tool_results: 1,
+            paired_tool_results: 1,
+        }
+    );
 }

@@ -84,7 +84,7 @@ use crate::events::{AgentEvent, EventSink};
 use crate::ids::{ThreadId, next_seq};
 use crate::middleware::AgentRun;
 use crate::runtime::AgentHarness;
-use crate::tool::{Tool, ToolCall, ToolExecutionContext, ToolResult, ToolSchema};
+use crate::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
 impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
@@ -163,6 +163,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
         Ok(config)
     }
 
+    /// Mints a readable, collision-free child run id for a known child depth.
+    fn child_run_id(&self, child_depth: usize) -> String {
+        format!("{}-d{child_depth}-{}", self.name, next_seq())
+    }
+
     /// Runs the sub-agent as a child run at `parent_depth`, returning the
     /// child's [`AgentRun`].
     ///
@@ -221,16 +226,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
         parent: &RunContext<Ctx>,
         input: impl Into<String>,
     ) -> Result<AgentRun> {
-        let config = self.child_config(
-            parent.depth(),
-            parent.thread_id(),
-            parent.config.max_turn_output_tokens,
-        )?;
-        // Share the parent's cancellation token so one `cancel()` unwinds the
-        // whole nested-run tree instead of stopping at this boundary.
-        let ctx = RunContext::new(config, ctx_data)
-            .with_events(parent.events.clone())
-            .with_cancellation(parent.cancellation.clone());
+        // The child harness may tighten the tree cap, but it may never widen
+        // the explicit parent lineage cap. `RunContext::child` is the one
+        // place that copies the live recursive capabilities and creates the
+        // isolated counters/control slot for this invocation.
+        let child_depth =
+            RunConfig::checked_child_depth(parent.depth(), self.harness.policy().limits.max_depth)?;
+        let ctx = parent.child(self.child_run_id(child_depth), ctx_data)?;
         self.run_child(state, ctx, input.into(), parent.streaming)
             .await
     }
@@ -503,126 +505,127 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
         }
     }
 
-    fn limit_result_for_parent(
-        call_id: String,
-        tool_name: &str,
-        error: &TinyAgentsError,
-    ) -> Option<ToolResult> {
-        let limit_kind = match error {
-            TinyAgentsError::LimitExceeded(_) => "configured run limit",
-            TinyAgentsError::Timeout(_) => "wall-clock deadline",
-            TinyAgentsError::SubAgentDepth(_) => "recursion depth limit",
-            _ => return None,
+    /// Invokes this sub-agent from the actual parent [`RunContext`].
+    ///
+    /// This is the agent-native recursive-tool boundary.  It is intentionally
+    /// separate from `tinytools::Tool`: TinyTools only receives the narrow
+    /// workspace/thread/output vocabulary it needs for ordinary tools, while
+    /// a child agent must inherit the parent run's live lineage, cancellation,
+    /// stores, events, workspace, steering, and streaming state.  The harness
+    /// tool dispatcher registers this typed entry point explicitly; it does
+    /// not downcast a generic tool or recover a parent from a global map.
+    pub async fn invoke_in_parent_context(
+        &self,
+        state: &State,
+        args: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &RunContext<Ctx>,
+    ) -> Result<tinytools::ToolResult>
+    where
+        Ctx: Default,
+    {
+        let input = Self::extract_input(&args);
+        let child_depth = match RunConfig::checked_child_depth(
+            parent.depth(),
+            self.subagent.harness.policy().limits.max_depth,
+        ) {
+            Ok(depth) => depth,
+            Err(error) => {
+                return Ok(tinytools::ToolResult::error(format!(
+                    "Sub-agent `{}` stopped before completing because it hit its recursion depth limit: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
+                    self.tool_name
+                )));
+            }
         };
-
-        Some(ToolResult::error(
-            call_id,
-            tool_name,
-            format!(
-                "Sub-agent `{tool_name}` stopped before completing because it hit its {limit_kind}: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer."
-            ),
-        ))
+        let child = parent.child(self.subagent.child_run_id(child_depth), Ctx::default())?;
+        let run = match self
+            .subagent
+            .run_child(state, child, input, parent.streaming)
+            .await
+        {
+            Ok(run) => run,
+            Err(error) => {
+                if matches!(
+                    error,
+                    TinyAgentsError::LimitExceeded(_)
+                        | TinyAgentsError::Timeout(_)
+                        | TinyAgentsError::SubAgentDepth(_)
+                ) {
+                    return Ok(tinytools::ToolResult::error(format!(
+                        "Sub-agent `{}` stopped before completing because it hit a configured run limit: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
+                        self.tool_name
+                    )));
+                }
+                return Err(error);
+            }
+        };
+        let text = run.text().unwrap_or_default();
+        let result = tinytools::ToolResult::success(text);
+        Ok(if options.prefer_markdown {
+            result.with_markdown(run.text().unwrap_or_default())
+        } else {
+            result
+        })
     }
 }
 
 #[async_trait]
-impl<State, Ctx> Tool<State> for SubAgentTool<State, Ctx>
+impl<State, Ctx> ToolDispatch<State, Ctx> for SubAgentTool<State, Ctx>
 where
     State: Send + Sync,
     Ctx: Send + Sync + Default,
 {
+    fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        Arc::new(SubAgentToolDeclaration {
+            name: self.tool_name.clone(),
+            description: self.subagent.description().to_owned(),
+            parameters: self.parameters.clone(),
+        })
+    }
+
+    async fn execute(
+        &self,
+        state: &State,
+        arguments: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &RunContext<Ctx>,
+    ) -> anyhow::Result<tinytools::ToolResult> {
+        self.invoke_in_parent_context(state, arguments, options, parent)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+}
+
+/// Pure canonical declaration for a typed-parent sub-agent dispatcher.
+///
+/// Calling it through `tinytools::Tool` directly is refused because that trait
+/// intentionally lacks the parent `RunContext`; register the enclosing
+/// [`SubAgentTool`] with [`crate::tool::ToolRegistry::register_dispatch`].
+struct SubAgentToolDeclaration {
+    name: String,
+    description: String,
+    parameters: Value,
+}
+
+#[async_trait]
+impl tinytools::Tool for SubAgentToolDeclaration {
     fn name(&self) -> &str {
-        &self.tool_name
+        &self.name
     }
 
     fn description(&self) -> &str {
-        self.subagent.description()
+        &self.description
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.tool_name.clone(),
-            self.subagent.description().to_owned(),
-            self.parameters.clone(),
+    fn parameters_schema(&self) -> Value {
+        self.parameters.clone()
+    }
+
+    async fn execute(&self, _args: Value) -> anyhow::Result<tinytools::ToolResult> {
+        anyhow::bail!(
+            "sub-agent `{}` requires typed-parent dispatch; register SubAgentTool with ToolRegistry::register_dispatch",
+            self.name
         )
-    }
-
-    async fn call(&self, state: &State, call: ToolCall) -> Result<ToolResult> {
-        let input = Self::extract_input(&call.arguments);
-        let call_id = call.id;
-        let run = match self
-            .subagent
-            .invoke(state, Ctx::default(), self.parent_depth, input)
-            .await
-        {
-            Ok(run) => run,
-            Err(error) => {
-                if let Some(result) =
-                    Self::limit_result_for_parent(call_id, &self.tool_name, &error)
-                {
-                    return Ok(result);
-                }
-                return Err(error);
-            }
-        };
-        let text = run.text().unwrap_or_default();
-        Ok(ToolResult::text(call_id, &self.tool_name, text))
-    }
-
-    async fn call_with_context(
-        &self,
-        state: &State,
-        call: ToolCall,
-        context: ToolExecutionContext,
-    ) -> Result<ToolResult> {
-        let input = Self::extract_input(&call.arguments);
-        let call_id = call.id;
-        // Route a depth-limit rejection through the same limit-to-tool-error
-        // conversion as a failure from `run_child` below, rather than letting
-        // it propagate raw and abort the whole parent run: a sub-agent that
-        // is simply too deep is a delegated-agent limit signal the parent
-        // orchestrator should see as a tool result, not a fatal error.
-        let config = match self.subagent.child_config(
-            context.depth,
-            context.thread_id.as_ref(),
-            context.max_turn_output_tokens,
-        ) {
-            Ok(config) => config,
-            Err(error) => {
-                if let Some(result) =
-                    Self::limit_result_for_parent(call_id, &self.tool_name, &error)
-                {
-                    return Ok(result);
-                }
-                return Err(error);
-            }
-        };
-        // Inherit the caller's cancellation token: a cancel requested on the
-        // parent run must also stop the child loop this tool drives, otherwise
-        // it runs to completion while the parent waits on this `await`.
-        let ctx = RunContext::new(config, Ctx::default())
-            .with_events(context.events)
-            .with_cancellation(context.cancellation);
-        // Match the parent's drive mode: when the parent run streams, the child
-        // streams too, so its deltas flow onto the shared sink and reach the
-        // parent's `invoke_stream` consumer with the child's own lineage.
-        let run = match self
-            .subagent
-            .run_child(state, ctx, input, context.streaming)
-            .await
-        {
-            Ok(run) => run,
-            Err(error) => {
-                if let Some(result) =
-                    Self::limit_result_for_parent(call_id, &self.tool_name, &error)
-                {
-                    return Ok(result);
-                }
-                return Err(error);
-            }
-        };
-        let text = run.text().unwrap_or_default();
-        Ok(ToolResult::text(call_id, &self.tool_name, text))
     }
 }
 

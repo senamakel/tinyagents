@@ -28,10 +28,12 @@ pub struct ParsedDataUri {
     pub bytes: Vec<u8>,
 }
 
-/// Parse a base64 `data:` URI.
+/// Parse a base64 or percent-encoded `data:` URI.
 ///
-/// Only base64 URIs are supported: the percent-encoded form has no size
-/// discipline and nothing this crate consumes emits it.
+/// Size admission remains with the caller: this pure parser does not know
+/// whether it is handling an image, a file, or a host-specific attachment
+/// policy.  Percent-encoded payloads are decoded byte-for-byte, rather than
+/// through UTF-8, so binary media is not lossy.
 ///
 /// The `Err` is a plain reason string rather than a
 /// [`MultimodalError`](super::error::MultimodalError) because the caller knows
@@ -45,8 +47,8 @@ pub fn parse_data_uri(source: &str) -> Result<ParsedDataUri, String> {
     let header = &source[..comma_idx];
     let payload = source[comma_idx + 1..].trim();
 
-    if !header.contains(";base64") {
-        return Err("only base64 data URIs are supported".to_string());
+    if !header.trim_start().starts_with("data:") {
+        return Err("data URI must start with `data:`".to_string());
     }
 
     let mut parts = header.trim_start_matches("data:").split(';');
@@ -64,9 +66,16 @@ pub fn parse_data_uri(source: &str) -> Result<ParsedDataUri, String> {
         })
         .collect::<Vec<_>>();
 
-    let bytes = STANDARD
-        .decode(payload)
-        .map_err(|error| format!("invalid base64 payload: {error}"))?;
+    let is_base64 = header
+        .split(';')
+        .any(|part| part.trim().eq_ignore_ascii_case("base64"));
+    let bytes = if is_base64 {
+        STANDARD
+            .decode(payload)
+            .map_err(|error| format!("invalid base64 payload: {error}"))?
+    } else {
+        percent_decode_bytes(payload)?
+    };
 
     Ok(ParsedDataUri {
         mime,
@@ -89,16 +98,26 @@ pub fn data_uri_param(params: &[(String, String)], key: &str) -> Option<String> 
 /// can fall back to the raw value — a filename containing a bare `%` is far
 /// more likely than a filename that meant to be percent-encoded and was not.
 pub fn percent_decode(value: &str) -> Option<String> {
+    String::from_utf8(percent_decode_bytes(value).ok()?).ok()
+}
+
+/// Percent-decode arbitrary data-URI payload bytes.
+///
+/// Unlike [`percent_decode`], this accepts non-UTF-8 results because image and
+/// other binary attachments are valid data-URI payloads.
+fn percent_decode_bytes(value: &str) -> Result<Vec<u8>, String> {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
             if i + 2 >= bytes.len() {
-                return None;
+                return Err("malformed percent escape in data URI payload".to_string());
             }
-            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
-            let byte = u8::from_str_radix(hex, 16).ok()?;
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .map_err(|_| "malformed percent escape in data URI payload".to_string())?;
+            let byte = u8::from_str_radix(hex, 16)
+                .map_err(|_| "malformed percent escape in data URI payload".to_string())?;
             out.push(byte);
             i += 3;
         } else {
@@ -106,7 +125,7 @@ pub fn percent_decode(value: &str) -> Option<String> {
             i += 1;
         }
     }
-    String::from_utf8(out).ok()
+    Ok(out)
 }
 
 /// Decompress a gzip payload, refusing anything over `max_decompressed_bytes`.
