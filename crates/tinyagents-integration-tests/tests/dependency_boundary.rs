@@ -51,19 +51,23 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        14,
+        15,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        22,
+        23,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        32,
+        33,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
-        95,
+        91,
+    ),
+    (
+        "crates/tinyagents-harness/src/providers/claude_code/input_builder.rs",
+        114,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
@@ -87,19 +91,19 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        132,
+        145,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        151,
+        175,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        162,
+        176,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        163,
+        177,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
@@ -107,19 +111,19 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        181,
+        195,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        182,
+        196,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        183,
+        197,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        184,
+        207,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
@@ -127,47 +131,39 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/input_builder_tests.rs",
-        209,
+        222,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        19,
+        23,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        164,
+        175,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        195,
+        238,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        212,
+        277,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        345,
+        300,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        26,
+        49,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        28,
+        50,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        29,
-    ),
-    (
-        "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        36,
-    ),
-    (
-        "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",
-        37,
+        51,
     ),
 ];
 
