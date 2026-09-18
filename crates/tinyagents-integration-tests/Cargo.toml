@@ -21,9 +21,9 @@ tinyagents-harness = { path = "../tinyagents-harness" }
 tinyagents-language = { path = "../tinyagents-language" }
 tinyagents-registry = { path = "../tinyagents-registry" }
 tinyagents-session = { path = "../tinyagents-session" }
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm" }
-tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings" }
-tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.1.0" }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
+tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.3.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.2.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [features]

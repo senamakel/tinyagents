@@ -19,7 +19,8 @@ sha2 = "0.11"
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.2", default-features = false }
 tinyagents-language = { path = "../tinyagents-language", version = "2.1.2" }
 tinyagents-tracing = { path = "../tinyagents-tracing", version = "2.1.2", default-features = false }
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.2.1" }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.2.0" }
 tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs"] }
 
 [features]

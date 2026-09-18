@@ -1444,6 +1444,7 @@ dependencies = [
  "tinyagents-language",
  "tinyagents-tracing",
  "tinyinference-llm",
+ "tinytools",
  "tokio",
 ]
 
@@ -1523,6 +1524,7 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-language",
  "tinyinference-llm",
+ "tinytools",
  "tokio",
 ]
 
@@ -1548,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "httpdate",
@@ -1557,9 +1559,11 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-embeddings"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
+ "once_cell",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
@@ -1572,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-llm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1600,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1610,7 +1614,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "regex",
  "serde",
