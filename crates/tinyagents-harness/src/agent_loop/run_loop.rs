@@ -442,6 +442,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .run_after_model(ctx, state, &mut response)
                 .await?;
 
+            // Providers occasionally put a text-dialect call in visible
+            // content even when a native tool channel was offered. Use the
+            // canonical TinyTools-Agent parser rather than the retired
+            // harness prompt parser, and only recover when the provider did
+            // not already supply structured calls.
+            recover_text_dialect_calls(&mut response, &call_id);
+
             // Accounting.
             run.model_calls += 1;
             run.steps += 1;
@@ -760,6 +767,63 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return None;
         }
         Some((Arc::clone(cache), cache_key(request)))
+    }
+}
+
+/// Recovers XML/text-dialect calls through `tinytools-agent` while preserving
+/// every non-text provider content block (notably reasoning blocks).
+fn recover_text_dialect_calls(
+    response: &mut tinyinference_llm::model::ModelResponse,
+    model_call_id: &CallId,
+) {
+    if !response.message.tool_calls.is_empty() {
+        return;
+    }
+
+    use tinytools_agent::dialect::{DialectResponse, ToolDialect, XmlDialect};
+
+    let dialect_response = DialectResponse {
+        text: Some(response.text()),
+        tool_calls: Vec::new(),
+    };
+    let (cleaned, parsed) = XmlDialect.parse_response(&dialect_response);
+    if parsed.is_empty() {
+        return;
+    }
+
+    response.message.tool_calls = parsed
+        .into_iter()
+        .enumerate()
+        .map(|(position, call)| {
+            ToolCall::new(
+                call.id
+                    .unwrap_or_else(|| format!("{model_call_id}-tool-{}", position + 1)),
+                call.name,
+                call.arguments,
+            )
+        })
+        .collect();
+
+    let mut inserted = false;
+    response.message.content = response
+        .message
+        .content
+        .drain(..)
+        .filter_map(|block| match block {
+            tinyinference_llm::message::ContentBlock::Text(_) if !inserted => {
+                inserted = true;
+                (!cleaned.is_empty())
+                    .then(|| tinyinference_llm::message::ContentBlock::Text(cleaned.clone()))
+            }
+            tinyinference_llm::message::ContentBlock::Text(_) => None,
+            other => Some(other),
+        })
+        .collect();
+    if !inserted && !cleaned.is_empty() {
+        response
+            .message
+            .content
+            .push(tinyinference_llm::message::ContentBlock::Text(cleaned));
     }
 }
 
