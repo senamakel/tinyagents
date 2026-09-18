@@ -688,9 +688,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         tool_calls: Vec<ToolCall>,
     ) -> Result<()> {
         for mut call in tool_calls {
-            let (dispatch, tool) = match self.admit_tool_call(state, ctx, status, &mut call).await?
-            {
-                ResolvedToolCall::Tool { dispatch, tool } => (dispatch, tool),
+            let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
+                ResolvedToolCall::Tool { dispatch, .. } => dispatch,
                 ResolvedToolCall::ErrorMessage(message) => {
                     self.recover_tool_call(state, ctx, run, status, messages, &call, message)
                         .await?;

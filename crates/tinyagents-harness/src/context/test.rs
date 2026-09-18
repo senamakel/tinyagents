@@ -309,7 +309,7 @@ fn sibling_children_are_isolated_while_sharing_tree_signals() {
 
 #[tokio::test]
 async fn child_store_values_are_shared_but_registry_membership_is_snapshotted() {
-    use crate::store::{InMemoryStore, Store};
+    use crate::store::InMemoryStore;
 
     let mut parent: RunContext<()> = RunContext::new(RunConfig::new("parent"), ());
     let child = parent.child(RunConfig::new("child"), ()).unwrap();

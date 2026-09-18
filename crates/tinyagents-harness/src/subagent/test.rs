@@ -11,7 +11,7 @@ use crate::error::TinyAgentsError;
 use crate::events::{AgentEvent, EventSink, RecordingListener};
 use crate::limits::RunLimits;
 use crate::runtime::{AgentHarness, RunPolicy};
-use crate::tool::{ToolDispatch, ToolRegistry};
+use crate::tool::ToolRegistry;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
 

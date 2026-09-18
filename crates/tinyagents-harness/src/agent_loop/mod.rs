@@ -106,7 +106,6 @@ use crate::middleware::{AgentRun, BoxModelFuture, BoxToolFuture, ModelBaseCall, 
 use crate::model_registry::{ResolvedModelBinding, model_eligible};
 use crate::runtime::{AgentHarness, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
-use crate::tool::ToolDispatch;
 use futures::StreamExt;
 use serde_json::Value;
 use tinyinference_llm::message::{Message, MessageDelta};

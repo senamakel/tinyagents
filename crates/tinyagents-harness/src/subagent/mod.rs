@@ -164,11 +164,6 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgent<State, Ctx> {
         Ok(config)
     }
 
-    /// Mints a readable, collision-free child run id for a known child depth.
-    fn child_run_id(&self, child_depth: usize) -> String {
-        format!("{}-d{child_depth}-{}", self.name, next_seq())
-    }
-
     /// Runs the sub-agent as a child run at `parent_depth`, returning the
     /// child's [`AgentRun`].
     ///

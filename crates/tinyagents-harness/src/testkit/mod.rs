@@ -38,7 +38,6 @@ use tinyinference_llm::message::MessageDelta;
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem, StreamAccumulator,
 };
-use tinyinference_llm::tool::ToolCall;
 use tinytools::{Tool, ToolResult};
 
 pub use types::*;

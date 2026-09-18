@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::context::{RunConfig, RunContext};
-use crate::error::{Result, TinyAgentsError};
+use crate::error::TinyAgentsError;
 use crate::events::AgentEvent;
 use crate::runtime::AgentHarness;
 use crate::steering::{

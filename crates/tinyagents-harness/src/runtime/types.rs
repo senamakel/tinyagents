@@ -22,7 +22,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::cache::ResponseCache;
 use crate::host::HostCapabilities;
-use crate::ids::RunId;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
 use crate::model_registry::ModelRegistry;
