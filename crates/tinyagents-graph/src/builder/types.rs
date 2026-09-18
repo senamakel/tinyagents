@@ -61,7 +61,7 @@ impl ForkId {
 /// optional `resume` value. On a normal run `resume` is `None`; when a run is
 /// resumed after an interrupt, the interrupted node is re-run with `resume` set
 /// to the value carried by the resume command.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NodeContext {
     /// The graph currently executing this node.
     pub graph_id: GraphId,
@@ -104,6 +104,28 @@ pub struct NodeContext {
     pub agent_events: Option<tinyagents_harness::events::EventSink>,
     /// Parent cancellation forwarded explicitly into recursive agent requests.
     pub agent_cancellation: Option<tinyagents_harness::cancel::CancellationToken>,
+}
+
+impl std::fmt::Debug for NodeContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NodeContext")
+            .field("graph_id", &self.graph_id)
+            .field("node_id", &self.node_id)
+            .field("run_id", &self.run_id)
+            .field("thread_id", &self.thread_id)
+            .field("step", &self.step)
+            .field("resume", &self.resume)
+            .field("fork", &self.fork)
+            .field("send_arg", &self.send_arg)
+            .field("root_run_id", &self.root_run_id)
+            .field("recursion_frames", &self.recursion_frames)
+            .field("has_child_runs", &self.child_runs.is_some())
+            .field("has_agent_invoker", &self.agent_invoker.is_some())
+            .field("has_agent_events", &self.agent_events.is_some())
+            .field("has_agent_cancellation", &self.agent_cancellation.is_some())
+            .finish()
+    }
 }
 
 /// Behavior-free, introspectable metadata attached to a node by the builder.

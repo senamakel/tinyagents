@@ -179,12 +179,12 @@ pub trait DefinitionRegistry: Send + Sync {
 
 /// A fixed, insertion-ordered definition catalogue.
 #[derive(Clone, Debug, Default)]
-pub struct InMemoryAgentDefinitionRegistry {
+pub struct InMemoryDefinitionRegistry {
     definitions: Vec<AgentDefinition>,
     index: HashMap<String, usize>,
 }
 
-impl InMemoryAgentDefinitionRegistry {
+impl InMemoryDefinitionRegistry {
     /// Retains the first definition for each id, preserving insertion order.
     #[must_use]
     pub fn new(definitions: Vec<AgentDefinition>) -> Self {
@@ -193,7 +193,9 @@ impl InMemoryAgentDefinitionRegistry {
             if registry.index.contains_key(&definition.id) {
                 continue;
             }
-            registry.index.insert(definition.id.clone(), registry.definitions.len());
+            registry
+                .index
+                .insert(definition.id.clone(), registry.definitions.len());
             registry.definitions.push(definition);
         }
         registry
@@ -210,7 +212,7 @@ impl InMemoryAgentDefinitionRegistry {
 }
 
 #[async_trait]
-impl DefinitionRegistry for InMemoryAgentDefinitionRegistry {
+impl DefinitionRegistry for InMemoryDefinitionRegistry {
     async fn resolve(&self, id: &str) -> Result<Option<AgentDefinition>> {
         Ok(self
             .index
@@ -228,11 +230,8 @@ impl DefinitionRegistry for InMemoryAgentDefinitionRegistry {
             .index
             .get(id)
             .and_then(|position| self.definitions.get(*position))
-            .map(|definition| definition.subagents.iter().map(String::as_str).collect())
-            .unwrap_or_default()
-            .into_iter()
-            .map(str::to_owned)
-            .collect())
+            .map(|definition| definition.subagents.clone())
+            .unwrap_or_default())
     }
 }
 
@@ -253,20 +252,41 @@ mod test {
         .unwrap();
         assert_eq!(serde_json::to_value(&definition).unwrap()["id"], "planner");
         let diagnostics = definition.diagnostics();
-        assert!(diagnostics.iter().any(|d| d.code == "duplicate" && d.field == "subagents"));
-        assert_eq!(diagnostics.iter().filter(|d| d.code == "empty_entry").count(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.code == "duplicate" && d.field == "subagents")
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|d| d.code == "empty_entry")
+                .count(),
+            2
+        );
     }
 
     #[tokio::test]
     async fn catalogue_is_stable_first_wins_and_absence_is_not_an_error() {
-        let registry = InMemoryAgentDefinitionRegistry::new(vec![
+        let registry = InMemoryDefinitionRegistry::new(vec![
             AgentDefinition::new("planner", "Planner", "first").with_subagents(["research"]),
             AgentDefinition::new("planner", "Other", "ignored"),
             AgentDefinition::new("research", "Research", "second"),
         ]);
-        assert_eq!(registry.resolve("planner").await.unwrap().unwrap().description, "first");
+        assert_eq!(
+            registry
+                .resolve("planner")
+                .await
+                .unwrap()
+                .unwrap()
+                .description,
+            "first"
+        );
         assert_eq!(registry.list().await.unwrap().len(), 2);
-        assert_eq!(registry.delegates_for("planner").await.unwrap(), vec!["research"]);
+        assert_eq!(
+            registry.delegates_for("planner").await.unwrap(),
+            vec!["research"]
+        );
         assert!(registry.resolve("missing").await.unwrap().is_none());
         assert!(registry.delegates_for("missing").await.unwrap().is_empty());
     }

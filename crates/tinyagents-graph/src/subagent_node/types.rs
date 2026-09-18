@@ -231,7 +231,6 @@ impl<State, Update> Clone for SubAgentNode<State, Update> {
             input_mapper: self.input_mapper.clone(),
             output_mapper: self.output_mapper.clone(),
             policy: self.policy.clone(),
-            events: self.events.clone(),
         }
     }
 }
