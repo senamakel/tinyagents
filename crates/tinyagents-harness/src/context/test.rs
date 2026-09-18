@@ -275,7 +275,7 @@ fn sibling_children_are_isolated_while_sharing_tree_signals() {
 
 #[test]
 fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
-    use tinyinference_llm::message::{ContentBlock, ImageRef, UserMessage};
+    use tinyinference_llm::message::{ContentBlock, ImageRef, Message, UserMessage};
     use tinyinference_llm::tool::ToolCall;
 
     let messages = vec![
