@@ -19,7 +19,7 @@
 //! handful of `From` impls and gets byte-identical output back.
 //!
 //! For hosts driving the crate's own agent loop, the equivalent surface is
-//! [`crate::tool::prompt`], which speaks
+//! [`crate::prompt`], which speaks
 //! [`Message`](tinyinference::message::Message) instead. The two are parallel
 //! on purpose; see [the module docs](super) for which one to reach for.
 
@@ -146,9 +146,9 @@ impl DialectResponse {
 /// The outcome of executing one tool call, ready to be rendered back into the
 /// transcript.
 ///
-/// Distinct from [`crate::tool::ToolResult`] because the two answer
-/// different questions. `ToolResult` is what a [`Tool`](crate::tool::Tool)
-/// *produced* — with timings, raw payload, and a mandatory call id. This is what
+/// Distinct from a harness execution result because the two answer different
+/// questions. An execution result is what a tool *produced* — with timings,
+/// raw payload, and a mandatory call id. This is what
 /// the dialect must *say* about it, where the call id is genuinely optional:
 /// text dialects correlate results by tool name, and only native tool calling
 /// has an id to correlate by.
@@ -167,8 +167,8 @@ pub struct ToolOutcome {
     /// — at byte 0 of its own message, with no banner, no `<tool_result>`
     /// wrapper, and not batched with the results around it.
     ///
-    /// Mirrors [`ToolResult::is_trusted_verbatim`](crate::tool::ToolResult::is_trusted_verbatim);
-    /// a host sets it when converting its own result type into an outcome.
+    /// Mirrors the harness result's `is_trusted_verbatim` flag; a host sets it
+    /// when converting its own result type into an outcome.
     /// Default `false` — reshaping is the right thing for almost every result,
     /// and this marks the few where a faithful-looking rewrite is still wrong:
     /// an input schema whose argument names must be copied character for

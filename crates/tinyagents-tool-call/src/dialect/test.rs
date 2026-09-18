@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::*;
-use crate::tool::ToolSchema;
-use crate::tool_calling::{PFormatRegistry, build_registry};
+use crate::{PFormatRegistry, build_registry};
+use tinyinference::tool::ToolSchema;
 
 /// The single transcript record a round of results almost always produces.
 ///

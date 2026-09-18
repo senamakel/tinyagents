@@ -17,8 +17,8 @@ use super::types::{
     DialectMessage, DialectResponse, ToolCallFormat, ToolOutcome, ToolResultEntry, TranscriptEntry,
 };
 use super::xml::XmlDialect;
-use crate::tool::ToolSchema;
-use crate::tool_calling::ParsedToolCall;
+use crate::ParsedToolCall;
+use tinyinference::tool::ToolSchema;
 
 /// Call id used when an outcome carries none. Only reachable if a host hands
 /// this dialect an outcome from a text-parsed call, which the fallback path can

@@ -16,8 +16,7 @@
 //!
 //! There are two, and picking the wrong one costs a rewrite:
 //!
-//! * **Driving the crate's [`agent_loop`](crate::agent_loop)** —
-//!   use [`crate::tool::prompt`]. It speaks
+//! * **Driving a `tinyagents-harness` agent loop** — use [`crate::prompt`]. It speaks
 //!   [`Message`](tinyinference::message::Message) and slots straight into the
 //!   loop, which owns the iteration for you.
 //! * **Driving your own loop over your own durable transcript** — use this
@@ -57,8 +56,8 @@ pub use types::{
 };
 pub use xml::XmlDialect;
 
-use crate::tool::ToolSchema;
-use crate::tool_calling::ParsedToolCall;
+use crate::ParsedToolCall;
+use tinyinference::tool::ToolSchema;
 
 /// One complete way of speaking tools to a model.
 ///

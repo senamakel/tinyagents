@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/*"]
 default-members = [
+    "crates/tinyagents-tool-call",
     "crates/tinyagents-harness",
     "crates/tinyagents-language",
     "crates/tinyagents-graph",

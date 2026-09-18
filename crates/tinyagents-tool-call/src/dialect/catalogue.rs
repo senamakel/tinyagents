@@ -15,8 +15,8 @@
 
 use std::fmt::Write as _;
 
-use crate::tool::ToolSchema;
-use crate::tool_calling::pformat::render_signature_from_schema;
+use crate::pformat::render_signature_from_schema;
+use tinyinference::tool::ToolSchema;
 
 /// Heading the catalogue is rendered under.
 pub const CATALOGUE_HEADING: &str = "## Tools\n\n";

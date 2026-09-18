@@ -2,7 +2,7 @@
 //!
 //! Roughly an 80% token saving over the JSON form on the call side, and more
 //! than that on the catalogue side, since a signature replaces a schema. See
-//! [`crate::tool_calling::pformat`] for the grammar itself.
+//! [`crate::pformat`] for the grammar itself.
 //!
 //! The interesting property is that it degrades rather than fails: a body that
 //! is not a well-formed p-format call falls through to the JSON parser per tag,
@@ -17,8 +17,8 @@ use std::sync::Arc;
 use super::ToolDialect;
 use super::text;
 use super::types::{DialectMessage, DialectResponse, ToolCallFormat, ToolOutcome, TranscriptEntry};
-use crate::tool::ToolSchema;
-use crate::tool_calling::{PFormatRegistry, ParsedToolCall, parse_tool_calls_with_pformat};
+use crate::{PFormatRegistry, ParsedToolCall, parse_tool_calls_with_pformat};
+use tinyinference::tool::ToolSchema;
 
 /// Positional tool calling, driven by a registry of parameter layouts.
 #[derive(Debug, Clone)]

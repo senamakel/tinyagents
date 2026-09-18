@@ -10,8 +10,8 @@ use super::ToolDialect;
 use super::catalogue::render_json_catalogue;
 use super::text;
 use super::types::{DialectMessage, DialectResponse, ToolCallFormat, ToolOutcome, TranscriptEntry};
-use crate::tool::ToolSchema;
-use crate::tool_calling::{ParsedToolCall, parse_tool_calls};
+use crate::{ParsedToolCall, parse_tool_calls};
+use tinyinference::tool::ToolSchema;
 
 /// JSON-in-tag tool calling.
 #[derive(Debug, Default, Clone, Copy)]
