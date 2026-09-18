@@ -47,6 +47,38 @@ pub struct AgentInvocation {
     pub cancellation: Option<CancellationToken>,
 }
 
+/// Atomic, execution-scoped host capability for recursive agent invocation.
+///
+/// This value is supplied to one graph run; it is never stored on a reusable
+/// [`CompiledGraph`](crate::CompiledGraph). Cloning it is only for descendants
+/// of that same execution tree, which preserves one parent invocation context
+/// while preventing separate top-level executions from bleeding signals.
+#[derive(Clone)]
+pub struct AgentInvocationBinding {
+    /// Host entry point bound to the parent invocation context.
+    pub invoker: Arc<dyn AgentInvoker>,
+    /// Parent event sink forwarded to every descendant request.
+    pub events: EventSink,
+    /// Parent cancellation signal forwarded to every descendant request.
+    pub cancellation: CancellationToken,
+}
+
+impl AgentInvocationBinding {
+    /// Creates the complete binding required for graph-to-agent recursion.
+    #[must_use]
+    pub fn new(
+        invoker: Arc<dyn AgentInvoker>,
+        events: EventSink,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            invoker,
+            events,
+            cancellation,
+        }
+    }
+}
+
 /// Object-safe host boundary for graph-to-agent recursion.
 ///
 /// Implementations must be explicitly bound by the host to an owned or

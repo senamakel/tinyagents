@@ -97,13 +97,9 @@ pub struct NodeContext {
     /// the [`ChildRun`](crate::ChildRun) it spawned back to the enclosing
     /// run; `None` when no executor sink is attached (e.g. a hand-built context).
     pub child_runs: Option<crate::recursion::ChildRunSink>,
-    /// Host-bound recursive agent entry point, if this graph was invoked from
-    /// a harness parent context.
-    pub agent_invoker: Option<Arc<dyn crate::subagent_node::AgentInvoker>>,
-    /// Parent event sink forwarded explicitly into recursive agent requests.
-    pub agent_events: Option<tinyagents_harness::events::EventSink>,
-    /// Parent cancellation forwarded explicitly into recursive agent requests.
-    pub agent_cancellation: Option<tinyagents_harness::cancel::CancellationToken>,
+    /// Complete host-owned recursive-agent binding for this execution, if one
+    /// was supplied at the graph entry point.
+    pub agent_binding: Option<crate::subagent_node::AgentInvocationBinding>,
 }
 
 impl std::fmt::Debug for NodeContext {
@@ -121,9 +117,7 @@ impl std::fmt::Debug for NodeContext {
             .field("root_run_id", &self.root_run_id)
             .field("recursion_frames", &self.recursion_frames)
             .field("has_child_runs", &self.child_runs.is_some())
-            .field("has_agent_invoker", &self.agent_invoker.is_some())
-            .field("has_agent_events", &self.agent_events.is_some())
-            .field("has_agent_cancellation", &self.agent_cancellation.is_some())
+            .field("has_agent_binding", &self.agent_binding.is_some())
             .finish()
     }
 }

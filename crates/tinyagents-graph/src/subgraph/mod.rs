@@ -48,9 +48,10 @@ where
         let child = child_for(&child, &ctx);
         let thread_id = ctx.thread_id.clone();
         let resume = ctx.resume.clone();
+        let binding = ctx.agent_binding.clone();
         let recorder = ChildRunRecorder::new(&ctx);
         Box::pin(async move {
-            let execution = drive_child(child, thread_id, state, resume).await?;
+            let execution = drive_child(child, thread_id, state, resume, binding).await?;
             recorder.record(&execution);
             // A child that paused on an interrupt must surface it to the parent
             // rather than have its partial state treated as a completed output.
@@ -84,12 +85,13 @@ where
         let child = child_for(&child, &ctx);
         let thread_id = ctx.thread_id.clone();
         let resume = ctx.resume.clone();
+        let binding = ctx.agent_binding.clone();
         let recorder = ChildRunRecorder::new(&ctx);
         let to_child = to_child.clone();
         let from_child = from_child.clone();
         Box::pin(async move {
             let child_input = to_child(&state);
-            let execution = drive_child(child, thread_id, child_input, resume).await?;
+            let execution = drive_child(child, thread_id, child_input, resume, binding).await?;
             recorder.record(&execution);
             // Propagate a child interrupt to the parent instead of folding a
             // paused child's partial state through `from_child`.
@@ -119,16 +121,7 @@ fn child_for<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledGr
     let child = namespaced(child, ctx)
         .with_recursion_frames(ctx.recursion_frames.clone())
         .with_recursion_node(ctx.node_id.clone());
-    match (
-        ctx.agent_invoker.clone(),
-        ctx.agent_events.clone(),
-        ctx.agent_cancellation.clone(),
-    ) {
-        (Some(invoker), Some(events), Some(cancellation)) => {
-            child.with_agent_invoker(invoker, events, cancellation)
-        }
-        _ => child,
-    }
+    child
 }
 
 /// Drives an embedded child graph for one parent-node activation.
@@ -145,15 +138,22 @@ async fn drive_child<S, U>(
     thread_id: Option<tinyagents_harness::ids::ThreadId>,
     state: S,
     resume: Option<serde_json::Value>,
+    binding: Option<crate::subagent_node::AgentInvocationBinding>,
 ) -> Result<GraphExecution<S>>
 where
     S: Clone + Send + Sync + 'static,
     U: Send + 'static,
 {
-    match (thread_id, resume) {
-        (Some(thread_id), Some(value)) => child.resume(thread_id, Command::resume(value)).await,
-        (Some(thread_id), None) => child.run_with_thread(thread_id, state).await,
-        (None, _) => child.run(state).await,
+    match (thread_id, resume, binding) {
+        (Some(thread_id), None, Some(binding)) => {
+            child
+                .run_with_thread_agent_binding(thread_id, state, binding)
+                .await
+        }
+        (None, _, Some(binding)) => child.run_with_agent_binding(state, binding).await,
+        (Some(thread_id), Some(value), _) => child.resume(thread_id, Command::resume(value)).await,
+        (Some(thread_id), None, None) => child.run_with_thread(thread_id, state).await,
+        (None, _, None) => child.run(state).await,
     }
 }
 

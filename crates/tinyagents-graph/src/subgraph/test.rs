@@ -46,9 +46,7 @@ fn ctx_for(id: &str) -> NodeContext {
         root_run_id: None,
         recursion_frames: Vec::new(),
         child_runs: None,
-        agent_invoker: None,
-        agent_events: None,
-        agent_cancellation: None,
+        agent_binding: None,
     }
 }
 
@@ -104,14 +102,19 @@ async fn embedded_graph_propagates_the_host_agent_invoker() {
         .set_entry("child")
         .set_finish("child")
         .compile()
-        .unwrap()
-        .with_agent_invoker(
-            invoker.clone(),
-            tinyagents_harness::events::EventSink::new(),
-            tinyagents_harness::cancel::CancellationToken::new(),
-        );
+        .unwrap();
 
-    let run = parent.run("nested".to_string()).await.unwrap();
+    let run = parent
+        .run_with_agent_binding(
+            "nested".to_string(),
+            crate::subagent_node::AgentInvocationBinding::new(
+                invoker.clone(),
+                tinyagents_harness::events::EventSink::new(),
+                tinyagents_harness::cancel::CancellationToken::new(),
+            ),
+        )
+        .await
+        .unwrap();
     let requests = invoker.0.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].root_run_id, run.root_run_id);

@@ -312,9 +312,6 @@ impl<State, Update> CompiledGraph<State, Update> {
             recursion_policy: crate::recursion::RecursionPolicy::default(),
             recursion_frames: Vec::new(),
             recursion_node: None,
-            agent_invoker: None,
-            agent_events: None,
-            agent_cancellation: None,
             checkpointer: None,
             event_sink: None,
             journal: None,
@@ -456,24 +453,6 @@ impl<State, Update> CompiledGraph<State, Update> {
     /// node that ran the embedded graph. Top-level graphs leave this unset.
     pub fn with_recursion_node(mut self, node: NodeId) -> Self {
         self.recursion_node = Some(node);
-        self
-    }
-
-    /// Binds the host-owned entry point used by graph sub-agent nodes.
-    ///
-    /// The invoker must be explicitly bound to an owned or `Arc`-backed parent
-    /// harness invocation context and create each child through
-    /// `RunContext::child`; graph execution only forwards this explicit
-    /// capability to node handlers. Nodes fail closed when it is absent.
-    pub fn with_agent_invoker(
-        mut self,
-        invoker: Arc<dyn crate::subagent_node::AgentInvoker>,
-        events: tinyagents_harness::events::EventSink,
-        cancellation: tinyagents_harness::cancel::CancellationToken,
-    ) -> Self {
-        self.agent_invoker = Some(invoker);
-        self.agent_events = Some(events);
-        self.agent_cancellation = Some(cancellation);
         self
     }
 

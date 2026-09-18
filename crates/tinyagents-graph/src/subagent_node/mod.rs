@@ -103,13 +103,13 @@ where
         let node = node.clone();
         Box::pin(async move {
             let input = (node.input_mapper)(&state);
-            let invoker = ctx.agent_invoker.clone().ok_or_else(|| {
+            let binding = ctx.agent_binding.clone().ok_or_else(|| {
                 TinyAgentsError::Capability(format!(
-                    "sub-agent `{}` requires a host-bound AgentInvoker",
+                    "sub-agent `{}` requires an execution-scoped AgentInvocationBinding",
                     node.agent
                 ))
             })?;
-            let output = run_with_policy(&invoker, &node.agent, input, &ctx, &node.policy).await?;
+            let output = run_with_policy(&binding, &node.agent, input, &ctx, &node.policy).await?;
 
             record_child_run(&ctx, &node.agent, &output);
 
@@ -122,7 +122,7 @@ where
 /// Runs `agent` under `policy`: applies the per-attempt timeout, retries
 /// transient failures per the retry policy, then enforces the work budget.
 async fn run_with_policy(
-    invoker: &Arc<dyn AgentInvoker>,
+    binding: &AgentInvocationBinding,
     agent_id: &str,
     input: SubAgentInput,
     ctx: &NodeContext,
@@ -130,7 +130,7 @@ async fn run_with_policy(
 ) -> Result<SubAgentOutput> {
     let mut attempt = 0;
     loop {
-        let fut = invoker.invoke(AgentInvocation {
+        let fut = binding.invoker.invoke(AgentInvocation {
             agent_id: agent_id.to_string(),
             input: input.clone(),
             graph_id: ctx.graph_id.clone(),
@@ -140,8 +140,8 @@ async fn run_with_policy(
                 .root_run_id
                 .clone()
                 .unwrap_or_else(|| ctx.run_id.clone()),
-            events: ctx.agent_events.clone().unwrap_or_default(),
-            cancellation: ctx.agent_cancellation.clone(),
+            events: binding.events.clone(),
+            cancellation: Some(binding.cancellation.clone()),
         });
         let result = match policy.timeout {
             Some(timeout) => match tokio::time::timeout(timeout, fut).await {

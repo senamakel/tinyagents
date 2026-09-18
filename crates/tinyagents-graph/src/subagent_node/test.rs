@@ -32,7 +32,7 @@ impl AgentInvoker for RecordingInvoker {
     }
 }
 
-fn graph(invoker: Arc<dyn AgentInvoker>) -> crate::CompiledGraph<String, String> {
+fn graph() -> crate::CompiledGraph<String, String> {
     GraphBuilder::<String, String>::overwrite()
         .add_node(
             "delegate",
@@ -46,15 +46,21 @@ fn graph(invoker: Arc<dyn AgentInvoker>) -> crate::CompiledGraph<String, String>
         .set_finish("delegate")
         .compile()
         .unwrap()
-        .with_agent_invoker(invoker, EventSink::new(), CancellationToken::new())
+}
+
+fn binding(invoker: Arc<dyn AgentInvoker>) -> AgentInvocationBinding {
+    AgentInvocationBinding::new(invoker, EventSink::new(), CancellationToken::new())
 }
 
 #[tokio::test]
 async fn delegation_uses_carried_invoker_and_preserves_graph_lineage() {
     let invoker = Arc::new(RecordingInvoker::default());
-    let graph = graph(invoker.clone());
+    let graph = graph();
 
-    let run = graph.run("question".to_string()).await.unwrap();
+    let run = graph
+        .run_with_agent_binding("question".to_string(), binding(invoker.clone()))
+        .await
+        .unwrap();
 
     assert_eq!(run.state, "done:question");
     let requests = invoker.requests();
@@ -71,28 +77,40 @@ async fn delegation_uses_carried_invoker_and_preserves_graph_lineage() {
 
 #[tokio::test]
 async fn concurrent_sibling_graph_runs_have_isolated_parent_identity() {
-    let invoker = Arc::new(RecordingInvoker::default());
-    let graph = graph(invoker.clone());
+    let left_invoker = Arc::new(RecordingInvoker::default());
+    let right_invoker = Arc::new(RecordingInvoker::default());
+    let graph = graph();
+    let left_cancellation = CancellationToken::new();
+    left_cancellation.cancel();
+    let right_cancellation = CancellationToken::new();
 
     let (left, right) = tokio::join!(
-        graph.run("left".to_string()),
-        graph.run("right".to_string())
+        graph.run_with_agent_binding(
+            "left".to_string(),
+            AgentInvocationBinding::new(left_invoker.clone(), EventSink::new(), left_cancellation,)
+        ),
+        graph.run_with_agent_binding(
+            "right".to_string(),
+            AgentInvocationBinding::new(
+                right_invoker.clone(),
+                EventSink::new(),
+                right_cancellation,
+            )
+        )
     );
     let left = left.unwrap();
     let right = right.unwrap();
-    let requests = invoker.requests();
-    assert_eq!(requests.len(), 2);
+    let left_request = left_invoker.requests().pop().unwrap();
+    let right_request = right_invoker.requests().pop().unwrap();
     assert_ne!(left.run_id, right.run_id);
-    for request in requests {
-        if request.input.prompt == "left" {
-            assert_eq!(request.parent_run_id, left.run_id);
-            assert_eq!(request.root_run_id, left.root_run_id);
-        } else {
-            assert_eq!(request.input.prompt, "right");
-            assert_eq!(request.parent_run_id, right.run_id);
-            assert_eq!(request.root_run_id, right.root_run_id);
-        }
-    }
+    assert_eq!(left_request.input.prompt, "left");
+    assert_eq!(left_request.parent_run_id, left.run_id);
+    assert_eq!(left_request.root_run_id, left.root_run_id);
+    assert!(left_request.cancellation.unwrap().is_cancelled());
+    assert_eq!(right_request.input.prompt, "right");
+    assert_eq!(right_request.parent_run_id, right.run_id);
+    assert_eq!(right_request.root_run_id, right.root_run_id);
+    assert!(!right_request.cancellation.unwrap().is_cancelled());
 }
 
 #[tokio::test]
