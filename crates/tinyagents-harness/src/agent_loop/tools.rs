@@ -374,11 +374,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 )));
             }
         };
-        let prepared_arguments = tinytools::prepare_tool_arguments(
-            &canonical_call,
-            &tool.injected_arguments(),
-            &injected_values,
-        );
+        let injected_declarations = tool.injected_arguments();
+        // `prepare_tool_arguments` deliberately requires an object because it
+        // strips and inserts named keys. A declaration without injected keys
+        // has no host authority to protect, so preserve its native JSON shape
+        // for normalization and schema validation (for example a string- or
+        // array-valued schema) instead of rejecting it as an injection error.
+        let prepared_arguments = if injected_declarations.is_empty() {
+            Ok(canonical_call.arguments.clone())
+        } else {
+            tinytools::prepare_tool_arguments(
+                &canonical_call,
+                &injected_declarations,
+                &injected_values,
+            )
+        };
         let prepared_arguments = match prepared_arguments {
             Ok(arguments) => arguments,
             Err(error) => {
@@ -617,7 +627,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // TinyTools distinguishes a fatal execution `Err` from a
             // recoverable `ToolResult::error`; no harness error-policy facade
             // rewrites that canonical distinction.
-            let guarded = async move { fut.await.map(|wrapped| wrapped.into_result()) };
+            let guarded =
+                futures::FutureExt::map(fut, |result| result.map(|wrapped| wrapped.into_result()));
             let outcome = Self::with_call_budget(
                 run_budget,
                 &run_id,
@@ -759,13 +770,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 let fut = Self::with_tool_policy_timeout(tool_timeout, timeout_result, fut);
                 // As in serial mode, canonical execution errors remain fatal;
                 // reported tool errors travel in `ToolResult::is_error`.
-                let guarded = async move { fut.await };
                 Self::with_call_budget(
                     run_budget,
                     &run_id,
                     "tool call",
                     super::model_call::RUN_BOUND_LABEL,
-                    guarded,
+                    fut,
                 )
                 .await
             });
@@ -1117,9 +1127,11 @@ mod canonical_result_tests {
         }
 
         fn injected_arguments(&self) -> Vec<tinytools::ToolInjectedArgument> {
-            self.injected_risk
-                .then(|| vec![tinytools::ToolInjectedArgument::host("risk")])
-                .unwrap_or_default()
+            if self.injected_risk {
+                vec![tinytools::ToolInjectedArgument::host("risk")]
+            } else {
+                Vec::new()
+            }
         }
     }
 
@@ -1202,7 +1214,10 @@ mod canonical_result_tests {
             parallel: false,
             injected_risk: false,
         }));
-        assert!(!batch_is_canonical_parallel_safe(&serial, &[call.clone()]));
+        assert!(!batch_is_canonical_parallel_safe(
+            &serial,
+            std::slice::from_ref(&call)
+        ));
 
         let mut concurrent: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
         concurrent.register(Arc::new(DeclaredParallelTool {

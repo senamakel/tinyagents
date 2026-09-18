@@ -3757,7 +3757,7 @@ async fn tool_completed_event_carries_outcome() {
         "failure message on the event"
     );
     assert!(duration_ms.is_some(), "wall-clock duration present");
-    assert_eq!(output_bytes, Some(4), "\"nope\".len() == 4");
+    assert_eq!(output_bytes, Some(6), "\"kaboom\".len() == 6");
 }
 
 // ── `ModelResponse::continue_turn` ───────────────────────────────────────────

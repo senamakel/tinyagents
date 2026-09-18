@@ -102,7 +102,7 @@ enum Phase<'a> {
     },
     /// The run has finished; drain any buffered events, then emit `terminal`.
     Draining {
-        terminal: AgentStreamItem,
+        terminal: Box<AgentStreamItem>,
         listener_guard: ChannelListenerGuard,
     },
     /// Terminal item already emitted; the stream is exhausted.
@@ -217,7 +217,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
                                         AgentStreamItem::Event(record),
                                         (
                                             Phase::Draining {
-                                                terminal,
+                                                terminal: Box::new(terminal),
                                                 listener_guard,
                                             },
                                             rx,
@@ -247,7 +247,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
                         )),
                         Err(_) => {
                             drop(listener_guard);
-                            Some((terminal, (Phase::Done, rx)))
+                            Some((*terminal, (Phase::Done, rx)))
                         }
                     },
                     Phase::Done => None,
