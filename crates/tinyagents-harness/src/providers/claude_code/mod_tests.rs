@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn chat_model_profile_advertises_native_streaming_tools() {
+fn chat_model_profile_advertises_streaming_without_native_tools() {
     let workspace = tempfile::tempdir().expect("workspace");
     let project = tempfile::tempdir().expect("project");
     let provider = ClaudeCodeProvider::new(
@@ -15,10 +15,10 @@ fn chat_model_profile_advertises_native_streaming_tools() {
     let profile = provider.profile().expect("profile");
     assert_eq!(profile.provider.as_deref(), Some("claude-code"));
     assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-6"));
-    assert!(profile.tool_calling);
-    assert!(profile.parallel_tool_calls);
+    assert!(!profile.tool_calling);
+    assert!(!profile.parallel_tool_calls);
     assert!(profile.streaming);
-    assert!(profile.streaming_tool_chunks);
+    assert!(!profile.streaming_tool_chunks);
 }
 
 #[test]

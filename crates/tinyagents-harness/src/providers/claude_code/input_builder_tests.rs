@@ -106,7 +106,7 @@ fn a_single_user_turn_is_sent_verbatim_with_no_transcript() {
 }
 
 #[test]
-fn resume_pipes_only_last_user_turn() {
+fn resume_pipes_the_pending_user_turn() {
     let history = vec![
         msg("user", "earlier turn"),
         msg("assistant", "earlier reply"),
@@ -118,6 +118,19 @@ fn resume_pipes_only_last_user_turn() {
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains("\"follow-up\""));
     assert_every_row_is_a_user_role(&s);
+}
+
+#[test]
+fn resume_combines_all_pending_user_turns_in_order() {
+    let history = vec![
+        msg("user", "earlier turn"),
+        msg("assistant", "earlier reply"),
+        msg("user", "first steering"),
+        msg("user", "second steering"),
+    ];
+    let s = String::from_utf8(build_stdin(&history, false)).unwrap();
+    assert!(s.contains("first steering\\n\\nsecond steering"), "{s}");
+    assert!(!s.contains("earlier turn"), "answered history leaked: {s}");
 }
 
 #[test]

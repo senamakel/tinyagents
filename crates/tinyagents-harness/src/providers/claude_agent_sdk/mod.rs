@@ -281,6 +281,14 @@ impl ClaudeAgentSdkProvider {
         let stderr_output = stderr_task.await.unwrap_or_default();
         tinyagents_tracing::debug!("[claude_agent_sdk] subprocess exited status={}", status);
 
+        if !status.success() {
+            anyhow::bail!(
+                "[claude_agent_sdk] claude subprocess exited with non-zero status {}; stderr={}",
+                status,
+                stderr_output
+            );
+        }
+
         if let Some(err) = error_message {
             anyhow::bail!("[claude_agent_sdk] error from claude CLI: {err}");
         }
@@ -289,14 +297,6 @@ impl ClaudeAgentSdkProvider {
         let output = result_text
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| text_parts.join(""));
-
-        if !status.success() && output.is_empty() {
-            anyhow::bail!(
-                "[claude_agent_sdk] claude subprocess exited with non-zero status {} and no output; stderr={}",
-                status,
-                stderr_output
-            );
-        }
 
         tinyagents_tracing::debug!(
             "[claude_agent_sdk] response collected output_len={}",

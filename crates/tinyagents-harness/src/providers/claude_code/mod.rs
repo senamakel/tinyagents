@@ -12,8 +12,9 @@ mod stream_parser;
 pub mod types;
 pub mod version_check;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
@@ -71,6 +72,7 @@ pub struct ClaudeCodeProvider {
     project_dir: PathBuf,
     anthropic_api_key: Option<String>,
     semaphore: Arc<Semaphore>,
+    thread_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     session_store: Arc<session_store::SessionStore>,
     profile: ModelProfile,
     mcp_provider: Option<Arc<dyn driver::McpEndpointProvider>>,
@@ -102,10 +104,14 @@ impl ClaudeCodeProvider {
             profile: ModelProfile {
                 provider: Some("claude-code".into()),
                 model: Some(model.clone()),
-                tool_calling: true,
-                parallel_tool_calls: true,
+                // Claude Code executes its own native tools internally and
+                // intentionally never returns them to the harness. Advertise
+                // prompt-guided tool handling so the harness does not wait for
+                // tool calls that this adapter cannot surface.
+                tool_calling: false,
+                parallel_tool_calls: false,
                 streaming: true,
-                streaming_tool_chunks: true,
+                streaming_tool_chunks: false,
                 ..Default::default()
             },
             model,
@@ -115,6 +121,7 @@ impl ClaudeCodeProvider {
             workspace_dir,
             anthropic_api_key,
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_TURNS)),
+            thread_locks: Arc::new(Mutex::new(HashMap::new())),
             mcp_provider: None,
         }
     }
@@ -172,6 +179,17 @@ impl ClaudeCodeProvider {
             .acquire_owned()
             .await
             .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
+        let thread_lock = {
+            let mut locks = self
+                .thread_locks
+                .lock()
+                .expect("claude-code thread lock map poisoned");
+            locks
+                .entry(thread_id.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _thread_guard = thread_lock.lock().await;
         let append_system_prompt = coalesce_system_prompt(messages);
         driver::run_turn(driver::TurnContext {
             bin_path: self.bin_path.clone(),
@@ -331,7 +349,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
     ) -> tinyinference_llm::Result<ModelResponse> {
         let thread_id = thread_key_from_request(&request);
         let messages = request_messages(&request);
-        self.run_chat(&messages, None, None, thread_id)
+        self.run_chat(&messages, None, request.model.as_deref(), thread_id)
             .await
             .map(model_response)
             .map_err(map_error)
@@ -343,12 +361,18 @@ impl ChatModel<()> for ClaudeCodeProvider {
     ) -> tinyinference_llm::Result<ModelStream> {
         let provider = self.clone();
         let thread_id = thread_key_from_request(&request);
+        let model_override = request.model.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = AbortOnDrop(tokio::spawn(async move {
             let _ = tx.send(ModelStreamItem::Started);
             let messages = request_messages(&request);
             let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(64);
-            let call = provider.run_chat(&messages, Some(&delta_tx), None, thread_id);
+            let call = provider.run_chat(
+                &messages,
+                Some(&delta_tx),
+                model_override.as_deref(),
+                thread_id,
+            );
             tokio::pin!(call);
             let response = loop {
                 tokio::select! { delta = delta_rx.recv() => if let Some(delta) = delta { forward_delta(&tx, delta); }, response = &mut call => break response }
