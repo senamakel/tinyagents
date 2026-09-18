@@ -23,14 +23,16 @@ use crate::middleware::{
 };
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
-use crate::tool::{Tool, ToolCall, ToolResult, ToolSchema, ToolTimeout, ToolTimeoutSettings};
+use crate::tool::ToolTimeoutSettings;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
     CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStreamItem,
     ResponseFormat, ToolChoice,
 };
 use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 use tinyinference_llm::usage::Usage;
+use tinytools::{Tool, ToolContent, ToolResult, ToolTimeout};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -52,19 +54,19 @@ impl FakeTool {
 }
 
 #[async_trait]
-impl Tool<()> for FakeTool {
+impl Tool for FakeTool {
     fn name(&self) -> &str {
         self.name
     }
     fn description(&self) -> &str {
         "fake tool"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name, "fake tool", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(call.id, self.name, self.reply))
+        Ok(ToolResult::success(self.reply))
     }
 }
 
@@ -76,19 +78,19 @@ struct SlowTool {
 }
 
 #[async_trait]
-impl Tool<()> for SlowTool {
+impl Tool for SlowTool {
     fn name(&self) -> &str {
         "slow"
     }
     fn description(&self) -> &str {
         "slow tool"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new("slow", "slow tool", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         tokio::time::sleep(self.delay).await;
-        Ok(ToolResult::text(call.id, "slow", "too late"))
+        Ok(ToolResult::success("too late"))
     }
 }
 
@@ -101,23 +103,18 @@ struct PolicySlowTool {
 }
 
 #[async_trait]
-impl Tool<()> for PolicySlowTool {
+impl Tool for PolicySlowTool {
     fn name(&self) -> &str {
         self.name
     }
     fn description(&self) -> &str {
         "policy-bounded slow tool"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.name,
-            "policy-bounded slow tool",
-            json!({"type": "object"}),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    fn timeout_policy(&self, call: &ToolCall) -> ToolTimeout {
-        if call
-            .arguments
+    fn timeout_policy(&self, arguments: &serde_json::Value) -> ToolTimeout {
+        if arguments
             .get("unbounded")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
@@ -127,9 +124,9 @@ impl Tool<()> for PolicySlowTool {
             self.timeout
         }
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         tokio::time::sleep(self.delay).await;
-        Ok(ToolResult::text(call.id, self.name, "too late"))
+        Ok(ToolResult::success("too late"))
     }
 }
 
@@ -160,7 +157,7 @@ struct OptionalStrictObjectTool {
 }
 
 #[async_trait]
-impl Tool<()> for StringEchoTool {
+impl Tool for StringEchoTool {
     fn name(&self) -> &str {
         "string_echo"
     }
@@ -169,29 +166,21 @@ impl Tool<()> for StringEchoTool {
         "echo a string"
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "string_echo",
-            "echo a string",
-            json!({
-                "type": ["object", "string"],
-                "properties": { "value": { "type": "string" } }
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": ["object", "string"],
+            "properties": { "value": { "type": "string" } }
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(
-            call.id,
-            self.name(),
-            call.arguments.to_string(),
-        ))
+        Ok(ToolResult::success(arguments.to_string()))
     }
 }
 
 #[async_trait]
-impl Tool<()> for RequiredOnlyTool {
+impl Tool for RequiredOnlyTool {
     fn name(&self) -> &str {
         "required_only"
     }
@@ -200,22 +189,18 @@ impl Tool<()> for RequiredOnlyTool {
         "accepts an implicitly object-shaped schema"
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "required_only",
-            self.description(),
-            json!({ "required": ["query"] }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({ "required": ["query"] })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(call.id, self.name(), "required-output"))
+        Ok(ToolResult::success("required-output"))
     }
 }
 
 #[async_trait]
-impl Tool<()> for ObjectEnumTool {
+impl Tool for ObjectEnumTool {
     fn name(&self) -> &str {
         "object_enum"
     }
@@ -224,22 +209,18 @@ impl Tool<()> for ObjectEnumTool {
         "accepts one enumerated object"
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "object_enum",
-            self.description(),
-            json!({ "enum": [{ "query": "rust" }] }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({ "enum": [{ "query": "rust" }] })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(call.id, self.name(), "enum-output"))
+        Ok(ToolResult::success("enum-output"))
     }
 }
 
 #[async_trait]
-impl Tool<()> for ObjectArrayTool {
+impl Tool for ObjectArrayTool {
     fn name(&self) -> &str {
         "object_array"
     }
@@ -248,29 +229,21 @@ impl Tool<()> for ObjectArrayTool {
         "accepts an object or array"
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "object_array",
-            self.description(),
-            json!({
-                "type": ["object", "array"],
-                "properties": { "value": { "type": "string" } }
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": ["object", "array"],
+            "properties": { "value": { "type": "string" } }
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(
-            call.id,
-            self.name(),
-            call.arguments.to_string(),
-        ))
+        Ok(ToolResult::success(arguments.to_string()))
     }
 }
 
 #[async_trait]
-impl Tool<()> for OptionalStrictObjectTool {
+impl Tool for OptionalStrictObjectTool {
     fn name(&self) -> &str {
         "optional_strict_object"
     }
@@ -279,56 +252,48 @@ impl Tool<()> for OptionalStrictObjectTool {
         "accepts only an optional query field"
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "optional_strict_object",
-            self.description(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": { "query": { "type": "string" } }
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "query": { "type": "string" } }
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(call.id, self.name(), "unexpected"))
+        Ok(ToolResult::success("unexpected"))
     }
 }
 
 #[async_trait]
-impl Tool<()> for StrictLookupTool {
+impl Tool for StrictLookupTool {
     fn name(&self) -> &str {
         "strict_lookup"
     }
     fn description(&self) -> &str {
         "strict lookup"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "strict_lookup",
-            "strict lookup",
-            json!({
-                "type": "object",
-                "required": ["query"],
-                "additionalProperties": false,
-                "properties": {
-                    "query": { "type": "string" },
-                    "filters": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "properties": {
-                            "limit": { "type": "integer" }
-                        }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "required": ["query"],
+            "additionalProperties": false,
+            "properties": {
+                "query": { "type": "string" },
+                "filters": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "limit": { "type": "integer" }
                     }
                 }
-            }),
-        )
+            }
+        })
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(call.id, self.name(), "strict-output"))
+        Ok(ToolResult::success("strict-output"))
     }
 }
 
@@ -347,6 +312,8 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -372,6 +339,8 @@ fn invalid_tool_call_response(id: &str, name: &str, raw: &str) -> ModelResponse 
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -390,6 +359,8 @@ fn text_response(text: &str, input: u64, output: u64) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -412,6 +383,8 @@ fn truncated_empty_response(reasoning_tokens: u64) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -599,7 +572,9 @@ impl ToolMiddleware<()> for StampToolWrap {
         next: ToolHandler<'_, (), ()>,
     ) -> Result<MiddlewareToolOutcome> {
         let mut result = next.run(ctx, state, call).await?.into_result();
-        result.content = format!("[wrapped] {}", result.content);
+        result.content = vec![ToolContent::Text {
+            text: format!("[wrapped] {}", result.output()),
+        }];
         Ok(result.into())
     }
 }
@@ -2309,19 +2284,19 @@ struct CancelOnCallTool {
 }
 
 #[async_trait]
-impl Tool<()> for CancelOnCallTool {
+impl Tool for CancelOnCallTool {
     fn name(&self) -> &str {
         "cancel_me"
     }
     fn description(&self) -> &str {
         "cancels the run"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new("cancel_me", "cancels the run", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         self.token.cancel();
-        Ok(ToolResult::text(call.id, "cancel_me", "cancelled"))
+        Ok(ToolResult::success("cancelled"))
     }
 }
 
@@ -3251,23 +3226,26 @@ struct ConcurrencyProbeTool {
 }
 
 #[async_trait]
-impl Tool<()> for ConcurrencyProbeTool {
+impl Tool for ConcurrencyProbeTool {
     fn name(&self) -> &str {
         self.name
     }
     fn description(&self) -> &str {
         "concurrency probe"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name, "concurrency probe", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    fn is_concurrency_safe(&self, _arguments: &serde_json::Value) -> bool {
+        true
+    }
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         use std::sync::atomic::Ordering;
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_seen.fetch_max(now, Ordering::SeqCst);
         tokio::time::sleep(self.delay).await;
         self.active.fetch_sub(1, Ordering::SeqCst);
-        Ok(ToolResult::text(call.id, self.name, self.reply))
+        Ok(ToolResult::success(self.reply))
     }
 }
 
@@ -3290,6 +3268,8 @@ fn multi_tool_call_response(calls: Vec<(&str, &str)>) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -3723,25 +3703,18 @@ async fn tool_completed_event_carries_outcome() {
     // side-channel — so journal-backed exporters can render the outcome.
     struct FailTool;
     #[async_trait]
-    impl Tool<()> for FailTool {
+    impl Tool for FailTool {
         fn name(&self) -> &str {
             "boom"
         }
         fn description(&self) -> &str {
             "always fails"
         }
-        fn schema(&self) -> ToolSchema {
-            ToolSchema::new("boom", "always fails", json!({ "type": "object" }))
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({ "type": "object" })
         }
-        async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-            Ok(ToolResult {
-                call_id: call.id,
-                name: "boom".to_string(),
-                content: "nope".to_string(),
-                raw: None,
-                error: Some("kaboom".to_string()),
-                elapsed_ms: 0,
-            })
+        async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::error("kaboom"))
         }
     }
 
@@ -3890,32 +3863,26 @@ struct SchemaShapedTool {
 }
 
 #[async_trait]
-impl Tool<()> for SchemaShapedTool {
+impl Tool for SchemaShapedTool {
     fn name(&self) -> &str {
         "schema_shaped"
     }
     fn description(&self) -> &str {
         "takes a literal `properties` argument"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "schema_shaped",
-            "takes a literal `properties` argument",
-            json!({
-                "type": "object",
-                "required": ["properties"],
-                "properties": {
-                    "properties": { "type": "object" }
-                }
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "required": ["properties"],
+            "properties": {
+                "properties": { "type": "object" }
+            }
+        })
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().unwrap() += 1;
-        Ok(ToolResult::text(
-            call.id,
-            self.name(),
-            serde_json::to_string(&call.arguments).unwrap_or_default(),
+        Ok(ToolResult::success(
+            serde_json::to_string(&arguments).unwrap_or_default(),
         ))
     }
 }
@@ -3927,22 +3894,22 @@ struct ArgumentRecordingTool {
 }
 
 #[async_trait]
-impl Tool<()> for ArgumentRecordingTool {
+impl Tool for ArgumentRecordingTool {
     fn name(&self) -> &str {
         "strict_lookup"
     }
     fn description(&self) -> &str {
         "strict lookup"
     }
-    fn schema(&self) -> ToolSchema {
+    fn parameters_schema(&self) -> serde_json::Value {
         StrictLookupTool {
             calls: Arc::new(Mutex::new(0)),
         }
-        .schema()
+        .parameters_schema()
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-        self.seen.lock().unwrap().push(call.arguments.clone());
-        Ok(ToolResult::text(call.id, self.name(), "strict-output"))
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        self.seen.lock().unwrap().push(arguments);
+        Ok(ToolResult::success("strict-output"))
     }
 }
 
