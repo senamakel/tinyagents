@@ -85,30 +85,25 @@ pub fn assemble_sections_with_budget(
     budget: PromptBudget,
     tokenize: impl Fn(&str) -> usize,
 ) -> PromptAssembly {
-    let mut accepted = Vec::new();
-    let mut bytes = 0;
-    let mut tokens = 0;
-    let mut truncated = None;
+    let mut assembled = PromptAssembly::default();
     for section in sections {
-        let sep = if accepted.is_empty() { 0 } else { 2 };
-        let section_tokens = tokenize(&section.content);
-        if bytes + sep + section.content.len() <= budget.max_bytes
-            && tokens + section_tokens <= budget.max_tokens
-        {
-            bytes += sep + section.content.len();
-            tokens += section_tokens;
-            accepted.push(section.clone());
-        } else {
-            truncated = Some(PromptTruncation {
+        // Tokenize the exact text the caller receives. In particular, the
+        // separator belongs to the candidate rather than being charged after
+        // the section's content, because tokenizers may assign it a cost.
+        let mut candidate = assembled.text.clone();
+        if !candidate.is_empty() {
+            candidate.push_str("\n\n");
+        }
+        candidate.push_str(&section.content);
+        if candidate.len() > budget.max_bytes || tokenize(&candidate) > budget.max_tokens {
+            assembled.truncation = Some(PromptTruncation {
                 section: section.name.clone(),
                 omitted_bytes: section.content.len(),
             });
             break;
         }
-    }
-    let mut assembled = assemble_sections(&accepted, budget.max_bytes);
-    if truncated.is_some() {
-        assembled.truncation = truncated;
+        assembled.text = candidate;
+        assembled.included_sections.push(section.name.clone());
     }
     assembled
 }

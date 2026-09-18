@@ -54,6 +54,28 @@ fn reusable_render_helpers_are_exact_and_stable() {
 }
 
 #[test]
+fn section_budget_tokenizes_rendered_separators() {
+    let sections = [
+        PromptSection::new("first", "first"),
+        PromptSection::new("second", "second"),
+    ];
+    // This deliberately charges a token for the renderer's `\n\n` separator.
+    // Counting only each section's content would incorrectly accept both.
+    let tokenize = |text: &str| text.split_whitespace().count() + text.matches("\n\n").count();
+    let budget = PromptBudget {
+        max_bytes: 64,
+        max_tokens: 2,
+    };
+
+    let assembled = assemble_sections_with_budget(&sections, budget, tokenize);
+
+    assert_eq!(assembled.text, "first");
+    assert_eq!(assembled.included_sections, vec!["first"]);
+    assert_eq!(assembled.truncation.unwrap().section, "second");
+    assert!(tokenize(&assembled.text) <= budget.max_tokens);
+}
+
+#[test]
 fn renders_simple_placeholder() {
     let tpl = PromptTemplate::new("Hello, {name}!");
     let mut vars = Map::new();
