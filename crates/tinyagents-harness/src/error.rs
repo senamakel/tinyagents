@@ -272,7 +272,11 @@ impl From<tinyinference::Error> for TinyAgentsError {
             tinyinference::Error::Validation(message) => Self::Validation(message),
             tinyinference::Error::Serialization(error) => Self::Serialization(error),
             tinyinference::Error::Embedding(message) => Self::Embedding(message),
-            tinyinference::Error::Catalog(message) => Self::Model(message),
+            tinyinference::Error::Catalog(message)
+            | tinyinference::Error::DownloadIo(message)
+            | tinyinference::Error::DownloadHttp(message)
+            | tinyinference::Error::DownloadTimeout(message)
+            | tinyinference::Error::DownloadIntegrity(message) => Self::Model(message),
         }
     }
 }
