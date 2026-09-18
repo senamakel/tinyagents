@@ -198,10 +198,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 self.policy.invalid_args,
                 InvalidArgsPolicy::NormalizeThenReturnToolError
             ) && batch_is_canonical_parallel_safe(&self.tools, &tool_calls);
-        if tool_calls.len() > 1
-            && canonical_parallel_safe
-            && self.middleware.tool_middleware_len() == 0
-        {
+        if should_execute_tools_concurrently(
+            tool_calls.len(),
+            canonical_parallel_safe,
+            self.middleware.len(),
+            self.middleware.tool_middleware_len(),
+        ) {
             self.execute_tools_concurrently(state, ctx, run, status, messages, tool_calls)
                 .await
         } else {
@@ -815,6 +817,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     }
 }
 
+/// Decides whether a batch may leave the serial path.
+///
+/// Lifecycle middleware runs during admission and can rewrite a call's name or
+/// arguments. Until that mutable admission phase is made a separate completed
+/// batch, any lifecycle middleware conservatively forces serial execution.
+fn should_execute_tools_concurrently(
+    calls: usize,
+    canonical_parallel_safe: bool,
+    lifecycle_middleware: usize,
+    tool_wrap_middleware: usize,
+) -> bool {
+    calls > 1 && canonical_parallel_safe && lifecycle_middleware == 0 && tool_wrap_middleware == 0
+}
+
 /// A batch may leave the serial path only when every registered declaration
 /// opts in for raw arguments that need no host-owned preparation. Unknown
 /// calls and injected arguments remain serial: injection is performed at
@@ -1090,7 +1106,8 @@ mod canonical_result_tests {
     use async_trait::async_trait;
 
     use super::{
-        batch_is_canonical_parallel_safe, map_tool_dispatch_error, tool_message_from_result,
+        batch_is_canonical_parallel_safe, map_tool_dispatch_error,
+        should_execute_tools_concurrently, tool_message_from_result,
     };
     use crate::error::TinyAgentsError;
     use tinyinference_llm::message::ContentBlock;
@@ -1256,5 +1273,15 @@ mod canonical_result_tests {
             "the host value is the one that makes this call unsafe"
         );
         assert!(!batch_is_canonical_parallel_safe(&registry, &[forged_safe]));
+    }
+
+    #[test]
+    fn lifecycle_rewrite_of_a_safe_call_forces_the_serial_route() {
+        // `before_tool` receives `&mut ToolCall`, so a middleware may rewrite
+        // a raw-safe call into an unsafe tool/action. The loop consequently
+        // never selects its concurrent path while any lifecycle middleware is
+        // present, regardless of the pre-admission declaration result.
+        assert!(!should_execute_tools_concurrently(2, true, 1, 0));
+        assert!(should_execute_tools_concurrently(2, true, 0, 0));
     }
 }
