@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use super::*;
-use crate::agent::AgentDefinition;
 use crate::component::ComponentKind;
+use tinyagents_definition::AgentDefinition;
 use tinyagents_language::Blueprint;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinytools::{Tool, ToolResult};

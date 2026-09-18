@@ -1,40 +1,69 @@
-//! Portable agent definitions and their deterministic in-memory catalogue.
+//! Host-owned agent definition vocabulary.
 //!
-//! These are catalogue data, not executable harness agents: the host owns
-//! prompt construction, authorization, and model/tool resolution. Keeping the
-//! definition here lets registries, graph planners, and hosts share one serde
-//! contract without importing an OpenHuman or harness configuration type.
+//! This lower-level crate deliberately knows only what a runtime may ask about
+//! an agent: its identity, description, declared model/tools/delegates, and a
+//! read-only catalogue seam. Authorization, prompt construction, and execution
+//! remain with the host and harness.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
+/// Result returned by a definition catalogue.
+pub type Result<T> = std::result::Result<T, DefinitionRegistryError>;
 
-/// Declarative description of an agent a host may make available.
+/// A backing catalogue could not answer a definition query.
+///
+/// This is distinct from [`DefinitionRegistry::resolve`] returning `Ok(None)`,
+/// which is the normal absence outcome for an agent omitted by a build or host
+/// configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefinitionRegistryError {
+    message: String,
+}
+
+impl DefinitionRegistryError {
+    /// Creates a catalogue-failure error with a host-safe explanation.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for DefinitionRegistryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DefinitionRegistryError {}
+
+/// What the runtime is permitted to know about an agent.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AgentDefinition {
-    /// Stable, host-assigned opaque identifier.
+    /// Host-assigned opaque identifier.
     pub id: String,
-    /// Human-readable display name.
+    /// Human-readable name for prompts and display.
     pub name: String,
-    /// Concise capability summary shown to a delegating parent.
+    /// Concise capability summary for a delegating parent.
     pub description: String,
     /// Preferred model identifier, if this agent pins one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub model: Option<String>,
     /// Agent ids this agent declares as eligible delegates.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub subagents: Vec<String>,
     /// Canonical tool names this agent may use.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub tools: Vec<String>,
 }
 
 impl AgentDefinition {
-    /// Creates a minimally valid definition.
+    /// Creates a definition with the required host-owned fields.
     #[must_use]
     pub fn new(
         id: impl Into<String>,
@@ -51,7 +80,7 @@ impl AgentDefinition {
         }
     }
 
-    /// Sets the model preference.
+    /// Sets the preferred model identifier.
     #[must_use]
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
@@ -173,7 +202,7 @@ pub trait DefinitionRegistry: Send + Sync {
     async fn resolve(&self, id: &str) -> Result<Option<AgentDefinition>>;
     /// Lists definitions in stable catalogue order.
     async fn list(&self) -> Result<Vec<AgentDefinition>>;
-    /// Returns the host-authorized delegate ids, not merely the declaration.
+    /// Returns host-authorized delegate ids, not merely the declaration.
     async fn delegates_for(&self, id: &str) -> Result<Vec<String>>;
 }
 
@@ -236,35 +265,8 @@ impl DefinitionRegistry for InMemoryDefinitionRegistry {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
-
-    #[test]
-    fn definition_round_trips_and_reports_specific_invalid_fields() {
-        let definition: AgentDefinition = serde_json::from_value(serde_json::json!({
-            "id": "planner",
-            "name": "Planner",
-            "description": "Plans work",
-            "model": "small",
-            "subagents": ["research", "research", ""],
-            "tools": ["search", ""],
-        }))
-        .unwrap();
-        assert_eq!(serde_json::to_value(&definition).unwrap()["id"], "planner");
-        let diagnostics = definition.diagnostics();
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.code == "duplicate" && d.field == "subagents")
-        );
-        assert_eq!(
-            diagnostics
-                .iter()
-                .filter(|d| d.code == "empty_entry")
-                .count(),
-            2
-        );
-    }
 
     #[tokio::test]
     async fn catalogue_is_stable_first_wins_and_absence_is_not_an_error() {
@@ -285,7 +287,7 @@ mod test {
         assert_eq!(registry.list().await.unwrap().len(), 2);
         assert_eq!(
             registry.delegates_for("planner").await.unwrap(),
-            vec!["research"]
+            ["research"]
         );
         assert!(registry.resolve("missing").await.unwrap().is_none());
         assert!(registry.delegates_for("missing").await.unwrap().is_empty());

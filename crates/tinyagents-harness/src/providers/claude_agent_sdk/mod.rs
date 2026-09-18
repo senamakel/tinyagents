@@ -4,6 +4,7 @@ mod protocol;
 
 use anyhow::Context;
 use async_trait::async_trait;
+use std::fmt::Write;
 use tinyinference_llm::message::{ContentBlock, Message};
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
@@ -304,21 +305,20 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
     ) -> tinyinference_llm::Result<ModelResponse> {
         let messages = prepare_prompt_messages(&request.messages, &request.tools);
         let system = coalesce_system_prompt(&messages);
-        let last_user = messages
+        let prompt = messages
             .iter()
-            .rev()
-            .find_map(|message| match message {
-                Message::User(_) => Some(message.text()),
-                _ => None,
-            })
-            .unwrap_or_default();
+            .filter(|message| !matches!(message, Message::System(_)))
+            .map(Message::text)
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let model = request
             .model
             .as_deref()
             .or(self.profile.model.as_deref())
             .unwrap_or(&self.config.default_model);
         let output = self
-            .invoke_cli(system.as_deref(), &last_user, model)
+            .invoke_cli(system.as_deref(), &prompt, model)
             .await
             .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
 
@@ -355,7 +355,7 @@ fn prepare_prompt_messages(
         })
         .collect::<Vec<_>>();
     let instructions = dialect.prompt_instructions(&specs);
-    let mut prepared = messages.to_vec();
+    let mut prepared = coalesce_prompt_tool_results(messages);
     if specs.is_empty() {
         return prepared;
     }
@@ -369,6 +369,58 @@ fn prepare_prompt_messages(
     } else {
         prepared.insert(0, Message::system(instructions));
     }
+    prepared
+}
+
+/// Convert structured transcript tool turns into the XML-dialect protocol the
+/// Claude CLI consumes. The CLI only accepts a system prompt and one user
+/// prompt, so leaving native assistant calls and `tool` roles in the history
+/// would silently omit the agent's prior work from stdin.
+fn coalesce_prompt_tool_results(messages: &[Message]) -> Vec<Message> {
+    const TOOL_RESULTS_MARKER: &str = "[Tool results]";
+    let mut prepared = Vec::with_capacity(messages.len());
+    let mut pending_results = Vec::new();
+
+    fn flush_results(prepared: &mut Vec<Message>, pending_results: &mut Vec<String>) {
+        if !pending_results.is_empty() {
+            prepared.push(Message::user(format!(
+                "{TOOL_RESULTS_MARKER}\n{}",
+                std::mem::take(pending_results).join("\n")
+            )));
+        }
+    }
+
+    for message in messages {
+        match message {
+            Message::Tool(_) => {
+                pending_results.push(format!("<tool_result>\n{}\n</tool_result>", message.text()));
+            }
+            Message::Assistant(assistant) if !assistant.tool_calls.is_empty() => {
+                flush_results(&mut prepared, &mut pending_results);
+                let mut assistant = assistant.clone();
+                let mut rendered = String::new();
+                if !assistant.content.is_empty() && !message.text().trim().is_empty() {
+                    rendered.push('\n');
+                }
+                for call in &assistant.tool_calls {
+                    let body = serde_json::json!({
+                        "name": &call.name,
+                        "arguments": &call.arguments,
+                    });
+                    let body = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
+                    let _ = writeln!(rendered, "<tool_call>{body}</tool_call>");
+                }
+                assistant.content.push(ContentBlock::Text(rendered));
+                assistant.tool_calls.clear();
+                prepared.push(Message::Assistant(assistant));
+            }
+            _ => {
+                flush_results(&mut prepared, &mut pending_results);
+                prepared.push(message.clone());
+            }
+        }
+    }
+    flush_results(&mut prepared, &mut pending_results);
     prepared
 }
 

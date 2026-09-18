@@ -190,11 +190,12 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
     }
 
     /// Runs after each tool invocation completes, allowing the middleware to
-    /// mutate the [`ToolResult`].
+    /// inspect its canonical tool name and mutate the [`ToolResult`].
     async fn after_tool(
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
+        _tool_name: &str,
         _result: &mut ToolResult,
     ) -> Result<()> {
         Ok(())

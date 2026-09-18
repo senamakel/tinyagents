@@ -61,14 +61,3 @@ impl<State: Send + Sync> tinyagents_language::capability_resolver::CapabilitySou
         self.names_including_aliases(kind)
     }
 }
-
-impl<State: Send + Sync> tinyagents_graph::subagent_node::AgentRegistry
-    for CapabilityRegistry<State>
-{
-    fn agent(
-        &self,
-        name: &str,
-    ) -> Option<std::sync::Arc<dyn tinyagents_graph::subagent_node::HarnessAgent>> {
-        CapabilityRegistry::agent(self, name)
-    }
-}

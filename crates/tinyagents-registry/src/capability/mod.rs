@@ -179,7 +179,10 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Returns [`TinyAgentsError::DuplicateComponent`] if an agent with the same
     /// name is already registered. Use [`replace_agent`](Self::replace_agent) to
     /// overwrite intentionally.
-    pub fn register_agent(&mut self, agent: crate::agent::AgentDefinition) -> Result<&mut Self> {
+    pub fn register_agent(
+        &mut self,
+        agent: tinyagents_definition::AgentDefinition,
+    ) -> Result<&mut Self> {
         let name = agent.id.clone();
         self.ensure_absent(ComponentKind::Agent, &name)?;
         self.record_meta(ComponentKind::Agent, &name);
@@ -189,7 +192,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
 
     /// Registers or overwrites a declarative agent definition, preserving any
     /// existing metadata.
-    pub fn replace_agent(&mut self, agent: crate::agent::AgentDefinition) -> &mut Self {
+    pub fn replace_agent(&mut self, agent: tinyagents_definition::AgentDefinition) -> &mut Self {
         let name = agent.id.clone();
         self.record_meta(ComponentKind::Agent, &name);
         self.agents.insert(name, agent);
@@ -197,7 +200,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     }
 
     /// Looks up a registered declarative agent definition by name or alias.
-    pub fn agent(&self, name: &str) -> Option<&crate::agent::AgentDefinition> {
+    pub fn agent(&self, name: &str) -> Option<&tinyagents_definition::AgentDefinition> {
         let canonical = self.resolve_name(ComponentKind::Agent, name)?;
         self.agents.get(&canonical)
     }

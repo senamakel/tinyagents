@@ -1129,7 +1129,7 @@ async fn tool_policy_requires_sandbox_for_sandboxed_tool() {
 }
 
 #[tokio::test]
-async fn tool_policy_truncates_oversized_results() {
+async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(
@@ -1143,20 +1143,17 @@ async fn tool_policy_truncates_oversized_results() {
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw);
 
-    let mut result = ToolResult {
-        call_id: "c1".into(),
-        name: "reader".into(),
-        content: "abcdefgh".into(),
-        raw: None,
-        error: None,
-        elapsed_ms: 0,
-    };
+    let mut result = ToolResult::error("abcdefgh")
+        .with_markdown("abcdefgh")
+        .verbatim();
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(&mut ctx, &(), "reader", &mut result)
         .await
         .expect("after_tool runs");
-    assert_eq!(result.content, "abcd");
-    assert!(result.error.unwrap().contains("max_result_bytes"));
+    assert_eq!(result.output(), "abcd");
+    assert_eq!(result.markdown_formatted.as_deref(), Some("abcd"));
+    assert!(result.is_error);
+    assert!(result.trusted_verbatim);
 }
 
 // ── HumanApprovalMiddleware ─────────────────────────────────────────────────
@@ -1290,19 +1287,12 @@ async fn redaction_masks_response_and_tool_text() {
         .expect("redaction runs");
     assert_eq!(response.text(), "key is [REDACTED] and pw [REDACTED]");
 
-    let mut result = ToolResult {
-        call_id: "c".to_string(),
-        name: "t".to_string(),
-        content: "token sk-secret".to_string(),
-        raw: None,
-        error: None,
-        elapsed_ms: 0,
-    };
+    let mut result = ToolResult::success("token sk-secret");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(&mut ctx, &(), "t", &mut result)
         .await
         .expect("redaction runs on tool");
-    assert_eq!(result.content, "token [REDACTED]");
+    assert_eq!(result.output(), "token [REDACTED]");
     assert_eq!(redaction.redactions(), 3);
 }
 
@@ -1338,7 +1328,7 @@ async fn redaction_is_idempotent_and_never_matches_inside_mask() {
 }
 
 /// Tool-call arguments (before the tool runs and in the model response) and
-/// raw payloads must be scrubbed, not just plain text content.
+/// structured tool-result blocks must be scrubbed, not just plain text content.
 #[tokio::test]
 async fn redaction_scrubs_tool_call_arguments_and_raw_payloads() {
     let (mut ctx, _recorder) = ctx_with_recorder();
@@ -1381,21 +1371,21 @@ async fn redaction_scrubs_tool_call_arguments_and_raw_payloads() {
         .expect("redaction runs before tool");
     assert_eq!(call.arguments, json!({"key": "[REDACTED]"}));
 
-    // Tool result raw payload and error message via after_tool.
-    let mut result = ToolResult {
-        call_id: "c2".to_string(),
-        name: "http".to_string(),
-        content: "done".to_string(),
-        raw: Some(json!({"echo": "sk-secret"})),
-        error: Some("auth failed for sk-secret".to_string()),
-        elapsed_ms: 0,
-    };
+    // Tool result structured payload and markdown rendering via after_tool.
+    let mut result =
+        ToolResult::json(json!({"echo": "sk-secret"})).with_markdown("auth failed for sk-secret");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(&mut ctx, &(), "http", &mut result)
         .await
         .expect("redaction runs after tool");
-    assert_eq!(result.raw, Some(json!({"echo": "[REDACTED]"})));
-    assert_eq!(result.error.as_deref(), Some("auth failed for [REDACTED]"));
+    assert!(matches!(
+        result.content.first(),
+        Some(tinytools::ToolContent::Json { data }) if data == &json!({"echo": "[REDACTED]"})
+    ));
+    assert_eq!(
+        result.markdown_formatted.as_deref(),
+        Some("auth failed for [REDACTED]")
+    );
 }
 
 // ── TracingMiddleware ───────────────────────────────────────────────────────
@@ -1423,16 +1413,9 @@ async fn tracing_records_phase_boundaries_and_counts() {
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
         .unwrap();
-    let mut result = ToolResult {
-        call_id: "c".to_string(),
-        name: "t".to_string(),
-        content: String::new(),
-        raw: None,
-        error: None,
-        elapsed_ms: 0,
-    };
+    let mut result = ToolResult::success("");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(&mut ctx, &(), "t", &mut result)
         .await
         .unwrap();
     let mut run = crate::middleware::AgentRun::new();

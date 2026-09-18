@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::agent::AgentDefinition;
 use crate::component::{ComponentKind, ComponentMetadata};
+use tinyagents_definition::AgentDefinition;
 use tinyagents_language::Blueprint;
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;

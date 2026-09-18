@@ -23,8 +23,9 @@
 //! populated by the runtime from the real one, and every field added to
 //! [`ToolResult`] would then either need mirroring or would be invisible to
 //! classifiers — a drift surface with no upside. Classifiers read the real
-//! result, including `raw`, which is where a host's structured error codes
-//! live.
+//! result, including its structured content blocks. Hosts that need richer
+//! error codes keep their taxonomy beside the classifier rather than adding
+//! provider metadata to the shared tool result.
 //!
 //! **Dependency rule:** `serde` + `std` only, matching the inert-value-type
 //! carve-out in [`crate::config::types`]. A host can implement this
@@ -122,10 +123,10 @@ pub trait ToolOutcomeClassifier: Send + Sync {
 
 // ── ErrorFieldClassifier ──────────────────────────────────────────────────────
 
-/// The baseline classifier: reads [`ToolResult::error`] and nothing else.
+/// The baseline classifier: reads [`ToolResult::is_error`] and nothing else.
 ///
-/// `Some(_)` becomes [`OutcomeClass::PermanentFailure`], `None` becomes
-/// [`OutcomeClass::Success`]. It ignores `name`, `content`, and `raw`, because
+/// `true` becomes [`OutcomeClass::PermanentFailure`], `false` becomes
+/// [`OutcomeClass::Success`]. It ignores tool name and content, because
 /// interpreting any of those would require knowing which tool ran — precisely
 /// the knowledge this crate does not have.
 ///
@@ -152,10 +153,11 @@ impl ErrorFieldClassifier {
 
 impl ToolOutcomeClassifier for ErrorFieldClassifier {
     fn classify(&self, _name: &str, result: &ToolResult) -> OutcomeClass {
-        result
-            .is_error
-            .then_some(OutcomeClass::PermanentFailure)
-            .unwrap_or(OutcomeClass::Success)
+        if result.is_error {
+            OutcomeClass::PermanentFailure
+        } else {
+            OutcomeClass::Success
+        }
     }
 }
 
@@ -164,14 +166,7 @@ mod tests {
     use super::*;
 
     fn result_with_error(error: Option<&str>) -> ToolResult {
-        ToolResult {
-            call_id: "call-1".to_string(),
-            name: "search".to_string(),
-            content: "some content".to_string(),
-            raw: None,
-            error: error.map(str::to_string),
-            elapsed_ms: 3,
-        }
+        error.map_or_else(|| ToolResult::success("some content"), ToolResult::error)
     }
 
     // ── OutcomeClass invariants ───────────────────────────────────────────────
@@ -267,15 +262,16 @@ mod tests {
     }
 
     #[test]
-    fn content_and_raw_are_ignored() {
+    fn content_blocks_are_ignored() {
         let classifier = ErrorFieldClassifier::new();
         let mut noisy = result_with_error(None);
-        noisy.content = "Error: everything is on fire".to_string();
-        noisy.raw = Some(serde_json::json!({ "status": 500 }));
+        noisy.content = vec![tinytools::ToolContent::Json {
+            data: serde_json::json!({ "status": 500, "message": "Error: everything is on fire" }),
+        }];
         assert_eq!(
             classifier.classify("search", &noisy),
             OutcomeClass::Success,
-            "only the error field is consulted"
+            "only the reported-error flag is consulted"
         );
     }
 

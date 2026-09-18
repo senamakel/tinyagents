@@ -38,7 +38,6 @@
 pub mod agent_memory;
 pub mod budget_gate;
 pub mod context_composer;
-pub mod definition_registry;
 pub mod experience_store;
 pub mod learning_sink;
 pub mod model_resolver;
@@ -53,7 +52,6 @@ pub use budget_gate::{
     BudgetGate, CallEstimate, CompressionHint, ContextState, Permit, UnlimitedBudgetGate,
 };
 pub use context_composer::{ContextComposer, StaticContextComposer, TurnContextRequest};
-pub use definition_registry::{AgentDefinition, DefinitionRegistry, InMemoryDefinitionRegistry};
 pub use experience_store::{Experience, ExperienceStore, InMemoryExperienceStore};
 pub use learning_sink::{LearningSink, NoopLearningSink, TurnSummary};
 pub use model_resolver::{FixedModelResolver, ModelResolveRequest, ModelResolver};
@@ -64,6 +62,8 @@ pub use security_gate::{
 pub use tool_outcome_classifier::{ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier};
 
 use std::sync::Arc;
+
+use tinyagents_definition::DefinitionRegistry;
 
 /// The bundle of host capabilities handed to a session.
 ///

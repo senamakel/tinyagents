@@ -2,6 +2,7 @@
 //! these cover the required/optional split and the hand-written `Clone`.
 
 use super::*;
+use tinyagents_definition::InMemoryDefinitionRegistry;
 
 /// The bundle is generic over `State` only because `ModelResolver` is. Nothing
 /// in these tests needs a real state, so use unit.

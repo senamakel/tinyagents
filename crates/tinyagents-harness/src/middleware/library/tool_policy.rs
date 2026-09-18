@@ -6,7 +6,7 @@
 //! full built-in middleware library overview.
 
 use super::*;
-use tinytools::{SandboxMode, ToolPolicy, ToolSideEffects};
+use tinytools::{SandboxMode, ToolContent, ToolPolicy, ToolResult, ToolSideEffects};
 
 // ── ToolAllowlistMiddleware ───────────────────────────────────────────────────
 
@@ -234,17 +234,52 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolPolicy
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
+        tool_name: &str,
         result: &mut ToolResult,
     ) -> Result<()> {
         if !self.enforce_result_bytes {
             return Ok(());
         }
-        // `tinytools::ToolResult` intentionally contains only tool-owned
-        // output; it has no tool name. The agent-loop execution seam still has
-        // the canonical declaration and enforces `max_result_bytes` there
-        // before this lifecycle hook observes the result.
+        let Some(max_result_bytes) = self
+            .policies
+            .get(tool_name)
+            .and_then(|policy| policy.runtime.max_result_bytes)
+        else {
+            return Ok(());
+        };
+        truncate_result(result, max_result_bytes);
         Ok(())
     }
+}
+
+/// Truncates each model-facing canonical representation without changing the
+/// tool's reported-error or trusted-verbatim declarations. JSON content is
+/// rendered to text when it exceeds the cap because a partial JSON block would
+/// no longer be a valid structured value.
+fn truncate_result(result: &mut ToolResult, max_result_bytes: usize) {
+    let output = result.output();
+    if output.len() > max_result_bytes {
+        result.content = vec![ToolContent::Text {
+            text: truncate_utf8(&output, max_result_bytes),
+        }];
+    }
+    if let Some(markdown) = &mut result.markdown_formatted
+        && markdown.len() > max_result_bytes
+    {
+        *markdown = truncate_utf8(markdown, max_result_bytes);
+    }
+}
+
+/// Returns the longest valid UTF-8 prefix fitting within `max_bytes`.
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
 }
 
 // ── DynamicToolSelectionMiddleware ────────────────────────────────────────────

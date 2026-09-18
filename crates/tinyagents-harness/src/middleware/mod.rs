@@ -258,10 +258,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         &self,
         ctx: &mut RunContext<Ctx>,
         state: &State,
+        tool_name: &str,
         result: &mut ToolResult,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_tool(ctx, state, result))
+            .after_tool(ctx, state, tool_name, result))
     }
 
     /// Runs every middleware's [`Middleware::on_error`] in registration order,

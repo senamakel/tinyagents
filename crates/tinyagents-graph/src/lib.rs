@@ -115,7 +115,7 @@ pub use reducer::{
 pub use status::GraphRunStatus;
 pub use stream::{CollectingSink, GraphEvent, GraphEventSink, NoopSink, StreamMode};
 pub use subagent_node::{
-    HarnessAgent, HarnessSubAgent, InputMapper, OutputMapper, SubAgentBudget, SubAgentInput,
+    AgentInvocation, AgentInvoker, InputMapper, OutputMapper, SubAgentBudget, SubAgentInput,
     SubAgentNode, SubAgentOutput, SubAgentPolicy, subagent_node,
 };
 pub use subgraph::{adapter_subgraph_node, shared_subgraph_node};
