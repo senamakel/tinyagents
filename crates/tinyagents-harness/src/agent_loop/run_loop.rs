@@ -317,7 +317,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `RunContext`; explicit-model SDK calls continue to resolve only
             // through the local registry. Context-instance identity keeps two
             // same-id concurrent runs from borrowing each other's model.
-            let binding = self.host_run_binding(ctx.instance_id()).map_or_else(
+            let binding = self.host_run_binding(ctx.instance_id())?.map_or_else(
                 || {
                     self.models
                         .resolve_request(&request, None, None)
@@ -342,10 +342,29 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // A host budget is acquired only for an explicit host-driven run.
             // The permit remains alive through response accounting below, so a
             // cancellation or provider error still releases it through Drop.
-            let host_budget = if let (Some(host), Some(host_run)) =
-                (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
-            {
+            let host_budget = if let (Some(host), Some(host_run)) = (
+                self.host.as_ref(),
+                self.host_run_binding(ctx.instance_id())?,
+            ) {
                 if let Some(budget) = &host.budget {
+                    let context_state = crate::host::ContextState {
+                        message_count: request.messages.len(),
+                        prompt_tokens: crate::token_estimation::estimate_slice_tokens(
+                            &request.messages,
+                        ),
+                        context_window_tokens: binding
+                            .model
+                            .profile()
+                            .and_then(|profile| profile.max_input_tokens),
+                        iterations: run.steps,
+                    };
+                    let hint = budget.compression_hint(&context_state);
+                    if hint.is_advised() {
+                        tinyagents_tracing::debug!(
+                            ?hint,
+                            "[host] budget gate advised context compression"
+                        );
+                    }
                     let estimate = crate::host::CallEstimate::new(
                         &model_name,
                         crate::token_estimation::estimate_slice_tokens(&request.messages),

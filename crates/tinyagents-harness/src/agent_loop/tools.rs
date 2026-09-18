@@ -444,9 +444,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // model-forged fields, but before a tool can execute. A hosted run is
         // identified from its explicit RunContext binding; the lower-level SDK
         // path has no implicit host policy.
-        if let (Some(host), Some(binding)) =
-            (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
-        {
+        if let (Some(host), Some(binding)) = (
+            self.host.as_ref(),
+            self.host_run_binding(ctx.instance_id())?,
+        ) {
             let request = crate::host::ToolCallRequest::from_tool_call(call, binding.agent_id);
             let decision = host.security.authorize_tool(&request).await?;
             if !decision.is_allowed() {
@@ -480,6 +481,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             call_id: call_id.clone(),
             tool_name: tool_name.clone(),
         });
+        self.emit_host_progress(
+            ctx.instance_id(),
+            crate::host::ProgressEvent::ToolCall {
+                run: ctx.run_id().clone(),
+                call: call_id.clone(),
+                tool: tool_name.clone(),
+            },
+        );
         status.set_last_event(record.id);
         // Snapshot the arguments for observability before `call` is moved
         // into execution, gated by the capture policy.
@@ -565,9 +574,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // request. Screen it after host/result middleware shaping but before a
         // transcript message exists, so neither the original nor a blocked
         // value can reach the provider.
-        if let (Some(host), Some(_binding)) =
-            (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
-        {
+        if let (Some(host), Some(_binding)) = (
+            self.host.as_ref(),
+            self.host_run_binding(ctx.instance_id())?,
+        ) {
             let rendered = result.output_for_llm(prepared.options.prefer_markdown);
             match host
                 .security
@@ -585,11 +595,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
         }
 
-        if let (Some(host), Some(binding)) =
-            (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
-            && let Some(classifier) = &host.tool_outcomes
+        if let (Some(host), Some(binding)) = (
+            self.host.as_ref(),
+            self.host_run_binding(ctx.instance_id())?,
+        ) && let Some(classifier) = &host.tool_outcomes
         {
             let outcome = classifier.classify(&prepared.tool_name, &result);
+            match outcome {
+                crate::host::OutcomeClass::Success => result.is_error = false,
+                crate::host::OutcomeClass::PermanentFailure => result.is_error = true,
+                crate::host::OutcomeClass::RetryableFailure => {
+                    result.is_error = true;
+                    let detail = result.output_for_llm(prepared.options.prefer_markdown);
+                    result.content = vec![tinytools::ToolContent::Text {
+                        text: format!("retryable tool failure: {detail}"),
+                    }];
+                    result.markdown_formatted = None;
+                }
+            }
             tinyagents_tracing::debug!(
                 tool = %prepared.tool_name,
                 agent = %binding.agent_id,
@@ -630,6 +653,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             output_bytes: Some(output_bytes),
             error,
         });
+        self.emit_host_progress(
+            ctx.instance_id(),
+            crate::host::ProgressEvent::ToolCallFinished {
+                run: ctx.run_id().clone(),
+                call: prepared.call_id.clone(),
+                success: !result.is_error,
+                output: String::new(),
+            },
+        );
         status.set_last_event(record.id);
 
         messages.push(Message::Tool(tool_message_from_result(

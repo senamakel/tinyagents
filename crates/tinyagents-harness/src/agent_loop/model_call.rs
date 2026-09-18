@@ -308,6 +308,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 call_id: call_id.clone(),
                 delta,
             });
+            self.emit_host_progress(
+                ctx.instance_id(),
+                crate::host::ProgressEvent::Token {
+                    run: ctx.run_id().clone(),
+                    text: model_delta.content.clone(),
+                },
+            );
             self.middleware
                 .run_on_model_delta(ctx, state, &mut model_delta)
                 .await?;
@@ -724,6 +731,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     call_id: call_id.clone(),
                     delta: message_delta,
                 });
+                self.emit_host_progress(
+                    ctx.instance_id(),
+                    crate::host::ProgressEvent::Token {
+                        run: ctx.run_id().clone(),
+                        text: model_delta.content.clone(),
+                    },
+                );
                 *deltas_emitted += 1;
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)

@@ -110,16 +110,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
 
         let outcome = self
-            .invoke_in_context(state, context, prepared.messages.clone())
+            .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
             .await;
         self.remove_host_binding(context_id);
 
-        match outcome {
-            Ok(run) => {
-                self.finish_host_turn(&prepared, &run).await;
-                Ok(run)
+        match outcome.error {
+            None => {
+                self.finish_host_turn(&prepared, &outcome.run, true).await;
+                Ok(outcome.run)
             }
-            Err(error) => {
+            Some(error) => {
+                self.finish_host_turn(&prepared, &outcome.run, false).await;
                 if let Some(progress) = &prepared.host.progress {
                     progress
                         .emit(ProgressEvent::Error {
@@ -279,7 +280,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 },
                 model,
             },
-        );
+        )?;
         Ok(PreparedAgentTurn {
             host,
             agent_id: request.agent_id,
@@ -290,7 +291,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         })
     }
 
-    async fn finish_host_turn(&self, prepared: &PreparedAgentTurn<State>, run: &AgentRun) {
+    async fn finish_host_turn(
+        &self,
+        prepared: &PreparedAgentTurn<State>,
+        run: &AgentRun,
+        succeeded: bool,
+    ) {
         if let Some(progress) = &prepared.host.progress {
             progress
                 .emit(ProgressEvent::Finished {
@@ -315,22 +321,32 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             tinyagents_tracing::warn!(%error, "[host] learning sink failed after completed turn");
         }
         if let Some(store) = &prepared.host.experience {
-            let experience =
-                Experience::new(&prepared.agent_id, &prepared.input_text, &output).succeeded();
+            let mut experience = Experience::new(&prepared.agent_id, &prepared.input_text, &output);
+            if succeeded {
+                experience = experience.succeeded();
+            }
             if let Err(error) = store.record(&experience).await {
                 tinyagents_tracing::warn!(%error, "[host] experience store failed after completed turn");
             }
         }
     }
 
-    pub(crate) fn host_run_binding(&self, context_id: u64) -> Option<HostRunBinding<State>> {
-        self.host_runs.lock().ok()?.get(&context_id).cloned()
+    pub(crate) fn host_run_binding(
+        &self,
+        context_id: u64,
+    ) -> Result<Option<HostRunBinding<State>>> {
+        self.host_runs
+            .lock()
+            .map_err(|_| TinyAgentsError::Validation("host run binding lock poisoned".into()))
+            .map(|runs| runs.get(&context_id).cloned())
     }
 
-    fn insert_host_run(&self, context_id: u64, binding: HostRunBinding<State>) {
-        if let Ok(mut runs) = self.host_runs.lock() {
-            runs.insert(context_id, binding);
-        }
+    fn insert_host_run(&self, context_id: u64, binding: HostRunBinding<State>) -> Result<()> {
+        self.host_runs
+            .lock()
+            .map_err(|_| TinyAgentsError::Validation("host run binding lock poisoned".into()))?
+            .insert(context_id, binding);
+        Ok(())
     }
 
     fn install_host_binding(&self, _context_id: u64, _prepared: &PreparedAgentTurn<State>) {
@@ -342,6 +358,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub(crate) fn remove_host_binding(&self, context_id: u64) {
         if let Ok(mut runs) = self.host_runs.lock() {
             runs.remove(&context_id);
+        }
+    }
+
+    /// Best-effort progress projection. A host UI must never make the turn
+    /// wait or fail, so delivery is detached and dropped when no Tokio runtime
+    /// is available.
+    pub(crate) fn emit_host_progress(&self, context_id: u64, event: ProgressEvent) {
+        let Ok(Some(_binding)) = self.host_run_binding(context_id) else {
+            return;
+        };
+        let Some(progress) = self.host.as_ref().and_then(|host| host.progress.clone()) else {
+            return;
+        };
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                progress.emit(event).await;
+            });
         }
     }
 }

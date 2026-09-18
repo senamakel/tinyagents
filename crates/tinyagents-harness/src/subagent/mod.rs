@@ -268,7 +268,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
             depth,
         });
 
-        let run = if streaming {
+        let run = if self.harness.host_capabilities().is_some() {
+            let request = crate::runtime::AgentTurnRequest::new(self.name.clone(), messages);
+            // `RunContext::child` above remains the sole recursion boundary;
+            // the hosted entry point performs the same capability lifecycle.
+            // Child model deltas still reach the inherited event sink through
+            // the normal loop even when the parent selected streaming.
+            self.harness.invoke_agent(request, ctx, state).await?
+        } else if streaming {
             self.harness
                 .invoke_streaming_in_context(state, ctx, messages)
                 .await?
