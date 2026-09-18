@@ -8,6 +8,21 @@ use super::*;
 use serde_json::{Map, json};
 
 #[test]
+fn section_assembly_preserves_order_budget_and_truncation_provenance() {
+    let sections = vec![
+        PromptSection::new("first", "α"),
+        PromptSection::new("second", "second section"),
+    ];
+    let assembled = assemble_sections(&sections, "α\n\nse".len());
+    assert_eq!(assembled.text, "α\n\nse");
+    assert_eq!(assembled.included_sections, vec!["first"]);
+    assert_eq!(assembled.truncation, Some(PromptTruncation {
+        section: "second".into(),
+        omitted_bytes: "cond section".len(),
+    }));
+}
+
+#[test]
 fn renders_simple_placeholder() {
     let tpl = PromptTemplate::new("Hello, {name}!");
     let mut vars = Map::new();

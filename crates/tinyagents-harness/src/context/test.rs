@@ -173,8 +173,8 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
             .with_max_turn_output_tokens(123),
         (),
     );
-    let child = parent.child("child", "child-data").unwrap();
-    let grandchild = child.child("grandchild", ()).unwrap();
+    let child = parent.child(RunConfig::new("child"), "child-data").unwrap();
+    let grandchild = child.child(RunConfig::new("grandchild"), ()).unwrap();
 
     assert_eq!(parent.lineage().root_run_id.as_str(), "root");
     assert_eq!(parent.lineage().parent_run_id, None);
@@ -198,7 +198,7 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
     assert_eq!(grandchild.thread_id().unwrap().as_str(), "thread");
     assert_eq!(grandchild.config.max_turn_output_tokens, Some(123));
     assert!(matches!(
-        grandchild.child("too-deep", ()),
+        grandchild.child(RunConfig::new("too-deep"), ()),
         Err(crate::TinyAgentsError::SubAgentDepth(2))
     ));
 }
@@ -227,10 +227,9 @@ fn child_inherits_recursive_capabilities_but_not_mutable_run_state() {
     parent.request_control(MiddlewareControl::StopWithFinal("parent-only".into()));
 
     let child = parent
-        .child_with_metadata(
-            "child",
+        .child(
+            RunConfig::new("child").with_metadata(serde_json::json!({"replace": "child", "new": 1})),
             (),
-            serde_json::json!({"replace": "child", "new": 1}),
         )
         .unwrap();
 
@@ -257,8 +256,8 @@ fn child_inherits_recursive_capabilities_but_not_mutable_run_state() {
 fn sibling_children_are_isolated_while_sharing_tree_signals() {
     let events = EventSink::new();
     let parent: RunContext<()> = RunContext::new(RunConfig::new("root"), ()).with_events(events);
-    let mut first = parent.child("first", ()).unwrap();
-    let second = parent.child("second", ()).unwrap();
+    let mut first = parent.child(RunConfig::new("first"), ()).unwrap();
+    let second = parent.child(RunConfig::new("second"), ()).unwrap();
 
     first.record_tool_call().unwrap();
     first.request_control(MiddlewareControl::StopWithFinal("first".into()));

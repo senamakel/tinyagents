@@ -71,7 +71,7 @@ pub struct RunLineage {
 /// assert_eq!(defaulted.max_model_calls, None);
 /// assert_eq!(defaulted.effective_max_model_calls(), 25);
 /// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RunConfig {
     /// Unique identifier for this run.
     pub run_id: RunId,
@@ -122,29 +122,8 @@ pub struct RunConfig {
     /// model call. Child sub-agent runs inherit the same cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turn_output_tokens: Option<u32>,
-    /// Current depth of this run in the sub-agent / recursion tree.
-    ///
-    /// A top-level run is depth `0`. When a [`crate::subagent::SubAgent`]
-    /// invokes a child harness, the child run's `depth` is the parent's depth
-    /// plus one. Defaults to `0` and is `#[serde(default)]` so configs written
-    /// before this field existed still deserialize.
-    #[serde(default)]
-    pub depth: usize,
-    /// Maximum sub-agent / recursion depth permitted for the run tree rooted at
-    /// this run. Carried into [`crate::limits::RunLimits`] so the agent
-    /// loop and sub-agent guard share one cap. Defaults to
-    /// [`crate::limits::RunLimits::DEFAULT_MAX_DEPTH`].
-    #[serde(default = "default_max_depth")]
-    pub max_depth: usize,
-    /// Recursive ancestry for this run.  `depth` and `max_depth` remain
-    /// compatibility fields for existing consumers; constructors and builders
-    /// keep them synchronized with this canonical lineage record.
+    /// Recursive ancestry and depth cap for this run.
     pub lineage: RunLineage,
-}
-
-/// Serde default for [`RunConfig::max_depth`]: the crate-wide depth cap.
-fn default_max_depth() -> usize {
-    crate::limits::RunLimits::DEFAULT_MAX_DEPTH
 }
 
 /// A structured control outcome a middleware (or any step) can request on the

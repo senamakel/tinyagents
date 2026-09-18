@@ -43,6 +43,58 @@ use crate::tool::ToolSchema;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, PromptSegment, ResponseFormat, SegmentRole};
 
+/// Renders supplied sections in order without product prompt selection.
+///
+/// `max_bytes` is a caller-owned budget. The first section that does not fit
+/// is clipped at a UTF-8 boundary and recorded; later sections are omitted.
+pub fn assemble_sections(sections: &[PromptSection], max_bytes: usize) -> PromptAssembly {
+    let mut output = PromptAssembly::default();
+    for section in sections {
+        let separator = if output.text.is_empty() { "" } else { "\n\n" };
+        let available = max_bytes.saturating_sub(output.text.len());
+        let required = separator.len() + section.content.len();
+        if required <= available {
+            output.text.push_str(separator);
+            output.text.push_str(&section.content);
+            output.included_sections.push(section.name.clone());
+            continue;
+        }
+        if available > separator.len() {
+            output.text.push_str(separator);
+            let content_cap = available - separator.len();
+            let cut = utf8_prefix(&section.content, content_cap);
+            output.text.push_str(&section.content[..cut]);
+            output.truncation = Some(PromptTruncation {
+                section: section.name.clone(),
+                omitted_bytes: section.content.len().saturating_sub(cut),
+            });
+        } else {
+            output.truncation = Some(PromptTruncation {
+                section: section.name.clone(),
+                omitted_bytes: section.content.len(),
+            });
+        }
+        break;
+    }
+    output
+}
+
+/// Renders generic retrieved documents in ranked order for context composition.
+pub fn render_retrieved_documents(documents: &[crate::retriever::RetrievedDocument]) -> String {
+    documents
+        .iter()
+        .map(|document| format!("[{} score={}]\n{}", document.id, document.score, document.content))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn utf8_prefix(text: &str, max_bytes: usize) -> usize {
+    if text.len() <= max_bytes { return text.len(); }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) { end -= 1; }
+    end
+}
+
 // ---------------------------------------------------------------------------
 // PromptTemplate
 // ---------------------------------------------------------------------------

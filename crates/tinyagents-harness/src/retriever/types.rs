@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::Result;
+use crate::CancellationToken;
 
 /// A retrieval request supplied by context composition.
 #[derive(Clone, Debug, PartialEq)]
@@ -20,6 +21,8 @@ pub struct RetrievalRequest {
     /// Optional caller metadata, preserved for a host adapter but never
     /// interpreted by the generic contract.
     pub metadata: Value,
+    /// Cooperative cancellation signal for expensive retrieval work.
+    pub cancellation: CancellationToken,
 }
 
 impl RetrievalRequest {
@@ -29,12 +32,19 @@ impl RetrievalRequest {
             query: query.into(),
             limit,
             metadata: Value::Null,
+            cancellation: CancellationToken::new(),
         }
     }
 
     /// Attaches opaque host metadata.
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Uses the caller's cancellation tree for retrieval work.
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
         self
     }
 }

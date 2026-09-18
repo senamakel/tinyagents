@@ -232,7 +232,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
         // isolated counters/control slot for this invocation.
         let child_depth =
             RunConfig::checked_child_depth(parent.depth(), self.harness.policy().limits.max_depth)?;
-        let ctx = parent.child(self.child_run_id(child_depth), ctx_data)?;
+        let ctx = parent.child(RunConfig::new(self.child_run_id(child_depth)), ctx_data)?;
         self.run_child(state, ctx, input.into(), parent.streaming)
             .await
     }
@@ -400,7 +400,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         self.transcript.extend(input);
 
         let config = self.child_config()?;
-        let depth = config.depth;
+        let depth = config.depth();
         let ctx = RunContext::new(config, ctx_data).with_events(self.events.clone());
 
         // Clone the sink so we can emit the completion event after `ctx` is
@@ -457,14 +457,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
         })
     }
 
-    /// Wraps `subagent` as a tool invoked at `parent_depth = 0` (child runs at
-    /// depth `1`). The tool name defaults to the sub-agent name.
-    pub fn new(subagent: Arc<SubAgent<State, Ctx>>) -> Self {
+    /// Wraps `subagent` as a typed-parent tool.
+    ///
+    /// `child_data` is required: it makes application-data inheritance explicit
+    /// for every recursive invocation.
+    pub fn new(subagent: Arc<SubAgent<State, Ctx>>, child_data: ChildDataPolicy<Ctx>) -> Self {
         let tool_name = subagent.name().to_owned();
         Self {
             subagent,
             tool_name,
-            parent_depth: 0,
+            child_data,
             parameters: Self::default_parameters(),
         }
     }
@@ -472,14 +474,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
-        self
-    }
-
-    /// Sets the caller depth this tool invokes the child at; the child runs at
-    /// `parent_depth + 1`. Use this to express deeper nesting through the tool
-    /// path (where the live parent depth is not available).
-    pub fn with_parent_depth(mut self, parent_depth: usize) -> Self {
-        self.parent_depth = parent_depth;
         self
     }
 
@@ -537,7 +531,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
                 )));
             }
         };
-        let child = parent.child(self.subagent.child_run_id(child_depth), Ctx::default())?;
+        let child_data = self.child_data.child_data(&parent.data);
+        let child = parent.child(
+            RunConfig::new(self.subagent.child_run_id(child_depth)),
+            child_data,
+        )?;
         let run = match self
             .subagent
             .run_child(state, child, input, parent.streaming)

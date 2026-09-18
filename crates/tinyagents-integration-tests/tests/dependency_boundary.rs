@@ -184,6 +184,15 @@ fn visit_files(root: &Path, extension: &str, found: &mut Vec<PathBuf>) {
     }
 }
 
+fn dependency_manifests(workspace: &Path) -> Vec<PathBuf> {
+    let mut manifests = vec![workspace.join("Cargo.toml")];
+    visit_files(&workspace.join("crates"), "toml", &mut manifests);
+    manifests.retain(|manifest| {
+        manifest.file_name().and_then(|name| name.to_str()) == Some("Cargo.toml")
+    });
+    manifests
+}
+
 fn is_rust_char_literal(bytes: &[u8], start: usize) -> bool {
     let Some(&first) = bytes.get(start + 1) else {
         return false;
@@ -502,12 +511,7 @@ fn host_independent_crates_do_not_depend_on_or_name_openhuman_types() {
         .expect("integration crate is nested under the TinyAgents workspace");
     let crates = workspace.join("crates");
 
-    let mut manifests = Vec::new();
-    visit_files(&crates, "toml", &mut manifests);
-    for manifest in manifests {
-        if manifest.file_name().and_then(|name| name.to_str()) != Some("Cargo.toml") {
-            continue;
-        }
+    for manifest in dependency_manifests(workspace) {
         let source = fs::read_to_string(&manifest).expect("manifest is readable");
         assert!(
             !manifest_declares_openhuman(&source),
@@ -542,6 +546,20 @@ fn host_independent_crates_do_not_depend_on_or_name_openhuman_types() {
     {
         panic!("{diff}");
     }
+}
+
+#[test]
+fn workspace_root_manifest_is_inside_the_dependency_guard() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("integration crate is nested under the TinyAgents workspace");
+    let manifests = dependency_manifests(workspace);
+
+    assert!(manifests.contains(&workspace.join("Cargo.toml")));
+    assert!(manifest_declares_openhuman(
+        "[workspace.dependencies]\nhost = { package = \"openhuman-core\", version = \"1\" }",
+    ));
 }
 
 #[test]

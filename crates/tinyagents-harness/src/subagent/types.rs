@@ -26,6 +26,30 @@ use tinyinference_llm::message::Message;
 /// whole string is used instead.
 pub const SUBAGENT_INPUT_FIELD: &str = "input";
 
+/// Typed policy that constructs a child's user data from its parent data.
+///
+/// Recursive capabilities are inherited by [`RunContext::child`]; this policy
+/// makes the separate application-data decision explicit instead of silently
+/// substituting `Default` or reaching for task-local state.
+#[derive(Clone)]
+pub struct ChildDataPolicy<Ctx> {
+    pub(crate) transform: Arc<dyn Fn(&Ctx) -> Ctx + Send + Sync>,
+}
+
+impl<Ctx> ChildDataPolicy<Ctx> {
+    /// Creates a policy from a pure parent-to-child transformation.
+    pub fn new(transform: impl Fn(&Ctx) -> Ctx + Send + Sync + 'static) -> Self {
+        Self {
+            transform: Arc::new(transform),
+        }
+    }
+
+    /// Produces one child's data value from its parent.
+    pub fn child_data(&self, parent: &Ctx) -> Ctx {
+        (self.transform)(parent)
+    }
+}
+
 /// A reusable, named child agent built on top of an [`AgentHarness`].
 ///
 /// A `SubAgent` bundles:
@@ -121,9 +145,8 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) subagent: Arc<SubAgent<State, Ctx>>,
     /// Tool name exposed to the model (defaults to the sub-agent name).
     pub(crate) tool_name: String,
-    /// The caller depth this tool invokes the child at; the child runs at
-    /// `parent_depth + 1`.
-    pub(crate) parent_depth: usize,
+    /// Explicit parent-to-child application-data policy.
+    pub(crate) child_data: ChildDataPolicy<Ctx>,
     /// JSON Schema describing the tool's model-visible arguments.
     pub(crate) parameters: Value,
 }

@@ -13,6 +13,9 @@ struct RecordingRetriever {
 #[async_trait]
 impl Retriever for RecordingRetriever {
     async fn retrieve(&self, request: RetrievalRequest) -> crate::Result<Vec<RetrievedDocument>> {
+        if request.cancellation.is_cancelled() {
+            return Err(crate::TinyAgentsError::Cancelled);
+        }
         self.requests.lock().unwrap().push(request.clone());
         Ok(vec![
             RetrievedDocument::new("first", "first result", 0.9)
@@ -23,6 +26,17 @@ impl Retriever for RecordingRetriever {
         .take(request.limit)
         .collect())
     }
+}
+
+#[tokio::test]
+async fn retrieval_contract_propagates_cancellation() {
+    let retriever = RecordingRetriever::default();
+    let cancellation = crate::CancellationToken::new();
+    cancellation.cancel();
+    let result = retriever
+        .retrieve(RetrievalRequest::new("query", 2).with_cancellation(cancellation))
+        .await;
+    assert!(matches!(result, Err(crate::TinyAgentsError::Cancelled)));
 }
 
 #[tokio::test]
