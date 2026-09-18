@@ -28,9 +28,6 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
 - **`tinyagents-harness`** — provider-neutral model calls, typed tools,
   middleware, structured output, streaming, usage/cost accounting, retries,
   caching, and memory. Features: `sqlite`, `tools`, `multimodal`, `tracing`.
-- **`tinyagents-tool-call`** — agent-facing tool protocols: permissive call
-  parsing, P-Format, XML/native dialects, catalogue and result rendering,
-  prompt-guided tool blocks, and transcript replay. Feature: `tracing`.
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
@@ -56,7 +53,6 @@ None of the crates are published to crates.io (`publish = false` in every
 ```toml
 [dependencies]
 tinyagents-harness = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-harness" }
-tinyagents-tool-call = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-tool-call" }
 tinyagents-graph = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-graph" }
 tinyagents-language = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-language" }
 tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-registry" }

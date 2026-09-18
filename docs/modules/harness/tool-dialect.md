@@ -1,6 +1,6 @@
 # Tool Dialects
 
-Canonical API: `tinyagents_tool_call::dialect`.
+Canonical API: `tinytools_agent::dialect` from the vendored TinyTools workspace.
 
 `tinyagents_harness::tool_calling::dialect` remains a compatibility re-export.
 
@@ -29,10 +29,10 @@ Three ship:
 There are two tool-calling surfaces in the protocol crate and they are not
 interchangeable:
 
-- **`tinyagents_tool_call::prompt`** — for hosts driving the harness's
+- **`tinyagents_harness::tool::prompt`** — for hosts driving the harness's
   `agent_loop`. It speaks `harness::message::Message` and the loop owns the
   iteration.
-- **`tinyagents_tool_call::dialect`** — for hosts driving their own loop over
+- **`tinytools_agent::dialect`** — for hosts driving their own loop over
   their own durable transcript. It speaks `TranscriptEntry`, a deliberately thin
   record shape, and makes no assumption about when the model is called.
 
