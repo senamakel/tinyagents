@@ -23,9 +23,9 @@
 
 use crate::error::{Result, TinyAgentsError};
 
-use super::types::{ToolCall, ToolResult};
+use tinytools::ToolResult;
 
-/// What the harness should do when a tool's [`call`][super::Tool::call] returns
+/// What the harness should do when a tool's canonical execution returns
 /// `Err`.
 ///
 /// Declared per tool via [`Tool::error_policy`][super::Tool::error_policy].
@@ -70,7 +70,7 @@ impl ToolErrorPolicy {
     /// through untouched — a tool that already returned
     /// `Ok(ToolResult::error(..))` has made its own choice and the policy does
     /// not second-guess it.
-    pub fn apply(&self, call: &ToolCall, outcome: Result<ToolResult>) -> Result<ToolResult> {
+    pub fn apply(&self, tool_name: &str, outcome: Result<ToolResult>) -> Result<ToolResult> {
         let error = match outcome {
             Ok(result) => return Ok(result),
             Err(error) => error,
@@ -79,7 +79,7 @@ impl ToolErrorPolicy {
         if is_control_flow_error(&error) {
             tinyagents_tracing::debug!(
                 "[tool::error_policy] bubbling control-flow error from `{}`: {error}",
-                call.name
+                tool_name
             );
             return Err(error);
         }
@@ -88,31 +88,23 @@ impl ToolErrorPolicy {
             ToolErrorPolicy::Fail => {
                 tinyagents_tracing::debug!(
                     "[tool::error_policy] failing run on `{}` error: {error}",
-                    call.name
+                    tool_name
                 );
                 Err(error)
             }
             ToolErrorPolicy::ReturnToError => {
                 tinyagents_tracing::debug!(
                     "[tool::error_policy] converting `{}` error to a tool result: {error}",
-                    call.name
+                    tool_name
                 );
-                Ok(ToolResult::error(
-                    call.id.clone(),
-                    call.name.clone(),
-                    error.to_string(),
-                ))
+                Ok(ToolResult::error(error.to_string()))
             }
             ToolErrorPolicy::Message(message) => {
                 tinyagents_tracing::debug!(
                     "[tool::error_policy] masking `{}` error behind a fixed message: {error}",
-                    call.name
+                    tool_name
                 );
-                Ok(ToolResult::error(
-                    call.id.clone(),
-                    call.name.clone(),
-                    message.clone(),
-                ))
+                Ok(ToolResult::error(message.clone()))
             }
         }
     }

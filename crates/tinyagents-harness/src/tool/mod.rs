@@ -1,315 +1,190 @@
-//! Tool layer for the harness.
+//! Harness-side registration and execution support for canonical tools.
 //!
-//! In the recursive architecture the [`Tool`] trait is the universal call
-//! boundary that makes recursion uniform: a tool can be a plain function, but it
-//! can equally be an *entire other agent* —
-//! [`crate::subagent::SubAgentTool`] implements [`Tool`], so "a model
-//! calling a model" is just "a model calling a tool". Everything the agent loop
-//! can invoke flows through this layer and its [`ToolRegistry`].
-//!
-//! See [`types`] for definitions. This module provides constructors and the
-//! [`ToolRegistry`] logic for registering and looking up tools by name.
+//! `tinytools` owns the public tool vocabulary. This module owns only the host
+//! concerns: name lookup, provider-schema projection, timeout settings, error
+//! routing, and the explicit recursive-dispatch handoff.
 
 mod error_policy;
-pub mod injected;
-mod prompt;
 mod schema;
 mod schema_prepare;
 pub mod select;
 mod timeout;
 mod types;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use serde_json::Value;
+
 pub use error_policy::{ToolErrorPolicy, is_control_flow_error};
-// Rendering a tool call for a human is not harness-specific, and two copies of
-// the prefix list is how one of them silently stops stripping a prefix the
-// other does. The definitions live in `tinytools` so a host that never links
-// this crate still renders a tool name the same way.
-pub use injected::{project_injected_arguments, strip_injected_arguments};
-pub use prompt::*;
 pub use schema::*;
 pub use schema_prepare::*;
 pub use select::*;
 pub use timeout::*;
-pub use tinytools::{
-    ContextDetailOptions, context_detail_from_args, context_detail_from_args_with,
-    humanize_tool_name,
-};
-pub use types::*;
+pub use types::ToolExecutionContext;
 
-/// Converts a runtime [`ToolResult`] into a provider-neutral tool message.
-pub fn message_from_result(result: &ToolResult) -> tinyinference_llm::message::Message {
-    tinyinference_llm::message::Message::Tool(tinyinference_llm::message::ToolMessage {
-        tool_call_id: result.call_id.clone(),
-        content: vec![tinyinference_llm::message::ContentBlock::Text(
-            result.content.clone(),
-        )],
-        trusted_verbatim: result.is_trusted_verbatim(),
-        artifact: result.raw.clone(),
-    })
-}
+/// A host-owned dispatch hook for the rare canonical tool that must execute
+/// against the *typed* parent run (currently recursive sub-agents).
+///
+/// Normal registrations use [`ToolRegistry::register`] and dispatch through
+/// `tinytools::Tool::execute_with_context`. A recursive registration must be
+/// explicit: no downcast, global registry, or hidden argument is involved.
+#[async_trait]
+pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
+    /// Canonical declaration exposed to the model and policy layer.
+    fn tool(&self) -> Arc<dyn tinytools::Tool>;
 
-impl ToolTimeout {
-    /// Returns `true` for the default inherited timeout behavior.
-    pub fn is_inherit(&self) -> bool {
-        matches!(self, ToolTimeout::Inherit)
-    }
-}
-
-impl ToolDisplay {
-    /// Returns `true` when no display metadata is set.
-    pub fn is_empty(&self) -> bool {
-        self.label.is_none() && self.detail.is_none()
-    }
-
-    /// Creates display metadata with optional label and detail fields.
-    pub fn new(label: Option<impl Into<String>>, detail: Option<impl Into<String>>) -> Self {
-        Self {
-            label: label.map(Into::into),
-            detail: detail.map(Into::into),
-        }
-    }
-
-    /// Creates display metadata with only a label.
-    pub fn label(label: impl Into<String>) -> Self {
-        Self {
-            label: Some(label.into()),
-            detail: None,
-        }
-    }
-
-    /// Sets the static display detail.
-    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
-}
-
-impl ToolResult {
-    /// Creates a successful textual tool result.
-    pub fn text(
-        call_id: impl Into<String>,
-        name: impl Into<String>,
-        content: impl Into<String>,
-    ) -> Self {
-        Self {
-            call_id: call_id.into(),
-            name: name.into(),
-            content: content.into(),
-            raw: None,
-            error: None,
-            elapsed_ms: 0,
-        }
-    }
-
-    /// Creates an error tool result, preserving the call id for repair.
-    pub fn error(
-        call_id: impl Into<String>,
-        name: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
-        let message = message.into();
-        Self {
-            call_id: call_id.into(),
-            name: name.into(),
-            content: message.clone(),
-            raw: None,
-            error: Some(message),
-            elapsed_ms: 0,
-        }
-    }
-
-    /// Returns `true` when the tool reported an error.
-    pub fn is_error(&self) -> bool {
-        self.error.is_some()
-    }
-}
-
-impl ToolPolicy {
-    /// A classified, side-effect-free read-only policy.
+    /// Supplies authoritative values for `ToolInjectedArgumentSource::Host`.
     ///
-    /// This is the recommended baseline for pure tools (computation, lookups
-    /// against in-memory state) that never touch the filesystem, network, or
-    /// money. Being *classified*, it passes strict policy enforcement.
-    pub fn read_only() -> Self {
-        Self {
-            classified: true,
-            side_effects: ToolSideEffects {
-                read_only: true,
-                ..ToolSideEffects::default()
-            },
-            runtime: ToolRuntime {
-                idempotent: true,
-                cancelable: true,
-                ..ToolRuntime::default()
-            },
-            access: ToolAccess {
-                background_safe: true,
-                ..ToolAccess::default()
-            },
-            display: ToolDisplay::default(),
-        }
+    /// This is deliberately an explicit registration-time dispatch concern;
+    /// model arguments never carry host authority. The default is right for
+    /// tools that only declare call-id injection (or no injected values).
+    fn injected_arguments(
+        &self,
+        _call: &tinytools::ToolCall,
+    ) -> anyhow::Result<tinytools::InjectedToolArguments> {
+        Ok(tinytools::InjectedToolArguments::new())
     }
 
-    /// A classified policy with no side effects declared yet, ready for the
-    /// builder methods below.
-    pub fn classified() -> Self {
-        Self {
-            classified: true,
-            ..Self::default()
-        }
+    /// Executes with the full typed parent run when the dispatch needs it.
+    async fn execute(
+        &self,
+        state: &State,
+        arguments: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &crate::context::RunContext<Ctx>,
+    ) -> anyhow::Result<tinytools::ToolResult>;
+}
+
+struct CanonicalDispatch {
+    tool: Arc<dyn tinytools::Tool>,
+}
+
+#[async_trait]
+impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for CanonicalDispatch {
+    fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        self.tool.clone()
     }
 
-    /// Sets the declared side effects.
-    pub fn with_side_effects(mut self, side_effects: ToolSideEffects) -> Self {
-        self.classified = true;
-        self.side_effects = side_effects;
-        self
-    }
-
-    /// Sets the declared runtime requirements.
-    pub fn with_runtime(mut self, runtime: ToolRuntime) -> Self {
-        self.classified = true;
-        self.runtime = runtime;
-        self
-    }
-
-    /// Sets the declared access requirements.
-    pub fn with_access(mut self, access: ToolAccess) -> Self {
-        self.classified = true;
-        self.access = access;
-        self
-    }
-
-    /// Sets human-facing presentation metadata for timeline/audit use.
-    pub fn with_display(mut self, display: ToolDisplay) -> Self {
-        self.display = display;
-        self
-    }
-
-    /// Marks the tool as requiring explicit human approval before each call.
-    pub fn requiring_approval(mut self) -> Self {
-        self.classified = true;
-        self.access.approval_required = true;
-        self
-    }
-
-    /// Returns `true` when the policy declares any side effect beyond read-only.
-    pub fn has_side_effects(&self) -> bool {
-        let s = &self.side_effects;
-        s.writes_files
-            || s.network
-            || s.installs_dependencies
-            || s.destructive
-            || s.external_service
-            || s.payment
+    async fn execute(
+        &self,
+        _state: &State,
+        arguments: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &crate::context::RunContext<Ctx>,
+    ) -> anyhow::Result<tinytools::ToolResult> {
+        let context = ToolExecutionContext::from_run_context(parent);
+        self.tool
+            .execute_with_context(arguments, options, Some(&context))
+            .await
     }
 }
 
-impl<State: Send + Sync> ToolRegistry<State> {
+/// A name-keyed canonical tool registry.
+pub struct ToolRegistry<State: Send + Sync, Ctx: Send + Sync> {
+    tools: HashMap<String, Arc<dyn ToolDispatch<State, Ctx>>>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
     /// Creates an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            tools: std::collections::HashMap::new(),
+            tools: HashMap::new(),
         }
     }
 
-    /// Registers a tool under its [`Tool::name`], replacing any existing tool
-    /// with the same name.
-    pub fn register(&mut self, tool: Arc<dyn Tool<State>>) -> &mut Self {
-        self.tools.insert(tool.name().to_owned(), tool);
+    /// Registers a canonical tool under its declared name.
+    pub fn register(&mut self, tool: Arc<dyn tinytools::Tool>) -> &mut Self {
+        let name = tool.name().to_owned();
+        self.tools
+            .insert(name, Arc::new(CanonicalDispatch { tool }));
         self
     }
 
-    /// Looks up a tool by name.
-    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool<State>>> {
+    /// Registers an explicit typed-parent dispatcher for a canonical tool.
+    pub fn register_dispatch(&mut self, dispatch: Arc<dyn ToolDispatch<State, Ctx>>) -> &mut Self {
+        let name = dispatch.tool().name().to_owned();
+        self.tools.insert(name, dispatch);
+        self
+    }
+
+    /// Looks up the complete host dispatch entry.
+    pub(crate) fn dispatch(&self, name: &str) -> Option<Arc<dyn ToolDispatch<State, Ctx>>> {
         self.tools.get(name).cloned()
     }
 
-    /// Returns the registered tool names in sorted order.
+    /// Looks up a canonical tool declaration.
+    pub fn get(&self, name: &str) -> Option<Arc<dyn tinytools::Tool>> {
+        self.dispatch(name).map(|dispatch| dispatch.tool())
+    }
+
+    /// Returns registered names in sorted order.
+    #[must_use]
     pub fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.tools.keys().cloned().collect();
+        let mut names: Vec<_> = self.tools.keys().cloned().collect();
         names.sort();
         names
     }
 
-    /// Returns the **model-facing** schemas of all registered tools, sorted by
-    /// name.
-    ///
-    /// Each schema has its tool's
-    /// [`injected_arguments`][Tool::injected_arguments] projected out — removed
-    /// from `properties` and from `required` alike — so a host-supplied
-    /// argument is never advertised to the model and never demanded of it. See
-    /// [`crate::tool::injected`] for the matching execution-time rule.
-    pub fn schemas(&self) -> Vec<ToolSchema> {
-        let mut schemas: Vec<ToolSchema> = self
+    /// Returns provider request schemas projected from canonical declarations.
+    #[must_use]
+    pub fn schemas(&self) -> Vec<tinyinference_llm::tool::ToolSchema> {
+        let mut schemas: Vec<_> = self
             .tools
             .values()
-            .map(|t| project_injected_arguments(t.schema(), t.injected_arguments()))
+            .map(|dispatch| provider_schema(dispatch.tool().as_ref()))
             .collect();
-        schemas.sort_by(|a, b| a.name.cmp(&b.name));
+        schemas.sort_by(|left, right| left.name.cmp(&right.name));
         schemas
     }
 
-    /// Returns the **declared** schemas, including any injected arguments.
-    ///
-    /// This is the introspection view — registry listings, audit logs, docs —
-    /// not the model-facing one. Never put this on the wire; use
-    /// [`Self::schemas`].
-    pub fn declared_schemas(&self) -> Vec<ToolSchema> {
-        let mut schemas: Vec<ToolSchema> = self.tools.values().map(|t| t.schema()).collect();
-        schemas.sort_by(|a, b| a.name.cmp(&b.name));
-        schemas
+    /// Returns canonical specs including host-injected fields for introspection.
+    #[must_use]
+    pub fn declared_specs(&self) -> Vec<tinytools::ToolSpec> {
+        let mut specs: Vec<_> = self
+            .tools
+            .values()
+            .map(|dispatch| dispatch.tool().spec())
+            .collect();
+        specs.sort_by(|left, right| left.name.cmp(&right.name));
+        specs
     }
 
-    /// Returns each registered tool's injected-argument names, keyed by tool
-    /// name. Tools declaring none are omitted.
-    pub fn injected_arguments(&self) -> std::collections::HashMap<String, Vec<String>> {
+    /// Returns declared policies keyed by tool name.
+    #[must_use]
+    pub fn policies(&self) -> HashMap<String, tinytools::ToolPolicy> {
         self.tools
             .iter()
-            .filter_map(|(name, tool)| {
-                let injected = tool.injected_arguments();
-                if injected.is_empty() {
-                    return None;
-                }
-                Some((
-                    name.clone(),
-                    injected.iter().map(|key| (*key).to_string()).collect(),
-                ))
-            })
-            .collect()
-    }
-
-    /// Returns each registered tool's [`ToolErrorPolicy`], keyed by tool name.
-    pub fn error_policies(&self) -> std::collections::HashMap<String, ToolErrorPolicy> {
-        self.tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool.error_policy()))
-            .collect()
-    }
-
-    /// Returns a snapshot of every registered tool's [`ToolPolicy`], keyed by
-    /// tool name. This is the projection policy-enforcement middleware and audit
-    /// logs consume.
-    pub fn policies(&self) -> std::collections::HashMap<String, ToolPolicy> {
-        self.tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool.policy()))
+            .map(|(name, dispatch)| (name.clone(), dispatch.tool().policy()))
             .collect()
     }
 }
 
-impl<State: Send + Sync> Default for ToolRegistry<State> {
+impl<State: Send + Sync, Ctx: Send + Sync> Default for ToolRegistry<State, Ctx> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(test)]
-mod schema_test;
-#[cfg(test)]
-mod test;
+/// Converts a canonical spec into the inference provider's request schema.
+/// Host-injected values are removed before a model sees the schema.
+#[must_use]
+pub(crate) fn provider_schema(tool: &dyn tinytools::Tool) -> tinyinference_llm::tool::ToolSchema {
+    let spec = tool.spec();
+    tinyinference_llm::tool::ToolSchema {
+        name: spec.name,
+        description: spec.description,
+        parameters: tinytools::project_injected_arguments(
+            &spec.parameters,
+            &tool.injected_arguments(),
+        ),
+        format: tinyinference_llm::tool::ToolFormat::Json,
+    }
+}
 
+#[cfg(test)]
+mod canonical_test;
 #[cfg(test)]
 mod timeout_test;

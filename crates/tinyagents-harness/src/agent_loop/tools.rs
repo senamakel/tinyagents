@@ -90,14 +90,17 @@
 
 use super::model_call::ToolCallBase;
 use super::*;
-use crate::tool::{
-    ToolErrorPolicy, ToolExecutionContext, project_injected_arguments, strip_injected_arguments,
-};
+use crate::tool::{ToolDispatch, ToolErrorPolicy, provider_schema};
+use tinyinference_llm::message::ContentBlock;
+use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
 /// How a single requested tool call was resolved during admission.
-enum ResolvedToolCall<State: Send + Sync> {
+enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
     /// A registered tool (possibly after an unknown-tool rewrite).
-    Tool(Arc<dyn Tool<State>>),
+    Tool {
+        dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
+        tool: Arc<dyn tinytools::Tool>,
+    },
     /// Unknown-tool recovery: no tool runs; this tool-error message is
     /// appended to the transcript at the call's original position.
     ErrorMessage(String),
@@ -108,10 +111,11 @@ enum ResolvedToolCall<State: Send + Sync> {
 /// The concurrent path materialises the whole admitted batch before emitting a
 /// single [`AgentEvent::ToolStarted`], so an admission failure part-way through
 /// the batch cannot leave earlier calls announced-but-never-run (TOOL-3).
-enum AdmittedCall<State: Send + Sync> {
+enum AdmittedCall<State: Send + Sync, Ctx: Send + Sync> {
     /// A registered tool to invoke, with its (validated) call.
     Execute {
-        tool: Arc<dyn Tool<State>>,
+        dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
+        tool: Arc<dyn tinytools::Tool>,
         call: ToolCall,
     },
     /// A recovery: no tool runs, but the call is still answered through the
@@ -144,7 +148,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// recoverable tool-error result, while exhausting the run budget aborts.
     fn resolved_tool_timeout(
         &self,
-        tool: &dyn Tool<State>,
+        tool: &dyn tinytools::Tool,
         call: &ToolCall,
     ) -> Option<crate::tool::ResolvedToolTimeout> {
         self.tool_timeouts
@@ -205,7 +209,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
-    ) -> Result<ResolvedToolCall<State>> {
+    ) -> Result<ResolvedToolCall<State, Ctx>> {
         // Safe cancellation checkpoint: stop before invoking the next
         // (side-effecting) tool if cancellation was requested.
         if ctx.cancellation.is_cancelled() {
@@ -272,8 +276,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Ok(ResolvedToolCall::ErrorMessage(detail));
         }
 
-        let tool = match self.tools.get(&call.name) {
-            Some(tool) => tool,
+        let (dispatch, tool) = match self.tools.dispatch(&call.name) {
+            Some(dispatch) => {
+                let tool = dispatch.tool();
+                (dispatch, tool)
+            }
             None => {
                 // The model called an unregistered tool. Apply the run's
                 // `UnknownToolPolicy` instead of unconditionally aborting.
@@ -284,13 +291,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // Rewrite mode: retarget to a fixed compatibility tool if
                 // that tool exists, otherwise fall through to recovery.
                 let rewrite_target = match &self.policy.unknown_tool {
-                    UnknownToolPolicy::Rewrite { tool_name } => {
-                        self.tools.get(tool_name).map(|t| (tool_name.clone(), t))
-                    }
+                    UnknownToolPolicy::Rewrite { tool_name } => self
+                        .tools
+                        .dispatch(tool_name)
+                        .map(|dispatch| (tool_name.clone(), dispatch)),
                     _ => None,
                 };
 
-                if let Some((tool_name, tool)) = rewrite_target {
+                if let Some((tool_name, dispatch)) = rewrite_target {
                     call.name = tool_name.clone();
                     let record = ctx.emit(AgentEvent::UnknownToolCall {
                         call_id,
@@ -299,7 +307,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         recovery: format!("rewrite:{tool_name}"),
                     });
                     status.set_last_event(record.id);
-                    tool
+                    let tool = dispatch.tool();
+                    (dispatch, tool)
                 } else if matches!(self.policy.unknown_tool, UnknownToolPolicy::Fail) {
                     return Err(TinyAgentsError::ToolNotFound(requested));
                 } else {
@@ -333,18 +342,42 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // then validates against the **model-facing** projection of the schema
         // — the same one `ToolRegistry::schemas` advertises — because a key the
         // model never saw must not be `required` of it.
-        let injected = tool.injected_arguments();
-        let forged = strip_injected_arguments(&mut call.arguments, injected);
-        if !forged.is_empty() {
-            tinyagents_tracing::warn!(
-                "[agent_loop::tools] tool `{}` call `{}`: discarded model-supplied value(s) \
-                 for host-injected argument(s): {}",
-                call.name,
-                call.id,
-                forged.join(", ")
-            );
-        }
-        let schema = project_injected_arguments(tool.schema(), injected);
+        let canonical_call = CanonicalToolCall::new(
+            ToolCallId::new(call.id.clone()),
+            call.name.clone(),
+            call.arguments.clone(),
+        );
+        // Canonical preparation is security sensitive: it removes protected
+        // model values, injects authoritative host/call-id values, and only
+        // then returns the value we validate and execute.
+        let injected_values = match dispatch.injected_arguments(&canonical_call) {
+            Ok(values) => values,
+            Err(error) => {
+                return Err(TinyAgentsError::Validation(format!(
+                    "failed to prepare injected arguments for tool `{}`: {error}",
+                    call.name
+                )));
+            }
+        };
+        let prepared_arguments = tinytools::prepare_tool_arguments(
+            &canonical_call,
+            &tool.injected_arguments(),
+            &injected_values,
+        );
+        let prepared_arguments = match prepared_arguments {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                if matches!(self.policy.invalid_args, InvalidArgsPolicy::Fail) {
+                    return Err(TinyAgentsError::Validation(error.to_string()));
+                }
+                return Ok(ResolvedToolCall::ErrorMessage(format!(
+                    "invalid injected arguments for tool `{}`: {error}",
+                    call.name
+                )));
+            }
+        };
+        call.arguments = prepared_arguments;
+        let schema = provider_schema(tool.as_ref());
         let raw_arguments = call.arguments.clone();
         if matches!(
             self.policy.invalid_args,
@@ -381,7 +414,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             status.set_last_event(record.id);
             return Ok(ResolvedToolCall::ErrorMessage(message));
         }
-        Ok(ResolvedToolCall::Tool(tool))
+        Ok(ResolvedToolCall::Tool { dispatch, tool })
     }
 
     /// Marks one call as started: status bookkeeping, the `ToolStarted`
@@ -461,26 +494,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         prepared: PreparedToolCall,
-        mut result: crate::tool::ToolResult,
+        mut result: tinytools::ToolResult,
     ) -> Result<()> {
-        // The harness, not the tool, owns the identity of the call being
-        // answered. A tool that stamps its own `call_id` — a hard-coded string,
-        // an empty one, a reused constant — would otherwise put a
-        // `tool_call_id` in the transcript that matches no `tool_calls[].id` in
-        // the preceding assistant message, and the provider rejects that on the
-        // *next* request, one turn away from the tool that caused it (TOOL-1).
-        // Overwrite rather than fail: the correct id is known here, and a
-        // third-party bug should not end a run.
-        if result.call_id != prepared.call_id.as_str() {
-            tinyagents_tracing::warn!(
-                "[agent_loop::tools] tool `{}` returned call_id `{}` for call `{}`; \
-                 overwriting with the admitted id so the transcript stays consistent",
-                prepared.tool_name,
-                result.call_id,
-                prepared.call_id.as_str()
-            );
-            result.call_id = prepared.call_id.as_str().to_string();
-        }
+        // Canonical ToolResult is intentionally correlation-free. The harness
+        // owns `PreparedToolCall` and uses it below for transcript pairing,
+        // events, and elapsed time; a tool cannot forge any of those fields.
 
         if let Err(err) = self
             .middleware
@@ -505,14 +523,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .policy
             .capture
             .tool_io
-            .then(|| Value::String(result.content.clone()));
+            .then(|| Value::String(result.output()));
         // Outcome fields carried on the event itself (not a side-channel) so
         // journal-backed exporters render duration/size/success without the
         // live run's state. Duration is wall-clock (completion minus start);
-        // `error` mirrors `ToolResult::error` (`None` == success).
+        // `is_error` is a reported tool failure, distinct from execution Err.
         let duration_ms = crate::ids::now_ms().saturating_sub(prepared.started_at_ms);
-        let output_bytes = result.content.len() as u64;
-        let error = result.error.clone();
+        let output = result.output();
+        let output_bytes = output.len() as u64;
+        let error = result.is_error.then_some(output.clone());
         let record = ctx.emit(AgentEvent::ToolCompleted {
             call_id: prepared.call_id,
             tool_name: prepared.tool_name,
@@ -525,10 +544,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         });
         status.set_last_event(record.id);
 
-        // `tool_from_result`, not `tool`: a result that asked to reach the model
-        // byte-for-byte must carry that request into the transcript, or the host
-        // has no way to tell it apart from output it may freely reshape.
-        messages.push(crate::tool::message_from_result(&result));
+        messages.push(Message::Tool(tinyinference_llm::message::ToolMessage {
+            tool_call_id: prepared.call_id.to_string(),
+            content: result
+                .content
+                .into_iter()
+                .map(|block| match block {
+                    tinytools::ToolContent::Text { text } => ContentBlock::Text(text),
+                    tinytools::ToolContent::Json { data } => ContentBlock::Json(data),
+                })
+                .collect(),
+            trusted_verbatim: false,
+            artifact: None,
+        }));
         Ok(())
     }
 
@@ -544,8 +572,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         tool_calls: Vec<ToolCall>,
     ) -> Result<()> {
         for mut call in tool_calls {
-            let tool = match self.admit_tool_call(state, ctx, status, &mut call).await? {
-                ResolvedToolCall::Tool(tool) => tool,
+            let (dispatch, tool) = match self.admit_tool_call(state, ctx, status, &mut call).await?
+            {
+                ResolvedToolCall::Tool { dispatch, tool } => (dispatch, tool),
                 ResolvedToolCall::ErrorMessage(message) => {
                     self.recover_tool_call(state, ctx, run, status, messages, &call, message)
                         .await?;
@@ -565,7 +594,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let error_policy = tool.error_policy();
             let policy_call = call.clone();
             let base = ToolCallBase {
-                tool,
+                dispatch,
                 timeout_settings: self.tool_timeouts.clone(),
             };
             let run_id = ctx.run_id().as_str().to_string();
@@ -635,7 +664,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             call.name
         );
         let prepared = self.start_tool_call(ctx, status, call);
-        let result = crate::tool::ToolResult::error(call.id.clone(), call.name.clone(), message);
+        let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
     }
@@ -660,10 +689,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // an `active_tool_calls` entry for work that is dropped unpolled
         // (TOOL-3). The serial path would have executed those calls; the
         // concurrent path now agrees with it by executing none of them.
-        let mut admitted: Vec<AdmittedCall<State>> = Vec::with_capacity(tool_calls.len());
+        let mut admitted: Vec<AdmittedCall<State, Ctx>> = Vec::with_capacity(tool_calls.len());
         for mut call in tool_calls {
             match self.admit_tool_call(state, ctx, status, &mut call).await? {
-                ResolvedToolCall::Tool(tool) => admitted.push(AdmittedCall::Execute { tool, call }),
+                ResolvedToolCall::Tool { dispatch, tool } => admitted.push(AdmittedCall::Execute {
+                    dispatch,
+                    tool,
+                    call,
+                }),
                 ResolvedToolCall::ErrorMessage(message) => {
                     admitted.push(AdmittedCall::Recovered { call, message })
                 }
@@ -676,8 +709,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut prepared: Vec<PreparedToolCall> = Vec::new();
         let mut futures: Vec<_> = Vec::new();
         for entry in admitted {
-            let (tool, call) = match entry {
-                AdmittedCall::Execute { tool, call } => (tool, call),
+            let (dispatch, tool, call) = match entry {
+                AdmittedCall::Execute {
+                    dispatch,
+                    tool,
+                    call,
+                } => (dispatch, tool, call),
                 AdmittedCall::Recovered { call, message } => {
                     slots.push(ToolSlot::Recovered { call, message });
                     continue;
@@ -696,11 +733,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let timeout_result = timeout_result(&call, tool_timeout);
             let run_budget = self.call_budget(ctx);
             let run_id = ctx.run_id().as_str().to_string();
-            let exec_ctx = ToolExecutionContext::from_run_context(ctx);
             let error_policy = tool.error_policy();
             let policy_call = call.clone();
             futures.push(async move {
-                let fut = tool.call_with_context(state, call, exec_ctx);
+                let fut = dispatch.execute(state, call.arguments, ToolCallOptions::default(), ctx);
                 let fut = Self::with_tool_policy_timeout(tool_timeout, timeout_result, fut);
                 // As in serial mode: the error policy routes the *tool's*
                 // failure, inside the run-budget wrapper that stays fatal.
@@ -786,12 +822,12 @@ fn release_active_tool_call(status: &mut HarnessRunStatus, call_id: &CallId) {
 fn apply_tool_error_policy(
     policy: &ToolErrorPolicy,
     call: &ToolCall,
-    outcome: Result<crate::tool::ToolResult>,
-) -> Result<crate::tool::ToolResult> {
+    outcome: Result<tinytools::ToolResult>,
+) -> Result<tinytools::ToolResult> {
     if let Err(TinyAgentsError::Middleware(_)) = &outcome {
         return outcome;
     }
-    policy.apply(call, outcome)
+    policy.apply(&call.name, outcome)
 }
 
 /// Repairs provider-neutral argument shape defects before schema validation.
@@ -946,15 +982,10 @@ fn strip_markdown_code_fence(raw: &str) -> &str {
 pub(super) fn timeout_result(
     call: &ToolCall,
     timeout: Option<crate::tool::ResolvedToolTimeout>,
-) -> crate::tool::ToolResult {
+) -> tinytools::ToolResult {
     let budget_ms = timeout.map_or(0, |resolved| resolved.budget_ms);
-    let mut result = crate::tool::ToolResult::error(
-        call.id.clone(),
-        call.name.clone(),
-        format!("tool `{}` timed out after {budget_ms} ms", call.name),
-    );
-    result.elapsed_ms = timeout
-        .and_then(|resolved| resolved.deadline)
-        .map_or(0, |deadline| deadline.as_millis() as u64);
-    result
+    tinytools::ToolResult::error(format!(
+        "tool `{}` timed out after {budget_ms} ms",
+        call.name
+    ))
 }

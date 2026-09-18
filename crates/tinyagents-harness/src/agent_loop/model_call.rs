@@ -288,7 +288,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             deltas.push(MessageDelta {
                 text: String::new(),
                 reasoning: String::new(),
-                tool_call: Some(crate::tool::ToolDelta {
+                tool_call: Some(tinyinference_llm::tool::ToolDelta {
                     call_id: call.id.clone(),
                     content: serde_json::to_string(&call.arguments).unwrap_or_default(),
                     tool_name: Some(call.name.clone()),
@@ -854,12 +854,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
 /// Implements [`ToolBaseCall`] over a single resolved [`Tool`] so a
 /// [`crate::middleware::ToolMiddleware`] can wrap the real tool
 /// invocation.
-pub(super) struct ToolCallBase<State: Send + Sync> {
-    pub(super) tool: Arc<dyn Tool<State>>,
+pub(super) struct ToolCallBase<State: Send + Sync, Ctx: Send + Sync> {
+    pub(super) dispatch: Arc<dyn crate::tool::ToolDispatch<State, Ctx>>,
     pub(super) timeout_settings: Option<crate::tool::ToolTimeoutSettings>,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCallBase<State> {
+impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCallBase<State, Ctx> {
     fn call<'a>(
         &'a self,
         ctx: &'a mut RunContext<Ctx>,
@@ -867,15 +867,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
         call: ToolCall,
     ) -> BoxToolFuture<'a> {
         Box::pin(async move {
-            let timeout = self
-                .timeout_settings
-                .as_ref()
-                .map(|settings| settings.resolve(self.tool.timeout_policy(&call)));
+            let timeout = self.timeout_settings.as_ref().map(|settings| {
+                settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
+            });
             let timeout_result = super::tools::timeout_result(&call, timeout);
-            let future = self.tool.call_with_context(
+            let future = self.dispatch.execute(
                 state,
-                call,
-                crate::tool::ToolExecutionContext::from_run_context(ctx),
+                call.arguments,
+                tinytools::ToolCallOptions::default(),
+                ctx,
             );
             match timeout.and_then(|resolved| resolved.deadline) {
                 Some(deadline) => match tokio::time::timeout(deadline, future).await {

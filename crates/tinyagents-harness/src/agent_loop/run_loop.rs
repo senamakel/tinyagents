@@ -361,7 +361,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     name: name.clone(),
                                     description: format!("Return the result as `{name}`."),
                                     parameters: schema.clone(),
-                                    format: crate::tool::ToolFormat::Json,
+                                    format: tinyinference_llm::tool::ToolFormat::Json,
                                 });
                                 // Force the schema tool **only** when it is the
                                 // sole tool available. Forcing it inside a

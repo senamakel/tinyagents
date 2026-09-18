@@ -106,7 +106,7 @@ use crate::middleware::{AgentRun, BoxModelFuture, BoxToolFuture, ModelBaseCall, 
 use crate::model_registry::{ResolvedModelBinding, model_eligible};
 use crate::runtime::{AgentHarness, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
-use crate::tool::{Tool, ToolCall, ToolSchema};
+use crate::tool::ToolDispatch;
 use futures::StreamExt;
 use serde_json::Value;
 use tinyinference_llm::message::{Message, MessageDelta};
@@ -114,6 +114,7 @@ use tinyinference_llm::model::{
     ChatModel, ModelDelta, ModelRequest, ModelResolutionSource, ModelResponse, ModelStreamItem,
     ResolvedModel, ResponseFormat, StreamAccumulator, ToolChoice,
 };
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 mod entry;
 mod model_call;

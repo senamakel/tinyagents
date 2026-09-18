@@ -53,7 +53,7 @@
 use serde_json::{Map, Value, json};
 
 use super::schema::{CleaningStrategy, SchemaCleanr};
-use super::types::ToolSchema;
+use tinyinference_llm::tool::ToolSchema;
 
 /// How a [`ToolSchema`] should be projected for a specific provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
