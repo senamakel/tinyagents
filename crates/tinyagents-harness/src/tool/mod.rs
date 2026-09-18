@@ -4,6 +4,7 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+mod prompt;
 mod schema;
 mod schema_prepare;
 pub mod select;
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use prompt::*;
 pub use schema::*;
 pub use schema_prepare::*;
 pub use select::*;

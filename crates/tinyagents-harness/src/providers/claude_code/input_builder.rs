@@ -4,12 +4,13 @@
 //! like:
 //!   { "type":"user", "message":{"role":"user","content":[{"type":"text","text":"..."}]} }
 //!
-//! v1 piping policy:
+//! Piping policy:
 //! - On a *new* CC session: send every history `ChatMessage` so claude
 //!   has full context (system message is conveyed via
 //!   `--append-system-prompt`, not stdin).
 //! - On a `--resume` of an existing CC session: claude already has prior
-//!   turns server-side; we only send the last user turn.
+//!   turns server-side; send all user turns that are still pending after the
+//!   last answered assistant turn as one user message.
 
 use super::bridge::ChatMessage;
 use base64::Engine as _;
@@ -25,7 +26,7 @@ pub fn build_stdin(messages: &[ChatMessage], is_new_session: bool) -> Vec<u8> {
     // carry no image placeholder, so plain-text turns are unaffected.
     // `--input-format stream-json` accepts ONLY user-role turns — replaying an
     // assistant turn fails with `Expected message role 'user', got 'assistant'`.
-    // So we always emit exactly one user message: the trailing user turn. On a
+    // So we always emit exactly one user message. On a
     // *new* session (including a recreated one — see the session_store recovery
     // path) any prior turns are folded into a text preamble so the session keeps
     // its context instead of erroring; on resume the CLI already holds them.
@@ -35,6 +36,7 @@ pub fn build_stdin(messages: &[ChatMessage], is_new_session: bool) -> Vec<u8> {
     // context on a new session; never resubmit an earlier answered prompt.
     let last_user_pos = non_system.iter().rposition(|m| m.role == "user");
     let active_user_pos = last_user_pos.filter(|&pos| pos == non_system.len() - 1);
+    let active_user_content = active_user_pos.and_then(|_| pending_user_content(&non_system));
 
     let mut content: Vec<Value> = Vec::new();
     if is_new_session {
@@ -50,7 +52,7 @@ pub fn build_stdin(messages: &[ChatMessage], is_new_session: bool) -> Vec<u8> {
             }
         }
     }
-    let Some(last_user_pos) = active_user_pos else {
+    let Some(active_user_content) = active_user_content else {
         return if is_new_session && !content.is_empty() {
             let line = json!({
                 "type": "user",
@@ -68,7 +70,7 @@ pub fn build_stdin(messages: &[ChatMessage], is_new_session: bool) -> Vec<u8> {
     // message bridge re-emits them from its typed image blocks — see
     // `message_convert::message_to_native_chat_message`). `content_blocks` splits
     // each marker into a real Anthropic `image` block below.
-    content.extend(content_blocks(&non_system[last_user_pos].content));
+    content.extend(content_blocks(&active_user_content));
     if content.is_empty() {
         return Vec::new();
     }
@@ -80,6 +82,23 @@ pub fn build_stdin(messages: &[ChatMessage], is_new_session: bool) -> Vec<u8> {
     let mut out = String::new();
     push_json_line(&mut out, &line);
     out.into_bytes()
+}
+
+/// Join user turns that arrived after the most recent assistant response. A
+/// single Claude input message is required, but queued steering/user messages
+/// must retain their order instead of silently dropping every turn except the
+/// last one.
+fn pending_user_content(non_system: &[&ChatMessage]) -> Option<String> {
+    let after_assistant = non_system
+        .iter()
+        .rposition(|message| message.role == "assistant")
+        .map_or(0, |position| position + 1);
+    let pending: Vec<&str> = non_system[after_assistant..]
+        .iter()
+        .filter(|message| message.role == "user" && !message.content.is_empty())
+        .map(|message| message.content.as_str())
+        .collect();
+    (!pending.is_empty()).then(|| pending.join("\n\n"))
 }
 
 /// Render the turns before `end` (the latest user turn) as a plain-text preamble

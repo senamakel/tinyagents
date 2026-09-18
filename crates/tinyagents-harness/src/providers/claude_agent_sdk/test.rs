@@ -1,4 +1,5 @@
 use super::*;
+use tinyinference_llm::tool::ToolCall;
 
 #[test]
 fn provider_constructs_with_default_config() {
@@ -204,6 +205,14 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
     let stdin =
         std::fs::read_to_string(format!("{}.stdin", script.display())).expect("captured stdin");
     assert!(stdin.contains("Base system"));
+    assert!(
+        stdin.contains("[USER]\noriginal question\n[/USER]"),
+        "unexpected CLI stdin: {stdin:?}"
+    );
+    assert!(
+        stdin.contains("[ASSISTANT]\ncalling\n<tool_call>"),
+        "the assistant transcript must retain its text before the prior tool call: {stdin:?}"
+    );
     assert!(stdin.contains("## Tool Use Protocol"));
     let prior_call = stdin
         .lines()
@@ -221,7 +230,7 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
         stdin.contains("[Tool results]\n<tool_result>\nfirst result\n</tool_result>"),
         "unexpected CLI stdin: {stdin:?}"
     );
-    assert!(stdin.ends_with("<tool_result>\nsecond result\n</tool_result>"));
+    assert!(stdin.contains("<tool_result>\nsecond result\n</tool_result>"));
     let args =
         std::fs::read_to_string(format!("{}.args", script.display())).expect("captured args");
     assert!(args.contains("request-model"));

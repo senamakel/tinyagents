@@ -2,14 +2,11 @@
 
 mod protocol;
 
+use crate::tool::{coalesce_prompt_tool_results, with_prompt_tool_instructions};
 use anyhow::Context;
 use async_trait::async_trait;
-use std::fmt::Write;
-use tinyinference_llm::message::{ContentBlock, Message};
+use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
-use tinyinference_llm::tool::ToolCall;
-use tinytools::ToolSpec;
-use tinytools_agent::dialect::{ToolDialect, XmlDialect};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -78,6 +75,37 @@ fn build_invocation(
         args.push(format!("{budget:.4}"));
     }
     ClaudeInvocation { args, stdin }
+}
+
+/// Render the complete non-system transcript for the stateless CLI process.
+///
+/// Every `claude -p` invocation starts a fresh process, so passing only the
+/// final user turn loses the question and any assistant/tool turns that led to
+/// it. Keep the common one-user request compact, but label every turn when a
+/// transcript is present so the model can distinguish its own prior output
+/// from the next user turn.
+fn render_transcript(messages: &[Message]) -> String {
+    let non_system: Vec<&Message> = messages
+        .iter()
+        .filter(|message| !matches!(message, Message::System(_)))
+        .collect();
+    if non_system.len() == 1 {
+        return non_system[0].text();
+    }
+
+    non_system
+        .into_iter()
+        .map(|message| {
+            let role = match message {
+                Message::User(_) => "USER",
+                Message::Assistant(_) => "ASSISTANT",
+                Message::Tool(_) => "TOOL",
+                Message::System(_) => unreachable!("system messages were filtered"),
+            };
+            format!("[{role}]\n{}\n[/{role}]", message.text())
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn spawn_error(binary: &str, source: std::io::Error) -> anyhow::Error {
@@ -253,6 +281,14 @@ impl ClaudeAgentSdkProvider {
         let stderr_output = stderr_task.await.unwrap_or_default();
         tinyagents_tracing::debug!("[claude_agent_sdk] subprocess exited status={}", status);
 
+        if !status.success() {
+            anyhow::bail!(
+                "[claude_agent_sdk] claude subprocess exited with non-zero status {}; stderr={}",
+                status,
+                stderr_output
+            );
+        }
+
         if let Some(err) = error_message {
             anyhow::bail!("[claude_agent_sdk] error from claude CLI: {err}");
         }
@@ -261,14 +297,6 @@ impl ClaudeAgentSdkProvider {
         let output = result_text
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| text_parts.join(""));
-
-        if !status.success() && output.is_empty() {
-            anyhow::bail!(
-                "[claude_agent_sdk] claude subprocess exited with non-zero status {} and no output; stderr={}",
-                status,
-                stderr_output
-            );
-        }
 
         tinyagents_tracing::debug!(
             "[claude_agent_sdk] response collected output_len={}",
@@ -303,125 +331,27 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        let messages = prepare_prompt_messages(&request.messages, &request.tools);
+        let messages = coalesce_prompt_tool_results(&request.messages);
+        let messages = with_prompt_tool_instructions(&messages, &request.tools);
         let system = coalesce_system_prompt(&messages);
-        let prompt = messages
-            .iter()
-            .filter(|message| !matches!(message, Message::System(_)))
-            .map(Message::text)
-            .filter(|text| !text.trim().is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let transcript = render_transcript(&messages);
         let model = request
             .model
             .as_deref()
             .or(self.profile.model.as_deref())
             .unwrap_or(&self.config.default_model);
         let output = self
-            .invoke_cli(system.as_deref(), &prompt, model)
+            .invoke_cli(system.as_deref(), &transcript, model)
             .await
             .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
 
-        let mut response = ModelResponse::assistant(output);
-        if !request.tools.is_empty() {
-            let (text, calls) = XmlDialect::parse_text(&response.text());
-            response.message.content = vec![ContentBlock::Text(text)];
-            response.message.tool_calls = calls
-                .into_iter()
-                .enumerate()
-                .map(|(index, call)| ToolCall {
-                    id: call.id.unwrap_or_else(|| format!("claude-sdk-{index}")),
-                    name: call.name,
-                    arguments: call.arguments,
-                    invalid: None,
-                })
-                .collect();
-        }
-        Ok(response)
-    }
-}
-
-fn prepare_prompt_messages(
-    messages: &[Message],
-    tools: &[tinyinference_llm::tool::ToolSchema],
-) -> Vec<Message> {
-    let dialect = XmlDialect;
-    let specs = tools
-        .iter()
-        .map(|tool| ToolSpec {
-            name: tool.name.clone(),
-            description: tool.description.clone(),
-            parameters: tool.parameters.clone(),
+        let response = ModelResponse::assistant(output);
+        Ok(if request.tools.is_empty() {
+            response
+        } else {
+            crate::tool::apply_prompt_tool_calls(response)
         })
-        .collect::<Vec<_>>();
-    let instructions = dialect.prompt_instructions(&specs);
-    let mut prepared = coalesce_prompt_tool_results(messages);
-    if specs.is_empty() {
-        return prepared;
     }
-    if let Some(Message::System(system)) = prepared
-        .iter_mut()
-        .find(|message| matches!(message, Message::System(_)))
-    {
-        system
-            .content
-            .push(ContentBlock::Text(format!("\n\n{instructions}")));
-    } else {
-        prepared.insert(0, Message::system(instructions));
-    }
-    prepared
-}
-
-/// Convert structured transcript tool turns into the XML-dialect protocol the
-/// Claude CLI consumes. The CLI only accepts a system prompt and one user
-/// prompt, so leaving native assistant calls and `tool` roles in the history
-/// would silently omit the agent's prior work from stdin.
-fn coalesce_prompt_tool_results(messages: &[Message]) -> Vec<Message> {
-    const TOOL_RESULTS_MARKER: &str = "[Tool results]";
-    let mut prepared = Vec::with_capacity(messages.len());
-    let mut pending_results = Vec::new();
-
-    fn flush_results(prepared: &mut Vec<Message>, pending_results: &mut Vec<String>) {
-        if !pending_results.is_empty() {
-            prepared.push(Message::user(format!(
-                "{TOOL_RESULTS_MARKER}\n{}",
-                std::mem::take(pending_results).join("\n")
-            )));
-        }
-    }
-
-    for message in messages {
-        match message {
-            Message::Tool(_) => {
-                pending_results.push(format!("<tool_result>\n{}\n</tool_result>", message.text()));
-            }
-            Message::Assistant(assistant) if !assistant.tool_calls.is_empty() => {
-                flush_results(&mut prepared, &mut pending_results);
-                let mut assistant = assistant.clone();
-                let mut rendered = String::new();
-                if !assistant.content.is_empty() && !message.text().trim().is_empty() {
-                    rendered.push('\n');
-                }
-                for call in &assistant.tool_calls {
-                    let body = serde_json::json!({
-                        "name": &call.name,
-                        "arguments": &call.arguments,
-                    });
-                    let body = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
-                    let _ = writeln!(rendered, "<tool_call>{body}</tool_call>");
-                }
-                assistant.content.push(ContentBlock::Text(rendered));
-                assistant.tool_calls.clear();
-                prepared.push(Message::Assistant(assistant));
-            }
-            _ => {
-                flush_results(&mut prepared, &mut pending_results);
-                prepared.push(message.clone());
-            }
-        }
-    }
-    flush_results(&mut prepared, &mut pending_results);
-    prepared
 }
 
 /// Join every system message into the one system prompt the CLI accepts.

@@ -12,14 +12,19 @@ mod stream_parser;
 pub mod types;
 pub mod version_check;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use crate::tool::{
+    apply_prompt_tool_calls, coalesce_prompt_tool_results, with_prompt_tool_instructions,
+};
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
+    ResponseFormat,
 };
 use tinyinference_llm::usage::Usage;
 use tokio::sync::Semaphore;
@@ -71,6 +76,7 @@ pub struct ClaudeCodeProvider {
     project_dir: PathBuf,
     anthropic_api_key: Option<String>,
     semaphore: Arc<Semaphore>,
+    thread_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     session_store: Arc<session_store::SessionStore>,
     profile: ModelProfile,
     mcp_provider: Option<Arc<dyn driver::McpEndpointProvider>>,
@@ -102,10 +108,14 @@ impl ClaudeCodeProvider {
             profile: ModelProfile {
                 provider: Some("claude-code".into()),
                 model: Some(model.clone()),
-                tool_calling: true,
-                parallel_tool_calls: true,
+                // Claude Code executes its own native tools internally and
+                // intentionally never returns them to the harness. Advertise
+                // prompt-guided tool handling so the harness does not wait for
+                // tool calls that this adapter cannot surface.
+                tool_calling: false,
+                parallel_tool_calls: false,
                 streaming: true,
-                streaming_tool_chunks: true,
+                streaming_tool_chunks: false,
                 ..Default::default()
             },
             model,
@@ -115,6 +125,7 @@ impl ClaudeCodeProvider {
             workspace_dir,
             anthropic_api_key,
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_TURNS)),
+            thread_locks: Arc::new(Mutex::new(HashMap::new())),
             mcp_provider: None,
         }
     }
@@ -164,6 +175,7 @@ impl ClaudeCodeProvider {
         messages: &[ChatMessage],
         stream: Option<&tokio::sync::mpsc::Sender<ProviderDelta>>,
         model_override: Option<&str>,
+        thread_id: String,
     ) -> anyhow::Result<ChatResponse> {
         let _permit = self
             .semaphore
@@ -171,15 +183,24 @@ impl ClaudeCodeProvider {
             .acquire_owned()
             .await
             .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
-        let append_system_prompt = messages
-            .iter()
-            .find(|message| message.role == "system")
-            .map(|message| message.content.clone());
-        driver::run_turn(driver::TurnContext {
+        let lock_key = thread_id.clone();
+        let thread_lock = {
+            let mut locks = self
+                .thread_locks
+                .lock()
+                .expect("claude-code thread lock map poisoned");
+            locks
+                .entry(thread_id.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _thread_guard = thread_lock.lock().await;
+        let append_system_prompt = coalesce_system_prompt(messages);
+        let result = driver::run_turn(driver::TurnContext {
             bin_path: self.bin_path.clone(),
             workspace_dir: self.workspace_dir.clone(),
             project_dir: self.project_dir.clone(),
-            thread_id: thread_key_from_messages(messages),
+            thread_id,
             model: model_override.unwrap_or(&self.model).to_string(),
             append_system_prompt,
             messages,
@@ -188,13 +209,80 @@ impl ClaudeCodeProvider {
             anthropic_api_key: self.anthropic_api_key.clone(),
             mcp_provider: self.mcp_provider.clone(),
         })
-        .await
+        .await;
+        drop(_thread_guard);
+
+        // Remove idle entries without disrupting a waiter that already holds
+        // a clone of the same lock. A new caller racing after removal creates
+        // a fresh lock only after this turn has released the old one.
+        if Arc::strong_count(&thread_lock) == 2 {
+            let mut locks = self
+                .thread_locks
+                .lock()
+                .expect("claude-code thread lock map poisoned");
+            if locks
+                .get(&lock_key)
+                .is_some_and(|lock| Arc::ptr_eq(lock, &thread_lock))
+                && Arc::strong_count(locks.get(&lock_key).expect("lock checked above")) == 2
+            {
+                locks.remove(&lock_key);
+            }
+        }
+        result
     }
 }
 
+/// Claude Code accepts one appended system prompt, so preserve every system
+/// message in order instead of silently dropping middleware additions after the
+/// first one.
+fn coalesce_system_prompt(messages: &[ChatMessage]) -> Option<String> {
+    let parts: Vec<&str> = messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| message.content.as_str())
+        .filter(|content| !content.trim().is_empty())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Resolve the caller's logical conversation id. A content hash is not a
+/// conversation id: two independent threads can begin with the same text.
+/// Callers should provide `metadata.thread_id` (or the equivalent
+/// `conversation_id`/`session_id`); `continuation_id` is also accepted for
+/// integrations that already carry a provider-neutral continuation handle.
+/// Requests without an id get an isolated session rather than risking a
+/// cross-conversation resume.
+fn thread_key_from_request(request: &ModelRequest) -> String {
+    const METADATA_KEYS: &[&str] = &["thread_id", "conversation_id", "session_id"];
+    for key in METADATA_KEYS {
+        if let Some(value) = request
+            .metadata
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            && !value.trim().is_empty()
+        {
+            return value.to_string();
+        }
+    }
+    if let Some(value) = request
+        .continuation_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return value.to_string();
+    }
+    format!("ephemeral_{}", uuid::Uuid::new_v4())
+}
+
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
-    request
-        .messages
+    let mut messages = coalesce_prompt_tool_results(&request.messages);
+    if !request.tools.is_empty() {
+        messages = with_prompt_tool_instructions(&messages, &request.tools);
+    }
+    if let Some(instruction) = response_format_instruction(request.response_format.as_ref()) {
+        messages.push(Message::system(instruction));
+    }
+    messages
         .iter()
         .map(|message| {
             let role = match message {
@@ -212,6 +300,24 @@ fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
             ChatMessage::new(role, content)
         })
         .collect()
+}
+
+/// Claude Code does not expose a provider-native JSON-schema switch. Carry the
+/// requested schema in the system prompt so the provider-schema strategy still
+/// has a concrete wire-level instruction and the normal extractor can validate
+/// the returned JSON.
+fn response_format_instruction(format: Option<&ResponseFormat>) -> Option<String> {
+    let schema = match format? {
+        ResponseFormat::JsonSchema { name, schema } | ResponseFormat::Auto { name, schema } => {
+            Some((name, schema))
+        }
+        ResponseFormat::Text | ResponseFormat::JsonObject => None,
+    }?;
+    Some(format!(
+        "Return only valid JSON for the `{}` response. Do not include markdown fences or prose.\nJSON Schema:\n{}",
+        schema.0,
+        serde_json::to_string_pretty(schema.1).unwrap_or_else(|_| schema.1.to_string())
+    ))
 }
 
 fn render_content(content: &[ContentBlock]) -> String {
@@ -262,6 +368,15 @@ fn model_response(response: ChatResponse) -> ModelResponse {
     }
 }
 
+fn model_response_with_tools(response: ChatResponse, has_tools: bool) -> ModelResponse {
+    let response = model_response(response);
+    if has_tools {
+        apply_prompt_tool_calls(response)
+    } else {
+        response
+    }
+}
+
 fn map_error(error: anyhow::Error) -> tinyinference_llm::Error {
     let message = format!("claude-code model call failed: {error}");
     if !matches!(
@@ -282,9 +397,10 @@ impl ChatModel<()> for ClaudeCodeProvider {
     }
     fn cache_identity(&self) -> Option<String> {
         Some(format!(
-            "claude_code:{}:{}",
+            "claude_code:{}:{}:{}",
             self.bin_path.display(),
-            self.model
+            self.model,
+            self.project_dir.display()
         ))
     }
     async fn invoke(
@@ -292,10 +408,12 @@ impl ChatModel<()> for ClaudeCodeProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
+        let thread_id = thread_key_from_request(&request);
+        let has_tools = !request.tools.is_empty();
         let messages = request_messages(&request);
-        self.run_chat(&messages, None, None)
+        self.run_chat(&messages, None, request.model.as_deref(), thread_id)
             .await
-            .map(model_response)
+            .map(|response| model_response_with_tools(response, has_tools))
             .map_err(map_error)
     }
     async fn stream(
@@ -304,12 +422,20 @@ impl ChatModel<()> for ClaudeCodeProvider {
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
         let provider = self.clone();
+        let thread_id = thread_key_from_request(&request);
+        let model_override = request.model.clone();
+        let has_tools = !request.tools.is_empty();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = AbortOnDrop(tokio::spawn(async move {
             let _ = tx.send(ModelStreamItem::Started);
             let messages = request_messages(&request);
             let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(64);
-            let call = provider.run_chat(&messages, Some(&delta_tx), None);
+            let call = provider.run_chat(
+                &messages,
+                Some(&delta_tx),
+                model_override.as_deref(),
+                thread_id,
+            );
             tokio::pin!(call);
             let response = loop {
                 tokio::select! { delta = delta_rx.recv() => if let Some(delta) = delta { forward_delta(&tx, delta); }, response = &mut call => break response }
@@ -318,7 +444,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
                 forward_delta(&tx, delta);
             }
             let terminal = response
-                .map(model_response)
+                .map(|response| model_response_with_tools(response, has_tools))
                 .map(ModelStreamItem::Completed)
                 .unwrap_or_else(|error| ModelStreamItem::Failed(map_error(error).to_string()));
             let _ = tx.send(terminal);
@@ -340,20 +466,6 @@ fn forward_delta(
         ProviderDelta::ThinkingDelta { delta } => MessageDelta::reasoning(delta),
     };
     let _ = sender.send(ModelStreamItem::MessageDelta(item));
-}
-
-fn thread_key_from_messages(messages: &[ChatMessage]) -> String {
-    use sha2::{Digest, Sha256};
-    let first = messages
-        .iter()
-        .find(|message| message.role == "user")
-        .map(|message| message.content.as_str())
-        .unwrap_or("");
-    let digest = Sha256::digest(first.as_bytes());
-    format!(
-        "hash_{:032x}",
-        u128::from_be_bytes(digest[..16].try_into().expect("SHA-256 prefix"))
-    )
 }
 
 #[cfg(test)]

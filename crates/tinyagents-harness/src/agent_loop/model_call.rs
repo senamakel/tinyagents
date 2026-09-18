@@ -80,17 +80,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let identity = binding.model.cache_identity();
         let primary_name = binding.resolved.name.clone();
 
-        let decision = self.response_cache_decision(request).map(|(cache, base)| {
-            let key = scoped_cache_key(
-                &base,
-                identity.as_deref(),
-                streaming,
-                policy.namespace.as_deref(),
-            );
-            (cache, key)
-        });
+        // Claude Code executes file and shell tools inside the provider turn.
+        // Replaying a cached first turn would skip those side effects entirely,
+        // so this provider is never response-cacheable. Other providers retain
+        // the normal request-policy behavior.
+        let side_effecting_provider = binding
+            .model
+            .profile()
+            .and_then(|profile| profile.provider.as_deref())
+            == Some("claude-code");
+        let decision = (!side_effecting_provider)
+            .then(|| self.response_cache_decision(request))
+            .flatten()
+            .map(|(cache, base)| {
+                let key = scoped_cache_key(
+                    &base,
+                    identity.as_deref(),
+                    streaming,
+                    policy.namespace.as_deref(),
+                );
+                (cache, key)
+            });
 
-        if decision.is_none() {
+        if side_effecting_provider {
+            tinyagents_tracing::debug!(
+                call_id = %call_id.as_str(),
+                provider = "claude-code",
+                "[cache] response cache disabled for side-effecting provider"
+            );
+        } else if decision.is_none() {
             let reason = self.cache_skip_reason(request);
             tinyagents_tracing::debug!(
                 call_id = %call_id.as_str(),
