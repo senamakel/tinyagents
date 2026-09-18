@@ -77,3 +77,46 @@ fn cache_identity_includes_project_scope() {
     );
     assert_ne!(first.cache_identity(), second.cache_identity());
 }
+
+#[test]
+fn prompt_guided_tool_response_is_exposed_to_the_harness() {
+    let response = model_response_with_tools(
+        ChatResponse {
+            text: Some(
+                "before <tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>"
+                    .into(),
+            ),
+            usage: None,
+        },
+        true,
+    );
+    assert_eq!(response.text(), "before");
+    assert_eq!(response.message.tool_calls.len(), 1);
+    assert_eq!(response.message.tool_calls[0].name, "lookup");
+}
+
+#[test]
+fn request_messages_include_tool_and_schema_instructions() {
+    let request = ModelRequest {
+        messages: vec![Message::user("lookup")],
+        tools: vec![tinyinference_llm::tool::ToolSchema::new(
+            "lookup",
+            "look up a value",
+            serde_json::json!({"type":"object"}),
+        )],
+        response_format: Some(ResponseFormat::JsonSchema {
+            name: "answer".into(),
+            schema: serde_json::json!({"type":"object"}),
+        }),
+        ..Default::default()
+    };
+    let messages = request_messages(&request);
+    let system = messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| message.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(system.contains("Tool Use Protocol"));
+    assert!(system.contains("JSON Schema"));
+}
