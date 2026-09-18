@@ -364,14 +364,14 @@ impl<Ctx> RunContext<Ctx> {
     /// provider (emitting the workspace lifecycle events), use
     /// [`crate::workspace::prepare_workspace`] to obtain the descriptor
     /// first.
-    pub fn with_workspace(mut self, workspace: crate::workspace::WorkspaceDescriptor) -> Self {
+    pub fn with_workspace(mut self, workspace: tinytools::WorkspaceDescriptor) -> Self {
         self.workspace = Some(workspace);
         self
     }
 
     fn with_optional_workspace(
         mut self,
-        workspace: Option<crate::workspace::WorkspaceDescriptor>,
+        workspace: Option<tinytools::WorkspaceDescriptor>,
     ) -> Self {
         self.workspace = workspace;
         self

@@ -78,4 +78,4 @@ pub use steering::{
 };
 pub use subagent::{SubAgent, SubAgentSession, SubAgentTool};
 pub use tool::ToolRegistry;
-pub use workspace::{SharedRootWorkspace, WorkspaceDescriptor, WorkspaceIsolation};
+pub use workspace::{SharedRootWorkspace, WorkspaceIsolation};

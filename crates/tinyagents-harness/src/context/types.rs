@@ -235,7 +235,7 @@ pub struct RunContext<Ctx = ()> {
     /// [`RunContext::with_workspace`] or by preparing a
     /// [`WorkspaceIsolation`][crate::workspace::WorkspaceIsolation]
     /// provider; `None` means no workspace policy is in effect.
-    pub workspace: Option<crate::workspace::WorkspaceDescriptor>,
+    pub workspace: Option<tinytools::WorkspaceDescriptor>,
     /// Whether the middleware stack already fanned `on_error` out to every
     /// middleware for the error currently unwinding this run. The stack sets it
     /// when a lifecycle hook fails (it dispatches `on_error` itself before

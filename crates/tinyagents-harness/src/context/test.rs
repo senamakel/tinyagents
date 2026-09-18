@@ -3,8 +3,8 @@
 use super::*;
 use crate::events::{AgentEvent, RecordingListener};
 use crate::steering::SteeringHandle;
-use crate::workspace::WorkspaceDescriptor;
 use std::sync::Arc;
+use tinytools::WorkspaceDescriptor;
 
 #[test]
 fn run_config_defaults_are_sensible() {

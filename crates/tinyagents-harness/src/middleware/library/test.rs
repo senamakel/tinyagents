@@ -1094,7 +1094,7 @@ async fn tool_policy_blocks_unapproved_approval_required_tool() {
 #[tokio::test]
 async fn tool_policy_requires_sandbox_for_sandboxed_tool() {
     use crate::context::{RunConfig, RunContext};
-    use crate::workspace::WorkspaceDescriptor;
+    use tinytools::WorkspaceDescriptor;
 
     let mut policies = std::collections::HashMap::new();
     policies.insert(
