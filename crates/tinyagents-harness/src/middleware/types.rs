@@ -66,6 +66,11 @@ pub struct AgentRun {
     pub model_calls: usize,
     /// Number of tool invocations executed during the run.
     pub tool_calls: usize,
+    /// Names of calls that reached a tool executor, in execution order.
+    ///
+    /// Recovery messages for denied, unknown, or invalid calls intentionally do
+    /// not appear here: they produced a transcript response but never acted.
+    pub executed_tools: Vec<String>,
     /// Number of loop iterations (model/tool super-steps) executed.
     pub steps: usize,
     /// Set when the run stopped because steering latched a **pause** rather

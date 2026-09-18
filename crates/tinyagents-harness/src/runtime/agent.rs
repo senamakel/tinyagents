@@ -55,23 +55,48 @@ impl AgentTurnRequest {
 ///
 /// Dropping it removes the per-context host routing entry even when a caller
 /// stops listening before a terminal item.
-pub struct AgentStream<'a, State: Send + Sync, Ctx: Send + Sync> {
+pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
     inner: Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>,
     harness: &'a AgentHarness<State, Ctx>,
     context_id: u64,
+    prepared: Option<PreparedAgentTurn<State>>,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> Stream for AgentStream<'_, State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, State, Ctx> {
     type Item = AgentStreamItem;
 
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.get_mut().inner.as_mut().poll_next(context)
+    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let poll = self.inner.as_mut().poll_next(context);
+        if let Poll::Ready(Some(item)) = &poll {
+            let terminal = match item {
+                AgentStreamItem::Completed(run) => Some((run.as_ref().clone(), true, None)),
+                AgentStreamItem::Failed { error, run } => {
+                    Some((run.as_ref().clone(), false, Some(error.clone())))
+                }
+                AgentStreamItem::Event(_) => None,
+            };
+            if let Some((run, succeeded, error)) = terminal {
+                self.harness.remove_host_binding(self.context_id);
+                if let Some(prepared) = self.prepared.take() {
+                    spawn_host_finalizer(prepared, run, succeeded, error);
+                }
+            }
+        }
+        poll
     }
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> Drop for AgentStream<'_, State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, State, Ctx> {
     fn drop(&mut self) {
         self.harness.remove_host_binding(self.context_id);
+        if let Some(prepared) = self.prepared.take() {
+            spawn_host_finalizer(
+                prepared,
+                AgentRun::new(),
+                false,
+                Some("hosted stream cancelled by caller".to_string()),
+            );
+        }
     }
 }
 
@@ -82,6 +107,7 @@ struct PreparedAgentTurn<State: Send + Sync> {
     run_id: crate::ids::RunId,
     input_text: String,
     messages: Vec<tinyinference_llm::message::Message>,
+    progress: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -99,15 +125,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let prepared = self.prepare_agent_turn(request, &context).await?;
         let context_id = context.instance_id();
         self.install_host_binding(context_id, &prepared);
-        if let Some(progress) = &prepared.host.progress {
-            progress
-                .emit(ProgressEvent::Started {
-                    run: context.run_id().clone(),
-                    thread: context.thread_id().cloned(),
-                    agent: prepared.agent_id.clone(),
-                })
-                .await;
-        }
+        self.emit_host_progress(
+            context_id,
+            ProgressEvent::Started {
+                run: context.run_id().clone(),
+                thread: context.thread_id().cloned(),
+                agent: prepared.agent_id.clone(),
+            },
+        );
 
         let outcome = self
             .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
@@ -116,19 +141,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         match outcome.error {
             None => {
-                self.finish_host_turn(&prepared, &outcome.run, true).await;
+                finish_host_turn(prepared, outcome.run.clone(), true, None).await;
                 Ok(outcome.run)
             }
             Some(error) => {
-                self.finish_host_turn(&prepared, &outcome.run, false).await;
-                if let Some(progress) = &prepared.host.progress {
-                    progress
-                        .emit(ProgressEvent::Error {
-                            run: prepared_run_id(&prepared, context_id),
-                            message: error.to_string(),
-                        })
-                        .await;
-                }
+                finish_host_turn(prepared, outcome.run, false, Some(error.to_string())).await;
                 Err(error)
             }
         }
@@ -148,26 +165,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<AgentStream<'a, State, Ctx>>
     where
         Ctx: 'static,
+        State: 'static,
     {
         let prepared = self.prepare_agent_turn(request, &context).await?;
         let context_id = context.instance_id();
         self.install_host_binding(context_id, &prepared);
-        if let Some(progress) = &prepared.host.progress {
-            progress
-                .emit(ProgressEvent::Started {
-                    run: context.run_id().clone(),
-                    thread: context.thread_id().cloned(),
-                    agent: prepared.agent_id.clone(),
-                })
-                .await;
-        }
+        self.emit_host_progress(
+            context_id,
+            ProgressEvent::Started {
+                run: context.run_id().clone(),
+                thread: context.thread_id().cloned(),
+                agent: prepared.agent_id.clone(),
+            },
+        );
         let stream = self
-            .invoke_stream_in_context(state, context, prepared.messages)
+            .invoke_stream_in_context(state, context, prepared.messages.clone())
             .map(|item| item);
         Ok(AgentStream {
             inner: Box::pin(stream),
             harness: self,
             context_id,
+            prepared: Some(prepared),
         })
     }
 
@@ -269,6 +287,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         messages.append(&mut preamble);
         messages.append(&mut request.messages);
+        let progress = start_progress_dispatcher(host.progress.clone());
         self.insert_host_run(
             context.instance_id(),
             HostRunBinding {
@@ -279,6 +298,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     source: tinyinference_llm::model::ModelResolutionSource::AgentDefault,
                 },
                 model,
+                progress: progress.clone(),
             },
         )?;
         Ok(PreparedAgentTurn {
@@ -288,47 +308,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             run_id: context.run_id().clone(),
             input_text,
             messages,
+            progress,
         })
-    }
-
-    async fn finish_host_turn(
-        &self,
-        prepared: &PreparedAgentTurn<State>,
-        run: &AgentRun,
-        succeeded: bool,
-    ) {
-        if let Some(progress) = &prepared.host.progress {
-            progress
-                .emit(ProgressEvent::Finished {
-                    run: prepared_run_id(prepared, 0),
-                    usage: None,
-                })
-                .await;
-        }
-        let output = run.text().unwrap_or_default();
-        let mut summary = TurnSummary::new(prepared.thread_id.clone(), &prepared.agent_id)
-            .with_text(&prepared.input_text, &output);
-        for message in &run.messages {
-            if let tinyinference_llm::message::Message::Assistant(message) = message {
-                for tool in &message.tool_calls {
-                    summary.record_tool(&tool.name);
-                }
-            }
-        }
-        if let Some(learning) = &prepared.host.learning
-            && let Err(error) = learning.on_turn_complete(&summary).await
-        {
-            tinyagents_tracing::warn!(%error, "[host] learning sink failed after completed turn");
-        }
-        if let Some(store) = &prepared.host.experience {
-            let mut experience = Experience::new(&prepared.agent_id, &prepared.input_text, &output);
-            if succeeded {
-                experience = experience.succeeded();
-            }
-            if let Err(error) = store.record(&experience).await {
-                tinyagents_tracing::warn!(%error, "[host] experience store failed after completed turn");
-            }
-        }
     }
 
     pub(crate) fn host_run_binding(
@@ -365,18 +346,82 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// wait or fail, so delivery is detached and dropped when no Tokio runtime
     /// is available.
     pub(crate) fn emit_host_progress(&self, context_id: u64, event: ProgressEvent) {
-        let Ok(Some(_binding)) = self.host_run_binding(context_id) else {
+        let Ok(Some(binding)) = self.host_run_binding(context_id) else {
             return;
         };
-        let Some(progress) = self.host.as_ref().and_then(|host| host.progress.clone()) else {
+        let Some(progress) = binding.progress else {
             return;
         };
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                progress.emit(event).await;
+        let _ = progress.send(event);
+    }
+}
+
+fn spawn_host_finalizer<State: Send + Sync + 'static>(
+    prepared: PreparedAgentTurn<State>,
+    run: AgentRun,
+    succeeded: bool,
+    error: Option<String>,
+) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move { finish_host_turn(prepared, run, succeeded, error).await });
+    }
+}
+
+async fn finish_host_turn<State: Send + Sync>(
+    prepared: PreparedAgentTurn<State>,
+    run: AgentRun,
+    succeeded: bool,
+    error: Option<String>,
+) {
+    // The per-turn queue preserves event order while keeping a slow progress
+    // consumer completely outside the agent's critical path.
+    if let Some(progress) = &prepared.progress {
+        if let Some(message) = error {
+            let _ = progress.send(ProgressEvent::Error {
+                run: prepared.run_id.clone(),
+                message,
             });
         }
+        let _ = progress.send(ProgressEvent::Finished {
+            run: prepared.run_id.clone(),
+            usage: Some(run.usage.usage),
+        });
     }
+    let output = run.text().unwrap_or_default();
+    let mut summary = TurnSummary::new(prepared.thread_id.clone(), &prepared.agent_id)
+        .with_text(&prepared.input_text, &output)
+        .with_usage(run.usage.usage);
+    for tool in &run.executed_tools {
+        summary.record_tool(tool);
+    }
+    if let Some(learning) = &prepared.host.learning
+        && let Err(error) = learning.on_turn_complete(&summary).await
+    {
+        tinyagents_tracing::warn!(%error, "[host] learning sink failed after terminal turn");
+    }
+    if let Some(store) = &prepared.host.experience {
+        let mut experience = Experience::new(&prepared.agent_id, &prepared.input_text, &output);
+        if succeeded {
+            experience = experience.succeeded();
+        }
+        if let Err(error) = store.record(&experience).await {
+            tinyagents_tracing::warn!(%error, "[host] experience store failed after terminal turn");
+        }
+    }
+}
+
+fn start_progress_dispatcher(
+    sink: Option<std::sync::Arc<dyn crate::host::ProgressSink>>,
+) -> Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>> {
+    let sink = sink?;
+    let handle = tokio::runtime::Handle::try_current().ok()?;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    handle.spawn(async move {
+        while let Some(event) = rx.recv().await {
+            sink.emit(event).await;
+        }
+    });
+    Some(tx)
 }
 
 async fn screen_user_messages<State: Send + Sync>(
@@ -422,11 +467,4 @@ async fn screen_stored<State: Send + Sync>(
         ScreenOutcome::Redacted(text) => Ok(text),
         ScreenOutcome::Block { reason } => Err(TinyAgentsError::Validation(reason)),
     }
-}
-
-fn prepared_run_id<State: Send + Sync>(
-    prepared: &PreparedAgentTurn<State>,
-    _context_id: u64,
-) -> crate::ids::RunId {
-    prepared.run_id.clone()
 }

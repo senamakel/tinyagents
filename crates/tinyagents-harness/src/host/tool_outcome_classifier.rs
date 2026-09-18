@@ -57,8 +57,9 @@ pub enum OutcomeClass {
     #[default]
     Success,
     /// The call failed for a reason that may not recur: a timeout, a throttle,
-    /// a transient upstream error. The runtime may re-dispatch the identical
-    /// call.
+    /// a transient upstream error. The runtime marks the transcript result as
+    /// retryable so the model may choose a new attempt within normal turn
+    /// limits; it never silently re-dispatches an action.
     ///
     /// A classifier must only return this for calls it believes are safe to
     /// repeat. The runtime cannot know whether a tool had side effects, so this
@@ -76,12 +77,13 @@ impl OutcomeClass {
         matches!(self, Self::Success)
     }
 
-    /// Whether the runtime may re-dispatch the identical call.
+    /// Whether this result is surfaced as retryable to the model.
     ///
     /// Only [`RetryableFailure`](Self::RetryableFailure) is retryable —
-    /// [`Success`](Self::Success) has nothing to retry, and re-running a
-    /// [`PermanentFailure`](Self::PermanentFailure) spends an iteration to
-    /// obtain the same answer.
+    /// [`Success`](Self::Success) has nothing to retry, and a
+    /// [`PermanentFailure`](Self::PermanentFailure) must be surfaced as a
+    /// terminal tool failure. Any model-selected retry remains bounded by the
+    /// run's ordinary tool and iteration limits.
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::RetryableFailure)
     }

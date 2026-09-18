@@ -41,6 +41,8 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
     pub(crate) agent_id: String,
     pub(crate) resolved: ResolvedModel,
     pub(crate) model: Arc<dyn ChatModel<State>>,
+    /// Per-turn ordered, nonblocking projection to the optional progress sink.
+    pub(crate) progress: Option<tokio::sync::mpsc::UnboundedSender<crate::host::ProgressEvent>>,
 }
 
 impl<State: Send + Sync> Clone for HostRunBinding<State> {
@@ -49,6 +51,7 @@ impl<State: Send + Sync> Clone for HostRunBinding<State> {
             agent_id: self.agent_id.clone(),
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
+            progress: self.progress.clone(),
         }
     }
 }

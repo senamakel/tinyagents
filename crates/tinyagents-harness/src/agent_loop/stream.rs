@@ -29,13 +29,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::context::{RunConfig, RunContext};
-use crate::error::Result;
 use crate::events::{EventListener, EventRecord, EventSink};
 use crate::middleware::AgentRun;
 use crate::runtime::AgentHarness;
 use tinyinference_llm::message::Message;
 
-use super::AgentLoopResult;
+use super::PartialRunOutcome;
 
 /// One item yielded by [`AgentHarness::invoke_stream`].
 ///
@@ -53,8 +52,14 @@ pub enum AgentStreamItem {
     /// Terminal: the run completed successfully. Boxed because [`AgentRun`] is
     /// large relative to the event variant.
     Completed(Box<AgentRun>),
-    /// Terminal: the run failed; carries the error rendered as a string.
-    Failed(String),
+    /// Terminal: the run failed, with the partial run retained for accurate
+    /// host-side accounting and terminal learning.
+    Failed {
+        /// Stable display form of the failure.
+        error: String,
+        /// Work completed before the failure.
+        run: Box<AgentRun>,
+    },
 }
 
 /// An [`EventListener`] that forwards every [`EventRecord`] into an unbounded
@@ -86,10 +91,13 @@ impl Drop for ChannelListenerGuard {
 }
 
 /// Maps a finished run result onto its terminal [`AgentStreamItem`].
-fn terminal_item(result: Result<AgentLoopResult>) -> AgentStreamItem {
-    match result {
-        Ok(loop_result) => AgentStreamItem::Completed(Box::new(loop_result.run)),
-        Err(error) => AgentStreamItem::Failed(error.to_string()),
+fn terminal_item(outcome: PartialRunOutcome) -> AgentStreamItem {
+    match outcome.error {
+        None => AgentStreamItem::Completed(Box::new(outcome.run)),
+        Some(error) => AgentStreamItem::Failed {
+            error: error.to_string(),
+            run: Box::new(outcome.run),
+        },
     }
 }
 
@@ -97,7 +105,7 @@ fn terminal_item(result: Result<AgentLoopResult>) -> AgentStreamItem {
 enum Phase<'a> {
     /// The run future is still executing.
     Running {
-        run_fut: Pin<Box<dyn Future<Output = Result<AgentLoopResult>> + Send + 'a>>,
+        run_fut: Pin<Box<dyn Future<Output = PartialRunOutcome> + Send + 'a>>,
         listener_guard: ChannelListenerGuard,
     },
     /// The run has finished; drain any buffered events, then emit `terminal`.
@@ -159,12 +167,11 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
             listener,
         };
 
-        // `invoke_streaming_in_context_with_status` is the public wrapper over
-        // the shared `drive(.., streaming = true)` path; it drives *our* `ctx`
-        // (with the listener already attached) and hands back the terminal
-        // `AgentLoopResult`.
-        let run_fut: Pin<Box<dyn Future<Output = Result<AgentLoopResult>> + Send + 'a>> =
-            Box::pin(self.invoke_streaming_in_context_with_status(state, ctx, input));
+        // Preserve partial work for a failed streamed run. The event stream
+        // remains unchanged, but terminal host capabilities need honest usage
+        // and executed-tool summaries for error and cancellation paths too.
+        let run_fut: Pin<Box<dyn Future<Output = PartialRunOutcome> + Send + 'a>> =
+            Box::pin(self.invoke_streaming_in_context_collecting_partial(state, ctx, input));
 
         futures::stream::unfold(
             (

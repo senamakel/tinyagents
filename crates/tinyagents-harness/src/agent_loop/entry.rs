@@ -201,6 +201,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.drive_collecting(state, ctx, input, false).await
     }
 
+    /// Streaming counterpart of [`Self::invoke_in_context_collecting_partial`].
+    ///
+    /// This preserves the accumulated run on a streaming provider failure so
+    /// host-owned terminal sinks can report the actual usage and executed
+    /// tools instead of inventing an empty failure record.
+    pub async fn invoke_streaming_in_context_collecting_partial(
+        &self,
+        state: &State,
+        ctx: RunContext<Ctx>,
+        input: Vec<Message>,
+    ) -> PartialRunOutcome {
+        self.drive_collecting(state, ctx, input, true).await
+    }
+
     async fn drive(
         &self,
         state: &State,

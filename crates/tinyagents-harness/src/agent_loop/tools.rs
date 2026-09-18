@@ -141,6 +141,7 @@ struct PreparedToolCall {
     options: ToolCallOptions,
     captured_input: Option<Value>,
     started_at_ms: u64,
+    executed: bool,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -470,6 +471,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         call: &ToolCall,
         options: ToolCallOptions,
+        executed: bool,
     ) -> PreparedToolCall {
         let call_id = CallId::new(call.id.clone());
         let tool_name = call.name.clone();
@@ -499,6 +501,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             options,
             captured_input,
             started_at_ms,
+            executed,
         }
     }
 
@@ -622,6 +625,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
 
         run.tool_calls += 1;
+        if prepared.executed {
+            run.executed_tools.push(prepared.tool_name.clone());
+        }
         status.tool_calls = run.tool_calls;
         release_active_tool_call(status, &prepared.call_id);
         let model_output = result.output_for_llm(prepared.options.prefer_markdown);
@@ -695,7 +701,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
 
             let options = dispatch.call_options(&call.arguments);
-            let prepared = self.start_tool_call(ctx, status, &call, options);
+            let prepared = self.start_tool_call(ctx, status, &call, options, true);
 
             // The real tool call is the innermost base of the tool-wrap
             // onion (same before -> wrap -> after ordering as the model
@@ -773,7 +779,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             call.id,
             call.name
         );
-        let prepared = self.start_tool_call(ctx, status, call, ToolCallOptions::default());
+        let prepared = self.start_tool_call(ctx, status, call, ToolCallOptions::default(), false);
         let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
@@ -835,7 +841,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
 
             let options = dispatch.call_options(&call.arguments);
-            prepared.push(self.start_tool_call(ctx, status, &call, options));
+            prepared.push(self.start_tool_call(ctx, status, &call, options, true));
             slots.push(ToolSlot::Execute);
 
             // Each call is bounded by its recoverable tool policy inside the

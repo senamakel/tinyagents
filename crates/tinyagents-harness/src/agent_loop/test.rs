@@ -3440,7 +3440,7 @@ async fn collect_stream(items: Vec<AgentStreamItem>) -> (Vec<AgentEvent>, AgentS
             Some(AgentStreamItem::Completed(_))
         ) && !matches!(
             items[..items.len() - 1].last(),
-            Some(AgentStreamItem::Failed(_))
+            Some(AgentStreamItem::Failed { .. })
         ),
         "terminal must be last"
     );
@@ -3628,7 +3628,7 @@ async fn invoke_stream_yields_failed_terminal_on_error() {
     let (_events, terminal) = collect_stream(items).await;
 
     match terminal {
-        AgentStreamItem::Failed(message) => {
+        AgentStreamItem::Failed { error: message, .. } => {
             assert!(message.contains("max model calls"), "got: {message}");
         }
         other => panic!("expected Failed terminal, got {other:?}"),
