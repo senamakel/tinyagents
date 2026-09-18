@@ -6,6 +6,12 @@
 //! This tracker owns the provider- and product-neutral streak accounting for
 //! those loops; a harness middleware remains responsible for building canonical
 //! signatures and deciding which polling tools are exempt.
+//!
+//! The streaks only see back-to-back repeats. A model that cycles through
+//! several successful calls (A, B, A, B, ...) changes the signature every step
+//! and never trips them, so the tracker also keeps a run-wide ledger of
+//! `(call, result)` recurrences fed by
+//! [`SuccessfulRepeatTracker::record_call_outcome`].
 
 use std::hash::{Hash, Hasher};
 
@@ -54,6 +60,7 @@ impl SuccessfulRepeatTracker {
             call_threshold: call_threshold.max(1),
             output: std::sync::Mutex::new(Streak::default()),
             calls: std::sync::Mutex::new(Streak::default()),
+            recurrences: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -104,9 +111,50 @@ impl SuccessfulRepeatTracker {
         ))
     }
 
-    /// Clears both streaks, for example when a paused run is resumed.
+    /// Records one successful, non-exempt tool call with the result it returned,
+    /// and halts once that call has returned that same result `call_threshold`
+    /// times in this run, whether or not the repeats were adjacent.
+    ///
+    /// An identical call that returns an identical result adds nothing the
+    /// transcript does not already hold, however far apart the repeats are, so
+    /// the ledger spans the run rather than a window: there is no size to tune,
+    /// and it holds for two-step and longer cycles alike. Keying on the result
+    /// means a re-read after state changed (same call, different result) does
+    /// not count. The threshold is the same `call_threshold` the adjacent
+    /// streak uses, because this is the same "identical successful call"
+    /// verdict with a stricter key.
+    ///
+    /// Call it once per call, not per batch, and only for calls that succeeded
+    /// and are not exempt polling calls; failures belong to
+    /// [`NoProgressTracker`](super::NoProgressTracker). Failed or exempt batches
+    /// deliberately do not clear this ledger: a failing sibling call does not
+    /// make an identical re-read informative. A driver whose context compaction
+    /// evicts earlier tool results should call [`reset`](Self::reset) when it
+    /// does, since re-reading an evicted result is not a repeat the model can
+    /// see.
+    pub fn record_call_outcome(
+        &self,
+        call_signature: &str,
+        outcome_signature: &str,
+    ) -> SuccessfulRepeat {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (call_signature, outcome_signature).hash(&mut hasher);
+        let mut recurrences = self.recurrences.lock().unwrap();
+        let count = recurrences.entry(hasher.finish()).or_insert(0);
+        *count += 1;
+        if *count < self.call_threshold {
+            return SuccessfulRepeat::Continue;
+        }
+        SuccessfulRepeat::Halt(format!(
+            "Stopping: the same successful tool call returned the identical result {count} times in this run; re-running steps whose results are already in the conversation adds no new information, so the run is cycling without making progress."
+        ))
+    }
+
+    /// Clears both streaks and the recurrence ledger, for example when a paused
+    /// run is resumed.
     pub fn reset(&self) {
         self.output.lock().unwrap().reset();
         self.calls.lock().unwrap().reset();
+        self.recurrences.lock().unwrap().clear();
     }
 }

@@ -252,6 +252,89 @@ fn exempt_batches_reset_both_streaks() {
 }
 
 #[test]
+fn cycling_identical_calls_halt_for_any_cycle_length() {
+    for cycle_len in 2..=5 {
+        let tracker = SuccessfulRepeatTracker::new(4, 3);
+        let calls: Vec<String> = (0..cycle_len).map(|i| format!("call-{i}")).collect();
+        let mut halted_at = None;
+        for step in 0..cycle_len * 3 {
+            let call = &calls[step % cycle_len];
+            // The adjacent streak never sees two identical batches in a row.
+            assert_eq!(
+                tracker.record_call_batch(call, true, false),
+                SuccessfulRepeat::Continue
+            );
+            if let SuccessfulRepeat::Halt(message) =
+                tracker.record_call_outcome(call, "same result")
+            {
+                assert!(message.contains("3 times"), "unexpected message: {message}");
+                halted_at = Some(step);
+                break;
+            }
+        }
+        assert_eq!(
+            halted_at,
+            Some(cycle_len * 2),
+            "a {cycle_len}-call cycle with identical results must halt on the first call's third recurrence"
+        );
+    }
+}
+
+#[test]
+fn identical_call_with_a_changed_result_is_not_a_recurrence() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    for i in 0..10 {
+        assert_eq!(
+            tracker.record_call_outcome("read_status", &format!("result-{i}")),
+            SuccessfulRepeat::Continue,
+            "a re-read whose result changed is progress, not a repeat"
+        );
+        assert_eq!(
+            tracker.record_call_outcome("other", &format!("other-{i}")),
+            SuccessfulRepeat::Continue
+        );
+    }
+}
+
+#[test]
+fn failed_and_exempt_batches_do_not_clear_recurrences() {
+    let tracker = SuccessfulRepeatTracker::new(4, 3);
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue
+    );
+    // A failing sibling call in the same batch.
+    let _ = tracker.record_call_batch("read_doc+missing_tool", false, false);
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue
+    );
+    let _ = tracker.record_call_batch("wait", true, true);
+    assert!(
+        matches!(
+            tracker.record_call_outcome("read_doc", "doc"),
+            SuccessfulRepeat::Halt(_)
+        ),
+        "failed or exempt batches in between must not hide an identical re-read"
+    );
+}
+
+#[test]
+fn reset_clears_recurrences() {
+    let tracker = SuccessfulRepeatTracker::new(4, 2);
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue
+    );
+    tracker.reset();
+    assert_eq!(
+        tracker.record_call_outcome("read_doc", "doc"),
+        SuccessfulRepeat::Continue,
+        "reset must forget earlier recurrences"
+    );
+}
+
+#[test]
 fn zero_thresholds_are_fail_safe() {
     let tracker = SuccessfulRepeatTracker::new(0, 0);
     assert_eq!(

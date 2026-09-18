@@ -14,9 +14,9 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
-use crate::tool::{ToolCall, ToolSchema};
 use tinyinference::message::{ContentBlock, Message};
 use tinyinference::model::ModelResponse;
+use tinyinference::tool::{ToolCall, ToolSchema};
 
 /// Opening / closing delimiters for a text-mode tool call.
 const OPEN_TAG: &str = "<tool_call>";
@@ -366,7 +366,8 @@ fn hold_from(buf: &str) -> usize {
 /// `<tool_call>…</tool_call>` markup from a text stream *as fragments arrive*.
 ///
 /// The terminal-response recovery ([`apply_prompt_tool_calls`]) only cleans the
-/// aggregated answer, so a consumer that renders live [`MessageDelta`] text would
+/// aggregated answer, so a consumer that renders live
+/// [`MessageDelta`](tinyinference::message::MessageDelta) text would
 /// still see raw markup stream through. This scrubber closes that gap: it emits
 /// only the text that is provably not part of a tool-call block, holding back any
 /// tail that could still become one (a partial `<tool_call`, an open tag whose
@@ -670,3 +671,7 @@ fn strip_code_fence(raw: &str) -> &str {
     };
     body.trim_end().strip_suffix("```").map_or(raw, str::trim)
 }
+
+#[cfg(test)]
+#[path = "prompt_test.rs"]
+mod tests;

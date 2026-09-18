@@ -4,6 +4,7 @@
 //! Split out of `no_progress/mod.rs`; see that module's doc comment for
 //! the full escalation-ladder design.
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// One recorded tool outcome, as the driver observed it.
@@ -171,9 +172,16 @@ pub(super) struct Streak {
 /// call batch is recorded as successful and non-exempt. Exempt polling batches
 /// and failed batches reset both streaks so the failure ladder remains
 /// authoritative.
+///
+/// A third, run-wide ledger counts how often each successful call returned the
+/// same result, so repeats that are not back to back (a model cycling A, B, A,
+/// B) are caught too. It is not cleared by failed or exempt batches; see
+/// [`SuccessfulRepeatTracker::record_call_outcome`].
 pub struct SuccessfulRepeatTracker {
     pub(super) output_threshold: u32,
     pub(super) call_threshold: u32,
     pub(super) output: Mutex<Streak>,
     pub(super) calls: Mutex<Streak>,
+    /// Hash of `(call signature, outcome signature)` → times recorded this run.
+    pub(super) recurrences: Mutex<HashMap<u64, u32>>,
 }

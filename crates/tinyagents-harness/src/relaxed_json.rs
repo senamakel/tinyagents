@@ -17,7 +17,7 @@
 //!     Kimi-family models served via GMI).
 //!
 //! Strict `serde_json::from_str` rejects all of these, so the call is marked
-//! [`crate::ToolCall::invalid`] and fed back to the model, which
+//! [`tinyinference::tool::ToolCall::invalid`] and fed back to the model, which
 //! "repairs" it by adding *another* brace — an infinite retry that burns the
 //! step budget without ever executing the tool. A zero-argument call
 //! (`NAME{}`) is the only shape that survives, because `{}` is valid strict
@@ -64,7 +64,7 @@ const LEAKED_QUOTE_TOKENS: &[&str] = &["<|\"|>", "<|\">"];
 ///
 /// See the module docs for the repair strategy and the safety invariant (only
 /// invoked after strict parsing has already failed).
-pub(crate) fn recover_relaxed_object(raw: &str) -> Option<Value> {
+pub fn recover_relaxed_object(raw: &str) -> Option<Value> {
     let normalized = normalize_leaked_quote_tokens(raw);
     let mut layer = normalized.trim().to_string();
     for _ in 0..=MAX_BRACE_PEEL {
