@@ -11,8 +11,9 @@
 //!
 //! - [`SubAgent`] wraps an [`AgentHarness`] and runs it as a *child run* one
 //!   level deeper in the recursion tree than its caller.
-//! - [`SubAgentTool`] adapts a [`SubAgent`] into a [`Tool`] so a parent agent
-//!   can invoke another agent exactly like any other tool.
+//! - [`SubAgentTool`] adapts a [`SubAgent`] into a typed
+//!   [`ToolDispatch`] so a parent agent can invoke another agent with its live
+//!   run context.
 //! - [`SubAgentSession`] keeps a single [`SubAgent`] alive across multiple
 //!   turns, *reusing* the same harness while accumulating the conversation
 //!   transcript — the post-completion, human-in-the-loop reuse primitive.
@@ -66,7 +67,7 @@
 //!
 //! - [`types`] holds the public type definitions.
 //! - This file holds the impls (constructors, the invoke methods, and the
-//!   [`Tool`] adapter).
+//!   typed-parent dispatcher).
 //! - `test.rs` holds focused tests.
 
 mod types;
@@ -230,9 +231,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
         // the explicit parent lineage cap. `RunContext::child` is the one
         // place that copies the live recursive capabilities and creates the
         // isolated counters/control slot for this invocation.
-        let child_depth =
-            RunConfig::checked_child_depth(parent.depth(), self.harness.policy().limits.max_depth)?;
-        let ctx = parent.child(RunConfig::new(self.child_run_id(child_depth)), ctx_data)?;
+        let config = self.child_config(
+            parent.depth(),
+            parent.thread_id(),
+            parent.config.max_turn_output_tokens,
+        )?;
+        let ctx = parent.child(config, ctx_data)?;
         self.run_child(state, ctx, input.into(), parent.streaming)
             .await
     }
@@ -516,11 +520,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
         parent: &RunContext<Ctx>,
     ) -> Result<tinytools::ToolResult> {
         let input = Self::extract_input(&args);
-        let child_depth = match RunConfig::checked_child_depth(
+        let config = match self.subagent.child_config(
             parent.depth(),
-            self.subagent.harness.policy().limits.max_depth,
+            parent.thread_id(),
+            parent.config.max_turn_output_tokens,
         ) {
-            Ok(depth) => depth,
+            Ok(config) => config,
             Err(error) => {
                 return Ok(tinytools::ToolResult::error(format!(
                     "Sub-agent `{}` stopped before completing because it hit its recursion depth limit: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
@@ -529,10 +534,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
             }
         };
         let child_data = self.child_data.child_data(&parent.data);
-        let child = match parent.child(
-            RunConfig::new(self.subagent.child_run_id(child_depth)),
-            child_data,
-        ) {
+        let child = match parent.child(config, child_data) {
             Ok(child) => child,
             Err(TinyAgentsError::SubAgentDepth(_)) => {
                 return Ok(tinytools::ToolResult::error(format!(

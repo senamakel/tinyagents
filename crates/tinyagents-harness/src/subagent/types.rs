@@ -3,8 +3,9 @@
 //! A [`SubAgent`] wraps an [`AgentHarness`] so it can be invoked as a *child
 //! run*: a fully independent agent loop that runs one level deeper in the
 //! recursion tree than its caller. [`SubAgentTool`] adapts a sub-agent into a
-//! [`Tool`] so a parent agent can call another agent the same way it calls any
-//! other tool — the key agent-calling-agent compositional pattern.
+//! typed [`crate::tool::ToolDispatch`] so a parent agent can call another agent
+//! through its live run context — the key agent-calling-agent compositional
+//! pattern.
 //!
 //! All public items are re-exported through [`super`] so callers import from
 //! `crate::subagent` directly. Implementations and tests live in the
@@ -123,23 +124,20 @@ pub struct SubAgentSession<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) seeded: bool,
 }
 
-/// A [`Tool`] adapter that exposes a [`SubAgent`] to a parent agent — the
-/// surface that turns "agents calling agents" into an ordinary tool call.
-///
-/// [`Tool`]: crate::tool::Tool
+/// A typed-parent dispatcher that exposes a [`SubAgent`] to a parent agent —
+/// the surface that turns "agents calling agents" into an ordinary tool call.
 ///
 /// When the parent model calls this tool, [`SubAgentTool`] runs the wrapped
-/// sub-agent as a child run at the configured `parent_depth` and returns the
-/// child's final assistant text as the [`crate::tool::ToolResult`]
+/// sub-agent as a child run and returns the child's final assistant text as the
+/// [`tinytools::ToolResult`]
 /// content. This makes an entire agent composable as a single tool call, so a
 /// model orchestrating tools is, transparently, a model orchestrating models.
 ///
-/// Because the [`Tool`] trait gives `call` no access to the live parent
-/// [`crate::context::RunContext`], the depth the child runs at is fixed
-/// at construction (`parent_depth`, default `0`). Nesting deeper sub-agents is
-/// expressed by constructing the inner tool with a larger `parent_depth`. For
-/// fully context-threaded invocation (reading the live parent depth) call
-/// [`SubAgent::invoke_in_parent`] directly instead of going through the tool.
+/// Register this with [`crate::tool::ToolRegistry::register_dispatch`]. The
+/// agent loop calls it with the live parent [`crate::context::RunContext`], so
+/// its depth, cancellation, events, stores, workspace, steering, and streaming
+/// state are inherited by the child. [`ChildDataPolicy`] makes the separate
+/// application-data decision explicit.
 pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// The wrapped child agent.
     pub(crate) subagent: Arc<SubAgent<State, Ctx>>,
