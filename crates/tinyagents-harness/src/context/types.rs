@@ -14,6 +14,8 @@
 //! `crate::context` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
+use std::any::Any;
+
 use serde::{Deserialize, Serialize};
 
 use crate::cancel::CancellationToken;
@@ -259,6 +261,11 @@ pub struct RunContext<Ctx = ()> {
     /// Host definition id currently driving this context, propagated into a
     /// child so recursive delegation can be authorized by the host registry.
     pub(crate) host_agent_id: Option<String>,
+    /// Type-erased, runtime-owned host authority inherited by children.  This
+    /// is deliberately not serializable or public: it keeps a hosted parent
+    /// from accidentally delegating through a child's unrelated (or absent)
+    /// capability bundle.
+    pub(crate) host_authority: Option<std::sync::Arc<dyn Any + Send + Sync>>,
     /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
     /// agent-loop guard even when the driving future is cancelled or dropped.
     pub(crate) terminal_observer: Option<TerminalObserver>,

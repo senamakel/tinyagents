@@ -445,17 +445,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // model-forged fields, but before a tool can execute. A hosted run is
         // identified from its explicit RunContext binding; the lower-level SDK
         // path has no implicit host policy.
-        if let (Some(host), Some(binding)) = (
-            self.host.as_ref(),
-            self.host_run_binding(ctx.instance_id())?,
-        ) {
+        if let Some(binding) = self.host_run_binding(ctx.instance_id())? {
             let request = crate::host::ToolCallRequest::from_tool_call(call, binding.agent_id);
-            let decision = host.security.authorize_tool(&request).await?;
+            let decision = binding.host.security.authorize_tool(&request).await?;
             if !decision.is_allowed() {
                 let reason = decision
                     .denial_reason()
                     .unwrap_or("tool call was not approved")
                     .to_string();
+                // Admission reserved a slot before consulting policy, but a
+                // denied call never enters execution. Release it so repeated
+                // approval denials cannot exhaust the tool budget and block a
+                // later authorized call in the same turn.
+                ctx.limits.rollback_tool_calls(1);
                 return Ok(ResolvedToolCall::ErrorMessage(reason));
             }
         }
@@ -577,12 +579,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // request. Screen it after host/result middleware shaping but before a
         // transcript message exists, so neither the original nor a blocked
         // value can reach the provider.
-        if let (Some(host), Some(_binding)) = (
-            self.host.as_ref(),
-            self.host_run_binding(ctx.instance_id())?,
-        ) {
+        if let Some(binding) = self.host_run_binding(ctx.instance_id())? {
             let rendered = result.output_for_llm(prepared.options.prefer_markdown);
-            match host
+            match binding
+                .host
                 .security
                 .screen_input(&rendered, crate::host::ContentOrigin::Tool)
                 .await?
@@ -598,10 +598,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
         }
 
-        if let (Some(host), Some(binding)) = (
-            self.host.as_ref(),
-            self.host_run_binding(ctx.instance_id())?,
-        ) && let Some(classifier) = &host.tool_outcomes
+        if let Some(binding) = self.host_run_binding(ctx.instance_id())?
+            && let Some(classifier) = &binding.host.tool_outcomes
         {
             let outcome = classifier.classify(&prepared.tool_name, &result);
             match outcome {

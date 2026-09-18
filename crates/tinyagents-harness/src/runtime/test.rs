@@ -34,6 +34,10 @@ struct NoopTool;
 
 struct DenyToolGate;
 
+struct DenyThenAllowGate {
+    denials_remaining: AtomicUsize,
+}
+
 struct RetryableClassifier;
 
 struct RecordingBudget {
@@ -45,6 +49,13 @@ impl RecordingBudget {
     fn hard() -> Self {
         Self {
             hint: CompressionHint::Hard,
+            records: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn soft() -> Self {
+        Self {
+            hint: CompressionHint::Soft,
             records: Mutex::new(Vec::new()),
         }
     }
@@ -204,6 +215,31 @@ async fn yield_until(mut predicate: impl FnMut() -> bool) {
 impl SecurityGate for DenyToolGate {
     async fn authorize_tool(&self, _call: &ToolCallRequest) -> crate::error::Result<GateDecision> {
         Ok(GateDecision::deny("host denied this tool"))
+    }
+
+    async fn screen_input(
+        &self,
+        _text: &str,
+        _origin: crate::host::ContentOrigin,
+    ) -> crate::error::Result<ScreenOutcome> {
+        Ok(ScreenOutcome::Pass)
+    }
+}
+
+#[async_trait]
+impl SecurityGate for DenyThenAllowGate {
+    async fn authorize_tool(&self, _call: &ToolCallRequest) -> crate::error::Result<GateDecision> {
+        if self
+            .denials_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            Ok(GateDecision::deny("approval declined"))
+        } else {
+            Ok(GateDecision::Allow)
+        }
     }
 
     async fn screen_input(
@@ -401,6 +437,62 @@ async fn host_security_denial_returns_a_tool_message_without_executing_the_tool(
             .iter()
             .any(|message| message.text().contains("host denied this tool"))
     );
+}
+
+#[tokio::test]
+async fn denied_tool_calls_release_their_reserved_limit_for_a_later_approval() {
+    fn call(id: &str) -> ModelResponse {
+        let mut response = ModelResponse::assistant("");
+        response
+            .message
+            .tool_calls
+            .push(tinyinference_llm::tool::ToolCall::new(
+                id,
+                "noop",
+                json!({}),
+            ));
+        response
+    }
+
+    let model = Arc::new(ScriptedModel::new(vec![
+        call("denied-one"),
+        call("denied-two"),
+        call("allowed"),
+        ModelResponse::assistant("completed after approval"),
+    ]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(DenyThenAllowGate {
+            denials_remaining: AtomicUsize::new(2),
+        }),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.with_host_capabilities(host);
+
+    let run = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(
+                RunConfig::new("denial-limit-release").with_max_tool_calls(1),
+                (),
+            ),
+            &(),
+        )
+        .await
+        .expect("two denials do not spend the only executable tool slot");
+
+    assert_eq!(run.text().as_deref(), Some("completed after approval"));
+    assert_eq!(run.executed_tools, vec!["noop"]);
 }
 
 #[tokio::test]
@@ -832,8 +924,16 @@ async fn same_user_run_id_concurrent_host_turns_keep_distinct_bindings() {
 }
 
 #[tokio::test]
-async fn hard_budget_compression_hint_blocks_before_the_provider_call() {
-    let model = Arc::new(ScriptedModel::replies(vec!["must not run"]));
+async fn hard_budget_compression_hint_reduces_context_before_the_provider_call() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::assistant("reduced").with_usage(Usage {
+            input_tokens: 7,
+            output_tokens: 3,
+            total_tokens: 10,
+            ..Usage::default()
+        }),
+    ]));
+    let budget = Arc::new(RecordingBudget::hard());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
@@ -844,22 +944,72 @@ async fn hard_budget_compression_hint_blocks_before_the_provider_call() {
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     )
-    .with_budget(Arc::new(RecordingBudget::hard()));
+    .with_budget(budget.clone());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_host_capabilities(host);
-    let error = harness
+    let run = harness
         .invoke_agent(
             AgentTurnRequest::new(
                 "helper",
-                vec![tinyinference_llm::message::Message::user("compress")],
+                vec![
+                    tinyinference_llm::message::Message::user("old context ".repeat(20)),
+                    tinyinference_llm::message::Message::assistant("older response ".repeat(20)),
+                    tinyinference_llm::message::Message::user("new context ".repeat(20)),
+                    tinyinference_llm::message::Message::assistant("latest response ".repeat(20)),
+                ],
             ),
             RunContext::new(RunConfig::new("hard-compression"), ()),
             &(),
         )
         .await
-        .expect_err("hard compression must prevent an uncompressed provider call");
-    assert!(error.to_string().contains("requires context compression"));
-    assert!(model.requests().is_empty());
+        .expect("hard compression reduces a multi-turn request before calling the provider");
+    assert_eq!(run.text().as_deref(), Some("reduced"));
+    let request = model.requests().pop().expect("provider was called once");
+    assert!(
+        request.messages.len() < 4,
+        "hard compression sent fewer messages to the provider"
+    );
+    assert_eq!(budget.records.lock().expect("budget lock").len(), 1);
+}
+
+#[tokio::test]
+async fn soft_budget_compression_hint_reduces_multiturn_context_without_blocking() {
+    let model = Arc::new(ScriptedModel::replies(vec!["soft reduced"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_budget(Arc::new(RecordingBudget::soft()));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![
+                    tinyinference_llm::message::Message::user("one ".repeat(20)),
+                    tinyinference_llm::message::Message::assistant("two ".repeat(20)),
+                    tinyinference_llm::message::Message::user("three ".repeat(20)),
+                    tinyinference_llm::message::Message::assistant("four ".repeat(20)),
+                ],
+            ),
+            RunContext::new(RunConfig::new("soft-compression"), ()),
+            &(),
+        )
+        .await
+        .expect("soft compression still invokes the provider");
+
+    assert!(
+        model.requests()[0].messages.len() < 4,
+        "soft compression reduced the provider request"
+    );
 }
 
 #[tokio::test]
@@ -932,8 +1082,10 @@ async fn host_delegate_registry_authorizes_recursive_children() {
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model)),
     );
-    let mut child_harness = AgentHarness::new();
-    child_harness.with_host_capabilities(host.clone());
+    // The child deliberately has no host installed. A hosted parent must
+    // propagate its own authority and bundle rather than falling back to this
+    // child harness's configuration.
+    let child_harness = AgentHarness::new();
     let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
     let mut parent_harness = AgentHarness::new();
     parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
@@ -951,6 +1103,70 @@ async fn host_delegate_registry_authorizes_recursive_children() {
             &(),
         )
         .await
-        .expect("registered delegate runs through the hosted child entry point");
+        .expect("registered delegate runs through the parent's hosted child entry point");
     assert_eq!(run.text().as_deref(), Some("parent answer"));
+}
+
+#[tokio::test]
+async fn hosted_parent_denial_cannot_be_bypassed_by_a_differently_hosted_child() {
+    let mut parent_tool_call = ModelResponse::assistant("");
+    parent_tool_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "delegate",
+            "worker",
+            json!({"input": "child task"}),
+        ));
+    let parent_model = Arc::new(ScriptedModel::new(vec![
+        parent_tool_call,
+        ModelResponse::assistant("parent recovered from denied delegation"),
+    ]));
+    let child_model = Arc::new(ScriptedModel::replies(vec!["must never run"]));
+    let parent_definitions = Arc::new(InMemoryDefinitionRegistry::new(vec![
+        AgentDefinition::new("parent", "Parent", "does not delegate"),
+        AgentDefinition::new("worker", "Worker", "child"),
+    ]));
+    let parent_host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        parent_definitions,
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(parent_model)),
+    );
+    let child_host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "worker",
+            "Worker",
+            "permissive child",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(child_model.clone())),
+    );
+    let mut child_harness = AgentHarness::new();
+    child_harness.with_host_capabilities(child_host);
+    let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
+    let mut parent_harness = AgentHarness::new();
+    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+        child,
+        ChildDataPolicy::new(|_: &()| ()),
+    )));
+    parent_harness.with_host_capabilities(parent_host);
+
+    let error = parent_harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "parent",
+                vec![tinyinference_llm::message::Message::user("delegate")],
+            ),
+            RunContext::new(RunConfig::new("denied-mismatched-child"), ()),
+            &(),
+        )
+        .await
+        .expect_err("parent policy denies the child before its host can run");
+    assert!(error.to_string().contains("not authorized to delegate"));
+    assert!(
+        child_model.requests().is_empty(),
+        "the differently-hosted child was never allowed to select its own policy"
+    );
 }

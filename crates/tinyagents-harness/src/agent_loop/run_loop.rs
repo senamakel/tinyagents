@@ -342,11 +342,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // A host budget is acquired only for an explicit host-driven run.
             // The permit remains alive through response accounting below, so a
             // cancellation or provider error still releases it through Drop.
-            let host_budget = if let (Some(host), Some(host_run)) = (
-                self.host.as_ref(),
-                self.host_run_binding(ctx.instance_id())?,
-            ) {
-                if let Some(budget) = &host.budget {
+            let host_budget = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
+                if let Some(budget) = host_run.host.budget.clone() {
                     let context_state = crate::host::ContextState {
                         message_count: request.messages.len(),
                         prompt_tokens: crate::token_estimation::estimate_slice_tokens(
@@ -364,11 +361,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             ?hint,
                             "[host] budget gate advised context compression"
                         );
-                    }
-                    if hint.is_required() {
-                        return Err(TinyAgentsError::Validation(
-                            "host budget requires context compression before provider call".into(),
-                        ));
+                        apply_host_budget_compression(ctx, &mut request.messages, hint)?;
                     }
                     let estimate = crate::host::CallEstimate::new(
                         &model_name,
@@ -381,7 +374,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             .cloned()
                             .unwrap_or_else(|| ctx.run_id().as_str().into()),
                     );
-                    Some((budget, budget.acquire(&estimate).await?))
+                    Some((budget.clone(), budget.acquire(&estimate).await?))
                 } else {
                     None
                 }
@@ -836,6 +829,55 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         Some((Arc::clone(cache), cache_key(request)))
     }
+}
+
+/// Applies a host budget hint before the provider sees the request.
+///
+/// This deliberately uses the harness's pairing-safe generic context reducer
+/// instead of a host-specific transcript rewrite. `Soft` preserves the most
+/// recent half of a multi-turn conversation (and all system messages) when it
+/// can make progress. `Hard` uses a token budget and refuses a request that
+/// cannot be reduced without discarding its whole conversational payload.
+/// Both outcomes are observable through the canonical `context.compressed`
+/// event so hosts can correlate a budget decision with the actual request.
+fn apply_host_budget_compression<Ctx>(
+    ctx: &mut RunContext<Ctx>,
+    messages: &mut Vec<Message>,
+    hint: crate::host::CompressionHint,
+) -> Result<()> {
+    use crate::host::CompressionHint;
+    use crate::summarization::{TrimStrategy, trim_messages};
+
+    let from_tokens = crate::token_estimation::estimate_slice_tokens(messages);
+    let non_system = messages
+        .iter()
+        .filter(|message| !matches!(message, Message::System(_)))
+        .count();
+    let strategy = match hint {
+        CompressionHint::None => return Ok(()),
+        // Preserve a recent working window without perturbing a short prompt.
+        CompressionHint::Soft if non_system < 3 => return Ok(()),
+        CompressionHint::Soft => TrimStrategy::KeepLast((non_system / 2).max(1)),
+        // A hard hint must create real headroom.  The generic trimmer keeps
+        // tool-call/result pairing intact while shedding oldest material.
+        CompressionHint::Hard => TrimStrategy::MaxTokens((from_tokens / 2).max(1)),
+    };
+    let reduced = trim_messages(messages, &strategy);
+    let to_tokens = crate::token_estimation::estimate_slice_tokens(&reduced);
+    if to_tokens >= from_tokens || reduced.is_empty() {
+        if hint.is_required() {
+            return Err(TinyAgentsError::Validation(
+                "host budget requires reducible context before provider call".into(),
+            ));
+        }
+        return Ok(());
+    }
+    *messages = reduced;
+    ctx.emit(AgentEvent::Compressed {
+        from_tokens,
+        to_tokens,
+    });
+    Ok(())
 }
 
 /// Recovers XML/text-dialect calls through `tinytools-agent` while preserving

@@ -302,6 +302,7 @@ impl<Ctx> RunContext<Ctx> {
             on_error_dispatched: false,
             streaming: false,
             host_agent_id: None,
+            host_authority: None,
             terminal_observer: None,
         }
     }
@@ -329,6 +330,7 @@ impl<Ctx> RunContext<Ctx> {
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
         child.host_agent_id = self.host_agent_id.clone();
+        child.host_authority = self.host_authority.clone();
         Ok(child)
     }
 

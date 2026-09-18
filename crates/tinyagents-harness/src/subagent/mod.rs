@@ -258,19 +258,36 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgent<State, Ctx> {
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
         let messages = self.seed_messages(input);
-        if let (Some(host), Some(parent_agent)) = (
-            self.harness.host_capabilities(),
-            ctx.host_agent_id.as_deref(),
-        ) {
-            let delegates =
-                host.definitions
-                    .delegates_for(parent_agent)
-                    .await
-                    .map_err(|error| {
-                        TinyAgentsError::Validation(format!(
-                            "delegate authorization lookup failed: {error}"
-                        ))
-                    })?;
+        let parent_host = if let Some(authority) = ctx.host_authority.as_ref() {
+            Some(
+                authority
+                    .downcast_ref::<crate::runtime::HostInvocationAuthority<State>>()
+                    .ok_or_else(|| {
+                        TinyAgentsError::Validation(
+                            "hosted parent delegation authority has an incompatible state type"
+                                .into(),
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        if let Some(authority) = parent_host {
+            let parent_agent = ctx.host_agent_id.as_deref().ok_or_else(|| {
+                TinyAgentsError::Validation(
+                    "hosted parent delegation is missing its parent agent identity".into(),
+                )
+            })?;
+            let delegates = authority
+                .host
+                .definitions
+                .delegates_for(parent_agent)
+                .await
+                .map_err(|error| {
+                    TinyAgentsError::Validation(format!(
+                        "delegate authorization lookup failed: {error}"
+                    ))
+                })?;
             if !delegates.iter().any(|delegate| delegate == &self.name) {
                 return Err(TinyAgentsError::Validation(format!(
                     "agent `{}` is not authorized to delegate to `{}`",
@@ -288,13 +305,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgent<State, Ctx> {
             depth,
         });
 
-        let run = if self.harness.host_capabilities().is_some() {
+        let run = if let Some(authority) = parent_host {
             let request = crate::runtime::AgentTurnRequest::new(self.name.clone(), messages);
-            // `RunContext::child` above remains the sole recursion boundary;
-            // the hosted entry point performs the same capability lifecycle.
-            // Child model deltas still reach the inherited event sink through
-            // the normal loop even when the parent selected streaming.
-            self.harness.invoke_agent(request, ctx, state).await?
+            // A hosted parent always re-enters the child through its own exact
+            // capability bundle. The child harness's installed host (including
+            // no host at all) is intentionally irrelevant here: allowing it
+            // to decide policy would make delegation authorization bypassable.
+            self.harness
+                .invoke_agent_with_host_capabilities(authority.host.clone(), request, ctx, state)
+                .await?
         } else if streaming {
             self.harness
                 .invoke_streaming_in_context(state, ctx, messages)

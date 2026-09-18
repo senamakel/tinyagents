@@ -28,6 +28,7 @@
 mod agent;
 mod types;
 
+pub(crate) use agent::HostInvocationAuthority;
 pub use agent::{AgentStream, AgentTurnRequest};
 pub use types::*;
 

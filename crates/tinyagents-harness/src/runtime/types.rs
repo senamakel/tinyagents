@@ -38,6 +38,10 @@ use tinyinference_llm::model::{ChatModel, ResolvedModel};
 /// process-local instance id, rather than its user-supplied run id: callers may
 /// legitimately run two turns with the same run id concurrently.
 pub(crate) struct HostRunBinding<State: Send + Sync> {
+    /// The capability bundle that prepared this exact invocation. This is
+    /// per-run rather than read from the harness so a recursively invoked
+    /// child cannot substitute its own installed (or missing) host policy.
+    pub(crate) host: HostCapabilities<State>,
     pub(crate) agent_id: String,
     pub(crate) resolved: ResolvedModel,
     pub(crate) model: Arc<dyn ChatModel<State>>,
@@ -48,6 +52,7 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
 impl<State: Send + Sync> Clone for HostRunBinding<State> {
     fn clone(&self) -> Self {
         Self {
+            host: self.host.clone(),
             agent_id: self.agent_id.clone(),
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),

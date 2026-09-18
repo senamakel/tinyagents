@@ -25,6 +25,17 @@ use crate::middleware::AgentRun;
 
 use super::{AgentHarness, HostRunBinding};
 
+/// The exact host bundle that authorized the parent invocation.
+///
+/// A child context carries this as type-erased runtime state because
+/// [`RunContext`] is intentionally independent of the application's `State`.
+/// `SubAgent` downcasts it at the recursive boundary and therefore cannot
+/// substitute an unhosted or differently-hosted child harness for the
+/// parent's policy.
+pub(crate) struct HostInvocationAuthority<State: Send + Sync> {
+    pub(crate) host: crate::host::HostCapabilities<State>,
+}
+
 /// A host-owned turn request.
 ///
 /// `agent_id` is opaque to the harness. It is resolved only through the host
@@ -127,16 +138,41 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub async fn invoke_agent(
         &self,
         request: AgentTurnRequest,
+        context: RunContext<Ctx>,
+        state: &State,
+    ) -> Result<AgentRun>
+    where
+        State: 'static,
+    {
+        let host = self.host.clone().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "host-driven invocation requires AgentHarness::with_host_capabilities".into(),
+            )
+        })?;
+        self.invoke_agent_with_host_capabilities(host, request, context, state)
+            .await
+    }
+
+    /// Re-enters the canonical hosted entry point with the parent's exact
+    /// capabilities. Used only by recursive delegation after the parent
+    /// authority has authorized the child.
+    pub(crate) async fn invoke_agent_with_host_capabilities(
+        &self,
+        host: crate::host::HostCapabilities<State>,
+        request: AgentTurnRequest,
         mut context: RunContext<Ctx>,
         state: &State,
     ) -> Result<AgentRun>
     where
         State: 'static,
     {
-        let prepared = self.prepare_agent_turn(request, &context).await?;
+        let prepared = self.prepare_agent_turn(host, request, &context).await?;
         let context_id = context.instance_id();
         let agent_id = prepared.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
+        context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
+            host: prepared.host.clone(),
+        }));
         self.install_host_terminal_observer(&mut context, context_id, prepared.clone());
         self.emit_host_progress(
             context_id,
@@ -165,6 +201,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub async fn invoke_agent_stream<'a>(
         &'a self,
         request: AgentTurnRequest,
+        context: RunContext<Ctx>,
+        state: &'a State,
+    ) -> Result<AgentStream<'a, State, Ctx>>
+    where
+        Ctx: 'static,
+        State: 'static,
+    {
+        let host = self.host.clone().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "host-driven invocation requires AgentHarness::with_host_capabilities".into(),
+            )
+        })?;
+        self.invoke_agent_stream_with_host_capabilities(host, request, context, state)
+            .await
+    }
+
+    async fn invoke_agent_stream_with_host_capabilities<'a>(
+        &'a self,
+        host: crate::host::HostCapabilities<State>,
+        request: AgentTurnRequest,
         mut context: RunContext<Ctx>,
         state: &'a State,
     ) -> Result<AgentStream<'a, State, Ctx>>
@@ -172,10 +228,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ctx: 'static,
         State: 'static,
     {
-        let prepared = self.prepare_agent_turn(request, &context).await?;
+        let prepared = self.prepare_agent_turn(host, request, &context).await?;
         let context_id = context.instance_id();
         let agent_id = prepared.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
+        context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
+            host: prepared.host.clone(),
+        }));
         let cancellation = context.cancellation.clone();
         let terminal_observer =
             self.install_host_terminal_observer(&mut context, context_id, prepared.clone());
@@ -200,14 +259,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     async fn prepare_agent_turn(
         &self,
+        host: crate::host::HostCapabilities<State>,
         mut request: AgentTurnRequest,
         context: &RunContext<Ctx>,
     ) -> Result<PreparedAgentTurn<State>> {
-        let host = self.host.clone().ok_or_else(|| {
-            TinyAgentsError::Validation(
-                "host-driven invocation requires AgentHarness::with_host_capabilities".into(),
-            )
-        })?;
         if request.agent_id.trim().is_empty() {
             return Err(TinyAgentsError::Validation(
                 "host-driven invocation requires a non-empty agent id".into(),
@@ -300,6 +355,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.insert_host_run(
             context.instance_id(),
             HostRunBinding {
+                host: host.clone(),
                 agent_id: request.agent_id.clone(),
                 resolved: tinyinference_llm::model::ResolvedModel {
                     name: model_name,
