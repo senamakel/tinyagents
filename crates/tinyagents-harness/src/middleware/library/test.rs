@@ -1143,9 +1143,7 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw);
 
-    let mut result = ToolResult::error("abcdefgh")
-        .with_markdown("abcdefgh")
-        .verbatim();
+    let mut result = ToolResult::error("abcdefgh").with_markdown("abcdefgh");
     stack
         .run_after_tool(&mut ctx, &(), "reader", &mut result)
         .await
@@ -1153,7 +1151,6 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     assert_eq!(result.output(), "abcd");
     assert_eq!(result.markdown_formatted.as_deref(), Some("abcd"));
     assert!(result.is_error);
-    assert!(result.trusted_verbatim);
 }
 
 // ── HumanApprovalMiddleware ─────────────────────────────────────────────────

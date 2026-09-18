@@ -25,8 +25,10 @@
 //! - This file holds the builder, registration, and accessor methods.
 //! - `test.rs` holds focused tests for construction and registration.
 
+mod agent;
 mod types;
 
+pub use agent::{AgentStream, AgentTurnRequest};
 pub use types::*;
 
 use std::sync::Arc;
@@ -49,6 +51,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             policy: RunPolicy::default(),
             tool_timeouts: None,
             response_cache: None,
+            host: None,
+            host_runs: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -156,6 +160,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub fn with_response_cache(&mut self, cache: Arc<dyn ResponseCache>) -> &mut Self {
         self.response_cache = Some(cache);
         self
+    }
+
+    /// Installs the host capabilities used by [`Self::invoke_agent`] and
+    /// [`Self::invoke_agent_stream`].
+    ///
+    /// This does not alter the lower-level explicit-model APIs (`invoke`,
+    /// `invoke_in_context`, and their streaming counterparts): those remain a
+    /// separate SDK surface and never fabricate a host capability bundle.
+    pub fn with_host_capabilities(
+        &mut self,
+        host: crate::host::HostCapabilities<State>,
+    ) -> &mut Self {
+        self.host = Some(host);
+        self
+    }
+
+    /// Returns the installed host bundle, if this harness was configured for
+    /// host-driven invocation.
+    pub fn host_capabilities(&self) -> Option<&crate::host::HostCapabilities<State>> {
+        self.host.as_ref()
     }
 
     /// Returns a reference to the attached response cache, if any.

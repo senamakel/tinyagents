@@ -439,6 +439,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             status.set_last_event(record.id);
             return Ok(ResolvedToolCall::ErrorMessage(message));
         }
+        // Host authorization is deliberately last in admission: the gate sees
+        // the canonical arguments after hidden host values have replaced any
+        // model-forged fields, but before a tool can execute. A hosted run is
+        // identified from its explicit RunContext binding; the lower-level SDK
+        // path has no implicit host policy.
+        if let (Some(host), Some(binding)) =
+            (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
+        {
+            let request = crate::host::ToolCallRequest::from_tool_call(call, binding.agent_id);
+            let decision = host.security.authorize_tool(&request).await?;
+            if !decision.is_allowed() {
+                let reason = decision
+                    .denial_reason()
+                    .unwrap_or("tool call was not approved")
+                    .to_string();
+                return Ok(ResolvedToolCall::ErrorMessage(reason));
+            }
+        }
         Ok(ResolvedToolCall::Tool { dispatch, tool })
     }
 
@@ -541,6 +559,43 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 &err,
             );
             return Err(err);
+        }
+
+        // Tool output is untrusted input on its way back into the next model
+        // request. Screen it after host/result middleware shaping but before a
+        // transcript message exists, so neither the original nor a blocked
+        // value can reach the provider.
+        if let (Some(host), Some(_binding)) =
+            (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
+        {
+            let rendered = result.output_for_llm(prepared.options.prefer_markdown);
+            match host
+                .security
+                .screen_input(&rendered, crate::host::ContentOrigin::Tool)
+                .await?
+            {
+                crate::host::ScreenOutcome::Pass => {}
+                crate::host::ScreenOutcome::Redacted(text) => {
+                    result.content = vec![tinytools::ToolContent::Text { text }];
+                    result.markdown_formatted = None;
+                }
+                crate::host::ScreenOutcome::Block { reason } => {
+                    result = tinytools::ToolResult::error(reason);
+                }
+            }
+        }
+
+        if let (Some(host), Some(binding)) =
+            (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
+            && let Some(classifier) = &host.tool_outcomes
+        {
+            let outcome = classifier.classify(&prepared.tool_name, &result);
+            tinyagents_tracing::debug!(
+                tool = %prepared.tool_name,
+                agent = %binding.agent_id,
+                ?outcome,
+                "[host] classified tool outcome"
+            );
         }
 
         run.tool_calls += 1;
@@ -902,13 +957,16 @@ fn tool_message_from_result(
         "tinytools_content": result.content,
         "markdown_formatted": result.markdown_formatted,
         "is_error": result.is_error,
-        "trusted_verbatim": result.trusted_verbatim,
+        // A canonical tool result never gets to declare that its own output
+        // bypasses host framing. Trust is host/dispatch policy; until that
+        // policy explicitly marks a delivery, the safe default is false.
+        "trusted_verbatim": false,
     });
 
     tinyinference_llm::message::ToolMessage {
         tool_call_id,
         content,
-        trusted_verbatim: result.trusted_verbatim,
+        trusted_verbatim: false,
         artifact: Some(artifact),
     }
 }
@@ -1146,7 +1204,6 @@ mod canonical_result_tests {
                 },
             ],
             is_error: true,
-            trusted_verbatim: true,
             markdown_formatted: Some("## compact failure".to_string()),
         }
     }
@@ -1166,7 +1223,12 @@ mod canonical_result_tests {
                 vec![ContentBlock::Text("## compact failure".to_string())]
             );
             assert_eq!(message.artifact.as_ref().unwrap()["is_error"], true);
-            assert!(message.trusted_verbatim);
+            assert!(!message.trusted_verbatim);
+            assert_eq!(
+                message.artifact.as_ref().unwrap()["trusted_verbatim"],
+                false,
+                "a tool-controlled canonical result cannot opt out of host framing"
+            );
             assert_eq!(
                 message.artifact.as_ref().unwrap()["tinytools_content"],
                 serde_json::json!([

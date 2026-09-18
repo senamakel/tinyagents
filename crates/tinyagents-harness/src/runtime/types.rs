@@ -17,9 +17,12 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::cache::ResponseCache;
+use crate::host::HostCapabilities;
+use crate::ids::RunId;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
 use crate::model_registry::ModelRegistry;
@@ -27,6 +30,28 @@ use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::cache::CachePolicy;
 use tinyinference_llm::model::ResponseFormat;
+use tinyinference_llm::model::{ChatModel, ResolvedModel};
+
+/// Model and identity selected by a host-driven invocation.
+///
+/// This is deliberately keyed by [`RunContext`](crate::context::RunContext)'s
+/// process-local instance id, rather than its user-supplied run id: callers may
+/// legitimately run two turns with the same run id concurrently.
+pub(crate) struct HostRunBinding<State: Send + Sync> {
+    pub(crate) agent_id: String,
+    pub(crate) resolved: ResolvedModel,
+    pub(crate) model: Arc<dyn ChatModel<State>>,
+}
+
+impl<State: Send + Sync> Clone for HostRunBinding<State> {
+    fn clone(&self) -> Self {
+        Self {
+            agent_id: self.agent_id.clone(),
+            resolved: self.resolved.clone(),
+            model: Arc::clone(&self.model),
+        }
+    }
+}
 
 /// Declarative, run-scoped policy shared by every invocation of an
 /// [`AgentHarness`].
@@ -287,4 +312,10 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// into it. Because it is owned by the harness rather than a single run, a
     /// repeated identical request can be served from an earlier run's result.
     pub(crate) response_cache: Option<Arc<dyn ResponseCache>>,
+    /// Host bundle used only by the explicit host-driven entry points.
+    pub(crate) host: Option<HostCapabilities<State>>,
+    /// Per-live-context host model selections. The entry points install and
+    /// remove these around a run so explicit-model SDK calls remain independent
+    /// of host routing.
+    pub(crate) host_runs: Mutex<HashMap<u64, HostRunBinding<State>>>,
 }

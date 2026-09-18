@@ -313,18 +313,57 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .await?;
 
             // Resolve the model for the event/log name before invoking.
-            let binding = self
-                .models
-                .resolve_request(&request, None, None)
-                .ok_or_else(|| {
-                    TinyAgentsError::ModelNotFound(
-                        request
-                            .model
-                            .clone()
-                            .unwrap_or_else(|| "<default>".to_string()),
-                    )
-                })?;
+            // Hosted turns install their routing decision against this live
+            // `RunContext`; explicit-model SDK calls continue to resolve only
+            // through the local registry. Context-instance identity keeps two
+            // same-id concurrent runs from borrowing each other's model.
+            let binding = self.host_run_binding(ctx.instance_id()).map_or_else(
+                || {
+                    self.models
+                        .resolve_request(&request, None, None)
+                        .ok_or_else(|| {
+                            TinyAgentsError::ModelNotFound(
+                                request
+                                    .model
+                                    .clone()
+                                    .unwrap_or_else(|| "<default>".to_string()),
+                            )
+                        })
+                },
+                |binding| {
+                    Ok(ResolvedModelBinding {
+                        resolved: binding.resolved,
+                        model: binding.model,
+                    })
+                },
+            )?;
             let model_name = binding.resolved.name.clone();
+
+            // A host budget is acquired only for an explicit host-driven run.
+            // The permit remains alive through response accounting below, so a
+            // cancellation or provider error still releases it through Drop.
+            let host_budget = if let (Some(host), Some(host_run)) =
+                (self.host.as_ref(), self.host_run_binding(ctx.instance_id()))
+            {
+                if let Some(budget) = &host.budget {
+                    let estimate = crate::host::CallEstimate::new(
+                        &model_name,
+                        crate::token_estimation::estimate_slice_tokens(&request.messages),
+                        request.max_tokens.unwrap_or_default() as u64,
+                    )
+                    .with_agent(host_run.agent_id)
+                    .with_thread(
+                        ctx.thread_id()
+                            .cloned()
+                            .unwrap_or_else(|| ctx.run_id().as_str().into()),
+                    );
+                    Some((budget, budget.acquire(&estimate).await?))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             // An explicit request override that resolution skipped (unknown
             // name, missing capability, or provider-retired) falls through to
@@ -473,6 +512,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     status.usage = run.usage;
                     let record = ctx.emit(AgentEvent::UsageRecorded { usage });
                     status.set_last_event(record.id);
+                }
+                if let Some((budget, _permit)) = &host_budget {
+                    budget.record(&usage).await?;
                 }
             }
             let captured_output = self
