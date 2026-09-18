@@ -23,6 +23,12 @@ use crate::limits::LimitTracker;
 use crate::steering::SteeringHandle;
 use crate::store::StoreRegistry;
 
+/// One-shot observer invoked with the exact accumulated run when a driver
+/// completes or is dropped. Kept crate-private: it is runtime lifecycle glue,
+/// not a host policy extension point.
+pub(crate) type TerminalObserver =
+    Box<dyn FnOnce(crate::middleware::AgentRun, bool, Option<String>) + Send + Sync + 'static>;
+
 /// The immutable ancestry of a run in a recursive harness invocation tree.
 ///
 /// A lineage names the root run, the immediate parent (when this is a child),
@@ -250,4 +256,10 @@ pub struct RunContext<Ctx = ()> {
     /// shared [`EventSink`]. A non-streaming parent leaves this `false`, so its
     /// event stream is unchanged.
     pub streaming: bool,
+    /// Host definition id currently driving this context, propagated into a
+    /// child so recursive delegation can be authorized by the host registry.
+    pub(crate) host_agent_id: Option<String>,
+    /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
+    /// agent-loop guard even when the driving future is cancelled or dropped.
+    pub(crate) terminal_observer: Option<TerminalObserver>,
 }

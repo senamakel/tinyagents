@@ -301,6 +301,8 @@ impl<Ctx> RunContext<Ctx> {
             workspace: None,
             on_error_dispatched: false,
             streaming: false,
+            host_agent_id: None,
+            terminal_observer: None,
         }
     }
 
@@ -319,13 +321,23 @@ impl<Ctx> RunContext<Ctx> {
     ) -> Result<RunContext<ChildCtx>> {
         let mut config = self.config.child(child_config)?;
         config.metadata = shallow_merge_metadata(&self.config.metadata, config.metadata);
-        Ok(RunContext::new(config, data)
+        let mut child = RunContext::new(config, data)
             .with_stores(self.stores.clone())
             .with_events(self.events.clone())
             .with_cancellation(self.cancellation.clone())
             .with_optional_steering(self.steering.clone())
             .with_optional_workspace(self.workspace.clone())
-            .with_streaming(self.streaming))
+            .with_streaming(self.streaming);
+        child.host_agent_id = self.host_agent_id.clone();
+        Ok(child)
+    }
+
+    /// Installs runtime-owned terminal bookkeeping for this invocation.
+    ///
+    /// This is crate-private because public callers must not couple their
+    /// behavior to future cancellation mechanics.
+    pub(crate) fn set_terminal_observer(&mut self, observer: TerminalObserver) {
+        self.terminal_observer = Some(observer);
     }
 
     /// Returns this run's recursive ancestry.

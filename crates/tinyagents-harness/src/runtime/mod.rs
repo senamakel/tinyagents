@@ -52,7 +52,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             tool_timeouts: None,
             response_cache: None,
             host: None,
-            host_runs: std::sync::Mutex::new(std::collections::HashMap::new()),
+            host_runs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

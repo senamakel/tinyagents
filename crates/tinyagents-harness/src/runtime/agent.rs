@@ -56,45 +56,39 @@ impl AgentTurnRequest {
 /// Dropping it removes the per-context host routing entry even when a caller
 /// stops listening before a terminal item.
 pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
-    inner: Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>,
-    harness: &'a AgentHarness<State, Ctx>,
-    context_id: u64,
-    prepared: Option<PreparedAgentTurn<State>>,
+    inner: Option<Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>>,
+    cancellation: crate::CancellationToken,
+    terminal_observer: std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>,
+    marker: std::marker::PhantomData<(&'a State, Ctx)>,
 }
 
 impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, State, Ctx> {
     type Item = AgentStreamItem;
 
-    fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let poll = self.inner.as_mut().poll_next(context);
-        if let Poll::Ready(Some(item)) = &poll {
-            let terminal = match item {
-                AgentStreamItem::Completed(run) => Some((run.as_ref().clone(), true, None)),
-                AgentStreamItem::Failed { error, run } => {
-                    Some((run.as_ref().clone(), false, Some(error.clone())))
-                }
-                AgentStreamItem::Event(_) => None,
-            };
-            if let Some((run, succeeded, error)) = terminal {
-                self.harness.remove_host_binding(self.context_id);
-                if let Some(prepared) = self.prepared.take() {
-                    spawn_host_finalizer(prepared, run, succeeded, error);
-                }
-            }
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // `inner` is pinned independently by `Box`; projecting only that field
+        // does not move the outer stream.
+        let inner = unsafe { self.map_unchecked_mut(|stream| &mut stream.inner) };
+        match inner.get_mut().as_mut() {
+            Some(inner) => inner.as_mut().poll_next(context),
+            None => Poll::Ready(None),
         }
-        poll
     }
 }
 
 impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, State, Ctx> {
     fn drop(&mut self) {
-        self.harness.remove_host_binding(self.context_id);
-        if let Some(prepared) = self.prepared.take() {
-            spawn_host_finalizer(
-                prepared,
+        // Dropping the driving stream drops the loop's `TerminalRunGuard`,
+        // which forwards its actual partial run to the installed observer.
+        self.cancellation.cancel();
+        self.inner.take();
+        if let Ok(mut observer) = self.terminal_observer.lock()
+            && let Some(observer) = observer.take()
+        {
+            observer(
                 AgentRun::new(),
                 false,
-                Some("hosted stream cancelled by caller".to_string()),
+                Some("hosted stream cancelled before execution began".to_string()),
             );
         }
     }
@@ -110,6 +104,20 @@ struct PreparedAgentTurn<State: Send + Sync> {
     progress: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
 }
 
+impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
+    fn clone(&self) -> Self {
+        Self {
+            host: self.host.clone(),
+            agent_id: self.agent_id.clone(),
+            thread_id: self.thread_id.clone(),
+            run_id: self.run_id.clone(),
+            input_text: self.input_text.clone(),
+            messages: self.messages.clone(),
+            progress: self.progress.clone(),
+        }
+    }
+}
+
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Runs an agent through the installed host-capability bundle.
     ///
@@ -119,35 +127,32 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub async fn invoke_agent(
         &self,
         request: AgentTurnRequest,
-        context: RunContext<Ctx>,
+        mut context: RunContext<Ctx>,
         state: &State,
-    ) -> Result<AgentRun> {
+    ) -> Result<AgentRun>
+    where
+        State: 'static,
+    {
         let prepared = self.prepare_agent_turn(request, &context).await?;
         let context_id = context.instance_id();
-        self.install_host_binding(context_id, &prepared);
+        let agent_id = prepared.agent_id.clone();
+        context.host_agent_id = Some(agent_id.clone());
+        self.install_host_terminal_observer(&mut context, context_id, prepared.clone());
         self.emit_host_progress(
             context_id,
             ProgressEvent::Started {
                 run: context.run_id().clone(),
                 thread: context.thread_id().cloned(),
-                agent: prepared.agent_id.clone(),
+                agent: agent_id,
             },
         );
 
         let outcome = self
             .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
             .await;
-        self.remove_host_binding(context_id);
-
         match outcome.error {
-            None => {
-                finish_host_turn(prepared, outcome.run.clone(), true, None).await;
-                Ok(outcome.run)
-            }
-            Some(error) => {
-                finish_host_turn(prepared, outcome.run, false, Some(error.to_string())).await;
-                Err(error)
-            }
+            None => Ok(outcome.run),
+            Some(error) => Err(error),
         }
     }
 
@@ -160,7 +165,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub async fn invoke_agent_stream<'a>(
         &'a self,
         request: AgentTurnRequest,
-        context: RunContext<Ctx>,
+        mut context: RunContext<Ctx>,
         state: &'a State,
     ) -> Result<AgentStream<'a, State, Ctx>>
     where
@@ -169,23 +174,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     {
         let prepared = self.prepare_agent_turn(request, &context).await?;
         let context_id = context.instance_id();
-        self.install_host_binding(context_id, &prepared);
+        let agent_id = prepared.agent_id.clone();
+        context.host_agent_id = Some(agent_id.clone());
+        let cancellation = context.cancellation.clone();
+        let terminal_observer =
+            self.install_host_terminal_observer(&mut context, context_id, prepared.clone());
         self.emit_host_progress(
             context_id,
             ProgressEvent::Started {
                 run: context.run_id().clone(),
                 thread: context.thread_id().cloned(),
-                agent: prepared.agent_id.clone(),
+                agent: agent_id,
             },
         );
         let stream = self
             .invoke_stream_in_context(state, context, prepared.messages.clone())
             .map(|item| item);
         Ok(AgentStream {
-            inner: Box::pin(stream),
-            harness: self,
-            context_id,
-            prepared: Some(prepared),
+            inner: Some(Box::pin(stream)),
+            cancellation,
+            terminal_observer,
+            marker: std::marker::PhantomData,
         })
     }
 
@@ -330,16 +339,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ok(())
     }
 
-    fn install_host_binding(&self, _context_id: u64, _prepared: &PreparedAgentTurn<State>) {
-        // `prepare_agent_turn` installs the binding before returning so model
-        // resolution cannot race with a concurrently-started child. Kept as a
-        // named step to make the run lifecycle obvious at the entry point.
-    }
-
-    pub(crate) fn remove_host_binding(&self, context_id: u64) {
-        if let Ok(mut runs) = self.host_runs.lock() {
-            runs.remove(&context_id);
-        }
+    fn install_host_terminal_observer(
+        &self,
+        context: &mut RunContext<Ctx>,
+        context_id: u64,
+        prepared: PreparedAgentTurn<State>,
+    ) -> std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>
+    where
+        State: 'static,
+    {
+        let runs = std::sync::Arc::clone(&self.host_runs);
+        let observer = std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
+            move |run, succeeded, error| {
+                if let Ok(mut runs) = runs.lock() {
+                    runs.remove(&context_id);
+                } else {
+                    tinyagents_tracing::warn!(
+                        "[host] host run binding lock poisoned during terminal cleanup"
+                    );
+                }
+                spawn_host_finalizer(prepared, run, succeeded, error);
+            },
+        )
+            as crate::context::TerminalObserver)));
+        let for_context = std::sync::Arc::clone(&observer);
+        context.set_terminal_observer(Box::new(move |run, succeeded, error| {
+            if let Ok(mut observer) = for_context.lock()
+                && let Some(observer) = observer.take()
+            {
+                observer(run, succeeded, error);
+            }
+        }));
+        observer
     }
 
     /// Best-effort progress projection. A host UI must never make the turn
@@ -381,11 +412,12 @@ async fn finish_host_turn<State: Send + Sync>(
                 run: prepared.run_id.clone(),
                 message,
             });
+        } else {
+            let _ = progress.send(ProgressEvent::Finished {
+                run: prepared.run_id.clone(),
+                usage: Some(run.usage.usage),
+            });
         }
-        let _ = progress.send(ProgressEvent::Finished {
-            run: prepared.run_id.clone(),
-            usage: Some(run.usage.usage),
-        });
     }
     let output = run.text().unwrap_or_default();
     let mut summary = TurnSummary::new(prepared.thread_id.clone(), &prepared.agent_id)
@@ -393,6 +425,19 @@ async fn finish_host_turn<State: Send + Sync>(
         .with_usage(run.usage.usage);
     for tool in &run.executed_tools {
         summary.record_tool(tool);
+    }
+    if let Some(memory) = &prepared.host.memory {
+        let item = crate::host::NewMemory::new(&output)
+            .with_thread(prepared.thread_id.clone())
+            .with_agent(&prepared.agent_id)
+            .with_tag(if succeeded {
+                "turn_success"
+            } else {
+                "turn_failure"
+            });
+        if let Err(error) = memory.remember(item).await {
+            tinyagents_tracing::warn!(%error, "[host] memory sink failed after terminal turn");
+        }
     }
     if let Some(learning) = &prepared.host.learning
         && let Err(error) = learning.on_turn_complete(&summary).await

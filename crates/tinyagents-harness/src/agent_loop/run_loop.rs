@@ -365,6 +365,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             "[host] budget gate advised context compression"
                         );
                     }
+                    if hint.is_required() {
+                        return Err(TinyAgentsError::Validation(
+                            "host budget requires context compression before provider call".into(),
+                        ));
+                    }
                     let estimate = crate::host::CallEstimate::new(
                         &model_name,
                         crate::token_estimation::estimate_slice_tokens(&request.messages),
@@ -532,7 +537,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let record = ctx.emit(AgentEvent::UsageRecorded { usage });
                     status.set_last_event(record.id);
                 }
-                if let Some((budget, _permit)) = &host_budget {
+                if !response.served_from_cache
+                    && let Some((budget, _permit)) = &host_budget
+                {
                     budget.record(&usage).await?;
                 }
             }

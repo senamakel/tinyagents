@@ -88,7 +88,7 @@ use crate::runtime::AgentHarness;
 use crate::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
-impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgent<State, Ctx> {
     /// Creates a sub-agent wrapping `harness` with a stable `name` and
     /// `description`.
     pub fn new(
@@ -258,6 +258,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
         let messages = self.seed_messages(input);
+        if let (Some(host), Some(parent_agent)) = (
+            self.harness.host_capabilities(),
+            ctx.host_agent_id.as_deref(),
+        ) {
+            let delegates =
+                host.definitions
+                    .delegates_for(parent_agent)
+                    .await
+                    .map_err(|error| {
+                        TinyAgentsError::Validation(format!(
+                            "delegate authorization lookup failed: {error}"
+                        ))
+                    })?;
+            if !delegates.iter().any(|delegate| delegate == &self.name) {
+                return Err(TinyAgentsError::Validation(format!(
+                    "agent `{}` is not authorized to delegate to `{}`",
+                    parent_agent, self.name
+                )));
+            }
+        }
         // Clone the sink (it shares listeners and the offset counter with the
         // context) so the completion event can be emitted after `ctx` is moved
         // into the child agent loop.
@@ -452,7 +472,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
     }
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
     /// Default JSON Schema for a sub-agent tool: an object with one required
     /// string field named [`SUBAGENT_INPUT_FIELD`].
     fn default_parameters() -> Value {
@@ -585,7 +605,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
 #[async_trait]
 impl<State, Ctx> ToolDispatch<State, Ctx> for SubAgentTool<State, Ctx>
 where
-    State: Send + Sync,
+    State: Send + Sync + 'static,
     Ctx: Send + Sync,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {

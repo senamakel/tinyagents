@@ -320,5 +320,5 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// Per-live-context host model selections. The entry points install and
     /// remove these around a run so explicit-model SDK calls remain independent
     /// of host routing.
-    pub(crate) host_runs: Mutex<HashMap<u64, HostRunBinding<State>>>,
+    pub(crate) host_runs: Arc<Mutex<HashMap<u64, HostRunBinding<State>>>>,
 }

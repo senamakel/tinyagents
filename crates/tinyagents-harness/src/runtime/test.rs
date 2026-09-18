@@ -1,21 +1,30 @@
 //! Tests for the [`AgentHarness`] builder and [`RunPolicy`].
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use crate::context::{RunConfig, RunContext};
 use crate::host::{
-    AgentMemory, AllowAllSecurityGate, ErrorFieldClassifier, FixedModelResolver, GateDecision,
-    InMemoryAgentMemory, InMemoryExperienceStore, NoopLearningSink, RecordingProgressSink,
-    ScreenOutcome, SecurityGate, StaticContextComposer, ToolCallRequest, UnlimitedBudgetGate,
+    AgentMemory, AllowAllSecurityGate, BudgetGate, CallEstimate, CompressionHint, ContextState,
+    ErrorFieldClassifier, FixedModelResolver, GateDecision, InMemoryAgentMemory,
+    InMemoryExperienceStore, NoopLearningSink, Permit, RecordingProgressSink, ScreenOutcome,
+    SecurityGate, StaticContextComposer, ToolCallRequest, UnlimitedBudgetGate,
 };
 use crate::limits::RunLimits;
 use crate::middleware::LoggingMiddleware;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentTurnRequest, RunPolicy};
+use crate::subagent::{ChildDataPolicy, SubAgent, SubAgentTool};
 use crate::testkit::ScriptedModel;
 use futures::StreamExt;
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::{
+    model::{ChatModel, ModelRequest, ModelResponse},
+    usage::Usage,
+};
 use tinytools::{Tool, ToolResult};
 
 use async_trait::async_trait;
@@ -26,6 +35,78 @@ struct NoopTool;
 struct DenyToolGate;
 
 struct RetryableClassifier;
+
+struct RecordingBudget {
+    hint: CompressionHint,
+    records: Mutex<Vec<Usage>>,
+}
+
+impl RecordingBudget {
+    fn hard() -> Self {
+        Self {
+            hint: CompressionHint::Hard,
+            records: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn permissive() -> Self {
+        Self {
+            hint: CompressionHint::None,
+            records: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl BudgetGate for RecordingBudget {
+    async fn acquire(&self, _estimate: &CallEstimate) -> crate::error::Result<Permit> {
+        Ok(Permit::unlimited())
+    }
+
+    async fn record(&self, usage: &Usage) -> crate::error::Result<()> {
+        self.records.lock().expect("budget lock").push(*usage);
+        Ok(())
+    }
+
+    fn compression_hint(&self, _state: &ContextState) -> CompressionHint {
+        self.hint
+    }
+}
+
+#[derive(Default)]
+struct PartialThenPendingModel {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ChatModel<()> for PartialThenPendingModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let mut response = ModelResponse::assistant("");
+            response
+                .message
+                .tool_calls
+                .push(tinyinference_llm::tool::ToolCall::new(
+                    "partial-tool",
+                    "noop",
+                    json!({}),
+                ));
+            response.usage = Some(Usage {
+                input_tokens: 3,
+                output_tokens: 2,
+                total_tokens: 5,
+                ..Usage::default()
+            });
+            Ok(response)
+        } else {
+            std::future::pending().await
+        }
+    }
+}
 
 impl crate::host::ToolOutcomeClassifier for RetryableClassifier {
     fn classify(&self, _name: &str, _result: &ToolResult) -> crate::host::OutcomeClass {
@@ -55,6 +136,36 @@ impl crate::host::LearningSink for RecordingLearning {
 #[derive(Default)]
 struct RecordingExperience {
     records: Mutex<Vec<crate::host::Experience>>,
+}
+
+#[derive(Default)]
+struct RecordingMemory {
+    items: Mutex<Vec<crate::host::NewMemory>>,
+}
+
+#[async_trait]
+impl AgentMemory for RecordingMemory {
+    async fn recall(
+        &self,
+        _req: crate::host::RecallRequest,
+    ) -> crate::error::Result<Vec<crate::host::MemoryItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn remember(
+        &self,
+        item: crate::host::NewMemory,
+    ) -> crate::error::Result<crate::host::MemoryId> {
+        self.items.lock().expect("memory lock").push(item);
+        Ok(crate::host::MemoryId::new("recorded"))
+    }
+
+    async fn thread_summary(
+        &self,
+        _thread: &crate::ids::ThreadId,
+    ) -> crate::error::Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -345,13 +456,13 @@ async fn hosted_streams_finalize_success_failure_and_drop_with_terminal_host_rec
             assert!(terminal.is_some(), "stream reaches terminal item");
         }
         drop(stream);
-        assert!(
+        yield_until(|| {
             harness
                 .host_run_binding(context_id)
                 .expect("binding lock")
-                .is_none(),
-            "terminal observation and Drop both remove the exact run binding"
-        );
+                .is_none()
+        })
+        .await;
         yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
         yield_until(|| experience.records.lock().expect("experience lock").len() == 1).await;
         yield_until(|| {
@@ -386,6 +497,15 @@ async fn hosted_streams_finalize_success_failure_and_drop_with_terminal_host_rec
             .iter()
             .any(|event| matches!(event, crate::host::ProgressEvent::Error { .. }))
     );
+    assert_eq!(
+        progress
+            .events()
+            .iter()
+            .filter(|event| event.is_terminal())
+            .count(),
+        1,
+        "a failed turn has one terminal progress event"
+    );
 
     let (_learning, experience, progress) = run_terminal_case(
         Arc::new(ScriptedModel::replies(vec!["unused"])),
@@ -400,6 +520,137 @@ async fn hosted_streams_finalize_success_failure_and_drop_with_terminal_host_rec
             .iter()
             .any(|event| matches!(event, crate::host::ProgressEvent::Error { .. }))
     );
+    assert_eq!(
+        progress
+            .events()
+            .iter()
+            .filter(|event| event.is_terminal())
+            .count(),
+        1,
+        "a cancelled turn has one terminal progress event"
+    );
+}
+
+#[tokio::test]
+async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
+    async fn host_with_partial_model(
+        model: Arc<PartialThenPendingModel>,
+    ) -> (
+        Arc<AgentHarness<()>>,
+        Arc<RecordingLearning>,
+        Arc<RecordingExperience>,
+        Arc<RecordingMemory>,
+        Arc<RecordingProgressSink>,
+    ) {
+        let learning = Arc::new(RecordingLearning::default());
+        let experience = Arc::new(RecordingExperience::default());
+        let memory = Arc::new(RecordingMemory::default());
+        let progress = Arc::new(RecordingProgressSink::new());
+        let host = crate::host::HostCapabilities::new(
+            Arc::new(StaticContextComposer::empty()),
+            Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+                "helper",
+                "Helper",
+                "test helper",
+            )])),
+            Arc::new(AllowAllSecurityGate),
+            Arc::new(FixedModelResolver::new(model)),
+        )
+        .with_learning(learning.clone())
+        .with_experience(experience.clone())
+        .with_memory(memory.clone())
+        .with_progress(progress.clone());
+        let mut harness = AgentHarness::new();
+        harness.register_tool(Arc::new(NoopTool));
+        harness.with_host_capabilities(host);
+        (Arc::new(harness), learning, experience, memory, progress)
+    }
+
+    async fn wait_for_second_call(model: &PartialThenPendingModel) {
+        yield_until(|| model.calls.load(Ordering::SeqCst) >= 2).await;
+    }
+
+    let model = Arc::new(PartialThenPendingModel::default());
+    let (harness, learning, experience, memory, progress) =
+        host_with_partial_model(model.clone()).await;
+    let task_harness = harness.clone();
+    let task = tokio::spawn(async move {
+        task_harness
+            .invoke_agent(
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("partial")],
+                ),
+                RunContext::new(RunConfig::new("unary-drop"), ()),
+                &(),
+            )
+            .await
+    });
+    wait_for_second_call(&model).await;
+    task.abort();
+    let _ = task.await;
+    yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
+    assert_eq!(
+        learning.summaries.lock().expect("learning lock")[0]
+            .usage
+            .total_tokens,
+        5
+    );
+    assert_eq!(
+        learning.summaries.lock().expect("learning lock")[0].tools_invoked,
+        ["noop"]
+    );
+    assert!(!experience.records.lock().expect("experience lock")[0].success);
+    assert_eq!(memory.items.lock().expect("memory lock").len(), 1);
+    let terminals: Vec<_> = progress
+        .events()
+        .into_iter()
+        .filter(|event| event.is_terminal())
+        .collect();
+    assert!(matches!(
+        terminals.as_slice(),
+        [crate::host::ProgressEvent::Error { .. }]
+    ));
+
+    let model = Arc::new(PartialThenPendingModel::default());
+    let (harness, learning, experience, _memory, progress) =
+        host_with_partial_model(model.clone()).await;
+    let mut stream = harness
+        .invoke_agent_stream(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("partial")],
+            ),
+            RunContext::new(RunConfig::new("stream-drop"), ()),
+            &(),
+        )
+        .await
+        .expect("stream starts");
+    while model.calls.load(Ordering::SeqCst) < 2 {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(10), stream.next()).await;
+    }
+    drop(stream);
+    yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
+    assert_eq!(
+        learning.summaries.lock().expect("learning lock")[0]
+            .usage
+            .total_tokens,
+        5
+    );
+    assert_eq!(
+        learning.summaries.lock().expect("learning lock")[0].tools_invoked,
+        ["noop"]
+    );
+    assert!(!experience.records.lock().expect("experience lock")[0].success);
+    let terminals: Vec<_> = progress
+        .events()
+        .into_iter()
+        .filter(|event| event.is_terminal())
+        .collect();
+    assert!(matches!(
+        terminals.as_slice(),
+        [crate::host::ProgressEvent::Error { .. }]
+    ));
 }
 
 #[tokio::test]
@@ -442,6 +693,7 @@ async fn denied_tool_calls_do_not_enter_terminal_executed_tool_summary() {
         )
         .await
         .expect("denial is recoverable");
+    yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
     let summaries = learning.summaries.lock().expect("learning lock");
     assert!(
         summaries[0].tools_invoked.is_empty(),
@@ -577,4 +829,128 @@ async fn same_user_run_id_concurrent_host_turns_keep_distinct_bindings() {
     assert!(first.is_ok());
     assert!(second.is_ok());
     assert!(harness.host_runs.lock().expect("binding lock").is_empty());
+}
+
+#[tokio::test]
+async fn hard_budget_compression_hint_blocks_before_the_provider_call() {
+    let model = Arc::new(ScriptedModel::replies(vec!["must not run"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_budget(Arc::new(RecordingBudget::hard()));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+    let error = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("compress")],
+            ),
+            RunContext::new(RunConfig::new("hard-compression"), ()),
+            &(),
+        )
+        .await
+        .expect_err("hard compression must prevent an uncompressed provider call");
+    assert!(error.to_string().contains("requires context compression"));
+    assert!(model.requests().is_empty());
+}
+
+#[tokio::test]
+async fn cached_host_response_does_not_re_record_provider_usage() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::assistant("cached").with_usage(Usage {
+            input_tokens: 2,
+            output_tokens: 3,
+            total_tokens: 5,
+            ..Usage::default()
+        }),
+    ]));
+    let budget = Arc::new(RecordingBudget::permissive());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_budget(budget.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_response_cache(Arc::new(crate::cache::InMemoryResponseCache::new()));
+    harness.with_host_capabilities(host);
+    for run_id in ["cache-one", "cache-two"] {
+        harness
+            .invoke_agent(
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("same")],
+                ),
+                RunContext::new(RunConfig::new(run_id), ()),
+                &(),
+            )
+            .await
+            .expect("cached run succeeds");
+    }
+    assert_eq!(model.requests().len(), 1, "second call is cache-served");
+    assert_eq!(budget.records.lock().expect("budget lock").len(), 1);
+}
+
+#[tokio::test]
+async fn host_delegate_registry_authorizes_recursive_children() {
+    let mut parent_tool_call = ModelResponse::assistant("");
+    parent_tool_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "delegate",
+            "worker",
+            json!({"input": "child task"}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        parent_tool_call,
+        ModelResponse::assistant("child answer"),
+        ModelResponse::assistant("parent answer"),
+    ]));
+    let mut parent = AgentDefinition::new("parent", "Parent", "delegates");
+    parent.subagents.push("worker".into());
+    let definitions = Arc::new(InMemoryDefinitionRegistry::new(vec![
+        parent,
+        AgentDefinition::new("worker", "Worker", "child"),
+    ]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        definitions,
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let mut child_harness = AgentHarness::new();
+    child_harness.with_host_capabilities(host.clone());
+    let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
+    let mut parent_harness = AgentHarness::new();
+    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+        child,
+        ChildDataPolicy::new(|_: &()| ()),
+    )));
+    parent_harness.with_host_capabilities(host);
+    let run = parent_harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "parent",
+                vec![tinyinference_llm::message::Message::user("delegate")],
+            ),
+            RunContext::new(RunConfig::new("authorized-child"), ()),
+            &(),
+        )
+        .await
+        .expect("registered delegate runs through the hosted child entry point");
+    assert_eq!(run.text().as_deref(), Some("parent answer"));
 }
