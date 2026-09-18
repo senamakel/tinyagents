@@ -56,7 +56,6 @@ use tinyagents_harness::Result;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy};
 use tinyagents_harness::testkit::{EventRecorder, Trajectory};
-use tinyagents_harness::tool::{Tool, ToolResult};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelStreamItem, ResponseFormat, StreamAccumulator, ToolChoice,
@@ -64,6 +63,7 @@ use tinyinference_llm::model::{
 use tinyinference_llm::providers::openai::OpenAiModel;
 use tinyinference_llm::providers::{ProviderKind, ProviderSpec};
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinytools::{Tool, ToolResult};
 
 /// Per-call ceiling. A cold local model has to load several GB off disk before
 /// it emits its first token, so this is deliberately generous.
@@ -393,7 +393,7 @@ impl WeatherTool {
 }
 
 #[async_trait]
-impl Tool<()> for WeatherTool {
+impl Tool for WeatherTool {
     fn name(&self) -> &str {
         "get_weather"
     }
@@ -402,23 +402,20 @@ impl Tool<()> for WeatherTool {
         "Returns the current weather for a given city. Always use this tool for weather questions."
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.name(), self.description(), Self::schema_json())
+    fn parameters_schema(&self) -> serde_json::Value {
+        Self::schema_json()
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-        let city = call
-            .arguments
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let city = arguments
             .get("city")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
         self.seen.lock().expect("weather tool lock").push(city);
-        Ok(ToolResult::text(
-            call.id,
-            "get_weather",
-            format!("{SENTINEL_TEMPERATURE} degrees Celsius and {SENTINEL_CONDITION}",),
-        ))
+        Ok(ToolResult::success(format!(
+            "{SENTINEL_TEMPERATURE} degrees Celsius and {SENTINEL_CONDITION}",
+        )))
     }
 }
 

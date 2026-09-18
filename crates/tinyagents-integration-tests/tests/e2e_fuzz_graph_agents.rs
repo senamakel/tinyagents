@@ -18,6 +18,7 @@ use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::events::EventSink;
 use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, Trajectory};
 use tinyagents_harness::*;
 use tinyagents_language::*;
@@ -264,6 +265,8 @@ fn tool_call_response(calls: Vec<ToolCall>) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -281,6 +284,8 @@ fn text_response(text: impl Into<String>) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -311,7 +316,10 @@ fn parent_harness(scenario: Scenario, node: &str) -> AgentHarness<()> {
             "delegate deterministic work to a child agent",
             Arc::new(child_harness(format!("child:{}:{node}", scenario.id))),
         ));
-        harness.register_tool(Arc::new(SubAgentTool::new(child)));
+        harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+            child,
+            ChildDataPolicy::new(|parent: &()| *parent),
+        )));
         calls.push(ToolCall::new(
             format!("{}-{node}-delegate", scenario.id),
             "delegate",

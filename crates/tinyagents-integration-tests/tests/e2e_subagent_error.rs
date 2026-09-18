@@ -21,8 +21,8 @@ use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, Trajectory};
-use tinyagents_harness::tool::Tool;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
@@ -70,12 +70,15 @@ async fn subagent_tool_call_surfaces_failure_as_err() {
         "a worker whose tool always fails",
         Arc::new(failing_child_harness()),
     ));
-    let tool = SubAgentTool::new(subagent);
+    let tool = SubAgentTool::new(subagent, ChildDataPolicy::new(|parent: &()| *parent));
+    let parent = RunContext::new(RunConfig::new("parent"), ());
 
     let err = tool
-        .call(
+        .invoke_in_parent_context(
             &(),
-            ToolCall::new("c1", "broken_worker", json!({ "input": "x" })),
+            json!({ "input": "x" }),
+            tinytools::ToolCallOptions::default(),
+            &parent,
         )
         .await
         .expect_err("SubAgentTool::call must surface the child failure as an Err");
@@ -96,10 +99,13 @@ async fn orchestrator_observes_failing_subagent_tool() {
         "a worker whose tool always fails",
         Arc::new(failing_child_harness()),
     ));
-    let tool = Arc::new(SubAgentTool::new(subagent));
+    let tool = Arc::new(SubAgentTool::new(
+        subagent,
+        ChildDataPolicy::new(|parent: &()| *parent),
+    ));
 
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
-    orchestrator.register_tool(tool);
+    orchestrator.register_tool_dispatch(tool);
     orchestrator.register_model(
         "parent-model",
         Arc::new(MockModel::with_tool_call(

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
-pub use tinyagents_harness::cost::ModelPricing;
+use tinyagents_harness::cost::ModelPricing;
 
 const SEED_SNAPSHOT: &str = include_str!("../model-catalog.snapshot.json");
 

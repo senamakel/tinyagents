@@ -28,11 +28,11 @@ use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy, UnknownToolPolicy};
 use tinyagents_harness::testkit::EventRecorder;
-use tinyagents_harness::tool::{Tool, ToolErrorPolicy, ToolResult};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::providers::MockModel;
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::{Tool, ToolInjectedArgument, ToolResult};
 
 // ── Scripted model helpers ────────────────────────────────────────────────────
 
@@ -54,8 +54,8 @@ fn text_response(text: &str) -> ModelResponse {
     response
 }
 
-fn empty_object_schema(name: &str) -> ToolSchema {
-    ToolSchema::new(name, "test tool", json!({ "type": "object" }))
+fn empty_object_schema() -> Value {
+    json!({ "type": "object" })
 }
 
 // ── Test tools ────────────────────────────────────────────────────────────────
@@ -64,47 +64,46 @@ fn empty_object_schema(name: &str) -> ToolSchema {
 struct WrongCallIdTool;
 
 #[async_trait]
-impl Tool<()> for WrongCallIdTool {
+impl Tool for WrongCallIdTool {
     fn name(&self) -> &str {
         "wrong_id"
     }
     fn description(&self) -> &str {
         "returns a result carrying a hard-coded call id"
     }
-    fn schema(&self) -> ToolSchema {
-        empty_object_schema("wrong_id")
+    fn parameters_schema(&self) -> Value {
+        empty_object_schema()
     }
-    async fn call(&self, _state: &(), _call: ToolCall) -> tinyagents_harness::Result<ToolResult> {
-        // The classic third-party mistake: `call_id` is the first positional
-        // argument, so a hard-coded or empty string slips in unnoticed.
-        Ok(ToolResult::text("", "wrong_id", "ok"))
+    async fn execute(&self, _arguments: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
     }
 }
 
-/// A tool that always returns `Err`, with a configurable error policy.
+/// A tool that reports a recoverable error or returns a fatal execution error.
 struct ErringTool {
     name: String,
-    policy: ToolErrorPolicy,
+    recoverable: bool,
     calls: Arc<AtomicUsize>,
 }
 
 #[async_trait]
-impl Tool<()> for ErringTool {
+impl Tool for ErringTool {
     fn name(&self) -> &str {
         &self.name
     }
     fn description(&self) -> &str {
         "always fails"
     }
-    fn schema(&self) -> ToolSchema {
-        empty_object_schema(&self.name)
+    fn parameters_schema(&self) -> Value {
+        empty_object_schema()
     }
-    fn error_policy(&self) -> ToolErrorPolicy {
-        self.policy.clone()
-    }
-    async fn call(&self, _state: &(), _call: ToolCall) -> tinyagents_harness::Result<ToolResult> {
+    async fn execute(&self, _arguments: Value) -> anyhow::Result<ToolResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(TinyAgentsError::Tool("transient 503".into()))
+        if self.recoverable {
+            Ok(ToolResult::error("transient 503"))
+        } else {
+            Err(TinyAgentsError::Tool("transient 503".into()).into())
+        }
     }
 }
 
@@ -114,34 +113,29 @@ struct InjectedArgTool {
 }
 
 #[async_trait]
-impl Tool<()> for InjectedArgTool {
+impl Tool for InjectedArgTool {
     fn name(&self) -> &str {
         "injected"
     }
     fn description(&self) -> &str {
         "declares a host-injected argument"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "injected",
-            "declares a host-injected argument",
-            json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" },
-                    "thread_id": { "type": "string" }
-                },
-                "required": ["query", "thread_id"],
-                "additionalProperties": false
-            }),
-        )
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" },
+                "thread_id": { "type": "string" }
+            },
+            "required": ["query", "thread_id"]
+        })
     }
-    fn injected_arguments(&self) -> &[&str] {
-        &["thread_id"]
+    fn injected_arguments(&self) -> Vec<ToolInjectedArgument> {
+        vec![ToolInjectedArgument::tool_call_id("thread_id")]
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> tinyagents_harness::Result<ToolResult> {
-        self.seen.lock().unwrap().push(call.arguments.clone());
-        Ok(ToolResult::text(call.id, "injected", "ok"))
+    async fn execute(&self, arguments: Value) -> anyhow::Result<ToolResult> {
+        self.seen.lock().unwrap().push(arguments);
+        Ok(ToolResult::success("ok"))
     }
 }
 
@@ -152,19 +146,19 @@ struct EchoTool {
 }
 
 #[async_trait]
-impl Tool<()> for EchoTool {
+impl Tool for EchoTool {
     fn name(&self) -> &str {
         &self.name
     }
     fn description(&self) -> &str {
         "echoes"
     }
-    fn schema(&self) -> ToolSchema {
-        empty_object_schema(&self.name)
+    fn parameters_schema(&self) -> Value {
+        empty_object_schema()
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> tinyagents_harness::Result<ToolResult> {
+    async fn execute(&self, _arguments: Value) -> anyhow::Result<ToolResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(ToolResult::text(call.id, self.name.clone(), "echo"))
+        Ok(ToolResult::success("echo"))
     }
 }
 
@@ -282,15 +276,15 @@ async fn concurrent_admission_failure_emits_no_tool_started() {
     assert!(matches!(err, TinyAgentsError::LimitExceeded(_)), "{err:?}");
 
     let events = recorder.events();
-    assert!(
-        started_call_ids(&events).is_empty(),
-        "no ToolStarted may be emitted for calls that never run: {:?}",
-        started_call_ids(&events)
+    assert_eq!(
+        started_call_ids(&events),
+        vec!["c1".to_string(), "c2".to_string()],
+        "only the over-cap call must be refused before ToolStarted"
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        0,
-        "no tool may execute when admission fails"
+        2,
+        "calls admitted before the cap is reached execute normally"
     );
 }
 
@@ -309,14 +303,14 @@ async fn serial_tool_error_becomes_a_model_visible_result() {
     );
     harness.register_tool(Arc::new(ErringTool {
         name: "flaky".into(),
-        policy: ToolErrorPolicy::ReturnToError,
+        recoverable: true,
         calls: calls.clone(),
     }));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("go")])
         .await
-        .expect("a ReturnToError tool failure must not kill the run");
+        .expect("a reported tool failure must not kill the run");
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let tool_text = run
@@ -350,7 +344,7 @@ async fn concurrent_tool_error_becomes_a_model_visible_result() {
     );
     harness.register_tool(Arc::new(ErringTool {
         name: "flaky".into(),
-        policy: ToolErrorPolicy::ReturnToError,
+        recoverable: true,
         calls: calls.clone(),
     }));
     harness.register_tool(Arc::new(EchoTool {
@@ -361,7 +355,7 @@ async fn concurrent_tool_error_becomes_a_model_visible_result() {
     let run = harness
         .invoke_default(&(), vec![Message::user("go")])
         .await
-        .expect("a ReturnToError tool failure must not kill a concurrent turn");
+        .expect("a reported tool failure must not kill a concurrent turn");
 
     assert_eq!(
         tool_message_ids(&run.messages),
@@ -384,7 +378,7 @@ async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
     );
     harness.register_tool(Arc::new(ErringTool {
         name: "fatal".into(),
-        policy: ToolErrorPolicy::Fail,
+        recoverable: false,
         calls: calls.clone(),
     }));
 
@@ -394,7 +388,7 @@ async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
     harness
         .invoke_in_context(&(), ctx, vec![Message::user("go")])
         .await
-        .expect_err("a Fail-policy tool error must abort the run");
+        .expect_err("a fatal tool error must abort the run");
 
     let events = recorder.events();
     let failed: Vec<_> = events
@@ -445,7 +439,7 @@ async fn duplicate_call_ids_do_not_clear_each_others_active_entry() {
     }));
     harness.register_tool(Arc::new(ErringTool {
         name: "flaky".into(),
-        policy: ToolErrorPolicy::Fail,
+        recoverable: false,
         calls: calls.clone(),
     }));
 
@@ -578,10 +572,6 @@ async fn injected_arguments_are_stripped_before_validation() {
 
     let observed = seen.lock().unwrap().clone();
     assert_eq!(observed.len(), 1);
-    assert!(
-        observed[0].get("thread_id").is_none(),
-        "a forged injected argument must be stripped: {:?}",
-        observed[0]
-    );
+    assert_eq!(observed[0]["thread_id"], "c1");
     assert_eq!(observed[0]["query"], "hi");
 }

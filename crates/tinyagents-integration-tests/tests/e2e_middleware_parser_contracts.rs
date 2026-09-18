@@ -14,11 +14,11 @@ use tinyagents_harness::middleware::{
     StructuredOutputValidatorMiddleware, TimeoutMiddleware, ToolAllowlistMiddleware, ToolBaseCall,
     ToolHandler, ToolMiddleware, TracingMiddleware,
 };
-use tinyagents_harness::tool::ToolResult;
 use tinyagents_language::{lexer, parser};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
 use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolSchema};
+use tinytools::ToolResult;
 
 struct ModelBase {
     seen_models: Mutex<Vec<Option<String>>>,
@@ -64,7 +64,8 @@ impl ToolBaseCall<(), ()> for ToolBase {
         _state: &'a (),
         call: ToolCall,
     ) -> Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>> {
-        Box::pin(async move { Ok(ToolResult::text(call.id, call.name, "tool-ok")) })
+        let _ = call;
+        Box::pin(async move { Ok(ToolResult::success("tool-ok")) })
     }
 }
 
@@ -83,7 +84,8 @@ impl ToolMiddleware<(), ()> for ToolShortCircuit {
         call: ToolCall,
         _next: ToolHandler<'_, (), ()>,
     ) -> Result<MiddlewareToolOutcome> {
-        Ok(ToolResult::text(call.id, call.name, "shorted").into())
+        let _ = call;
+        Ok(ToolResult::success("shorted").into())
     }
 }
 
@@ -193,12 +195,12 @@ async fn middleware_stack_runs_lifecycle_hooks_and_builtin_guards() {
         .run_on_tool_delta(&mut ctx, &(), &mut tool_delta)
         .await
         .unwrap();
-    let mut tool_result = ToolResult::text("tool-1", "lookup", "secret tool result");
+    let mut tool_result = ToolResult::success("secret tool result");
     stack
-        .run_after_tool(&mut ctx, &(), &mut tool_result)
+        .run_after_tool(&mut ctx, &(), "lookup", &mut tool_result)
         .await
         .unwrap();
-    assert_eq!(tool_result.content, "*** tool result");
+    assert_eq!(tool_result.text(), "*** tool result");
 
     let mut run = AgentRun::new();
     run.final_response = Some(response.clone());
@@ -333,7 +335,7 @@ async fn builtin_middleware_validates_structured_output_human_approval_and_wraps
         .await
         .unwrap()
         .into_result();
-    assert_eq!(tool_result.content, "shorted");
+    assert_eq!(tool_result.text(), "shorted");
 
     let timeout = TimeoutMiddleware::from_millis(1);
     assert_eq!(

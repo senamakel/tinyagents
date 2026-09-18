@@ -37,7 +37,6 @@ pub use tinyagents_harness::error::{Result, TinyAgentsError};
 pub use capability::CapabilityRegistry;
 pub use catalog::{
     ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
-    ModelPricing,
 };
 pub use component::{ComponentId, ComponentKind, ComponentMetadata};
 pub use diagnostics::{AliasBinding, DiagnosticSeverity, RegistryDiagnostic, RegistrySnapshot};
