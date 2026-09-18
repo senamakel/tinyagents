@@ -290,6 +290,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // policy response format.
             status.mark_running(HarnessPhase::BuildingRequest);
             let mut request = ModelRequest::new(messages.clone()).with_tools(tool_schemas.clone());
+            // Provider adapters that maintain an external conversation (for
+            // example Claude Code's resumable CLI session) need the caller's
+            // logical thread id, not a hash of prompt text. Carry the harness
+            // thread through request metadata while preserving an explicit
+            // caller-supplied value.
+            if let Some(thread_id) = ctx.thread_id() {
+                if request.metadata.is_null() {
+                    request.metadata = serde_json::json!({
+                        "thread_id": thread_id.as_str(),
+                    });
+                } else if let Some(metadata) = request.metadata.as_object_mut() {
+                    metadata.entry("thread_id").or_insert_with(|| {
+                        serde_json::Value::String(thread_id.as_str().to_string())
+                    });
+                }
+            }
             if let Some(format) = &self.policy.default_response_format {
                 request = request.with_response_format(format.clone());
             }

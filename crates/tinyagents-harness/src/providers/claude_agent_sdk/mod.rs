@@ -77,6 +77,37 @@ fn build_invocation(
     ClaudeInvocation { args, stdin }
 }
 
+/// Render the complete non-system transcript for the stateless CLI process.
+///
+/// Every `claude -p` invocation starts a fresh process, so passing only the
+/// final user turn loses the question and any assistant/tool turns that led to
+/// it. Keep the common one-user request compact, but label every turn when a
+/// transcript is present so the model can distinguish its own prior output
+/// from the next user turn.
+fn render_transcript(messages: &[Message]) -> String {
+    let non_system: Vec<&Message> = messages
+        .iter()
+        .filter(|message| !matches!(message, Message::System(_)))
+        .collect();
+    if non_system.len() == 1 {
+        return non_system[0].text();
+    }
+
+    non_system
+        .into_iter()
+        .map(|message| {
+            let role = match message {
+                Message::User(_) => "USER",
+                Message::Assistant(_) => "ASSISTANT",
+                Message::Tool(_) => "TOOL",
+                Message::System(_) => unreachable!("system messages were filtered"),
+            };
+            format!("[{role}]\n{}\n[/{role}]", message.text())
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn spawn_error(binary: &str, source: std::io::Error) -> anyhow::Error {
     let message = format!("failed to spawn claude binary '{binary}': {source}");
     anyhow::Error::new(source).context(message)
@@ -303,21 +334,14 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         let messages = coalesce_prompt_tool_results(&request.messages);
         let messages = with_prompt_tool_instructions(&messages, &request.tools);
         let system = coalesce_system_prompt(&messages);
-        let last_user = messages
-            .iter()
-            .rev()
-            .find_map(|message| match message {
-                Message::User(_) => Some(message.text()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let transcript = render_transcript(&messages);
         let model = request
             .model
             .as_deref()
             .or(self.profile.model.as_deref())
             .unwrap_or(&self.config.default_model);
         let output = self
-            .invoke_cli(system.as_deref(), &last_user, model)
+            .invoke_cli(system.as_deref(), &transcript, model)
             .await
             .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))?;
 

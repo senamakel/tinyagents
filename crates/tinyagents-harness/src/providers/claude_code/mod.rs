@@ -164,6 +164,7 @@ impl ClaudeCodeProvider {
         messages: &[ChatMessage],
         stream: Option<&tokio::sync::mpsc::Sender<ProviderDelta>>,
         model_override: Option<&str>,
+        thread_id: String,
     ) -> anyhow::Result<ChatResponse> {
         let _permit = self
             .semaphore
@@ -171,15 +172,12 @@ impl ClaudeCodeProvider {
             .acquire_owned()
             .await
             .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
-        let append_system_prompt = messages
-            .iter()
-            .find(|message| message.role == "system")
-            .map(|message| message.content.clone());
+        let append_system_prompt = coalesce_system_prompt(messages);
         driver::run_turn(driver::TurnContext {
             bin_path: self.bin_path.clone(),
             workspace_dir: self.workspace_dir.clone(),
             project_dir: self.project_dir.clone(),
-            thread_id: thread_key_from_messages(messages),
+            thread_id,
             model: model_override.unwrap_or(&self.model).to_string(),
             append_system_prompt,
             messages,
@@ -190,6 +188,48 @@ impl ClaudeCodeProvider {
         })
         .await
     }
+}
+
+/// Claude Code accepts one appended system prompt, so preserve every system
+/// message in order instead of silently dropping middleware additions after the
+/// first one.
+fn coalesce_system_prompt(messages: &[ChatMessage]) -> Option<String> {
+    let parts: Vec<&str> = messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .map(|message| message.content.as_str())
+        .filter(|content| !content.trim().is_empty())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Resolve the caller's logical conversation id. A content hash is not a
+/// conversation id: two independent threads can begin with the same text.
+/// Callers should provide `metadata.thread_id` (or the equivalent
+/// `conversation_id`/`session_id`); `continuation_id` is also accepted for
+/// integrations that already carry a provider-neutral continuation handle.
+/// Requests without an id get an isolated session rather than risking a
+/// cross-conversation resume.
+fn thread_key_from_request(request: &ModelRequest) -> String {
+    const METADATA_KEYS: &[&str] = &["thread_id", "conversation_id", "session_id"];
+    for key in METADATA_KEYS {
+        if let Some(value) = request
+            .metadata
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            && !value.trim().is_empty()
+        {
+            return value.to_string();
+        }
+    }
+    if let Some(value) = request
+        .continuation_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return value.to_string();
+    }
+    format!("ephemeral_{}", uuid::Uuid::new_v4())
 }
 
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
@@ -278,9 +318,10 @@ impl ChatModel<()> for ClaudeCodeProvider {
     }
     fn cache_identity(&self) -> Option<String> {
         Some(format!(
-            "claude_code:{}:{}",
+            "claude_code:{}:{}:{}",
             self.bin_path.display(),
-            self.model
+            self.model,
+            self.project_dir.display()
         ))
     }
     async fn invoke(
@@ -288,8 +329,9 @@ impl ChatModel<()> for ClaudeCodeProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
+        let thread_id = thread_key_from_request(&request);
         let messages = request_messages(&request);
-        self.run_chat(&messages, None, None)
+        self.run_chat(&messages, None, None, thread_id)
             .await
             .map(model_response)
             .map_err(map_error)
@@ -300,12 +342,13 @@ impl ChatModel<()> for ClaudeCodeProvider {
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
         let provider = self.clone();
+        let thread_id = thread_key_from_request(&request);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = AbortOnDrop(tokio::spawn(async move {
             let _ = tx.send(ModelStreamItem::Started);
             let messages = request_messages(&request);
             let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(64);
-            let call = provider.run_chat(&messages, Some(&delta_tx), None);
+            let call = provider.run_chat(&messages, Some(&delta_tx), None, thread_id);
             tokio::pin!(call);
             let response = loop {
                 tokio::select! { delta = delta_rx.recv() => if let Some(delta) = delta { forward_delta(&tx, delta); }, response = &mut call => break response }
@@ -336,20 +379,6 @@ fn forward_delta(
         ProviderDelta::ThinkingDelta { delta } => MessageDelta::reasoning(delta),
     };
     let _ = sender.send(ModelStreamItem::MessageDelta(item));
-}
-
-fn thread_key_from_messages(messages: &[ChatMessage]) -> String {
-    use sha2::{Digest, Sha256};
-    let first = messages
-        .iter()
-        .find(|message| message.role == "user")
-        .map(|message| message.content.as_str())
-        .unwrap_or("");
-    let digest = Sha256::digest(first.as_bytes());
-    format!(
-        "hash_{:032x}",
-        u128::from_be_bytes(digest[..16].try_into().expect("SHA-256 prefix"))
-    )
 }
 
 #[cfg(test)]
