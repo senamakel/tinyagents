@@ -298,15 +298,24 @@ mod tool_tests {
         )
         .await;
         assert!(!res.is_error, "{res:?}");
-        assert!(res.output().contains("land the PR"));
+        assert!(
+            res.output_for_llm(set.supports_markdown())
+                .contains("land the PR")
+        );
 
         let get = GoalTool::new(GoalToolKind::Get, s.clone());
         let res = run(&get, Some("thread-tools"), json!({})).await;
-        assert!(res.output().contains("status: active"));
+        assert!(
+            res.output_for_llm(get.supports_markdown())
+                .contains("status: active")
+        );
 
         let done = GoalTool::new(GoalToolKind::Complete, s.clone());
         let res = run(&done, Some("thread-tools"), json!({})).await;
-        assert!(res.output().contains("status: complete"));
+        assert!(
+            res.output_for_llm(done.supports_markdown())
+                .contains("status: complete")
+        );
     }
 
     #[tokio::test]

@@ -11,7 +11,7 @@
 //! [`ToolExecutionContext::thread_id`](tinyagents_harness::tool::ToolExecutionContext),
 //! the harness analogue of an ambient thread id: a tool never takes a
 //! `thread_id` argument, so a model can't address another thread's goal. The
-//! bare [`Tool::call`] entry point (no context) errors, matching the "tools
+//! bare [`Tool::execute`] entry point (no context) errors, matching the "tools
 //! require an active thread" contract.
 
 use std::sync::Arc;
@@ -237,6 +237,10 @@ impl Tool for GoalTool {
 
     fn parameters_schema(&self) -> Value {
         self.kind.parameters()
+    }
+
+    fn supports_markdown(&self) -> bool {
+        true
     }
 
     fn policy(&self) -> ToolPolicy {
