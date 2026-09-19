@@ -417,8 +417,14 @@ pub trait ToolBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
 /// `next` rather than by distinct enum variants; the enum only needs to carry
 /// the resolved response. It is `#[non_exhaustive]` so future control variants
 /// can be added without breaking callers.
+// `Response(ModelResponse)` is large relative to `Command`'s payload; boxing
+// it would ripple through every construction/destructure site across the
+// crate (including the `From<ModelResponse>` impl below and every wrap
+// middleware) for a value that lives only as long as one model call, so the
+// size skew is accepted here rather than threaded through as indirection.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)]
 pub enum MiddlewareModelOutcome {
     /// The response to use as the result of the wrapped model call.
     Response(ModelResponse),
