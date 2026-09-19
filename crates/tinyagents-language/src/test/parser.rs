@@ -148,7 +148,8 @@ fn sends_block_requires_a_comma_between_entries() {
     assert!(parse_str(with_comma).is_ok());
 
     // A trailing comma after the last entry is still allowed.
-    let trailing = r#"graph g { start a node a { sends [ send b "x", ] next END } node b { next END } }"#;
+    let trailing =
+        r#"graph g { start a node a { sends [ send b "x", ] next END } node b { next END } }"#;
     assert!(parse_str(trailing).is_ok());
 }
 

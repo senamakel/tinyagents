@@ -204,7 +204,8 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     ) -> Result<&mut Self> {
         let name = name.into();
         self.ensure_absent(ComponentKind::Model, &name)?;
-        self.meta.insert((ComponentKind::Model, name.clone()), metadata);
+        self.meta
+            .insert((ComponentKind::Model, name.clone()), metadata);
         self.remember_model_order(&name);
         self.models.insert(name, model);
         Ok(self)
@@ -244,7 +245,8 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     ) -> Result<&mut Self> {
         let name = tool.name().to_owned();
         self.ensure_absent(ComponentKind::Tool, &name)?;
-        self.meta.insert((ComponentKind::Tool, name.clone()), metadata);
+        self.meta
+            .insert((ComponentKind::Tool, name.clone()), metadata);
         self.tools.insert(name, tool);
         Ok(self)
     }
@@ -713,7 +715,9 @@ impl<State: Send + Sync> tinyagents_definition::DefinitionRegistry for Capabilit
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = tinyagents_definition::Result<Vec<tinyagents_definition::AgentDefinition>>,
+                    Output = tinyagents_definition::Result<
+                        Vec<tinyagents_definition::AgentDefinition>,
+                    >,
                 > + Send
                 + 'async_trait,
         >,
@@ -729,7 +733,11 @@ impl<State: Send + Sync> tinyagents_definition::DefinitionRegistry for Capabilit
         &'life0 self,
         id: &'life1 str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = tinyagents_definition::Result<Vec<String>>> + Send + 'async_trait>,
+        Box<
+            dyn std::future::Future<Output = tinyagents_definition::Result<Vec<String>>>
+                + Send
+                + 'async_trait,
+        >,
     >
     where
         'life0: 'async_trait,

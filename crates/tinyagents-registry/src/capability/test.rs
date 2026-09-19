@@ -522,8 +522,12 @@ async fn capability_registry_implements_definition_registry() {
     let parent = AgentDefinition::new("parent", "Parent", "delegates work")
         .with_subagents(["researcher", "writer"]);
     reg.register_agent(parent).unwrap();
-    reg.register_agent(AgentDefinition::new("researcher", "Researcher", "looks things up"))
-        .unwrap();
+    reg.register_agent(AgentDefinition::new(
+        "researcher",
+        "Researcher",
+        "looks things up",
+    ))
+    .unwrap();
 
     // `resolve`.
     let found = DefinitionRegistry::resolve(&reg, "parent").await.unwrap();
@@ -540,8 +544,13 @@ async fn capability_registry_implements_definition_registry() {
     assert_eq!(all.len(), 2);
 
     // `delegates_for`.
-    let delegates = DefinitionRegistry::delegates_for(&reg, "parent").await.unwrap();
-    assert_eq!(delegates, vec!["researcher".to_string(), "writer".to_string()]);
+    let delegates = DefinitionRegistry::delegates_for(&reg, "parent")
+        .await
+        .unwrap();
+    assert_eq!(
+        delegates,
+        vec!["researcher".to_string(), "writer".to_string()]
+    );
     assert!(
         DefinitionRegistry::delegates_for(&reg, "researcher")
             .await
