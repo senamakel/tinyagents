@@ -1227,18 +1227,71 @@ fn reset_truncated_empty_recovery(
 #[cfg(test)]
 mod recovery_tests {
     use super::recover_text_dialect_calls;
+    use crate::context::{RunConfig, RunContext};
     use crate::ids::CallId;
     use tinyinference_llm::model::ModelResponse;
 
     #[test]
     fn text_dialect_markup_is_not_recovered_when_the_request_offered_no_tools() {
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
         let mut response = ModelResponse::assistant(
             "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
         );
 
-        recover_text_dialect_calls(&mut response, &CallId::new("model-1"), false);
+        recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), false, true);
 
         assert!(response.message.tool_calls.is_empty());
         assert!(response.text().contains("<tool_call>"));
+    }
+
+    /// I-2 regression: even when tools were offered, `enabled = false`
+    /// (what `RunPolicy::text_dialect_recovery` resolves to for a model whose
+    /// profile reports native tool calling, under the default `Auto` policy)
+    /// must not execute `<tool_call>` markup the model merely quoted.
+    #[test]
+    fn text_dialect_markup_is_not_recovered_when_the_policy_disables_it() {
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
+        let mut response = ModelResponse::assistant(
+            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
+        );
+
+        recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), true, false);
+
+        assert!(response.message.tool_calls.is_empty());
+        assert!(response.text().contains("<tool_call>"));
+    }
+
+    /// I-2 regression: a final answer that quotes `<tool_call>` markup inside
+    /// a fenced code block must never be executed, even when recovery is
+    /// otherwise enabled and tools were offered.
+    #[test]
+    fn text_dialect_markup_inside_a_fenced_code_block_is_never_recovered() {
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
+        let mut response = ModelResponse::assistant(
+            "Here is the format:\n```\n<tool_call><name>shell</name><arguments>{}</arguments></tool_call>\n```\n",
+        );
+
+        recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), true, true);
+
+        assert!(
+            response.message.tool_calls.is_empty(),
+            "markup quoted inside a fenced code block must not become a real call"
+        );
+        assert!(response.text().contains("<tool_call>"));
+    }
+
+    /// Sanity check for the fenced-code-block guard: markup outside any fence
+    /// is still recovered when the policy and tool offer both allow it.
+    #[test]
+    fn text_dialect_markup_outside_a_fenced_code_block_is_recovered() {
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
+        let mut response = ModelResponse::assistant(
+            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
+        );
+
+        recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), true, true);
+
+        assert_eq!(response.message.tool_calls.len(), 1);
+        assert_eq!(response.message.tool_calls[0].name, "shell");
     }
 }
