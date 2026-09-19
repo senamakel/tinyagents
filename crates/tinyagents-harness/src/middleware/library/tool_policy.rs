@@ -66,6 +66,7 @@ impl ToolPolicyMiddleware {
             require_approval: false,
             approved: std::collections::HashSet::new(),
             enforce_result_bytes: false,
+            exempt_discovery_bridge: false,
         }
     }
 
