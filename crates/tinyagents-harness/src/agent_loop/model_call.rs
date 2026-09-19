@@ -579,7 +579,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // for the call to run to completion. `cancelled()` is
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
-                    let cancellation = ctx.cancellation.clone();
                     let fut = async {
                         model
                             .invoke(state, request.clone())
@@ -593,11 +592,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         bound,
                         fut,
                     );
-                    tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                        result = budgeted => result,
-                    }
+                    // `with_call_budget` already applies its own deadline, so
+                    // this only needs to race cancellation against an
+                    // otherwise-unbounded future — `bounded`'s `None` arm,
+                    // which never calls `timeout_message`.
+                    ctx.bounded(None, budgeted, || {
+                        unreachable!("with_call_budget already applies its own timeout")
+                    })
+                    .await
                 };
                 match attempt_result {
                     Ok(response) => break Ok(response),
