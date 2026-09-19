@@ -735,7 +735,17 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
 }
 
 #[tokio::test]
-async fn probe_terminal_only_stream_with_no_preceding_deltas_still_recovers_the_call() {
+async fn a_terminal_only_stream_with_no_preceding_deltas_still_recovers_the_call() {
+    // A provider may emit a single `Completed` item with no preceding
+    // `MessageDelta`s at all (e.g. a short response sent in one frame). The
+    // per-delta `DeltaScrubber` in `model_call.rs` never sees this text, so
+    // it cannot flag it as recovered — but that scrubber is not the only
+    // recovery path: `run_loop.rs` unconditionally runs
+    // `dialect::recover_text_calls` on the returned response afterward,
+    // regardless of whether anything streamed. This pins that second pass as
+    // the safety net for exactly this case, rather than assuming (as a
+    // superficial read of `model_call.rs` alone might) that terminal-only
+    // content without any preceding delta is unrecoverable.
     let text = "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>";
     let items = vec![
         ModelStreamItem::Started,
@@ -758,5 +768,14 @@ async fn probe_terminal_only_stream_with_no_preceding_deltas_still_recovers_the_
         .await
         .expect("run stops cleanly");
 
-    eprintln!("PROBE tool_calls={} messages={:?}", run.tool_calls, run.messages);
+    assert_eq!(run.tool_calls, 1, "{:?}", run.messages);
+    let assistant = run
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::Assistant(_)))
+        .expect("assistant turn");
+    assert!(
+        !assistant.text().contains("<tool_call"),
+        "raw markup must not survive in the transcript: {assistant:?}"
+    );
 }
