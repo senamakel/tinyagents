@@ -463,17 +463,14 @@ verify, tool-call ids shaped for the origin provider (Anthropic rejects a
 block when the target model has no vision input.
 
 Two pieces of vendor (`tinyinference-llm`) state make this detectable:
-
-- `AssistantMessage::origin: Option<MessageOrigin>` — the `{provider, api,
-  model}` that produced the message, stamped by every provider adapter
-  (OpenAI Chat Completions, OpenAI Responses, every OpenAI-compatible local
-  preset, and Anthropic) on both a unary response and a stream's terminal
-  `Completed` item. A message with no `origin` is either a host-authored
-  turn or one replayed from a journal written before this field existed.
-- `ModelProfile::tool_call_id_pattern` / `max_tool_call_id_len` — the target
-  provider's accepted tool-call id shape, when it constrains one. Anthropic's
-  default profile populates both; a provider with no such constraint (OpenAI)
-  leaves them `None`.
+`AssistantMessage::origin: Option<MessageOrigin>` — the `{provider, api,
+model}` that produced the message, stamped by every provider adapter (OpenAI
+Chat Completions, OpenAI Responses, every OpenAI-compatible local preset, and
+Anthropic) on both a unary response and a stream's terminal `Completed` item
+(`None` means a host-authored turn or a pre-`origin` journal replay) — and
+`ModelProfile::tool_call_id_pattern` / `max_tool_call_id_len`, the target's
+accepted tool-call id shape, when it constrains one (Anthropic's default
+profile populates both; OpenAI leaves them `None`).
 
 `tinyagents_harness::agent_loop::handoff_transform::prepare_for_model`
 consumes both immediately before a `ModelRequest` is dispatched — a pure pass

@@ -1147,6 +1147,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let options = dispatch.call_options(&call.arguments);
             let prepared =
                 self.start_tool_call(ctx, status, &call, options, true, dispatch.output_origin());
+            if let Err(err) = self
+                .record_tool_effect_started(ctx, &call.arguments, &prepared)
+                .await
+            {
+                self.fail_tool_call(
+                    ctx,
+                    status,
+                    &prepared.call_id,
+                    &prepared.tool_name,
+                    prepared.started_at_ms,
+                    &err,
+                );
+                return Err(err);
+            }
 
             // The real tool call is the innermost base of the tool-wrap
             // onion (same before -> wrap -> after ordering as the model
