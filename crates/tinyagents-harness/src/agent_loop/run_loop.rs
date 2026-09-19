@@ -151,7 +151,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
-            .map(|binding| binding.allowed_tools);
+            .map(|binding| binding.allowed_tools.clone());
         let tool_schemas = self
             .tools
             .schemas()
@@ -474,7 +474,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                         crate::token_estimation::estimate_slice_tokens(&request.messages),
                         request.max_tokens.unwrap_or_default() as u64,
                     )
-                    .with_agent(host_run.agent_id)
+                    .with_agent(host_run.agent_id.clone())
                     .with_thread(
                         ctx.thread_id()
                             .cloned()

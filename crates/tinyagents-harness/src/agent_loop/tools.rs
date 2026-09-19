@@ -290,7 +290,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         // hide disallowed schemas: a model can still fabricate a name, so the
         // dispatch boundary must reject it too.
         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
-            .map(|binding| binding.allowed_tools);
+            .map(|binding| binding.allowed_tools.clone());
         let is_allowed = allowed_tools
             .as_ref()
             .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
@@ -469,7 +469,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             let request = crate::host::ToolCallRequest::new(
                 call.name.clone(),
                 model_arguments,
-                binding.agent_id,
+                binding.agent_id.clone(),
             )
             .with_call_id(CallId::new(call.id.clone()));
             let cancellation = ctx.cancellation.clone();
