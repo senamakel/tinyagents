@@ -1858,6 +1858,7 @@ async fn provider_invalid_arguments_recoverable_by_relaxed_json_are_repaired_and
             // Unquoted object key: `relaxed_json::recover_relaxed_object`
             // repairs this to `{"query":"weather"}`.
             invalid_tool_call_response("call-x", "lookup", "{query:\"weather\"}"),
+            text_response("found it", 1, 1),
         ])),
     );
     harness.register_tool(tool.clone());
