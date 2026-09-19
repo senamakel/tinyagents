@@ -281,8 +281,7 @@ impl RetryPolicy {
         // realistic `max_attempts`, so saturate rather than truncate/wrap
         // silently (M-13).
         let exponent = i32::try_from(attempt).unwrap_or(i32::MAX);
-        let base = f64::from(u32::try_from(self.initial_backoff_ms).unwrap_or(u32::MAX))
-            * self.multiplier.powi(exponent);
+        let base = (self.initial_backoff_ms as f64) * self.multiplier.powi(exponent);
         let jittered = if self.jitter {
             // Map [0, 1) onto [-1, 1) then scale by the band width.
             let offset = JITTER_FRACTION * (2.0 * rand01.clamp(0.0, 1.0) - 1.0);
