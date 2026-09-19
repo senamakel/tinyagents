@@ -4093,3 +4093,165 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
     assert!(!done.is_interrupted());
     assert_eq!(done.state, 1);
 }
+
+// ── I4: panic safety, cooperative cancellation, and the run-drop guard ──────
+
+/// A single-node graph whose handler panics the first `panic_times`
+/// invocations, then succeeds with `+1`. Mirrors [`flaky_graph`] but for a
+/// panic instead of a transient `Err`, so the panic-safety tests below can
+/// reuse the same failure/retry assertions.
+fn panicking_graph(panic_times: usize, attempts: Arc<AtomicUsize>) -> CompiledGraph<i32, i32> {
+    GraphBuilder::<i32, i32>::overwrite()
+        .add_node("flaky", move |s, _c: NodeContext| {
+            let attempts = attempts.clone();
+            async move {
+                let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                if n < panic_times {
+                    panic!("synthetic node panic {n}");
+                }
+                Ok(NodeResult::Update(s + 1))
+            }
+        })
+        .set_entry("flaky")
+        .set_finish("flaky")
+        .compile()
+        .unwrap()
+}
+
+/// A node handler panic must not poison the whole run future: it becomes an
+/// ordinary node failure that flows through the normal failure boundary
+/// (checkpoint write, `Failed` status), and the checkpoint it leaves is
+/// loadable and resumable via `retry` — exactly like a returned `Err`.
+#[tokio::test]
+async fn node_panic_is_a_resumable_failure_not_a_lost_run() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let graph = panicking_graph(1, attempts.clone()).with_checkpointer(cp.clone());
+
+    let err = graph.run_with_thread("panicky", 5).await.unwrap_err();
+    assert!(matches!(err, TinyAgentsError::Graph(_)), "got {err:?}");
+    assert!(
+        err.to_string().contains("panicked"),
+        "error should describe the panic: {err}"
+    );
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1);
+
+    // The failure boundary persisted a loadable, resumable checkpoint.
+    let status = graph.get_state("panicky", None).await.unwrap().unwrap();
+    assert_eq!(status.next_nodes, vec![NodeId::from("flaky")]);
+
+    // The panic does not recur: `retry` re-runs the node to completion.
+    let resumed = graph.retry("panicky").await.unwrap();
+    assert_eq!(resumed.state, 6);
+    assert_eq!(resumed.status.status, ExecutionStatus::Completed);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
+}
+
+/// A graph whose entry node cancels `token` as soon as it starts (simulating
+/// a caller requesting cancellation while the node is already in flight),
+/// then keeps running for a while longer before completing — so a test can
+/// assert the cancellation is observed *without* waiting for the slow node.
+fn cancel_mid_step_graph(token: tinyagents_harness::CancellationToken) -> CompiledGraph<i32, i32> {
+    GraphBuilder::<i32, i32>::overwrite()
+        .add_node("a", move |s, _c: NodeContext| {
+            let token = token.clone();
+            async move {
+                token.cancel();
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Ok(NodeResult::Update(s + 1))
+            }
+        })
+        .add_node("b", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s + 1))
+        })
+        .set_entry("a")
+        .add_edge("a", "b")
+        .set_finish("b")
+        .compile()
+        .unwrap()
+}
+
+/// Cancelling a [`RunOptions`] token while a superstep's node handlers are
+/// still in flight stops the run without waiting for that node to finish:
+/// the still-pending activations are persisted as a resumable checkpoint,
+/// the run reports `Cancelled`, and a later `resume` completes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_mid_step_is_resumable() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let token = tinyagents_harness::CancellationToken::new();
+    let graph = cancel_mid_step_graph(token.clone()).with_checkpointer(cp.clone());
+
+    let started = std::time::Instant::now();
+    let run = graph
+        .run_with_thread_options("cancel-me", 0, RunOptions::with_cancellation(token))
+        .await
+        .unwrap();
+    assert_eq!(run.status.status, ExecutionStatus::Cancelled);
+    assert!(
+        started.elapsed() < Duration::from_millis(150),
+        "cancellation should not wait out node `a`'s 200ms sleep"
+    );
+
+    // The pending activation (node `a`, never having completed) is exactly
+    // what a resume re-runs.
+    let status = graph.get_state("cancel-me", None).await.unwrap().unwrap();
+    assert_eq!(status.next_nodes, vec![NodeId::from("a")]);
+
+    // Resuming with a fresh (never-cancelled) token completes the run.
+    let fresh = cancel_mid_step_graph(tinyagents_harness::CancellationToken::new())
+        .with_checkpointer(cp.clone());
+    let resumed = fresh.resume("cancel-me", Command::new()).await.unwrap();
+    assert_eq!(resumed.state, 2);
+    assert_eq!(resumed.status.status, ExecutionStatus::Completed);
+}
+
+/// A graph with one node that sleeps far longer than the caller is willing
+/// to wait, so wrapping the run in a short `tokio::time::timeout` drops the
+/// run future mid-flight without the executor's own cancellation/failure
+/// paths ever running.
+fn slow_node_graph() -> CompiledGraph<i32, i32> {
+    GraphBuilder::<i32, i32>::overwrite()
+        .add_node("slow", |s: i32, _c: NodeContext| async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(NodeResult::Update(s + 1))
+        })
+        .set_entry("slow")
+        .set_finish("slow")
+        .compile()
+        .unwrap()
+}
+
+/// Dropping the run future before it reaches a terminal state (here, via an
+/// external `tokio::time::timeout` that outraces the run) must not leave the
+/// run's stored status stuck at `Running` forever: the [`RunDropGuard`]
+/// (I4 part 3) spawns a best-effort background write that marks it
+/// `Cancelled`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_the_run_future_marks_status_cancelled_not_running() {
+    let store = Arc::new(crate::observability::InMemoryGraphStatusStore::default());
+    let graph = slow_node_graph().with_status_store(store.clone());
+
+    let outcome = tokio::time::timeout(Duration::from_millis(20), graph.run(0)).await;
+    assert!(
+        outcome.is_err(),
+        "the 5s sleep must outlast the 20ms timeout, dropping the run future"
+    );
+
+    // The drop guard's write happens on a detached background task; give it
+    // a moment to land before asserting on the store.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let statuses = store.list_by_thread("").await.unwrap();
+    // Without a thread id the run has no thread-indexed status, but the
+    // per-run record is still keyed by run id; scan every recorded status
+    // instead (there is exactly one: this run).
+    let all: Vec<GraphRunStatus> = store.all_statuses();
+    assert_eq!(all.len(), 1, "exactly this one run was recorded");
+    assert_ne!(
+        all[0].status,
+        ExecutionStatus::Running,
+        "the drop guard must not leave the run stuck at Running"
+    );
+    assert_eq!(all[0].status, ExecutionStatus::Cancelled);
+    assert!(statuses.is_empty(), "no thread id was used for this run");
+}
