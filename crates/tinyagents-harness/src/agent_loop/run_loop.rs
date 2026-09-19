@@ -638,6 +638,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     registry: run_dialect.registry_for(&request.tools),
                 }
             };
+            // Whether this turn could possibly have accepted a tool call at
+            // all — reuses `recovery.offered`, which is already empty
+            // exactly when no tools were offered or the effective choice was
+            // `None`. Read below by the dropped-tool-call nudge: nudging a
+            // model to "issue the call" when no call could ever have been
+            // accepted wastes up to `dropped_tool_call_nudges` model calls
+            // asking for something impossible before falling through.
+            let tools_available_this_turn = !recovery.offered.is_empty();
             // Applied before budget preflight below: for a text dialect this
             // rewrite folds the protocol block and full tool catalogue into
             // `request.messages` and clears `request.tools`, and that is the
