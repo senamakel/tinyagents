@@ -205,6 +205,7 @@ where
             last_checkpoint: None,
             parent_checkpoint: initial_parent,
             carried_completed,
+            cancellation,
         };
         ctx.emit(GraphEvent::RunStarted {
             run_id: ctx.run_id.clone(),
