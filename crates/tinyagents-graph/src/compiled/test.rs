@@ -2655,11 +2655,15 @@ fn forked_interrupt_graph(
 
 #[tokio::test]
 async fn attributed_update_keeps_other_pending_branches_scheduled() {
-    // Two independent branches are pending (`x` and the interrupted `c`). A
-    // manual write attributed to `x` schedules x's successor `y`, but it must
-    // not discard `c`: the attributed node's successors *add to* the schedule
-    // rather than replacing it, or the untouched branch is silently dropped and
-    // never runs again.
+    // `forked_interrupt_graph` runs `super -> [b, c]` in parallel: `b`
+    // completes (`Update(1)`) while `c` interrupts. Per the C2 fix, `b`'s
+    // routing is deferred rather than resolved immediately — only `c` (the
+    // interrupted branch) is in `next_nodes`/pending, and `b` sits in
+    // `completed_tasks` awaiting a step-finishing routing pass. A manual
+    // write attributed to `b` (`update_state`'s carried-completion routing —
+    // see `state_api::update_state`) resolves that deferred routing (`b`'s
+    // successor `x`), and must not discard `c`: the untouched interrupted
+    // branch stays pending alongside it.
     let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
     let graph = forked_interrupt_graph(cp.clone(), Arc::new(AtomicBool::new(false)));
 
@@ -2676,21 +2680,25 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
     assert!(paused.is_interrupted());
 
     let before = cp.get("t-fork-update", None).await.unwrap().unwrap();
-    assert!(
-        before.next_nodes.iter().any(|n| n.as_str() == "x")
-            && before.next_nodes.iter().any(|n| n.as_str() == "c"),
-        "precondition: both branches pending, got {:?}",
-        before.next_nodes
+    assert_eq!(
+        before.next_nodes.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+        vec!["c".to_string()],
+        "precondition: only the interrupted branch is pending, b's routing is deferred"
+    );
+    assert_eq!(
+        before.completed_tasks.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+        vec!["b".to_string()],
+        "precondition: b completed this step but its routing was not yet resolved"
     );
 
     graph
-        .update_state("t-fork-update", 10, Some(NodeId::from("x")))
+        .update_state("t-fork-update", 10, Some(NodeId::from("b")))
         .await
         .unwrap();
     let written = cp.get("t-fork-update", None).await.unwrap().unwrap();
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "y"),
-        "the attributed node's successor must be scheduled, got {:?}",
+        written.next_nodes.iter().any(|n| n.as_str() == "x"),
+        "b's deferred successor x must now be scheduled, got {:?}",
         written.next_nodes
     );
     assert!(
@@ -2699,7 +2707,7 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
         written.next_nodes
     );
     assert!(
-        !written.next_nodes.iter().any(|n| n.as_str() == "x"),
+        !written.next_nodes.iter().any(|n| n.as_str() == "b"),
         "the attributed node itself is completed, not pending: {:?}",
         written.next_nodes
     );
@@ -2719,8 +2727,14 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
         "the dropped branch must still run, visited {:?}",
         done.visited
     );
-    // 1 (b) + 10 (manual write) + 2 (c) + 40 (y).
-    assert_eq!(done.state.value, 53);
+    assert!(
+        done.visited.iter().any(|n| n.as_str() == "x"),
+        "b's deferred successor must run, visited {:?}",
+        done.visited
+    );
+    // 1 (b, applied at the original boundary) + 10 (manual write) + 2 (c) +
+    // 20 (x) + 40 (y).
+    assert_eq!(done.state.value, 73);
 }
 
 #[tokio::test]
