@@ -516,10 +516,33 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let is_allowed = allowed_tools
             .as_ref()
             .is_none_or(|allowed| allowed.contains(&call.name));
-        let (dispatch, tool) = match is_allowed
+        let registry_dispatch = is_allowed
             .then(|| self.tools.model_dispatch(&call.name))
-            .flatten()
-        {
+            .flatten();
+        // A name the registry does not itself resolve may still belong to
+        // the harness's composable toolset chain (`ToolSet`, gap B3) — for
+        // example a `CombinedToolSet` member the caller never also
+        // registered into `self.tools`. Only consulted once the registry has
+        // already said no, so a registered tool always wins a name collision.
+        let toolset_dispatch = if registry_dispatch.is_none() && is_allowed {
+            match &self.toolset {
+                Some(toolset) => toolset
+                    .tools(ctx)
+                    .await?
+                    .into_iter()
+                    .find(|candidate| candidate.name() == call.name)
+                    .map(|tool| {
+                        Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+                            Arc::clone(toolset),
+                            tool,
+                        )) as Arc<dyn crate::tool::ToolDispatch<State, Ctx>>
+                    }),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let (dispatch, tool) = match registry_dispatch.or(toolset_dispatch) {
             Some(dispatch) => {
                 let tool = dispatch.tool();
                 (dispatch, tool)
