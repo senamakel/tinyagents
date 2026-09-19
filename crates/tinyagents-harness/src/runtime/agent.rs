@@ -447,7 +447,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
-            binding: prepared.binding.clone(),
+            binding: std::sync::Arc::new(prepared.binding.clone()),
         }));
         let cancellation = context.cancellation.clone();
         let terminal_observer =
