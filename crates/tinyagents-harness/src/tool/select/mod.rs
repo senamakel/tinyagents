@@ -339,6 +339,8 @@ fn query_tokens(query: &str) -> HashSet<String> {
     expanded
 }
 
+/// Scores a candidate tool by query-token overlap: a hit in `name` counts
+/// three times as much as a hit in `desc`, matching the module doc's weighting.
 fn weighted_overlap(qt: &HashSet<String>, name: &str, desc: &str) -> i32 {
     let name_tokens = tokenize(name);
     let desc_tokens = tokenize(desc);
