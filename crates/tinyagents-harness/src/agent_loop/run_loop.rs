@@ -21,6 +21,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         input: Vec<Message>,
         streaming: bool,
     ) -> Result<()> {
+        // The tracker's wall-clock start is stamped when the context is
+        // constructed (`RunContext::new`), not necessarily when the run
+        // actually begins doing work — a context built ahead of time and
+        // queued would otherwise burn down its deadline before the first
+        // model call. Restart it here, at the true top of the run (M-8).
+        ctx.limits.restart();
         let mut messages = input;
         // The body borrows the working transcript rather than owning it so the
         // transcript survives **every** exit path, not just the successful one.
