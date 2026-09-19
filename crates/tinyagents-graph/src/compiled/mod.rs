@@ -179,7 +179,7 @@ struct StepFailure {
 struct Activation {
     node: NodeId,
     send_arg: Option<serde_json::Value>,
-    task_id: String,
+    task_id: TaskId,
 }
 
 impl Activation {
@@ -187,7 +187,7 @@ impl Activation {
         Self {
             node,
             send_arg: None,
-            task_id: String::new(),
+            task_id: TaskId::from(String::new()),
         }
     }
 }
