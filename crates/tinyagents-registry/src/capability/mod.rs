@@ -131,6 +131,9 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
             ComponentKind::Agent => {
                 self.agents.remove(name);
             }
+            ComponentKind::Capability => {
+                self.capabilities.remove(name);
+            }
             _ => {
                 // Router/Reducer/Store/Script/Middleware/Checkpointer/
                 // TaskStore/Listener are name-only descriptors: `meta`
