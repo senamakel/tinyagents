@@ -12,7 +12,7 @@ use tinyagents_harness::agent_loop::phases;
 use tinyagents_harness::context::{LoopTarget, MiddlewareControl, RunContext};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::events::{AgentEvent, HarnessRunStatus};
-use tinyagents_harness::ids::{CallId, ComponentId, NodeId};
+use tinyagents_harness::ids::{CallId, NodeId};
 use tinyagents_harness::middleware::{AgentRun, BoxModelFuture, ModelBaseCall};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{apply_pending_steering, SteeringOutcome};
@@ -26,7 +26,7 @@ use super::types::{node, LoopState, PendingStructuredPlan};
 use tinyinference_llm::model::{
     ModelRequest, ModelResponse, ResponseFormat, ToolChoice,
 };
-use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
+use tinyinference_llm::tool::{ToolFormat, ToolSchema};
 
 /// Per-run state shared by every node closure [`super::compile_loop`]
 /// builds, and by [`super::LoopIter`].
