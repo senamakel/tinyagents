@@ -1,6 +1,10 @@
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{
+    collections::HashMap,
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex as AsyncMutex, Notify};
 
 use super::{
     PersistedSubagentPause, SubagentError, SubagentExecution, SubagentExecutor, SubagentOutcome,
@@ -32,7 +36,7 @@ pub struct SubagentDriver<C: Send + 'static = (), H: Send + 'static = ()> {
     planner: Arc<dyn SubagentPlanner<C, H>>,
     executor: Arc<dyn SubagentExecutor<C>>,
     persistence: Arc<dyn SubagentPersistence>,
-    terminal_outcomes: Mutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
+    terminal_outcomes: AsyncMutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
     in_flight: Arc<Mutex<HashMap<SubagentTaskKey, Arc<InFlight>>>>,
 }
 
@@ -62,7 +66,12 @@ impl InFlight {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(result) = self.result.lock().await.clone() {
+            if let Some(result) = self
+                .result
+                .lock()
+                .expect("in-flight result poisoned")
+                .clone()
+            {
                 return result;
             }
             tokio::select! {
@@ -73,8 +82,8 @@ impl InFlight {
         }
     }
 
-    async fn complete(&self, result: Result<SubagentRunResult, SubagentError>) {
-        *self.result.lock().await = Some(result);
+    fn complete(&self, result: Result<SubagentRunResult, SubagentError>) {
+        *self.result.lock().expect("in-flight result poisoned") = Some(result);
         self.notify.notify_waiters();
     }
 }
@@ -91,9 +100,9 @@ struct LeaderReservation {
 }
 
 impl LeaderReservation {
-    async fn finish(mut self, result: Result<SubagentRunResult, SubagentError>) {
-        self.entry.complete(result).await;
-        let mut in_flight = self.in_flight.lock().await;
+    fn finish(mut self, result: Result<SubagentRunResult, SubagentError>) {
+        self.entry.complete(result);
+        let mut in_flight = self.in_flight.lock().expect("in-flight map poisoned");
         if in_flight
             .get(&self.task_key)
             .is_some_and(|current| Arc::ptr_eq(current, &self.entry))
@@ -112,19 +121,16 @@ impl Drop for LeaderReservation {
         let in_flight = self.in_flight.clone();
         let task_key = self.task_key.clone();
         let entry = self.entry.clone();
-        // `run` is async, so a current Tokio runtime is always available while
-        // this guard can be dropped. Publish a typed result before removal so
-        // existing followers cannot wait indefinitely.
-        tokio::spawn(async move {
-            entry.complete(Err(SubagentError::Cancelled)).await;
-            let mut in_flight = in_flight.lock().await;
-            if in_flight
-                .get(&task_key)
-                .is_some_and(|current| Arc::ptr_eq(current, &entry))
-            {
-                in_flight.remove(&task_key);
-            }
-        });
+        // Publish a typed result before removal so existing followers cannot
+        // wait indefinitely, even if the future is dropped outside a runtime.
+        entry.complete(Err(SubagentError::Cancelled));
+        let mut in_flight = in_flight.lock().expect("in-flight map poisoned");
+        if in_flight
+            .get(&task_key)
+            .is_some_and(|current| Arc::ptr_eq(current, &entry))
+        {
+            in_flight.remove(&task_key);
+        }
     }
 }
 
@@ -141,7 +147,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             persistence: capabilities
                 .persistence
                 .ok_or(SubagentError::MissingCapability("persistence"))?,
-            terminal_outcomes: Mutex::new(HashMap::new()),
+            terminal_outcomes: AsyncMutex::new(HashMap::new()),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -173,7 +179,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         }
 
         let (entry, is_leader) = {
-            let mut in_flight = self.in_flight.lock().await;
+            let mut in_flight = self.in_flight.lock().expect("in-flight map poisoned");
             match in_flight.get(&task_key) {
                 Some(entry) => (entry.clone(), false),
                 None => {
@@ -217,12 +223,10 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         // initial cache check and this reservation. Do not reopen that task
         // after its in-flight entry has been removed.
         if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
-            reservation
-                .finish(Ok(SubagentRunResult::new(
-                    outcome.clone(),
-                    SubagentPersistenceDisposition::TerminalExisting,
-                )))
-                .await;
+            reservation.finish(Ok(SubagentRunResult::new(
+                outcome.clone(),
+                SubagentPersistenceDisposition::TerminalExisting,
+            )));
             return Ok(SubagentRunResult::new(
                 outcome,
                 SubagentPersistenceDisposition::TerminalExisting,
@@ -232,7 +236,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         let result = self
             .run_reserved(request, task_key.clone(), cancellation)
             .await;
-        reservation.finish(result.clone()).await;
+        reservation.finish(result.clone());
         result
     }
 
