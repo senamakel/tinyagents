@@ -471,6 +471,9 @@ impl SchemaCleanr {
         }
     }
 
+    /// Copies [`SCHEMA_META_KEYS`] from `source` onto `target` when `target`
+    /// is an object, so replacing a node's shape (ref resolution, union
+    /// simplification) does not lose its `description`/`title`/`default`.
     fn preserve_meta(source: &Map<String, Value>, mut target: Value) -> Value {
         if let Value::Object(target_obj) = &mut target {
             for &key in SCHEMA_META_KEYS {
