@@ -938,11 +938,46 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             {
                 // Deltas represent only text/thinking, so preserve terminal
                 // blocks that cannot be streamed as a `ModelDelta` (JSON,
-                // images, and provider extensions).  Provider signatures on
-                // thinking are intentionally discarded: a transformed block
-                // can no longer be replayed as the signed raw one.
+                // images, and provider extensions).
+                //
+                // A signed `Thinking` block must be replayed *verbatim* on
+                // the next model call when thinking + tool calls are both in
+                // play (Anthropic requires the exact signed block ahead of a
+                // `tool_use`); synthesizing a fresh, unsigned block here would
+                // make that replay fail. So the terminal provider blocks are
+                // kept as-is unless a delta middleware actually rewrote the
+                // reasoning text: compare the concatenated `Thinking` text
+                // that crossed `on_model_delta` against the terminal
+                // response's own `Thinking` text. Equal means no middleware
+                // touched it — keep the terminal blocks (signature intact).
+                // Different means the delta stream was transformed — fall
+                // back to a synthetic, unsigned block built from what
+                // actually crossed the middleware boundary, same as before.
+                // `RedactedThinking` carries no reasoning text at all (it is
+                // opaque), so it is always kept verbatim.
+                let terminal_reasoning: String = response
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let reasoning_untransformed = terminal_reasoning == streamed_reasoning;
+
                 let mut content = Vec::new();
-                if !streamed_reasoning.is_empty() {
+                if reasoning_untransformed {
+                    content.extend(response.message.content.iter().filter(|block| {
+                        matches!(
+                            block,
+                            tinyinference_llm::message::ContentBlock::Thinking { .. }
+                        )
+                    }).cloned());
+                    streamed_reasoning.clear();
+                } else if !streamed_reasoning.is_empty() {
                     content.push(tinyinference_llm::message::ContentBlock::Thinking {
                         text: std::mem::take(&mut streamed_reasoning),
                         signature: None,
