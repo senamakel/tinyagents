@@ -776,7 +776,10 @@ async fn parent_retry_after_subgraph_child_failure_resumes_not_restarts() {
         .with_checkpointer(ckpt.clone());
 
     let failed = parent.run_with_thread("t", 0).await;
-    assert!(failed.is_err(), "the child's node failure aborts the parent run");
+    assert!(
+        failed.is_err(),
+        "the child's node failure aborts the parent run"
+    );
     assert_eq!(
         counter.load(std::sync::atomic::Ordering::SeqCst),
         1,
