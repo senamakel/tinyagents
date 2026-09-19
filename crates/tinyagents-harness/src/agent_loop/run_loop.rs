@@ -406,28 +406,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             if let Some(format) = &self.policy.default_response_format {
                 request = request.with_response_format(format.clone());
             }
-            // `ToolDispatcher::Native` is documented as *forcing* provider-native
-            // tool calls, unlike `Auto`'s "native when available, else Xml".
-            // `RunDialect::resolve` maps both to the same `Native` variant (it
-            // only decides whether *this* host renders a text protocol), so
-            // without a capability requirement that promise was unenforceable:
-            // a model profile lacking `tool_calling` could still be resolved,
-            // and a provider adapter is free to fall back to its own text
-            // encoding for such a profile. Requiring the capability makes
-            // resolution itself fail closed for an incapable model. An
-            // adapter's own *runtime* degrade after a live "tools not
-            // supported" provider response is a separate, adapter-internal
-            // reliability behavior this host-side dialect selection has no
-            // visibility into or control over.
-            if matches!(
-                self.policy.tool_dialect,
-                crate::config::ToolDispatcher::Native
-            ) && !tool_schemas.is_empty()
-            {
-                let mut required = request.required_capabilities.clone().unwrap_or_default();
-                required.tool_calling = true;
-                request.required_capabilities = Some(required);
-            }
             if let Some(cap) = ctx.config.max_turn_output_tokens {
                 request.max_tokens =
                     Some(request.max_tokens.map_or(cap, |current| current.min(cap)));
@@ -446,6 +424,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             self.middleware
                 .run_before_model(ctx, state, &mut request)
                 .await?;
+
+            // `ToolDispatcher::Native` is documented as *forcing* provider-native
+            // tool calls, unlike `Auto`'s "native when available, else Xml".
+            // `RunDialect::resolve` maps both to the same `Native` variant (it
+            // only decides whether *this* host renders a text protocol), so
+            // without a capability requirement that promise was unenforceable:
+            // a model profile lacking `tool_calling` could still be resolved,
+            // and a provider adapter is free to fall back to its own text
+            // encoding for such a profile. Requiring the capability makes
+            // resolution itself fail closed for an incapable model. An
+            // adapter's own *runtime* degrade after a live "tools not
+            // supported" provider response is a separate, adapter-internal
+            // reliability behavior this host-side dialect selection has no
+            // visibility into or control over.
+            //
+            // Checked against `request.tools` (the *effective* tool set),
+            // not the pre-`before_model` `tool_schemas` snapshot: a run that
+            // starts with no tools but whose `before_model` middleware adds
+            // some must still be gated — checking the earlier snapshot would
+            // silently let those middleware-added tools reach an
+            // incapable-of-native-tool-calling model.
+            if matches!(
+                self.policy.tool_dialect,
+                crate::config::ToolDispatcher::Native
+            ) && !request.tools.is_empty()
+            {
+                let mut required = request.required_capabilities.clone().unwrap_or_default();
+                required.tool_calling = true;
+                request.required_capabilities = Some(required);
+            }
 
             // Resolve the model for the event/log name before invoking.
             // Hosted turns install their routing decision against this live
