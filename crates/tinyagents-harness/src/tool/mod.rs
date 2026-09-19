@@ -369,4 +369,6 @@ pub(crate) fn provider_schema(tool: &dyn tinytools::Tool) -> tinyinference_llm::
 #[cfg(test)]
 mod canonical_test;
 #[cfg(test)]
+mod context_test;
+#[cfg(test)]
 mod timeout_test;
