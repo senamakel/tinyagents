@@ -469,7 +469,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             if matches!(
                 self.policy.tool_dialect,
                 crate::config::ToolDispatcher::Native
-            ) && !request.tools.is_empty()
+            ) && (!request.tools.is_empty() || structured_output_may_need_tool_calling)
             {
                 let mut required = request.required_capabilities.clone().unwrap_or_default();
                 required.tool_calling = true;
