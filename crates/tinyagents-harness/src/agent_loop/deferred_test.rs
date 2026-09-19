@@ -164,8 +164,8 @@ async fn approval_required_call_defers_the_run_after_its_siblings_execute() {
     assert!(deferred.calls.is_empty());
     assert_eq!(deferred.remaining(&DeferredToolResults::default()).len(), 1);
     assert_eq!(
-        result.status.phase,
-        crate::ids::HarnessPhase::Interrupted,
+        result.status.status,
+        crate::ids::ExecutionStatus::Interrupted,
         "a deferred run is interrupted, not completed"
     );
     assert!(recorder.events().iter().any(|event| matches!(
