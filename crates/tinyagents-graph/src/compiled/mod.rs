@@ -65,7 +65,6 @@
 //!   run aborts immediately, exactly as before.
 
 mod boundary;
-mod durable_update;
 mod executor;
 mod resume;
 mod routing;
