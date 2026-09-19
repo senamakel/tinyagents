@@ -343,6 +343,8 @@ impl<State, Update> CompiledGraph<State, Update> {
             node_retry: None,
             node_policies: Arc::new(HashMap::new()),
             node_defaults: None,
+            task_cache: None,
+            cached_nodes: Arc::new(HashMap::new()),
         }
     }
 
