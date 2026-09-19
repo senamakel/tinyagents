@@ -975,6 +975,13 @@ async fn screen_user_messages<State: Send + Sync>(
     Ok(visible.join("\n"))
 }
 
+/// Screens one piece of host-stored text (a thread summary, a recalled
+/// memory, a recalled experience) as [`ContentOrigin::Stored`] before it is
+/// injected into the transcript.
+///
+/// Applies to content the host itself produced or persisted earlier — it is
+/// screened anyway because a memory or experience record can still carry text
+/// that originated from an untrusted source further upstream.
 async fn screen_stored<State: Send + Sync>(
     host: &crate::host::HostCapabilities<State>,
     text: &str,
