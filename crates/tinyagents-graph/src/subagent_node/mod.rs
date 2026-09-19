@@ -77,7 +77,7 @@ impl<State, Update> SubAgentNode<State, Update> {
 }
 
 /// Lowers a [`SubAgentNode`] plus a host-bound `invoker` into a graph node
-/// [`Handler`].
+/// `Handler`.
 ///
 /// At each activation the handler:
 ///
@@ -88,7 +88,7 @@ impl<State, Update> SubAgentNode<State, Update> {
 ///    `root_run_id` and is parented to the enclosing graph run,
 /// 4. runs the agent under the node's [`SubAgentPolicy`] (timeout/retry), then
 ///    enforces the work budget,
-/// 5. records the child run — with its rolled-up [`UsageTotals`] — onto the
+/// 5. records the child run — with its rolled-up [`UsageTotals`](tinyinference_llm::usage::UsageTotals) — onto the
 ///    enclosing run's child-run sink, and
 /// 6. folds the [`SubAgentOutput`] into a parent `Update` via the output mapper.
 pub fn subagent_node<State, Update>(node: SubAgentNode<State, Update>) -> Handler<State, Update>
