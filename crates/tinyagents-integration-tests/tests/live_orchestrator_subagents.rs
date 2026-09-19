@@ -39,12 +39,7 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
     use tinyinference_llm::providers::openai::OpenAiModel;
     use tinyinference_llm::tool::ToolCall;
 
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!(
-            "skipping live_openai_orchestrator_designs_subagents_via_registry: \
-             OPENAI_API_KEY is not set"
-        );
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 
