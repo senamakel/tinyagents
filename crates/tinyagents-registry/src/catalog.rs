@@ -183,6 +183,137 @@ pub struct ModelCatalogSnapshot {
     pub models: Vec<ModelCatalogEntry>,
 }
 
+impl ModelCatalogSnapshot {
+    /// Validates the snapshot, returning the first failure found (see
+    /// `docs/modules/registry/model-catalog.md`'s "Refresh Workflow" for the
+    /// checks this enforces). Checked, in order:
+    ///
+    /// 1. no duplicate `(provider, model_id)` pair
+    /// 2. no negative price (flat or tiered)
+    /// 3. every entry has a non-empty `source`
+    /// 4. `max_output_tokens` never exceeds `max_input_tokens` when both are known
+    /// 5. no alias collides with another entry's canonical id or alias
+    /// 6. every date field (`created_at`, `retrieved_at`, `deprecation_date`)
+    ///    parses as `YYYY-MM-DD` or a full ISO-8601 timestamp
+    /// 7. every `provider` is a recognized id (see `KNOWN_PROVIDERS`)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::Validation`] with a message identifying the
+    /// offending entry and rule.
+    pub fn validate(&self) -> Result<()> {
+        let mut seen_ids = std::collections::HashSet::new();
+        let mut seen_names = std::collections::HashSet::new();
+
+        for source in &self.sources {
+            validate_date(&source.retrieved_at, "source.retrieved_at")?;
+        }
+        validate_date(&self.created_at, "created_at")?;
+
+        for entry in &self.models {
+            let id = (entry.provider.clone(), entry.model_id.clone());
+            if !seen_ids.insert(id) {
+                return Err(fail(format!(
+                    "duplicate (provider, model_id) pair: ({}, {})",
+                    entry.provider, entry.model_id
+                )));
+            }
+
+            if entry.source.trim().is_empty() {
+                return Err(fail(format!(
+                    "entry {}/{} is missing a source",
+                    entry.provider, entry.model_id
+                )));
+            }
+
+            if let (Some(max_in), Some(max_out)) =
+                (entry.max_input_tokens, entry.max_output_tokens)
+                && max_out > max_in
+            {
+                return Err(fail(format!(
+                    "entry {}/{} has max_output_tokens ({max_out}) greater than \
+                     max_input_tokens ({max_in})",
+                    entry.provider, entry.model_id
+                )));
+            }
+
+            if !KNOWN_PROVIDERS.contains(&entry.provider.as_str()) {
+                return Err(fail(format!(
+                    "entry {}/{} names an unrecognized provider id",
+                    entry.provider, entry.model_id
+                )));
+            }
+
+            if let Some(date) = &entry.deprecation_date {
+                validate_date(date, "deprecation_date")?;
+            }
+
+            validate_pricing(&entry.provider, &entry.model_id, &entry.pricing)?;
+
+            // The model's own canonical id and every alias must be globally
+            // unique across the snapshot (an alias colliding with another
+            // entry's id, or two entries sharing an alias, both make lookup
+            // ambiguous).
+            for name in std::iter::once(entry.model_id.clone()).chain(entry.aliases.clone()) {
+                if !seen_names.insert((entry.provider.clone(), name.clone())) {
+                    return Err(fail(format!(
+                        "alias or id `{name}` collides with another entry under provider `{}`",
+                        entry.provider
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn fail(message: String) -> TinyAgentsError {
+    TinyAgentsError::Validation(format!("model catalog validation failed: {message}"))
+}
+
+fn validate_pricing(provider: &str, model_id: &str, pricing: &ModelPricing) -> Result<()> {
+    let negative = |rate: Option<f64>| rate.is_some_and(|r| r < 0.0);
+    if negative(pricing.input_per_token)
+        || negative(pricing.output_per_token)
+        || negative(pricing.cache_read_input_per_token)
+        || negative(pricing.cache_creation_input_per_token)
+        || negative(pricing.input_audio_per_token)
+        || negative(pricing.output_reasoning_per_token)
+    {
+        return Err(fail(format!(
+            "entry {provider}/{model_id} has a negative flat price"
+        )));
+    }
+    for tier in &pricing.tiers {
+        if negative(tier.input)
+            || negative(tier.output)
+            || negative(tier.cache_read)
+            || negative(tier.cache_write)
+        {
+            return Err(fail(format!(
+                "entry {provider}/{model_id} has a negative tiered price"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Accepts `YYYY-MM-DD` or a full ISO-8601/RFC-3339 timestamp
+/// (`YYYY-MM-DDTHH:MM:SSZ`, with or without fractional seconds/offset).
+fn validate_date(value: &str, field: &str) -> Result<()> {
+    let plain_date = value.len() == 10
+        && value.as_bytes().get(4) == Some(&b'-')
+        && value.as_bytes().get(7) == Some(&b'-')
+        && value.split('-').count() == 3
+        && value.split('-').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    let timestamp = chrono::DateTime::parse_from_rfc3339(value).is_ok();
+    if plain_date || timestamp {
+        Ok(())
+    } else {
+        Err(fail(format!("{field} `{value}` is not a valid date")))
+    }
+}
+
 /// One provenance record for a [`ModelCatalogSnapshot`].
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ModelCatalogSource {
