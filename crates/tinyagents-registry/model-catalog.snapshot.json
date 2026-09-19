@@ -23,8 +23,8 @@
       "deprecation_date": null,
       "release_date": "2023-03-01",
       "pricing": {
-        "input_per_token": 5e-7,
-        "output_per_token": 1.5e-6,
+        "input_per_token": 5e-07,
+        "output_per_token": 1.5e-06,
         "cache_read_input_per_token": 0.0,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -89,8 +89,8 @@
       "deprecation_date": null,
       "release_date": "2023-11-06",
       "pricing": {
-        "input_per_token": 0.00003,
-        "output_per_token": 0.00006,
+        "input_per_token": 3e-05,
+        "output_per_token": 6e-05,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -154,8 +154,8 @@
       "deprecation_date": null,
       "release_date": "2023-11-06",
       "pricing": {
-        "input_per_token": 0.00001,
-        "output_per_token": 0.00003,
+        "input_per_token": 1e-05,
+        "output_per_token": 3e-05,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -213,16 +213,18 @@
     {
       "provider": "openai",
       "model_id": "gpt-4.1",
-      "aliases": [],
+      "aliases": [
+        "openai/gpt-4.1"
+      ],
       "mode": "chat",
       "max_input_tokens": 1047576,
       "max_output_tokens": 32768,
       "deprecation_date": null,
       "release_date": "2025-04-14",
       "pricing": {
-        "input_per_token": 2e-6,
-        "output_per_token": 8e-6,
-        "cache_read_input_per_token": 5e-7,
+        "input_per_token": 2e-06,
+        "output_per_token": 8e-06,
+        "cache_read_input_per_token": 5e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -287,9 +289,9 @@
       "deprecation_date": null,
       "release_date": "2025-04-14",
       "pricing": {
-        "input_per_token": 4.0000000000000003e-7,
-        "output_per_token": 1.6000000000000001e-6,
-        "cache_read_input_per_token": 1.0000000000000001e-7,
+        "input_per_token": 4.0000000000000003e-07,
+        "output_per_token": 1.6000000000000001e-06,
+        "cache_read_input_per_token": 1.0000000000000001e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -354,9 +356,9 @@
       "deprecation_date": null,
       "release_date": "2025-04-14",
       "pricing": {
-        "input_per_token": 1.0000000000000001e-7,
-        "output_per_token": 4.0000000000000003e-7,
-        "cache_read_input_per_token": 2.5000000000000002e-8,
+        "input_per_token": 1.0000000000000001e-07,
+        "output_per_token": 4.0000000000000003e-07,
+        "cache_read_input_per_token": 2.5000000000000002e-08,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -421,9 +423,9 @@
       "deprecation_date": null,
       "release_date": "2024-05-13",
       "pricing": {
-        "input_per_token": 2.5e-6,
-        "output_per_token": 0.00001,
-        "cache_read_input_per_token": 1.25e-6,
+        "input_per_token": 2.5e-06,
+        "output_per_token": 1e-05,
+        "cache_read_input_per_token": 1.25e-06,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -488,8 +490,8 @@
       "deprecation_date": null,
       "release_date": "2024-05-13",
       "pricing": {
-        "input_per_token": 5e-6,
-        "output_per_token": 0.000015,
+        "input_per_token": 5e-06,
+        "output_per_token": 1.5e-05,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -554,9 +556,9 @@
       "deprecation_date": null,
       "release_date": "2024-08-06",
       "pricing": {
-        "input_per_token": 2.5e-6,
-        "output_per_token": 0.00001,
-        "cache_read_input_per_token": 1.25e-6,
+        "input_per_token": 2.5e-06,
+        "output_per_token": 1e-05,
+        "cache_read_input_per_token": 1.25e-06,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -620,9 +622,9 @@
       "deprecation_date": null,
       "release_date": "2024-11-20",
       "pricing": {
-        "input_per_token": 2.5e-6,
-        "output_per_token": 0.00001,
-        "cache_read_input_per_token": 1.25e-6,
+        "input_per_token": 2.5e-06,
+        "output_per_token": 1e-05,
+        "cache_read_input_per_token": 1.25e-06,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -686,10 +688,10 @@
       "deprecation_date": null,
       "release_date": "2026-06-07",
       "pricing": {
-        "input_per_token": 0.00001,
-        "output_per_token": 0.00005,
-        "cache_read_input_per_token": 1e-6,
-        "cache_creation_input_per_token": 0.0000125,
+        "input_per_token": 1e-05,
+        "output_per_token": 5e-05,
+        "cache_read_input_per_token": 1e-06,
+        "cache_creation_input_per_token": 1.25e-05,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -765,10 +767,10 @@
       "deprecation_date": null,
       "release_date": "2026-09-01",
       "pricing": {
-        "input_per_token": 0.00001,
-        "output_per_token": 0.00005,
-        "cache_read_input_per_token": 2.5e-7,
-        "cache_creation_input_per_token": 0.0000125,
+        "input_per_token": 1e-05,
+        "output_per_token": 5e-05,
+        "cache_read_input_per_token": 2.5e-07,
+        "cache_creation_input_per_token": 1.25e-05,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -845,10 +847,10 @@
       "deprecation_date": null,
       "release_date": "2025-10-15",
       "pricing": {
-        "input_per_token": 1e-6,
-        "output_per_token": 5e-6,
-        "cache_read_input_per_token": 1.0000000000000001e-7,
-        "cache_creation_input_per_token": 1.25e-6,
+        "input_per_token": 1e-06,
+        "output_per_token": 5e-06,
+        "cache_read_input_per_token": 1.0000000000000001e-07,
+        "cache_creation_input_per_token": 1.25e-06,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -919,10 +921,10 @@
       "deprecation_date": null,
       "release_date": "2025-10-15",
       "pricing": {
-        "input_per_token": 1e-6,
-        "output_per_token": 5e-6,
-        "cache_read_input_per_token": 1.0000000000000001e-7,
-        "cache_creation_input_per_token": 1.25e-6,
+        "input_per_token": 1e-06,
+        "output_per_token": 5e-06,
+        "cache_read_input_per_token": 1.0000000000000001e-07,
+        "cache_creation_input_per_token": 1.25e-06,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -993,10 +995,10 @@
       "deprecation_date": null,
       "release_date": "2025-11-24",
       "pricing": {
-        "input_per_token": 5e-6,
-        "output_per_token": 0.000025,
-        "cache_read_input_per_token": 5e-7,
-        "cache_creation_input_per_token": 6.25e-6,
+        "input_per_token": 5e-06,
+        "output_per_token": 2.5e-05,
+        "cache_read_input_per_token": 5e-07,
+        "cache_creation_input_per_token": 6.25e-06,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -1075,10 +1077,10 @@
       "deprecation_date": null,
       "release_date": "2025-11-24",
       "pricing": {
-        "input_per_token": 5e-6,
-        "output_per_token": 0.000025,
-        "cache_read_input_per_token": 5e-7,
-        "cache_creation_input_per_token": 6.25e-6,
+        "input_per_token": 5e-06,
+        "output_per_token": 2.5e-05,
+        "cache_read_input_per_token": 5e-07,
+        "cache_creation_input_per_token": 6.25e-06,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -1157,10 +1159,10 @@
       "deprecation_date": null,
       "release_date": "2026-02-04",
       "pricing": {
-        "input_per_token": 5e-6,
-        "output_per_token": 0.000025,
-        "cache_read_input_per_token": 5e-7,
-        "cache_creation_input_per_token": 6.25e-6,
+        "input_per_token": 5e-06,
+        "output_per_token": 2.5e-05,
+        "cache_read_input_per_token": 5e-07,
+        "cache_creation_input_per_token": 6.25e-06,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -1240,10 +1242,10 @@
       "deprecation_date": null,
       "release_date": "2026-04-14",
       "pricing": {
-        "input_per_token": 5e-6,
-        "output_per_token": 0.000025,
-        "cache_read_input_per_token": 5e-7,
-        "cache_creation_input_per_token": 6.25e-6,
+        "input_per_token": 5e-06,
+        "output_per_token": 2.5e-05,
+        "cache_read_input_per_token": 5e-07,
+        "cache_creation_input_per_token": 6.25e-06,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
       },
@@ -1320,25 +1322,25 @@
       "deprecation_date": null,
       "release_date": "2026-04-21",
       "pricing": {
-        "input_per_token": 2e-6,
-        "output_per_token": 0.000012,
-        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "input_per_token": 2e-06,
+        "output_per_token": 1.2e-05,
+        "cache_read_input_per_token": 2.0000000000000002e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 2e-6,
-            "output": 0.000012,
-            "cache_read": 2.0000000000000002e-7,
+            "input": 2e-06,
+            "output": 1.2e-05,
+            "cache_read": 2.0000000000000002e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 4e-6,
-            "output": 0.000018,
-            "cache_read": 4.0000000000000003e-7,
+            "input": 4e-06,
+            "output": 1.8e-05,
+            "cache_read": 4.0000000000000003e-07,
             "cache_write": null
           }
         ]
@@ -1422,25 +1424,25 @@
       "deprecation_date": null,
       "release_date": "2026-04-21",
       "pricing": {
-        "input_per_token": 2e-6,
-        "output_per_token": 0.000012,
-        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "input_per_token": 2e-06,
+        "output_per_token": 1.2e-05,
+        "cache_read_input_per_token": 2.0000000000000002e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 2e-6,
-            "output": 0.000012,
-            "cache_read": 2.0000000000000002e-7,
+            "input": 2e-06,
+            "output": 1.2e-05,
+            "cache_read": 2.0000000000000002e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 4e-6,
-            "output": 0.000018,
-            "cache_read": 4.0000000000000003e-7,
+            "input": 4e-06,
+            "output": 1.8e-05,
+            "cache_read": 4.0000000000000003e-07,
             "cache_write": null
           }
         ]
@@ -1524,8 +1526,8 @@
       "deprecation_date": null,
       "release_date": "2025-10-07",
       "pricing": {
-        "input_per_token": 1.25e-6,
-        "output_per_token": 0.00001,
+        "input_per_token": 1.25e-06,
+        "output_per_token": 1e-05,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -1533,15 +1535,15 @@
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 1.25e-6,
-            "output": 0.00001,
+            "input": 1.25e-06,
+            "output": 1e-05,
             "cache_read": null,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 2.5e-6,
-            "output": 0.000015,
+            "input": 2.5e-06,
+            "output": 1.5e-05,
             "cache_read": null,
             "cache_write": null
           }
@@ -1619,9 +1621,9 @@
       "deprecation_date": null,
       "release_date": "2025-06-17",
       "pricing": {
-        "input_per_token": 3e-7,
-        "output_per_token": 2.5e-6,
-        "cache_read_input_per_token": 3e-8,
+        "input_per_token": 3e-07,
+        "output_per_token": 2.5e-06,
+        "cache_read_input_per_token": 3e-08,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -1699,9 +1701,9 @@
       "deprecation_date": null,
       "release_date": "2025-08-26",
       "pricing": {
-        "input_per_token": 3e-7,
-        "output_per_token": 0.00003,
-        "cache_read_input_per_token": 7.5e-8,
+        "input_per_token": 3e-07,
+        "output_per_token": 3e-05,
+        "cache_read_input_per_token": 7.5e-08,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -1766,9 +1768,9 @@
       "deprecation_date": null,
       "release_date": "2025-06-17",
       "pricing": {
-        "input_per_token": 1.0000000000000001e-7,
-        "output_per_token": 4.0000000000000003e-7,
-        "cache_read_input_per_token": 1e-8,
+        "input_per_token": 1.0000000000000001e-07,
+        "output_per_token": 4.0000000000000003e-07,
+        "cache_read_input_per_token": 1e-08,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -1846,25 +1848,25 @@
       "deprecation_date": null,
       "release_date": "2025-06-17",
       "pricing": {
-        "input_per_token": 1.25e-6,
-        "output_per_token": 0.00001,
-        "cache_read_input_per_token": 1.25e-7,
+        "input_per_token": 1.25e-06,
+        "output_per_token": 1e-05,
+        "cache_read_input_per_token": 1.25e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 1.25e-6,
-            "output": 0.00001,
-            "cache_read": 1.25e-7,
+            "input": 1.25e-06,
+            "output": 1e-05,
+            "cache_read": 1.25e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 2.5e-6,
-            "output": 0.000015,
-            "cache_read": 2.5e-7,
+            "input": 2.5e-06,
+            "output": 1.5e-05,
+            "cache_read": 2.5e-07,
             "cache_write": null
           }
         ]
@@ -1954,9 +1956,9 @@
       "deprecation_date": null,
       "release_date": "2025-12-17",
       "pricing": {
-        "input_per_token": 5e-7,
-        "output_per_token": 3e-6,
-        "cache_read_input_per_token": 5.0000000000000004e-8,
+        "input_per_token": 5e-07,
+        "output_per_token": 3e-06,
+        "cache_read_input_per_token": 5.0000000000000004e-08,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -2035,8 +2037,8 @@
       "deprecation_date": null,
       "release_date": "2024-05-29",
       "pricing": {
-        "input_per_token": 3e-7,
-        "output_per_token": 9.000000000000001e-7,
+        "input_per_token": 3e-07,
+        "output_per_token": 9.000000000000001e-07,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2098,8 +2100,8 @@
       "deprecation_date": null,
       "release_date": "2025-12-09",
       "pricing": {
-        "input_per_token": 4.0000000000000003e-7,
-        "output_per_token": 2e-6,
+        "input_per_token": 4.0000000000000003e-07,
+        "output_per_token": 2e-06,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2162,8 +2164,8 @@
       "deprecation_date": null,
       "release_date": "2025-12-09",
       "pricing": {
-        "input_per_token": 4.0000000000000003e-7,
-        "output_per_token": 2e-6,
+        "input_per_token": 4.0000000000000003e-07,
+        "output_per_token": 2e-06,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2226,8 +2228,8 @@
       "deprecation_date": null,
       "release_date": "2025-07-10",
       "pricing": {
-        "input_per_token": 4.0000000000000003e-7,
-        "output_per_token": 2e-6,
+        "input_per_token": 4.0000000000000003e-07,
+        "output_per_token": 2e-06,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2290,8 +2292,8 @@
       "deprecation_date": null,
       "release_date": "2025-12-02",
       "pricing": {
-        "input_per_token": 4.0000000000000003e-7,
-        "output_per_token": 2e-6,
+        "input_per_token": 4.0000000000000003e-07,
+        "output_per_token": 2e-06,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2354,8 +2356,8 @@
       "deprecation_date": null,
       "release_date": "2025-05-07",
       "pricing": {
-        "input_per_token": 1.0000000000000001e-7,
-        "output_per_token": 3e-7,
+        "input_per_token": 1.0000000000000001e-07,
+        "output_per_token": 3e-07,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2479,8 +2481,8 @@
       "deprecation_date": null,
       "release_date": "2024-07-23",
       "pricing": {
-        "input_per_token": 5.0000000000000004e-8,
-        "output_per_token": 8e-8,
+        "input_per_token": 5.0000000000000004e-08,
+        "output_per_token": 8e-08,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2542,8 +2544,8 @@
       "deprecation_date": null,
       "release_date": "2024-12-06",
       "pricing": {
-        "input_per_token": 5.9e-7,
-        "output_per_token": 7.900000000000001e-7,
+        "input_per_token": 5.9e-07,
+        "output_per_token": 7.900000000000001e-07,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2605,8 +2607,8 @@
       "deprecation_date": null,
       "release_date": "2025-05-29",
       "pricing": {
-        "input_per_token": 3e-8,
-        "output_per_token": 3e-8,
+        "input_per_token": 3e-08,
+        "output_per_token": 3e-08,
         "cache_read_input_per_token": null,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
@@ -2668,9 +2670,9 @@
       "deprecation_date": null,
       "release_date": "2026-09-10",
       "pricing": {
-        "input_per_token": 1.5e-7,
-        "output_per_token": 6e-7,
-        "cache_read_input_per_token": 3e-9,
+        "input_per_token": 1.5e-07,
+        "output_per_token": 6e-07,
+        "cache_read_input_per_token": 3e-09,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -2751,9 +2753,9 @@
       "deprecation_date": null,
       "release_date": "2026-09-10",
       "pricing": {
-        "input_per_token": 1.5e-7,
-        "output_per_token": 6e-7,
-        "cache_read_input_per_token": 3e-9,
+        "input_per_token": 1.5e-07,
+        "output_per_token": 6e-07,
+        "cache_read_input_per_token": 3e-09,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -2834,9 +2836,9 @@
       "deprecation_date": null,
       "release_date": "2026-09-10",
       "pricing": {
-        "input_per_token": 1.5e-7,
-        "output_per_token": 6e-7,
-        "cache_read_input_per_token": 3e-9,
+        "input_per_token": 1.5e-07,
+        "output_per_token": 6e-07,
+        "cache_read_input_per_token": 3e-09,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -2917,9 +2919,9 @@
       "deprecation_date": null,
       "release_date": "2026-08-12",
       "pricing": {
-        "input_per_token": 4.35e-7,
-        "output_per_token": 8.7e-7,
-        "cache_read_input_per_token": 3.625e-9,
+        "input_per_token": 4.35e-07,
+        "output_per_token": 8.7e-07,
+        "cache_read_input_per_token": 3.625e-09,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null
@@ -2997,25 +2999,25 @@
       "deprecation_date": null,
       "release_date": "2026-03-09",
       "pricing": {
-        "input_per_token": 1.25e-6,
-        "output_per_token": 2.5e-6,
-        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "input_per_token": 1.25e-06,
+        "output_per_token": 2.5e-06,
+        "cache_read_input_per_token": 2.0000000000000002e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 1.25e-6,
-            "output": 2.5e-6,
-            "cache_read": 2.0000000000000002e-7,
+            "input": 1.25e-06,
+            "output": 2.5e-06,
+            "cache_read": 2.0000000000000002e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 2.5e-6,
-            "output": 5e-6,
-            "cache_read": 4.0000000000000003e-7,
+            "input": 2.5e-06,
+            "output": 5e-06,
+            "cache_read": 4.0000000000000003e-07,
             "cache_write": null
           }
         ]
@@ -3095,25 +3097,25 @@
       "deprecation_date": null,
       "release_date": "2026-03-09",
       "pricing": {
-        "input_per_token": 1.25e-6,
-        "output_per_token": 2.5e-6,
-        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "input_per_token": 1.25e-06,
+        "output_per_token": 2.5e-06,
+        "cache_read_input_per_token": 2.0000000000000002e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 1.25e-6,
-            "output": 2.5e-6,
-            "cache_read": 2.0000000000000002e-7,
+            "input": 1.25e-06,
+            "output": 2.5e-06,
+            "cache_read": 2.0000000000000002e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 2.5e-6,
-            "output": 5e-6,
-            "cache_read": 4.0000000000000003e-7,
+            "input": 2.5e-06,
+            "output": 5e-06,
+            "cache_read": 4.0000000000000003e-07,
             "cache_write": null
           }
         ]
@@ -3194,25 +3196,25 @@
       "deprecation_date": null,
       "release_date": "2026-03-09",
       "pricing": {
-        "input_per_token": 1.25e-6,
-        "output_per_token": 2.5e-6,
-        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "input_per_token": 1.25e-06,
+        "output_per_token": 2.5e-06,
+        "cache_read_input_per_token": 2.0000000000000002e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 1.25e-6,
-            "output": 2.5e-6,
-            "cache_read": 2.0000000000000002e-7,
+            "input": 1.25e-06,
+            "output": 2.5e-06,
+            "cache_read": 2.0000000000000002e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 2.5e-6,
-            "output": 5e-6,
-            "cache_read": 4.0000000000000003e-7,
+            "input": 2.5e-06,
+            "output": 5e-06,
+            "cache_read": 4.0000000000000003e-07,
             "cache_write": null
           }
         ]
@@ -3303,25 +3305,25 @@
       "deprecation_date": null,
       "release_date": "2026-04-17",
       "pricing": {
-        "input_per_token": 1.25e-6,
-        "output_per_token": 2.5e-6,
-        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "input_per_token": 1.25e-06,
+        "output_per_token": 2.5e-06,
+        "cache_read_input_per_token": 2.0000000000000002e-07,
         "cache_creation_input_per_token": null,
         "input_audio_per_token": null,
         "output_reasoning_per_token": null,
         "tiers": [
           {
             "up_to_tokens": 200000,
-            "input": 1.25e-6,
-            "output": 2.5e-6,
-            "cache_read": 2.0000000000000002e-7,
+            "input": 1.25e-06,
+            "output": 2.5e-06,
+            "cache_read": 2.0000000000000002e-07,
             "cache_write": null
           },
           {
             "up_to_tokens": null,
-            "input": 2.5e-6,
-            "output": 5e-6,
-            "cache_read": 4.0000000000000003e-7,
+            "input": 2.5e-06,
+            "output": 5e-06,
+            "cache_read": 4.0000000000000003e-07,
             "cache_write": null
           }
         ]
