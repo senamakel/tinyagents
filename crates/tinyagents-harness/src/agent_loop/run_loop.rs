@@ -542,12 +542,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // not already supply structured calls.
             recover_text_dialect_calls(&mut response, &call_id, request_has_tools);
 
-            status.mark_running(HarnessPhase::Middleware);
-            self.middleware
-                .run_after_model(ctx, state, &mut response)
-                .await?;
-
-            // Accounting.
+            // Account for the completed provider response before fallible
+            // response middleware. A middleware rejection must not erase
+            // usage already incurred, and the host admission permit covers
+            // provider work rather than post-processing.
             run.model_calls += 1;
             run.steps += 1;
             status.model_calls = run.model_calls;
@@ -592,6 +590,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // deadlock a one-slot gate: the child needs that same slot for its
             // model call while the parent waits for the child tool to return.
             drop(host_budget);
+            status.mark_running(HarnessPhase::Middleware);
+            self.middleware
+                .run_after_model(ctx, state, &mut response)
+                .await?;
             let captured_output = self
                 .policy
                 .capture
