@@ -198,7 +198,9 @@ async fn exhaustive_ignores_the_first_output_tool_and_waits_for_a_clean_turn() {
 
 #[tokio::test]
 async fn prompted_mode_injects_the_schema_into_the_system_prompt_and_extracts_from_text() {
-    let model = Arc::new(MockModel::constant(r#"{"answer":"prompted"}"#));
+    let model = Arc::new(RecordingModel::new(vec![ModelResponse::assistant(
+        r#"{"answer":"prompted"}"#,
+    )]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("mock", model.clone()).with_policy(RunPolicy {
