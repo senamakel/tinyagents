@@ -196,6 +196,8 @@ pub struct WorkflowEngine<S, E> {
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
     lease_for: Duration,
+    /// Monotonic sequence counter for [`tinyagents_graph::GraphEventEnvelope::seq`].
+    sequence: std::sync::atomic::AtomicU64,
 }
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
