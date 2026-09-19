@@ -8,7 +8,7 @@
 //! hardcoded — while the registry's allowlist guarantees those references can
 //! only resolve to capabilities a human actually registered.
 //!
-//! See [`types`] for the data definitions. This module provides registration,
+//! See `types` for the data definitions. This module provides registration,
 //! lookup, aliasing, duplicate validation, and conveniences for handing the
 //! catalog's models and tools to a harness ([`to_model_registry`] /
 //! [`to_tool_registry`]) or to the `.rag` capability resolver
