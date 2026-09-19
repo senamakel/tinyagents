@@ -493,6 +493,7 @@ impl Default for RunPolicy {
             output_retry: OutputRetryPolicy::default(),
             end_strategy: EndStrategy::default(),
             structured_strategy_override: None,
+            execution: LoopExecution::default(),
         }
     }
 }
