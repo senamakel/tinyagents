@@ -45,9 +45,22 @@ where
         // Resume *loads* this checkpoint — it is a read, not a write — so emit a
         // restore event, not `CheckpointSaved` (which would falsely inflate
         // persisted-checkpoint counts and mislead durability observers).
-        self.emit(GraphEvent::CheckpointRestored {
-            checkpoint_id: CheckpointId::new(checkpoint.checkpoint_id.clone()),
-        });
+        // No new run id has been minted yet at this point in the resume
+        // path (see `executor.rs::resume`) — the checkpoint being restored
+        // is the one whose own `run_id` this read is about, so that (rather
+        // than the not-yet-existing resumed run's id) is what the envelope
+        // is stamped with.
+        let restored_run_id = checkpoint
+            .run_id
+            .clone()
+            .map(RunId::from)
+            .unwrap_or_else(|| RunId::from(String::new()));
+        self.emit(
+            &restored_run_id,
+            GraphEvent::CheckpointRestored {
+                checkpoint_id: CheckpointId::new(checkpoint.checkpoint_id.clone()),
+            },
+        );
 
         // Prefer the persisted pending activations (which preserve each pending
         // node's `Send` arg); fall back to the node-id projection for
