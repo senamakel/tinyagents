@@ -88,6 +88,7 @@ impl SchemaPreparation {
             strategy: CleaningStrategy::Gemini,
             strict: false,
             compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -97,6 +98,7 @@ impl SchemaPreparation {
             strategy: CleaningStrategy::Anthropic,
             strict: false,
             compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -106,6 +108,7 @@ impl SchemaPreparation {
             strategy: CleaningStrategy::OpenAI,
             strict: false,
             compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -115,6 +118,7 @@ impl SchemaPreparation {
             strategy: CleaningStrategy::Conservative,
             strict: false,
             compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -127,6 +131,22 @@ impl SchemaPreparation {
     /// Applies byte budgets after cleaning. See [`SchemaCompaction`].
     pub const fn with_compaction(mut self, compaction: SchemaCompaction) -> Self {
         self.compaction = compaction;
+        self
+    }
+
+    /// Applies a resolved [`ModelProfile`]'s [`SchemaTransform`] as the final
+    /// step of preparation, after cleaning and the strict sanitizer.
+    pub fn with_schema_transform(mut self, transform: SchemaTransform) -> Self {
+        self.schema_transform = Some(transform);
+        self
+    }
+
+    /// Merges `profile.schema_transform` into this preparation, when set,
+    /// leaving an unset preparation transform untouched otherwise.
+    pub fn with_profile(mut self, profile: Option<&ModelProfile>) -> Self {
+        if let Some(transform) = profile.and_then(|p| p.schema_transform.clone()) {
+            self.schema_transform = Some(transform);
+        }
         self
     }
 }
