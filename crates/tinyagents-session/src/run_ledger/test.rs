@@ -7,12 +7,284 @@ use super::types::*;
 use chrono::Utc;
 use serde_json::json;
 use std::path::Path;
+use std::sync::{Arc, Barrier};
 use tempfile::TempDir;
 
 /// Workspace root for a test: the ledger derives its database path from
 /// this, so a fresh `TempDir` per test gives a fresh database.
 fn test_workspace(dir: &TempDir) -> &Path {
     dir.path()
+}
+
+fn seed_workflow(workspace_dir: &Path, id: &str) {
+    upsert_workflow_run(
+        workspace_dir,
+        WorkflowRunUpsert {
+            id: id.into(),
+            definition_id: "definition".into(),
+            parent_thread_id: None,
+            input: json!({}),
+            phase_states: json!({}),
+            child_run_ids: vec![],
+            status: WorkflowRunStatus::Running,
+            summary: None,
+            started_at: None,
+            completed_at: None,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn workflow_driver_lease_is_atomic_and_cas_rejects_a_stale_writer() {
+    let dir = TempDir::new().unwrap();
+    seed_workflow(test_workspace(&dir), "workflow-race");
+    let workspace = Arc::new(dir.path().to_path_buf());
+    let barrier = Arc::new(Barrier::new(2));
+    let mut workers = Vec::new();
+    for owner in ["first", "second"] {
+        let workspace = workspace.clone();
+        let barrier = barrier.clone();
+        workers.push(std::thread::spawn(move || {
+            barrier.wait();
+            try_claim_workflow_run(
+                workspace.as_path(),
+                "workflow-race",
+                owner,
+                chrono::Duration::minutes(1),
+            )
+            .unwrap()
+        }));
+    }
+    let claims = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    let acquired = claims
+        .iter()
+        .find_map(|claim| match claim {
+            WorkflowLeaseClaim::Acquired(run) => Some(run.clone()),
+            _ => None,
+        })
+        .expect("one driver acquires the lease");
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|claim| matches!(claim, WorkflowLeaseClaim::Acquired(_)))
+            .count(),
+        1
+    );
+    assert!(
+        claims
+            .iter()
+            .any(|claim| matches!(claim, WorkflowLeaseClaim::Busy(_)))
+    );
+
+    let row = WorkflowRunUpsert {
+        id: acquired.id.clone(),
+        definition_id: acquired.definition_id.clone(),
+        parent_thread_id: acquired.parent_thread_id.clone(),
+        input: acquired.input.clone(),
+        phase_states: json!({"phase": {"status": "running"}}),
+        child_run_ids: vec![],
+        status: WorkflowRunStatus::Running,
+        summary: None,
+        started_at: Some(acquired.started_at),
+        completed_at: None,
+    };
+    let owner = acquired.lease_owner.as_deref().unwrap();
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace.as_path(),
+            row.clone(),
+            acquired.revision,
+            owner,
+            chrono::Duration::minutes(1)
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace.as_path(),
+            row,
+            acquired.revision,
+            owner,
+            chrono::Duration::minutes(1)
+        )
+        .unwrap()
+        .is_none(),
+        "stale revision must not overwrite the winner"
+    );
+
+    // Host stop/recovery uses ordinary upsert. A terminal write must release
+    // the lease so a later resume can acquire its own driver ownership.
+    let current = get_workflow_run(workspace.as_path(), "workflow-race")
+        .unwrap()
+        .unwrap();
+    upsert_workflow_run(
+        workspace.as_path(),
+        WorkflowRunUpsert {
+            id: current.id.clone(),
+            definition_id: current.definition_id.clone(),
+            parent_thread_id: current.parent_thread_id.clone(),
+            input: current.input.clone(),
+            phase_states: current.phase_states.clone(),
+            child_run_ids: current.child_run_ids.clone(),
+            status: WorkflowRunStatus::Interrupted,
+            summary: None,
+            started_at: Some(current.started_at),
+            completed_at: None,
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        try_claim_workflow_run(
+            workspace.as_path(),
+            "workflow-race",
+            "resumer",
+            chrono::Duration::minutes(1),
+        )
+        .unwrap(),
+        WorkflowLeaseClaim::Acquired(_)
+    ));
+}
+
+#[test]
+fn expired_workflow_lease_takeover_fences_the_crashed_owner() {
+    let dir = TempDir::new().unwrap();
+    let workspace = test_workspace(&dir);
+    seed_workflow(workspace, "workflow-expired-owner");
+    let old = match try_claim_workflow_run(
+        workspace,
+        "workflow-expired-owner",
+        "crashed-owner",
+        chrono::Duration::milliseconds(1),
+    )
+    .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected old owner lease, got {other:?}"),
+    };
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let replacement = match try_claim_workflow_run(
+        workspace,
+        "workflow-expired-owner",
+        "replacement",
+        chrono::Duration::minutes(1),
+    )
+    .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected expired lease takeover, got {other:?}"),
+    };
+    assert_eq!(replacement.lease_owner.as_deref(), Some("replacement"));
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace,
+            WorkflowRunUpsert {
+                id: old.id.clone(),
+                definition_id: old.definition_id.clone(),
+                parent_thread_id: old.parent_thread_id.clone(),
+                input: old.input.clone(),
+                phase_states: json!({"phase": {"status": "failed"}}),
+                child_run_ids: old.child_run_ids.clone(),
+                status: WorkflowRunStatus::Failed,
+                summary: Some("stale driver".into()),
+                started_at: Some(old.started_at),
+                completed_at: Some(Utc::now()),
+            },
+            old.revision,
+            "crashed-owner",
+            chrono::Duration::minutes(1),
+        )
+        .unwrap()
+        .is_none(),
+        "the old owner must not overwrite the replacement's recovery state"
+    );
+}
+
+#[test]
+fn lifecycle_fences_an_old_driver_and_lease_renewal_keeps_takeover_out() {
+    let dir = TempDir::new().unwrap();
+    let workspace = test_workspace(&dir);
+    seed_workflow(workspace, "workflow-lifecycle-fence");
+    let first = match try_claim_workflow_run(
+        workspace,
+        "workflow-lifecycle-fence",
+        "first",
+        chrono::Duration::milliseconds(300),
+    )
+    .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected first lease, got {other:?}"),
+    };
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert!(
+        renew_workflow_run_lease(
+            workspace,
+            &first.id,
+            "first",
+            chrono::Duration::milliseconds(500),
+        )
+        .unwrap()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(matches!(
+        try_claim_workflow_run(
+            workspace,
+            &first.id,
+            "second",
+            chrono::Duration::milliseconds(500),
+        )
+        .unwrap(),
+        WorkflowLeaseClaim::Busy(_)
+    ));
+
+    let stopped = compare_and_swap_workflow_run_lifecycle(
+        workspace,
+        WorkflowRunUpsert {
+            id: first.id.clone(),
+            definition_id: first.definition_id.clone(),
+            parent_thread_id: first.parent_thread_id.clone(),
+            input: first.input.clone(),
+            phase_states: json!({"phase": {"status": "pending"}}),
+            child_run_ids: first.child_run_ids.clone(),
+            status: WorkflowRunStatus::Interrupted,
+            summary: None,
+            started_at: Some(first.started_at),
+            completed_at: None,
+        },
+        first.revision,
+    )
+    .unwrap()
+    .expect("lifecycle transition wins");
+    assert!(stopped.lease_owner.is_none());
+
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace,
+            WorkflowRunUpsert {
+                id: first.id.clone(),
+                definition_id: first.definition_id,
+                parent_thread_id: first.parent_thread_id,
+                input: first.input,
+                phase_states: json!({"phase": {"status": "failed"}}),
+                child_run_ids: first.child_run_ids,
+                status: WorkflowRunStatus::Failed,
+                summary: Some("stale driver".into()),
+                started_at: Some(first.started_at),
+                completed_at: Some(Utc::now()),
+            },
+            first.revision,
+            "first",
+            chrono::Duration::seconds(1),
+        )
+        .unwrap()
+        .is_none(),
+        "a fenced driver must never overwrite stop/resume state"
+    );
 }
 
 // ── Regressions for the review findings on PR #90 ─────────────────────

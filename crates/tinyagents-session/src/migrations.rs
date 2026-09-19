@@ -244,6 +244,11 @@ pub(super) const MIGRATIONS: &[&str] = &[
         ON agent_team_tasks(team_id, order_index, created_at);",
     // ---- 4: retain hidden assistant reasoning ---------------------------
     "ALTER TABLE session_messages ADD COLUMN reasoning_content TEXT;",
+    // ---- 5: workflow-driver compare-and-swap leases ---------------------
+    "ALTER TABLE workflow_runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE workflow_runs ADD COLUMN lease_owner TEXT;
+     ALTER TABLE workflow_runs ADD COLUMN lease_expires_at TEXT;
+     CREATE INDEX IF NOT EXISTS idx_workflow_runs_lease ON workflow_runs(lease_expires_at);",
 ];
 
 /// Applies every migration newer than the database's recorded schema version.
@@ -350,7 +355,7 @@ mod test {
     fn migration_list_is_append_only() {
         assert_eq!(
             MIGRATIONS.len(),
-            5,
+            6,
             "MIGRATIONS is append-only — adding one is fine, reordering or \
              deleting one silently re-numbers every later migration"
         );
