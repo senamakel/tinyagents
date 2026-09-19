@@ -471,9 +471,7 @@ where
                 Ok(result) => {
                     match self.fold_result(index, &node_id, step, result, &mut accum, visited) {
                         Some(found) => {
-                            if interrupt.is_none() {
-                                interrupt = Some(found);
-                            }
+                            interrupted.push(found);
                             stalled.push((index, activation));
                         }
                         None => completed.push((index, activation)),
@@ -487,7 +485,7 @@ where
             goto_map: accum.goto_map,
             completed,
             stalled,
-            interrupt,
+            interrupted,
             failure,
         }
     }
