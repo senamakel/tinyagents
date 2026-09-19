@@ -107,10 +107,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             ResumeMode::LatestForAgent => target
                 .locator
                 .latest_for_agent(target.resume_agent.as_deref().unwrap_or(&target.stem)),
-            ResumeMode::Thread => options
-                .thread_id
-                .as_deref()
-                .and_then(|thread| target.locator.root_for_thread(thread)),
+            ResumeMode::Thread => options.thread_id.as_deref().and_then(|thread| {
+                target
+                    .locator
+                    .root_for_thread_scoped(thread, target.meta.agent_id.as_deref())
+            }),
         };
         let Some(read) = read else {
             return Ok(SessionResume {

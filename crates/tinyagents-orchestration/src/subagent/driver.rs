@@ -33,7 +33,7 @@ pub struct SubagentDriver<C: Send + 'static = (), H: Send + 'static = ()> {
     executor: Arc<dyn SubagentExecutor<C>>,
     persistence: Arc<dyn SubagentPersistence>,
     terminal_outcomes: Mutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
-    in_flight: Mutex<HashMap<SubagentTaskKey, Arc<InFlight>>>,
+    in_flight: Arc<Mutex<HashMap<SubagentTaskKey, Arc<InFlight>>>>,
 }
 
 /// Result shared by callers that arrived while the same task was executing.
@@ -79,6 +79,55 @@ impl InFlight {
     }
 }
 
+/// Owns the leader's in-flight reservation until its result is published.
+///
+/// Dropping a caller future must also release its reservation: otherwise a
+/// later caller becomes a follower of work that will never publish a result.
+struct LeaderReservation {
+    in_flight: Arc<Mutex<HashMap<SubagentTaskKey, Arc<InFlight>>>>,
+    task_key: SubagentTaskKey,
+    entry: Arc<InFlight>,
+    finished: bool,
+}
+
+impl LeaderReservation {
+    async fn finish(mut self, result: Result<SubagentRunResult, SubagentError>) {
+        self.entry.complete(result).await;
+        let mut in_flight = self.in_flight.lock().await;
+        if in_flight
+            .get(&self.task_key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.entry))
+        {
+            in_flight.remove(&self.task_key);
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for LeaderReservation {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let in_flight = self.in_flight.clone();
+        let task_key = self.task_key.clone();
+        let entry = self.entry.clone();
+        // `run` is async, so a current Tokio runtime is always available while
+        // this guard can be dropped. Publish a typed result before removal so
+        // existing followers cannot wait indefinitely.
+        tokio::spawn(async move {
+            entry.complete(Err(SubagentError::Cancelled)).await;
+            let mut in_flight = in_flight.lock().await;
+            if in_flight
+                .get(&task_key)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                in_flight.remove(&task_key);
+            }
+        });
+    }
+}
+
 impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
     /// Validates host capability availability before exposing a runnable driver.
     pub fn new(capabilities: SubagentCapabilities<C, H>) -> Result<Self, SubagentError> {
@@ -93,7 +142,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 .persistence
                 .ok_or(SubagentError::MissingCapability("persistence"))?,
             terminal_outcomes: Mutex::new(HashMap::new()),
-            in_flight: Mutex::new(HashMap::new()),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -158,18 +207,22 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                     )
                 });
         }
+        let reservation = LeaderReservation {
+            in_flight: self.in_flight.clone(),
+            task_key: task_key.clone(),
+            entry: entry.clone(),
+            finished: false,
+        };
         // A preceding caller may have committed a terminal result between the
         // initial cache check and this reservation. Do not reopen that task
         // after its in-flight entry has been removed.
         if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
-            entry
-                .complete(Ok(SubagentRunResult::new(
+            reservation
+                .finish(Ok(SubagentRunResult::new(
                     outcome.clone(),
                     SubagentPersistenceDisposition::TerminalExisting,
                 )))
                 .await;
-            let mut in_flight = self.in_flight.lock().await;
-            in_flight.remove(&task_key);
             return Ok(SubagentRunResult::new(
                 outcome,
                 SubagentPersistenceDisposition::TerminalExisting,
@@ -179,14 +232,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         let result = self
             .run_reserved(request, task_key.clone(), cancellation)
             .await;
-        entry.complete(result.clone()).await;
-        let mut in_flight = self.in_flight.lock().await;
-        if in_flight
-            .get(&task_key)
-            .is_some_and(|current| Arc::ptr_eq(current, &entry))
-        {
-            in_flight.remove(&task_key);
-        }
+        reservation.finish(result.clone()).await;
         result
     }
 
@@ -413,16 +459,22 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 SubagentPersistenceDisposition::TerminalExisting,
             ));
         }
-        let paused = self
-            .persistence
-            .load_pause(&task_key)
-            .await?
-            .ok_or_else(|| {
-                SubagentError::Persistence(
-                    "pause compare-and-swap lost without a durable pause or terminal outcome"
-                        .into(),
-                )
-            })?;
+        let Some(paused) = self.persistence.load_pause(&task_key).await? else {
+            // A different driver can consume the pause into a terminal between
+            // the first terminal read and this pause read. Recheck the
+            // authoritative terminal before classifying that interleaving as a
+            // persistence failure.
+            if let Some(terminal) = self.persistence.load_terminal(&task_key).await? {
+                self.cache_terminal(task_key, &terminal).await;
+                return Ok(SubagentRunResult::new(
+                    terminal,
+                    SubagentPersistenceDisposition::TerminalExisting,
+                ));
+            }
+            return Err(SubagentError::Persistence(
+                "pause compare-and-swap lost without a durable pause or terminal outcome".into(),
+            ));
+        };
         if !matches!(paused.status, SubagentStatus::AwaitingInput(_)) {
             return Err(SubagentError::Persistence(
                 "durable pause record did not contain an awaiting-input outcome".into(),

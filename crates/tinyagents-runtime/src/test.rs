@@ -166,6 +166,7 @@ impl TranscriptHistory for MemoryHistory {
 struct Locator {
     history: Arc<MemoryHistory>,
     latest_agents: Mutex<Vec<String>>,
+    scoped_threads: Mutex<Vec<(String, Option<String>)>>,
     opened_stems: Mutex<Vec<String>>,
 }
 
@@ -175,6 +176,17 @@ impl TranscriptLocator for Locator {
         Some(self.history.clone())
     }
     fn root_for_thread(&self, _: &str) -> Option<Arc<dyn TranscriptRead>> {
+        Some(self.history.clone())
+    }
+    fn root_for_thread_scoped(
+        &self,
+        thread: &str,
+        agent_id: Option<&str>,
+    ) -> Option<Arc<dyn TranscriptRead>> {
+        self.scoped_threads
+            .lock()
+            .unwrap()
+            .push((thread.into(), agent_id.map(str::to_owned)));
         Some(self.history.clone())
     }
     fn open_stem(
@@ -202,6 +214,7 @@ fn locator(session: Option<SessionTranscript>) -> (Arc<Locator>, Arc<MemoryHisto
         Arc::new(Locator {
             history: history.clone(),
             latest_agents: Mutex::new(Vec::new()),
+            scoped_threads: Mutex::new(Vec::new()),
             opened_stems: Mutex::new(Vec::new()),
         }),
         history,
@@ -1342,6 +1355,46 @@ async fn latest_resume_agent_is_distinct_from_the_write_stem() {
     assert_eq!(
         locator.opened_stems.lock().unwrap().as_slice(),
         ["write-stem"]
+    );
+}
+
+#[tokio::test]
+async fn thread_resume_scopes_lookup_to_the_target_agent() {
+    let (locator, _) = locator(Some(SessionTranscript {
+        meta: meta(),
+        messages: vec![TranscriptMessage::new("user", "resumed")],
+    }));
+    let target = TranscriptTarget::new(locator.clone(), "write-stem", meta());
+    let (hook, _) = hook_with_resume(
+        vec![ResumePreparation {
+            transcript: Some(target),
+        }],
+        vec![],
+    );
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("resumed"),
+        Message::assistant("next"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .hooks(hook)
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("next")),
+            TurnOptions {
+                resume: ResumeMode::Thread,
+                thread_id: Some("thread-1".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        locator.scoped_threads.lock().unwrap().as_slice(),
+        [("thread-1".into(), Some("agent-id".into()))]
     );
 }
 

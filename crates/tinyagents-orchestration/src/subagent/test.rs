@@ -1025,6 +1025,42 @@ async fn cancelled_follower_returns_without_cancelling_the_leader_or_persisting(
 }
 
 #[tokio::test]
+async fn dropped_leader_releases_its_in_flight_reservation() {
+    let (planner, executor, persistence, _) = fakes(ExecutorMode::WaitForCancellation);
+    let driver = Arc::new(driver(planner.clone(), executor.clone(), persistence));
+    let (started_at_execution, started) = tokio::sync::oneshot::channel();
+    *executor.started.lock().unwrap() = Some(started_at_execution);
+
+    let leader = tokio::spawn({
+        let driver = driver.clone();
+        async move {
+            driver
+                .run(
+                    request("dropped-leader", "leader"),
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    });
+    started.await.unwrap();
+    leader.abort();
+    let _ = leader.await;
+
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        driver.run(request("dropped-leader", "replacement"), cancellation),
+    )
+    .await
+    .expect("replacement leader must not wait on an abandoned reservation")
+    .unwrap();
+
+    assert_eq!(result.outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(*planner.calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
 async fn same_task_id_from_distinct_parent_runs_never_shares_lifecycle_state() {
     let (planner, executor, persistence, _) = fakes(ExecutorMode::Completed);
     let driver = driver(planner.clone(), executor.clone(), persistence.clone());
