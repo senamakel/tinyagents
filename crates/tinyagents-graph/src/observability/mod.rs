@@ -564,7 +564,7 @@ impl GraphEventSink for JournalGraphSink {
 /// observation envelope can record it directly.
 fn checkpoint_of(event: &GraphEvent) -> Option<CheckpointId> {
     match event {
-        GraphEvent::CheckpointSaved { checkpoint_id } => Some(checkpoint_id.clone()),
+        GraphEvent::CheckpointSaved { checkpoint_id, .. } => Some(checkpoint_id.clone()),
         _ => None,
     }
 }
