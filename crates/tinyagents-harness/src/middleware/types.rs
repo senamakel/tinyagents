@@ -244,6 +244,115 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
     async fn on_error(&self, _ctx: &mut RunContext<Ctx>, _error: &TinyAgentsError) -> Result<()> {
         Ok(())
     }
+
+    // ── Control-outcome hooks ────────────────────────────────────────────
+    //
+    // Each hook above has a `_control`-suffixed counterpart the
+    // [`MiddlewareStack`] actually drives. The default implementation below
+    // calls the plain hook and returns [`MiddlewareControl::Continue`], so
+    // every existing `Middleware` impl that only overrides the plain hooks
+    // keeps compiling and behaving exactly as before (A1's source-compat
+    // shim). Override a `_control` hook directly (instead of, not in
+    // addition to, the plain one) when the outcome needs to steer the loop —
+    // stop, jump, interrupt, or queue a state update. See
+    // `docs/modules/harness/middleware.md` for the precedence rule the stack
+    // applies across a phase's hooks and the checkpoints the loop honors a
+    // returned control at.
+
+    /// Control-outcome counterpart of [`Self::before_agent`].
+    async fn before_agent_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+    ) -> Result<MiddlewareControl> {
+        self.before_agent(ctx, state).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::after_agent`].
+    async fn after_agent_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        run: &mut AgentRun,
+    ) -> Result<MiddlewareControl> {
+        self.after_agent(ctx, state, run).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::before_model`].
+    async fn before_model_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: &mut ModelRequest,
+    ) -> Result<MiddlewareControl> {
+        self.before_model(ctx, state, request).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::after_model`].
+    async fn after_model_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        response: &mut ModelResponse,
+    ) -> Result<MiddlewareControl> {
+        self.after_model(ctx, state, response).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::before_tool`].
+    async fn before_tool_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        call: &mut ToolCall,
+    ) -> Result<MiddlewareControl> {
+        self.before_tool(ctx, state, call).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::after_tool`].
+    async fn after_tool_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        invocation: &ToolInvocationIdentity,
+        result: &mut ToolResult,
+    ) -> Result<MiddlewareControl> {
+        self.after_tool(ctx, state, invocation, result).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Whether this middleware still runs (for observation) in a phase where
+    /// an earlier middleware already produced a winning control outcome.
+    ///
+    /// The stack applies the *first* non-[`MiddlewareControl::Continue`]
+    /// outcome in a phase and, by default, skips every hook after it — an
+    /// early-exit tool guard or a budget stop should not pay for hooks whose
+    /// work is now moot. A middleware that must still observe every call
+    /// regardless (a usage accountant, an audit log) overrides this to
+    /// `true`; its own control outcome is then ignored; only the first
+    /// winning one is ever applied. See `docs/modules/harness/middleware.md`.
+    fn is_observer(&self) -> bool {
+        false
+    }
+
+    /// Whether the loop should stop after the turn currently completing,
+    /// evaluated once at the turn boundary (after tool execution, before the
+    /// loop would otherwise continue to the next model call).
+    ///
+    /// Defaults to `false`. A middleware that returns `true` here has the
+    /// same effect as requesting
+    /// [`MiddlewareControl::JumpTo`]`(`[`crate::context::LoopTarget::End`]`)`
+    /// from `after_tool_control`, but expresses "stop once this turn settles"
+    /// without needing to compute that decision inside `after_tool_control`
+    /// itself (useful when the decision depends on the whole turn's tool
+    /// results, not just one call).
+    fn should_stop_after_turn(&self, _ctx: &RunContext<Ctx>, _run: &AgentRun) -> bool {
+        false
+    }
 }
 
 // ── Wrap (around-call) middleware ─────────────────────────────────────────────
