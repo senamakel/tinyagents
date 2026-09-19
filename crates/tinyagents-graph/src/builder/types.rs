@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::Result;
+use crate::checkpoint::PendingWrite;
 use crate::command::NodeResult;
 use crate::reducer::StateReducer;
 use tinyagents_harness::ids::{GraphId, NodeId, RunId, TaskId, ThreadId};
@@ -186,9 +187,86 @@ pub struct NodeContext {
     /// Heartbeat channel for the node's idle timeout
     /// ([`crate::NodePolicy::idle_timeout`]); see [`Self::heartbeat`].
     pub idle_clock: IdleClock,
+    /// This task's [`Self::durable_task`] memo buffer, shared by every clone
+    /// of the context (a retried attempt sees the first attempt's memos).
+    /// Pre-seeded by the executor with the durable-task writes the task's
+    /// checkpoint already holds (so a re-run after an interrupt, crash, or
+    /// retry hits instead of re-executing), and appended to on every miss;
+    /// the executor folds it back into the boundary checkpoint's
+    /// `pending_writes` when the task stalls. Empty on a hand-built context.
+    pub(crate) durable_writes: Arc<std::sync::Mutex<Vec<PendingWrite>>>,
 }
 
 impl NodeContext {
+    /// Runs `fut` at most once per `(task, key)` across re-runs of this task.
+    ///
+    /// A node handler is re-run from its start after an interrupt/resume,
+    /// a failure/retry, or an in-process node retry, so any side effect it
+    /// performs (an API call, a payment, a counter increment) would repeat.
+    /// Wrapping that side effect in `durable_task` memoises its output in
+    /// this task's checkpoint write ledger, keyed by the task id and `key`:
+    /// the first execution awaits `fut`, serializes its `Ok` output as a
+    /// [`PendingWrite::durable_task`] memo, and returns it; a later re-run
+    /// of the same task finds the memo and returns the stored value
+    /// **without polling `fut` at all**. Memos are only ever recorded for a
+    /// successful `fut`; an `Err` is returned unmemoised so a retry re-runs
+    /// the step. Keys are independent: a handler that memoised `"a"` and
+    /// then failed before `"b"` replays `"a"` and runs `"b"` fresh.
+    ///
+    /// The memo is scoped to this task in this thread — it is not a
+    /// cross-run cache (see [`crate::TaskCache`] for that) — and it is only
+    /// durable across process restarts when the graph runs on a
+    /// checkpointed thread; without a checkpointer it still dedupes within
+    /// one run (in-process retries). Two calls with the same `key` inside
+    /// one handler execution return the same stored value.
+    pub async fn durable_task<T, F>(&self, key: &str, fut: F) -> Result<T>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned,
+        F: Future<Output = Result<T>>,
+    {
+        let hit = self
+            .lock_durable_writes()
+            .iter()
+            .find(|w| w.durable_task_key() == Some(key))
+            .map(|w| w.payload.clone());
+        if let Some(payload) = hit {
+            return serde_json::from_value(payload).map_err(|err| {
+                crate::TinyAgentsError::Serialization(serde::de::Error::custom(format!(
+                    "durable_task `{key}` of task `{}` (node `{}`) holds a memo that does not                      decode as the requested type: {err}",
+                    self.task_id.as_str(),
+                    self.node_id
+                )))
+            });
+        }
+        let value = fut.await?;
+        let payload = serde_json::to_value(&value)?;
+        let mut writes = self.lock_durable_writes();
+        let idx = writes.iter().map(|w| w.idx).max().unwrap_or(0).max(0) + 1;
+        writes.push(PendingWrite::durable_task(
+            self.node_id.clone(),
+            self.task_id.clone(),
+            idx,
+            key,
+            payload,
+        ));
+        Ok(value)
+    }
+
+    /// Locks the durable-task memo buffer, tolerating a poisoned lock (the
+    /// buffer is a plain `Vec` push/scan, so a panic mid-hold leaves it
+    /// consistent).
+    pub(crate) fn lock_durable_writes(&self) -> std::sync::MutexGuard<'_, Vec<PendingWrite>> {
+        self.durable_writes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A snapshot of this task's durable-task memo writes (pre-seeded plus
+    /// any recorded by [`Self::durable_task`] so far).
+    pub(crate) fn durable_writes_snapshot(&self) -> Vec<PendingWrite> {
+        self.lock_durable_writes().clone()
+    }
+
     /// Signals liveness to the executor's idle-timeout watcher, restarting
     /// the node's [`crate::NodePolicy::idle_timeout`] window. Cheap (an
     /// atomic increment plus a notify); a no-op for a node with no idle
@@ -237,6 +315,7 @@ impl std::fmt::Debug for NodeContext {
             .field("channel_versions", &self.channel_versions)
             .field("versions_seen", &self.versions_seen)
             .field("idle_clock", &self.idle_clock)
+            .field("durable_writes", &self.lock_durable_writes().len())
             .finish()
     }
 }
@@ -265,6 +344,48 @@ pub(crate) struct NodeMeta {
     pub(crate) command_destinations: Vec<NodeId>,
     /// Arbitrary, sorted key/value annotations carried into the export.
     pub(crate) metadata: BTreeMap<String, String>,
+}
+
+/// Encodes an `Update` for checkpoint storage.
+pub(crate) type EncodeUpdateFn<Update> =
+    dyn Fn(&Update) -> serde_json::Result<serde_json::Value> + Send + Sync;
+/// Decodes a stored value back into an `Update`.
+pub(crate) type DecodeUpdateFn<Update> =
+    dyn Fn(serde_json::Value) -> serde_json::Result<Update> + Send + Sync;
+
+/// A type-erased `Update` serde codec, installed by
+/// [`GraphBuilder::interrupt_after`](super::GraphBuilder::interrupt_after)
+/// (the one builder entry point that requires `Update: Serialize +
+/// DeserializeOwned`) so the executor can persist a node's deferred result
+/// in the checkpoint write ledger and replay it on resume, while
+/// [`GraphBuilder`]/[`crate::CompiledGraph`] themselves stay bound-free
+/// over `Update`. Same pattern as
+/// [`crate::CompiledGraph::with_cached_node`].
+pub(crate) struct UpdateCodec<Update> {
+    pub(crate) encode: Arc<EncodeUpdateFn<Update>>,
+    pub(crate) decode: Arc<DecodeUpdateFn<Update>>,
+}
+
+impl<Update> UpdateCodec<Update>
+where
+    Update: serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    /// Builds the serde codec for `Update`.
+    pub(crate) fn serde() -> Self {
+        Self {
+            encode: Arc::new(|update: &Update| serde_json::to_value(update)),
+            decode: Arc::new(|value: serde_json::Value| serde_json::from_value(value)),
+        }
+    }
+}
+
+impl<Update> Clone for UpdateCodec<Update> {
+    fn clone(&self) -> Self {
+        Self {
+            encode: self.encode.clone(),
+            decode: self.decode.clone(),
+        }
+    }
 }
 
 /// A compiled-in node: its handler. The node's id lives as the key of the
@@ -411,4 +532,13 @@ pub struct GraphBuilder<State, Update> {
     /// Graph-wide default execution policy every node falls back to, field
     /// by field, when it has no per-node override.
     pub(crate) node_defaults: Option<super::NodePolicy<State, Update>>,
+    /// Nodes the executor pauses *before* running (see
+    /// [`super::GraphBuilder::interrupt_before`]).
+    pub(crate) interrupt_before: HashSet<NodeId>,
+    /// Nodes the executor pauses *after* running, before applying their
+    /// result (see [`super::GraphBuilder::interrupt_after`]).
+    pub(crate) interrupt_after: HashSet<NodeId>,
+    /// The `Update` codec `interrupt_after` needs to persist a deferred
+    /// result; `None` until the first `interrupt_after` call.
+    pub(crate) update_codec: Option<UpdateCodec<Update>>,
 }
