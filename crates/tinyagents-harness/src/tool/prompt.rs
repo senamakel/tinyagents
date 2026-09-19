@@ -181,7 +181,11 @@ fn is_resolvable_user_query(message: &Message) -> bool {
     }
     user.content.iter().any(|block| match block {
         ContentBlock::Text(text) => !text.trim().is_empty(),
-        ContentBlock::Json(_) | ContentBlock::Image(_) => true,
+        ContentBlock::Json(_)
+        | ContentBlock::Image(_)
+        | ContentBlock::Audio(_)
+        | ContentBlock::Video(_)
+        | ContentBlock::Document(_) => true,
         // Reasoning replay and opaque provider payloads are not user input.
         ContentBlock::Thinking { .. }
         | ContentBlock::RedactedThinking { .. }
