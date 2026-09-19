@@ -27,7 +27,7 @@ use crate::tool::ToolTimeoutSettings;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
     CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStreamItem,
-    ResponseFormat, ToolChoice,
+    ReasoningConfig, ReasoningEffort, ResponseFormat, SchemaTransform, StructuredMode, ToolChoice,
 };
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
