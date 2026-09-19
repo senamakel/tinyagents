@@ -180,9 +180,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 _ => None,
             })
-            && tool_schemas
+            && self
+                .tools
+                .names()
                 .iter()
-                .any(|registered| registered.name == *name)
+                .any(|registered| registered == name)
         {
             return Err(TinyAgentsError::Validation(format!(
                 "structured-output schema name `{name}` collides with a registered tool of the \
