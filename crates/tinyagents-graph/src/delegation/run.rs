@@ -217,9 +217,9 @@ where
 ///
 /// Classifies the thread's latest checkpoint and routes accordingly:
 /// - **resumable** (a crash/failure left a mid-run boundary) → re-run only the
-///   not-yet-completed nodes from that boundary via [`CompiledGraph::resume`]
+///   not-yet-completed nodes from that boundary via [`CompiledGraph::resume`](crate::CompiledGraph::resume)
 ///   with an empty command — never restarting from `plan`, and never re-running
-///   an already-completed step (its [`StepRecord`] is restored from the state);
+///   an already-completed step (its [`StepRecord`](crate::StepRecord) is restored from the state);
 /// - **terminal** (already finalized/cancelled) → return the stored final state
 ///   without re-running (idempotent re-invocation of a stable thread);
 /// - **absent** (no checkpoint) → a fresh durable run;
