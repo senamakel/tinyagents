@@ -563,8 +563,8 @@ async fn capability_registry_implements_definition_registry() {
 // route_workload
 // ---------------------------------------------------------------------------
 
-#[test]
-fn route_workload_resolves_tier_through_router_to_registered_model() {
+#[tokio::test]
+async fn route_workload_resolves_tier_through_router_to_registered_model() {
     use crate::router::{WorkloadRoute, WorkloadRouter};
 
     let mut reg: CapabilityRegistry = CapabilityRegistry::new();
@@ -579,12 +579,8 @@ fn route_workload_resolves_tier_through_router_to_registered_model() {
     );
 
     let resolved = reg.route_workload("chat-v1").unwrap();
-    assert_eq!(
-        futures::executor::block_on(resolved.invoke(&(), ModelRequest::new(vec![])))
-            .unwrap()
-            .text(),
-        "chat"
-    );
+    let response = resolved.invoke(&(), ModelRequest::new(vec![])).await.unwrap();
+    assert_eq!(response.text(), "chat");
 }
 
 #[test]
