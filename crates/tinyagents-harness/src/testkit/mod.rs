@@ -16,6 +16,7 @@
 //! | Type | Purpose |
 //! |------|---------|
 //! | [`ScriptedModel`] | Pre-loaded `ChatModel` returning queued responses |
+//! | [`SchemaDrivenModel`] | `ChatModel` that calls every declared tool once with schema-generated args |
 //! | [`SlowModel`] | `ChatModel` that sleeps before replying (timeout testing) |
 //! | [`FakeTool`] | Configurable `Tool` recording invocations |
 //! | [`DeterministicClock`] | Controllable millisecond clock |
