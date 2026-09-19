@@ -84,10 +84,13 @@ where
             checkpoint
                 .pending_writes
                 .iter()
-                .map(|w| w.task_id.clone())
+                .map(|w| w.task_id.as_str().to_string())
                 .collect()
         } else {
-            recorded.iter().map(|w| w.task_id.clone()).collect()
+            recorded
+                .iter()
+                .map(|w| w.task_id.as_str().to_string())
+                .collect()
         };
         let active: Vec<Activation> = if done.is_empty() {
             active
@@ -97,7 +100,7 @@ where
                 // A node name is not a task identity: a Send fan-out can have
                 // several live activations of one node. Legacy checkpoints
                 // have no persisted task id, so leave them runnable.
-                .filter(|a| a.task_id.is_empty() || !done.contains(&a.task_id))
+                .filter(|a| a.task_id.as_str().is_empty() || !done.contains(a.task_id.as_str()))
                 .cloned()
                 .collect();
             if filtered.is_empty() {
