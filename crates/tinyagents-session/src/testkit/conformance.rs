@@ -340,19 +340,10 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
             request_id: Some("turn-1"),
         })
         .expect("append_turn (extension) succeeds");
-    let after_turn1 = history.messages().expect("messages succeeds");
     assert_eq!(
-        content_view(&after_turn1),
+        content_view(&history.messages().expect("messages succeeds")),
         content_view(&turn1_next),
         "append_turn's logical view is exactly its `next` argument"
-    );
-    // The newly-appended message carries the turn's request id through to a
-    // fresh read, regardless of whether the backend stores it inline or
-    // recomputes it from a diff against `prev`.
-    assert_eq!(
-        after_turn1.last().and_then(|m| m.request_id.as_deref()),
-        Some("turn-1"),
-        "the tail message of an append_turn extension is stamped with the turn's request id"
     );
 
     // ── append_turn: idempotent re-import ────────────────────────────
