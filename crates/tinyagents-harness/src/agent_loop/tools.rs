@@ -516,29 +516,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let is_allowed = allowed_tools
             .as_ref()
             .is_none_or(|allowed| allowed.contains(&call.name));
-        let registry_dispatch = is_allowed
-            .then(|| self.tools.model_dispatch(&call.name))
-            .flatten();
         // A name the registry does not itself resolve may still belong to
         // the harness's composable toolset chain (`ToolSet`, gap B3) — for
         // example a `CombinedToolSet` member the caller never also
         // registered into `self.tools`. Only consulted once the registry has
         // already said no, so a registered tool always wins a name collision.
+        // Built via `Self::toolset_dispatch` rather than inline: bridging a
+        // `ToolSet` into `Arc<dyn ToolDispatch<State, Ctx>>` requires
+        // `State: 'static, Ctx: 'static` (the coercion to a trait object
+        // needs the concrete bridge type to be `'static`), a bound this
+        // method's own `impl` block deliberately does not carry (recursive
+        // dispatch stays callable with a borrowed, non-`'static` `State`/`Ctx`
+        // — see `runtime/agent.rs`'s `host_invocation_binding`). Isolating the
+        // extra bound to the helper keeps that guarantee for every other path.
+        let registry_dispatch = is_allowed
+            .then(|| self.tools.model_dispatch(&call.name))
+            .flatten();
         let toolset_dispatch = if registry_dispatch.is_none() && is_allowed {
-            match &self.toolset {
-                Some(toolset) => toolset
-                    .tools(ctx)
-                    .await?
-                    .into_iter()
-                    .find(|candidate| candidate.name() == call.name)
-                    .map(|tool| {
-                        Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
-                            Arc::clone(toolset),
-                            tool,
-                        )) as Arc<dyn crate::tool::ToolDispatch<State, Ctx>>
-                    }),
-                None => None,
-            }
+            self.toolset_dispatch(ctx, &call.name).await?
         } else {
             None
         };
