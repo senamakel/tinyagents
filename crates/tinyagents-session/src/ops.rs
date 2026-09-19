@@ -525,6 +525,9 @@ pub(super) fn search_sessions_inner(
     Ok(SessionSearchResult { sessions, total })
 }
 
+/// Lists a session's messages in insertion order (`id ASC`).
+///
+/// `limit` is capped at 1000 regardless of the requested value.
 pub fn list_messages(
     workspace_dir: &Path,
     session_id: &str,
