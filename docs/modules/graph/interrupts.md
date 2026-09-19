@@ -1,6 +1,27 @@
 # Graph Interrupts And Resume
 
-Interrupts pause execution and return control to the caller.
+Interrupts pause execution and return control to the caller. Basic
+interrupt/resume — the `Interrupt` type, `Command::resume`, and
+`CompiledGraph::resume`/`resume_from` — is implemented today
+(`crates/tinyagents-graph/src/command/types.rs`,
+`crates/tinyagents-graph/src/compiled/executor.rs`). Everything under
+"Targeted Human Steering" below, plus `interrupt_before`/`interrupt_after`
+selectors and resume-by-interrupt-id maps, is a **target — not implemented**
+(verified by grep against `crates/tinyagents-graph/src`; see
+`docs/runtime-comparison/plan.md`).
+
+The struct actually shipped today is smaller than the one below — no
+`task_id` or `order` field:
+
+```rust
+pub struct Interrupt {
+    pub id: String,
+    pub node: NodeId,
+    pub payload: serde_json::Value,
+}
+```
+
+The fuller shape this doc originally described (target, not implemented):
 
 ```rust
 pub struct Interrupt {
