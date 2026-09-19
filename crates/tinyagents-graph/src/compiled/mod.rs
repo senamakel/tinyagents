@@ -514,4 +514,6 @@ impl<State, Update> CompiledGraph<State, Update> {
 }
 
 #[cfg(test)]
+mod durable_test;
+#[cfg(test)]
 mod test;
