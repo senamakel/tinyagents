@@ -320,7 +320,7 @@ pub trait Summarizer: Send + Sync {
             parts.push(format!(
                 "[part {}] {}",
                 i + 1,
-                record.summary.text_or_default()
+                record.summary.text()
             ));
             source_ids.extend(record.provenance.source_ids.iter().cloned());
             original_token_estimate += record.provenance.original_token_estimate;
