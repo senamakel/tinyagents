@@ -1588,7 +1588,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     synthesized.push(Message::Tool(tool_message));
                     if let Err(err) = ledger
                         .settled(ToolEffectSettle {
-                            run_id: RunId::new(run_id),
+                            run_id: crate::ids::RunId::new(run_id),
                             call_id: CallId::new(call.id.clone()),
                             status: ToolEffectStatus::Interrupted,
                             effect_summary: Some(effect.tool.clone()),
