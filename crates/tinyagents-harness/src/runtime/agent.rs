@@ -816,6 +816,14 @@ fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static
     }
 }
 
+/// The hosted turn's epilogue: emits the terminal progress event, then feeds
+/// the finished run into whichever optional host capabilities are configured
+/// (memory, learning, experience). Runs once per turn, after the caller-facing
+/// result has already been produced.
+///
+/// Each optional sink's failure is logged and does not affect the others or
+/// propagate anywhere — by the time this runs the turn is already over, so
+/// there is nothing left to fail.
 async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
     prepared: PreparedAgentTurn<State, Ctx>,
     run: AgentRun,
@@ -874,6 +882,13 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
     }
 }
 
+/// Spawns the background task that drains a [`ProgressSender`]'s channel into
+/// `sink`, and returns the sender half — or `None` when there is no sink or no
+/// ambient Tokio runtime to spawn onto.
+///
+/// See the field comment below for the 128 nonterminal + 1 terminal slot
+/// accounting this pairs with in [`ProgressSender::send_nonterminal`] /
+/// [`ProgressSender::send_terminal`].
 fn start_progress_dispatcher(
     sink: Option<std::sync::Arc<dyn crate::host::ProgressSink>>,
 ) -> Option<ProgressSender> {
