@@ -358,25 +358,27 @@ async fn cancel_terminates_the_run() {
 }
 
 #[tokio::test]
-async fn disallowed_command_fails_the_run() {
+async fn disallowed_command_is_skipped_and_the_run_still_completes() {
     let recorder = EventRecorder::new();
     // Empty policy: every command is rejected.
     let handle = SteeringHandle::new(SteeringPolicy::new());
     handle.send(SteeringCommand::InjectMessage(Message::user("nope")));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("never reached")));
+    harness.register_model("mock", Arc::new(MockModel::constant("reached")));
 
     let ctx: RunContext = RunContext::new(RunConfig::new("run-reject"), ())
         .with_events(recorder.sink())
         .with_steering(handle);
 
-    let err = harness
+    // A disallowed steering command no longer kills the run (I-5/M-7); it is
+    // rejected individually and the loop continues.
+    let run = harness
         .invoke_in_context(&(), ctx, vec![Message::user("start")])
         .await
-        .expect_err("run should fail on disallowed steering");
+        .expect("run should complete despite the rejected steering command");
+    assert_eq!(run.text(), Some("reached"));
 
-    assert!(matches!(err, TinyAgentsError::Steering(_)), "got {err:?}");
     assert!(recorder.events().iter().any(|e| matches!(
         e,
         AgentEvent::Steered { command_kind, accepted: false } if command_kind == "inject_message"
