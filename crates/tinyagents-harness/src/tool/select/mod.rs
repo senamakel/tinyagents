@@ -177,6 +177,9 @@ fn tool_verb_prefixes(v: ToolVerb) -> &'static [&'static str] {
     }
 }
 
+/// Detects which [`ToolVerb`]s a prompt expresses, by whole-word alias match
+/// plus the `Send`-resource-noun special case documented on
+/// [`SEND_NOUN_ALIASES`]. A prompt may match more than one verb.
 fn detect_verbs(prompt: &str) -> HashSet<ToolVerb> {
     let lowered = prompt.to_ascii_lowercase();
     let mut found = HashSet::new();

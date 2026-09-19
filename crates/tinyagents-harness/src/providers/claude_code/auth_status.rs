@@ -45,6 +45,7 @@ pub enum AuthSource {
     /// subscription type returned best-effort; absent when the schema
     /// drifts.
     Subscription {
+        /// Signed-in account's email, when the CLI reports one.
         account_email: Option<String>,
         /// `"max"` / `"pro"` etc., for display. Absent when not reported.
         subscription_type: Option<String>,

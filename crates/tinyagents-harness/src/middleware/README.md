@@ -79,7 +79,11 @@ the loop itself) skips its own dispatch for that error.
   result enums wrap middleware resolve to; construct via `.into()` from a
   `ModelResponse` / `ToolResult`.
 
-### Built-in middleware (`library/`)
+### Middleware defined directly in this module (`types.rs`)
+
+These ship in `middleware/types.rs` itself (not `library/`) because they are
+tightly coupled to context-window/prompt-cache machinery that already lives at
+this level of the crate:
 
 - `LoggingMiddleware` — observation-only; counts how often each lifecycle hook
   fires (`HookCounts`, readable via `.counts()`). Emits no events of its own —
@@ -93,6 +97,11 @@ the loop itself) skips its own dispatch for that error.
   `ConcatSummarizer`) into a summary message, keeps the recent window and
   system messages verbatim, records a `SummaryRecord`, and emits
   `AgentEvent::Compressed`.
+- `MicrocompactMiddleware` — the micro-compaction companion to
+  `ContextCompressionMiddleware`: blanks the bodies of older tool-result
+  messages (keeping the newest `keep_recent` verbatim) instead of summarizing
+  chat history, optionally gated on a token budget to preserve the
+  prompt-cache prefix.
 - `PromptCacheGuardMiddleware` — computes the request's
   `cache::PromptCacheLayout` in `before_model` and records a
   `CacheLayoutEvent` whenever the cacheable prefix changes from the previous
@@ -100,14 +109,22 @@ the loop itself) skips its own dispatch for that error.
 - `UsageAccountingMiddleware` — folds each `response.usage` into a running
   `UsageTotals` in `after_model`, readable via `.totals()`.
 
+### Built-in middleware library (`library/`)
+
+A much larger catalog of ready-to-use middleware — retry/timeout/fallback/rate
+limiting, budget enforcement, tool policy/allowlisting/selection, human
+approval, structured-output validation, dynamic prompts, redaction, and
+tracing — lives in `library/` and is re-exported through this module. See
+[`library/README.md`](library/README.md) for the full list.
+
 ## Files
 
 | File | Role |
 | --- | --- |
-| `types.rs` | Every public type: traits, `MiddlewareStack`, built-in middleware structs. |
+| `types.rs` | Every public type: traits, `MiddlewareStack`, and the middleware listed above. |
 | `mod.rs` | Behavioral code: `AgentRun` helpers, the stack runner. |
-| `library/` | Constructors and impls for every built-in middleware, split by concern: `resilience.rs` (retry/timeout/fallback/rate-limit), `budget.rs` (token/cost tracking and enforcement), `tool_policy.rs` (allowlisting, policy, dynamic/contextual selection, human approval), `context.rs` (message trim, summarization-based compression, prompt-cache guard), `observe.rs` (structured-output validation, dynamic prompt, redaction, tracing, logging, usage accounting). |
-| `test.rs` | Unit tests (ordering, short-circuiting, each built-in middleware). |
+| `library/` | The built-in middleware library — see [`library/README.md`](library/README.md). |
+| `test.rs` | Unit tests (ordering, short-circuiting, each middleware defined in this module). |
 
 ## Operational constraints
 
