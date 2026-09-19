@@ -63,6 +63,7 @@
 //! coordination guarantees.
 
 mod context;
+pub mod entry_tree;
 mod migrations;
 pub mod ops;
 pub mod retention;
