@@ -146,6 +146,15 @@ pub struct NodeDecl {
     /// A registered REPL script name (`script "triage"`) for a `repl_agent`
     /// node. Names a script capability; it never inlines executable code.
     pub script: Option<String>,
+    /// A registered router-function name (`router "classify"`) for a
+    /// `router` node, parallel to `agent`/`graph`/`script`.
+    ///
+    /// `router` nodes previously had no dedicated item and named their route
+    /// function through the overloaded `model` field (M4 in
+    /// `docs/runtime-comparison/code-review-workspace.md`); `model` is still
+    /// read as a deprecated fallback when `router` is absent, so existing
+    /// `.rag` source keeps compiling.
+    pub router: Option<String>,
     /// An input-mapping name (`input "split_a"`) for sub-agent / subgraph nodes.
     pub input: Option<String>,
     /// A `command { goto … update { … } }` declaration.
