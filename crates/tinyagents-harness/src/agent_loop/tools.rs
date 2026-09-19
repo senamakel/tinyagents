@@ -162,6 +162,25 @@ struct PreparedToolCall {
     output_origin: crate::host::ContentOrigin,
 }
 
+/// Derives a best-effort deduplication key for one tool call from its name
+/// and arguments (B5).
+///
+/// `tinytools::ToolPolicy` does not currently declare an explicit
+/// idempotency key field, so this hashes `(tool name, arguments)` with
+/// SHA-256: two calls to the same tool with identical arguments derive the
+/// same key, which is exactly what a host wants to notice when deciding
+/// whether an orphaned effect might have already landed. This is content
+/// equality, not a cryptographic guarantee — a tool whose "same effect" notion
+/// differs from "identical arguments" (e.g. one that reads a clock) should
+/// not rely on this key alone.
+fn tool_call_idempotency_key(tool_name: &str, arguments: &Value) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(tool_name.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(serde_json::to_vec(arguments).unwrap_or_default());
+    format!("{:x}", hasher.finalize())
+}
+
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Resolves the effective host tool allow-list for `ctx`, or `Ok(None)`
     /// when nothing should be restricted.
