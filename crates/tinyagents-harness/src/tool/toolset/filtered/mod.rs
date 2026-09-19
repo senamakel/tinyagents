@@ -1,8 +1,8 @@
 //! [`FilteredToolSet`]: keep only the tools a predicate accepts.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::sync::Arc;
 
@@ -30,7 +30,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> FilteredToolSet<State, Ctx> {
     ) -> Self {
         let allowed: std::collections::HashSet<String> =
             names.into_iter().map(Into::into).collect();
-        Self::new(inner, Arc::new(move |tool: &dyn Tool| tool_name_allowed(&allowed, tool.name())))
+        Self::new(
+            inner,
+            Arc::new(move |tool: &dyn Tool| tool_name_allowed(&allowed, tool.name())),
+        )
     }
 }
 

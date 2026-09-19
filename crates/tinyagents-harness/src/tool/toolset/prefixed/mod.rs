@@ -1,8 +1,8 @@
 //! [`PrefixedToolSet`]: prefix every advertised tool name.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::sync::Arc;
 

@@ -1,8 +1,8 @@
 //! [`CombinedToolSet`]: merge multiple toolsets into one.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::sync::Arc;
 

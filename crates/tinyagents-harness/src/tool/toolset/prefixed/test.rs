@@ -51,5 +51,8 @@ async fn unprefixed_name_is_not_found() {
         .call("forecast", json!({"text": "sunny"}), &ctx)
         .await
         .expect_err("the unprefixed name was never advertised");
-    assert!(matches!(err, crate::error::TinyAgentsError::ToolNotFound(_)));
+    assert!(matches!(
+        err,
+        crate::error::TinyAgentsError::ToolNotFound(_)
+    ));
 }

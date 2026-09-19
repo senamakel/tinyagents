@@ -1,8 +1,8 @@
 //! [`ApprovalRequiredToolSet`]: flag matching tools as requiring approval.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::sync::Arc;
 
@@ -30,7 +30,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ApprovalRequiredToolSet<State, Ctx> {
     ) -> Self {
         let flagged: std::collections::HashSet<String> =
             names.into_iter().map(Into::into).collect();
-        Self::new(inner, Arc::new(move |tool: &dyn Tool| flagged.contains(tool.name())))
+        Self::new(
+            inner,
+            Arc::new(move |tool: &dyn Tool| flagged.contains(tool.name())),
+        )
     }
 }
 

@@ -1,8 +1,8 @@
 //! [`RenamedToolSet`]: rename tools per an explicit map.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::collections::HashMap;
 use std::sync::Arc;

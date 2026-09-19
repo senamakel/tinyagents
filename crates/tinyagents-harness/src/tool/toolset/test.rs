@@ -105,7 +105,10 @@ async fn tool_registry_as_tool_set_hides_hidden_tools() {
     let err = ToolSet::call(&registry, "hidden_tool", json!({}), &ctx)
         .await
         .expect_err("hidden tool is not model-callable through ToolSet either");
-    assert!(matches!(err, crate::error::TinyAgentsError::ToolNotFound(_)));
+    assert!(matches!(
+        err,
+        crate::error::TinyAgentsError::ToolNotFound(_)
+    ));
 }
 
 #[tokio::test]

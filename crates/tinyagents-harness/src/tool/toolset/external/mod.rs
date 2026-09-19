@@ -1,8 +1,8 @@
 //! [`ExternalToolSet`]: schema-only tools the host executes.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::sync::Arc;
 

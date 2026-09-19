@@ -31,7 +31,10 @@ async fn renames_mapped_tools_and_leaves_others_untouched() {
         .map(|tool| tool.name().to_string())
         .collect();
     names.sort();
-    assert_eq!(names, vec!["untouched".to_string(), "web_search".to_string()]);
+    assert_eq!(
+        names,
+        vec!["untouched".to_string(), "web_search".to_string()]
+    );
 }
 
 #[tokio::test]
@@ -53,5 +56,8 @@ async fn original_name_of_a_renamed_tool_is_no_longer_reachable() {
         .call("search", json!({"text": "hi"}), &ctx)
         .await
         .expect_err("the tool was renamed away from `search`");
-    assert!(matches!(err, crate::error::TinyAgentsError::ToolNotFound(_)));
+    assert!(matches!(
+        err,
+        crate::error::TinyAgentsError::ToolNotFound(_)
+    ));
 }

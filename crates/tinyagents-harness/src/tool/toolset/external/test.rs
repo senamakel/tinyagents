@@ -19,7 +19,9 @@ fn spec(name: &str) -> ToolSpec {
 async fn advertises_its_schemas() {
     let external = ExternalToolSet::new(vec![spec("host_only")]);
     let ctx: crate::context::RunContext<()> = ctx();
-    let tools = <ExternalToolSet as ToolSet<(), ()>>::tools(&external, &ctx).await.expect("tools");
+    let tools = <ExternalToolSet as ToolSet<(), ()>>::tools(&external, &ctx)
+        .await
+        .expect("tools");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name(), "host_only");
 }
@@ -28,9 +30,10 @@ async fn advertises_its_schemas() {
 async fn call_is_always_deferred_to_the_host() {
     let external = ExternalToolSet::new(vec![spec("host_only")]);
     let ctx: crate::context::RunContext<()> = ctx();
-    let err = <ExternalToolSet as ToolSet<(), ()>>::call(&external, "host_only", json!({"a": 1}), &ctx)
-        .await
-        .expect_err("execution is never local");
+    let err =
+        <ExternalToolSet as ToolSet<(), ()>>::call(&external, "host_only", json!({"a": 1}), &ctx)
+            .await
+            .expect_err("execution is never local");
     match err {
         crate::error::TinyAgentsError::CallDeferred { name, arguments } => {
             assert_eq!(name, "host_only");
@@ -47,14 +50,19 @@ async fn unknown_name_is_tool_not_found_not_deferred() {
     let err = <ExternalToolSet as ToolSet<(), ()>>::call(&external, "missing", json!({}), &ctx)
         .await
         .expect_err("missing was never advertised");
-    assert!(matches!(err, crate::error::TinyAgentsError::ToolNotFound(_)));
+    assert!(matches!(
+        err,
+        crate::error::TinyAgentsError::ToolNotFound(_)
+    ));
 }
 
 #[tokio::test]
 async fn direct_execute_also_fails_safely() {
     let external = ExternalToolSet::new(vec![spec("host_only")]);
     let ctx: crate::context::RunContext<()> = ctx();
-    let tools = <ExternalToolSet as ToolSet<(), ()>>::tools(&external, &ctx).await.expect("tools");
+    let tools = <ExternalToolSet as ToolSet<(), ()>>::tools(&external, &ctx)
+        .await
+        .expect("tools");
     let result = tools[0].execute(json!({})).await;
     assert!(result.is_err());
 }

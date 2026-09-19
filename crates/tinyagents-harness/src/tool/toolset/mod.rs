@@ -313,7 +313,9 @@ impl Tool for OverrideTool {
         options: ToolCallOptions,
         context: Option<&dyn tinytools::ToolRunContext>,
     ) -> anyhow::Result<ToolResult> {
-        self.inner.execute_with_context(args, options, context).await
+        self.inner
+            .execute_with_context(args, options, context)
+            .await
     }
 
     fn injected_arguments(&self) -> Vec<ToolInjectedArgument> {

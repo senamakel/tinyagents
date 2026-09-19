@@ -190,8 +190,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // [`crate::tool::toolset::ToolSet::tools`] directly from a
         // `before_model` middleware, which *does* run every turn.
         if let Some(toolset) = &self.toolset {
-            let existing: std::collections::HashSet<&str> =
-                tool_schemas.iter().map(|schema| schema.name.as_str()).collect();
+            let existing: std::collections::HashSet<&str> = tool_schemas
+                .iter()
+                .map(|schema| schema.name.as_str())
+                .collect();
             let extra: Vec<_> = toolset
                 .tools(ctx)
                 .await?

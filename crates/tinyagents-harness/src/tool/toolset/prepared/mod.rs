@@ -1,8 +1,8 @@
 //! [`PreparedToolSet`]: a per-step schema transform over an inner toolset.
 
-mod types;
 #[cfg(test)]
 mod test;
+mod types;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,10 +48,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> PreparedToolSet<State, Ctx> {
         ctx: &RunContext<Ctx>,
     ) -> Result<Vec<(tinyinference_llm::tool::ToolSchema, Arc<dyn Tool>)>> {
         let inner_tools = self.inner.tools(ctx).await?;
-        let by_name: HashMap<&str, &Arc<dyn Tool>> = inner_tools
-            .iter()
-            .map(|tool| (tool.name(), tool))
-            .collect();
+        let by_name: HashMap<&str, &Arc<dyn Tool>> =
+            inner_tools.iter().map(|tool| (tool.name(), tool)).collect();
         let declared_schemas: Vec<_> = inner_tools
             .iter()
             .map(|tool| crate::tool::provider_schema(tool.as_ref()))

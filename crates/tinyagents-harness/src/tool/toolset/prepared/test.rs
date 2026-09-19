@@ -28,13 +28,11 @@ fn registry() -> Arc<dyn ToolSet<(), u32>> {
 async fn per_step_transform_hides_the_tool_on_an_early_step() {
     let prepared = PreparedToolSet::new(
         registry(),
-        Arc::new(|ctx: &RunContext<u32>, schemas| {
-            if ctx.data < 2 {
-                Vec::new()
-            } else {
-                schemas
-            }
-        }),
+        Arc::new(
+            |ctx: &RunContext<u32>, schemas| {
+                if ctx.data < 2 { Vec::new() } else { schemas }
+            },
+        ),
     );
 
     let early = prepared.tools(&ctx_for_step(0)).await.expect("tools");
@@ -72,7 +70,10 @@ async fn hidden_tool_cannot_be_called() {
         .call("search", json!({"text": "hi"}), &ctx)
         .await
         .expect_err("the transform hid every tool");
-    assert!(matches!(err, crate::error::TinyAgentsError::ToolNotFound(_)));
+    assert!(matches!(
+        err,
+        crate::error::TinyAgentsError::ToolNotFound(_)
+    ));
 }
 
 #[tokio::test]

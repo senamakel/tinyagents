@@ -50,7 +50,10 @@ async fn unowned_name_reports_tool_not_found() {
         .call("missing", json!({}), &ctx)
         .await
         .expect_err("no member owns `missing`");
-    assert!(matches!(err, crate::error::TinyAgentsError::ToolNotFound(_)));
+    assert!(matches!(
+        err,
+        crate::error::TinyAgentsError::ToolNotFound(_)
+    ));
 }
 
 /// Two members that would otherwise both expose a `search` tool: prefixing
