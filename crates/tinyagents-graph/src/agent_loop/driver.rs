@@ -107,7 +107,7 @@ where
             };
 
             match result {
-                Ok(NodeResult::Interrupt(interrupt)) => {
+                Ok(NodeResult::Interrupt(interrupt)) if interrupt.id.ends_with("-steering-pause") => {
                     // No `CompiledGraph` is in play here, so there is no
                     // checkpoint to pause against — mirror the direct loop's
                     // steering pause instead: latch `run.paused` and finish
@@ -116,6 +116,28 @@ where
                     // module doc on `super` for why this is not a resumable
                     // graph interrupt.
                     break Ok(Some(interrupt));
+                }
+                Ok(NodeResult::Interrupt(interrupt)) => {
+                    // A `MiddlewareControl::Interrupt` (an approval gate, not
+                    // a steering pause). The direct loop surfaces this as
+                    // `TinyAgentsError::Interrupted` (see
+                    // `agent_loop::run_loop`'s `apply_pending_control`), not
+                    // a pause — matched here so `RunPolicy::execution ==
+                    // Graph` behaves identically to `Direct` for this
+                    // control. Only `compile_loop`/`LoopIter`'s real
+                    // `CompiledGraph` upgrades this into a resumable graph
+                    // interrupt (A5's "approvals surfacing as graph
+                    // interrupts").
+                    let message = interrupt
+                        .payload
+                        .get("message")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("interrupted")
+                        .to_string();
+                    break Err(TinyAgentsError::Interrupted {
+                        node: interrupt.node.to_string(),
+                        message,
+                    });
                 }
                 Ok(NodeResult::Update(updated)) => {
                     // Every node body returns `Command`/`Interrupt` (see
