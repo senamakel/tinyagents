@@ -19,7 +19,9 @@ use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{Message, MessageDelta};
-use tinyinference_llm::model::{ChatModel, ModelDelta, ModelResponse, ModelStreamItem};
+use tinyinference_llm::model::{
+    ChatModel, ModelDelta, ModelRequest, ModelResponse, ModelStreamItem, ToolChoice,
+};
 use tinyinference_llm::providers::MockModel;
 use tinytools::{Tool, ToolResult};
 
