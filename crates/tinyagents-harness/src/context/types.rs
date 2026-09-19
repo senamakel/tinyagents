@@ -460,4 +460,19 @@ pub struct RunContext<Ctx = ()> {
     /// [`crate::tool::LedgerFailure`] for the two modes; defaults to
     /// [`crate::tool::LedgerFailure::Abort`].
     pub tool_effect_ledger_failure: crate::tool::LedgerFailure,
+    /// Durable sink for [`crate::summarization::CompactionRecord`]s this run
+    /// produces, when a host wants every compaction persisted somewhere
+    /// durable rather than only kept in
+    /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
+    /// in-process buffer.
+    ///
+    /// `None` (the default) means compaction runs exactly as it did before
+    /// this existed — no persistence side effect. Attach one with
+    /// [`RunContext::with_compaction_sink`]; a child context inherits its
+    /// parent's sink, matching how `stores`/`events`/`tool_effect_ledger`
+    /// propagate. `tinyagents-harness` cannot depend on
+    /// `tinyagents-session` (the dependency runs the other way), so this is
+    /// a trait object rather than a concrete `Arc<EntryTree>` — see
+    /// [`crate::summarization::CompactionSink`]'s docs.
+    pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
 }
