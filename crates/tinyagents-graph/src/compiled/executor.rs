@@ -293,17 +293,7 @@ where
 
     /// Returns the configured checkpointer or a [`TinyAgentsError::Checkpoint`]
     /// when inspection is attempted on a graph without durability.
-    #[allow(clippy::too_many_arguments)]
-    async fn execute(
-        &self,
-        state: State,
-        initial_active: Vec<Activation>,
-        thread_id: Option<ThreadId>,
-        resume_map: HashMap<NodeId, serde_json::Value>,
-        initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
-        initial_parent: Option<String>,
-        binding: Option<crate::subagent_node::AgentInvocationBinding>,
-    ) -> Result<GraphExecution<State>> {
+    async fn execute(&self, seed: RunSeed<State, Update>) -> Result<GraphExecution<State>> {
         let run_id = tinyagents_harness::ids::new_run_id();
         // When a durable journal is configured, run against a clone whose event
         // sink wraps every emitted event into a `GraphObservation` and appends
@@ -311,30 +301,10 @@ where
         // sink carries this graph's checkpoint namespace so subgraph runs record
         // their nested path. Default (no journal) leaves `self` untouched.
         if self.journal.is_some() {
-            let this = self.clone_with_journal_sink(&run_id, &thread_id);
-            this.execute_run(
-                run_id,
-                state,
-                initial_active,
-                thread_id,
-                resume_map,
-                initial_barriers,
-                initial_parent,
-                binding,
-            )
-            .await
+            let this = self.clone_with_journal_sink(&run_id, &seed.thread_id);
+            this.execute_run(run_id, seed).await
         } else {
-            self.execute_run(
-                run_id,
-                state,
-                initial_active,
-                thread_id,
-                resume_map,
-                initial_barriers,
-                initial_parent,
-                binding,
-            )
-            .await
+            self.execute_run(run_id, seed).await
         }
     }
 
