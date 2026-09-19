@@ -120,96 +120,111 @@ where
             })?;
         let parent_step = base.to_metadata().step;
         let parent_id = base.checkpoint_id.clone();
+
+        // The base checkpoint may itself be mid-step: an interrupt/failure
+        // boundary whose completed siblings were deferred rather than
+        // routed (see `boundary::advance`'s `carried_completed` doc, the C2
+        // fix). Those node ids live in `base.completed_tasks` with no
+        // persisted `goto_map` entry of their own, so — exactly like
+        // `advance`'s carried-completed handling — they route via
+        // static/conditional edges only, not any `Command::goto` they might
+        // have returned. Routing them here (rather than silently dropping
+        // them) is what keeps a manual write from permanently losing a
+        // step's other branches the moment it touches a mid-step thread.
+        let carried_completed: Vec<NodeId> = if base.metadata.get("interrupted_nodes").is_some()
+            || base.metadata.get("failed_node").is_some()
+        {
+            base.completed_tasks.clone()
+        } else {
+            Vec::new()
+        };
         let new_state = self.reducer.apply(base.state, update)?;
 
         // Manual writes preserve any accumulated barrier arrivals, and an
-        // attributed write records its own arrival into them.
+        // attributed write (or a carried-forward completion routed here)
+        // records its own arrival into them.
         let mut arrivals = barriers_from_persisted(&base.barrier_arrivals);
-        // Pending schedule: the attributed node's successors *merged into* the
-        // base checkpoint's still-pending work, or the inherited set verbatim.
+        // Pending schedule: the attributed node's successors and any
+        // carried-forward completions' successors, merged into the base
+        // checkpoint's still-pending work.
         //
         // `next_nodes` and `pending_activations` are derived from one merged
         // activation list so they can never disagree — resume prefers the
         // activations, so a node named by only one of them would be silently
         // dropped (or re-scheduled without its `Send` arg).
-        //
-        // The merge is unconditional rather than a fallback for the
-        // nothing-was-scheduled case. `route(node, None, ..)` resolves a static
-        // or conditional edge, so today it yields at most one target and a
-        // withheld barrier is the only way to end up with none — but keying the
-        // merge on that would silently drop the untouched branches the moment a
-        // single call ever resolves a withheld target *and* a schedulable one.
-        let (next_nodes, pending_activations): (Vec<NodeId>, Option<Vec<PendingActivation>>) =
-            match &as_node {
-                Some(node) => {
-                    // The attributed node counts as completed, so it leaves the
-                    // schedule; every other branch the base checkpoint had in
-                    // flight (with its `Send` arg, when it carried one) stays.
-                    let mut merged: Vec<Activation> = match &base.pending_activations {
-                        Some(pending) if !pending.is_empty() => pending
-                            .iter()
-                            .map(Activation::from)
-                            .filter(|activation| activation.node != *node)
-                            .collect(),
-                        // Checkpoints written before `pending_activations`
-                        // existed only carry the node-id projection.
-                        _ => base
-                            .next_nodes
-                            .iter()
-                            .filter(|pending| *pending != node)
-                            .cloned()
-                            .map(Activation::node)
-                            .collect(),
-                    };
-                    let mut seen: HashSet<NodeId> = merged
-                        .iter()
-                        .filter(|activation| activation.send_arg.is_none())
-                        .map(|activation| activation.node.clone())
-                        .collect();
-                    for target in self.route(node, None, &new_state)? {
-                        let tnode = target.node().clone();
-                        if tnode.as_str() == END {
-                            continue;
-                        }
-                        // Apply the same barrier gate the executor applies in
-                        // `route_completed`: a waiting node stays unscheduled
-                        // until every required predecessor has arrived. Without
-                        // this an attributed write would fire a join ahead of a
-                        // predecessor that is still pending — the data loss the
-                        // waiting edge exists to prevent. The barrier's other
-                        // predecessors are still scheduled (they are part of
-                        // `merged` above), so they run and clear the join.
-                        if let Some(required) = self.waiting.get(&tnode) {
-                            let arrived = arrivals.entry(tnode.clone()).or_default();
-                            arrived.insert(node.clone());
-                            if !required.is_subset(arrived) {
-                                continue;
-                            }
-                            arrivals.remove(&tnode);
-                        }
-                        // `Send` activations may legitimately repeat a node
-                        // (each carries its own arg); plain ones are
-                        // deduplicated so a successor already pending is not
-                        // scheduled twice.
-                        let send_arg = target.send_arg().cloned();
-                        if send_arg.is_some() || seen.insert(tnode.clone()) {
-                            merged.push(Activation {
-                                node: tnode,
-                                send_arg,
-                                task_id: String::new(),
-                            });
-                        }
-                    }
-                    let nodes = activation_nodes(&merged);
-                    let activations = if merged.is_empty() {
-                        None
-                    } else {
-                        Some(merged.iter().map(PendingActivation::from).collect())
-                    };
-                    (nodes, activations)
+        let mut merged: Vec<Activation> = match &base.pending_activations {
+            Some(pending) if !pending.is_empty() => pending
+                .iter()
+                .map(Activation::from)
+                .filter(|activation| Some(&activation.node) != as_node.as_ref())
+                .collect(),
+            // Checkpoints written before `pending_activations` existed only
+            // carry the node-id projection.
+            _ => base
+                .next_nodes
+                .iter()
+                .filter(|pending| Some(*pending) != as_node.as_ref())
+                .cloned()
+                .map(Activation::node)
+                .collect(),
+        };
+        let mut seen: HashSet<NodeId> = merged
+            .iter()
+            .filter(|activation| activation.send_arg.is_none())
+            .map(|activation| activation.node.clone())
+            .collect();
+        // Routes one completed node's (static/conditional-only) successors
+        // into `merged`, applying the same barrier gate `route_completed`
+        // applies at the normal boundary. The merge is unconditional rather
+        // than a fallback for the nothing-was-scheduled case: `route(node,
+        // None, ..)` resolves a static or conditional edge, so today it
+        // yields at most one target and a withheld barrier is the only way
+        // to end up with none — but keying the merge on that would silently
+        // drop the untouched branches the moment a single call ever
+        // resolves a withheld target *and* a schedulable one.
+        let mut route_into_merged = |node: &NodeId| -> Result<()> {
+            for target in self.route(node, None, &new_state)? {
+                let tnode = target.node().clone();
+                if tnode.as_str() == END {
+                    continue;
                 }
-                None => (base.next_nodes.clone(), base.pending_activations.clone()),
-            };
+                if let Some(required) = self.waiting.get(&tnode) {
+                    let arrived = arrivals.entry(tnode.clone()).or_default();
+                    arrived.insert(node.clone());
+                    if !required.is_subset(arrived) {
+                        continue;
+                    }
+                    arrivals.remove(&tnode);
+                }
+                // `Send` activations may legitimately repeat a node (each
+                // carries its own arg); plain ones are deduplicated so a
+                // successor already pending is not scheduled twice.
+                let send_arg = target.send_arg().cloned();
+                if send_arg.is_some() || seen.insert(tnode.clone()) {
+                    merged.push(Activation {
+                        node: tnode,
+                        send_arg,
+                        task_id: String::new(),
+                    });
+                }
+            }
+            Ok(())
+        };
+        for node in &carried_completed {
+            route_into_merged(node)?;
+        }
+        if let Some(node) = &as_node {
+            route_into_merged(node)?;
+        }
+        let next_nodes = activation_nodes(&merged);
+        let pending_activations = if merged.is_empty() {
+            None
+        } else {
+            Some(merged.iter().map(PendingActivation::from).collect())
+        };
+        // This write resolves every carried-forward completion's routing
+        // (above), so none of them are still "owed" afterward; only the
+        // attributed node (if any) is freshly completed by this write.
         let completed_tasks: Vec<NodeId> = as_node.iter().cloned().collect();
         let barrier_arrivals = barriers_to_persisted(&arrivals);
 
