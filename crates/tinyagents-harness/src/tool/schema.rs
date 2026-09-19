@@ -36,6 +36,9 @@ pub const GEMINI_UNSUPPORTED_KEYWORDS: &[&str] = &[
     "examples",
 ];
 
+/// Descriptive keys copied onto a simplified/resolved node so cleaning never
+/// drops a human-facing `description`, `title`, or `default` even when the
+/// surrounding schema shape (a `$ref`, a union) is replaced wholesale.
 const SCHEMA_META_KEYS: &[&str] = &["description", "title", "default"];
 
 /// Schema cleaning strategies for different LLM providers.
@@ -116,6 +119,10 @@ impl SchemaCleanr {
         Ok(())
     }
 
+    /// Collects `$defs`/`definitions` entries from the schema's top level so
+    /// local `$ref`s can be resolved inline. Both keywords are merged into one
+    /// table; JSON Schema drafts disagree on which name to use and callers may
+    /// pass either.
     fn extract_defs(obj: &Map<String, Value>) -> HashMap<String, Value> {
         let mut defs = HashMap::new();
 

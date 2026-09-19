@@ -651,6 +651,10 @@ pub struct MicrocompactMiddleware {
 
 // ── PromptCacheGuardMiddleware ────────────────────────────────────────────────
 
+/// Default cap on the number of [`CacheLayoutEvent`]s a
+/// [`PromptCacheGuardMiddleware`] retains before evicting the oldest.
+pub const DEFAULT_CACHE_GUARD_EVENT_CAP: usize = 1024;
+
 /// Middleware that watches the prompt cache layout for accidental prefix
 /// invalidations.
 ///
@@ -660,11 +664,8 @@ pub struct MicrocompactMiddleware {
 /// [`CacheLayoutEvent`] (retrievable via
 /// [`PromptCacheGuardMiddleware::layout_events`]) so KV-cache regressions are
 /// observable. This demonstrates provider prompt/KV-cache prefix protection.
-/// Default cap on the number of [`CacheLayoutEvent`]s a
-/// [`PromptCacheGuardMiddleware`] retains before evicting the oldest.
-pub const DEFAULT_CACHE_GUARD_EVENT_CAP: usize = 1024;
-
 pub struct PromptCacheGuardMiddleware {
+    /// Label reported in `MiddlewareStarted`/`MiddlewareCompleted` events.
     pub(crate) label: &'static str,
     /// The previous pass's layout, tagged with the run it was observed in.
     ///
@@ -678,7 +679,9 @@ pub struct PromptCacheGuardMiddleware {
     /// stability was compared by segment id alone, because any two requests
     /// carrying the same segment ids compared equal regardless of content.
     pub(crate) previous: Mutex<Option<(RunId, crate::cache::PromptCacheLayout)>>,
+    /// Recorded layout-change events, oldest first, capped at `max_events`.
     pub(crate) events: Mutex<VecDeque<CacheLayoutEvent>>,
+    /// Eviction cap for `events`.
     pub(crate) max_events: usize,
 }
 
