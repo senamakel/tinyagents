@@ -31,10 +31,36 @@ use std::sync::Arc;
 use crate::context::{RunConfig, RunContext};
 use crate::events::{EventListener, EventRecord, EventSink};
 use crate::middleware::AgentRun;
-use crate::runtime::AgentHarness;
+use crate::runtime::{AgentHarness, InvocationRuntime};
 use tinyinference_llm::message::Message;
 
 use super::PartialRunOutcome;
+
+/// The concrete driver behind a caller-consumable stream: either the
+/// durable harness borrowed for the caller's lifetime (the ordinary SDK
+/// path), or an invocation-local runtime owned outright (the hosted path,
+/// where the runtime is only alive as a local variable at the call site).
+///
+/// Moving the `Owned` variant into the driving future (see
+/// [`invoke_stream_with_runner`]) is what lets the hosted stream avoid both
+/// an unsound lifetime extension and depending on field drop order: the
+/// runtime's lifetime becomes exactly the future's, which the stream already
+/// owns.
+pub(crate) enum StreamRunner<'a, State: Send + Sync, Ctx: Send + Sync> {
+    Borrowed(&'a AgentHarness<State, Ctx>),
+    Owned(Arc<InvocationRuntime<State, Ctx>>),
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> std::ops::Deref for StreamRunner<'_, State, Ctx> {
+    type Target = AgentHarness<State, Ctx>;
+
+    fn deref(&self) -> &AgentHarness<State, Ctx> {
+        match self {
+            StreamRunner::Borrowed(harness) => harness,
+            StreamRunner::Owned(runtime) => runtime.harness(),
+        }
+    }
+}
 
 /// One item yielded by [`AgentHarness::invoke_stream`].
 ///
