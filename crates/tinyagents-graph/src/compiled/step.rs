@@ -556,14 +556,15 @@ where
             if cache_hits[index] {
                 continue;
             }
-            self.try_cache_put(
+            if let Some((key, value, ttl)) = self.prepare_cache_put(
                 &activation.node,
                 state,
                 activation.send_arg.as_ref(),
                 &results[index],
-                step,
-            )
-            .await;
+            ) {
+                self.store_cache_entry(key, value, ttl, &activation.node, step)
+                    .await;
+            }
         }
 
         let results = active.iter().cloned().zip(results).collect::<Vec<_>>();
