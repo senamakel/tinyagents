@@ -230,6 +230,25 @@ fn contract_message(role: &str, content: &str) -> TranscriptMessage {
     TranscriptMessage::new(role, content)
 }
 
+/// Projects a message list onto its `(role, content)` pairs.
+///
+/// Used to compare the *logical view* `append_turn`/`replace` establish
+/// against a freshly-constructed expectation. A raw [`TranscriptMessage`]
+/// equality would be backend-specific here: a file-backed history
+/// legitimately stamps `preserve_request_id: true` on every message it reads
+/// back (a row read from a transcript owns its recorded correlation id — see
+/// `jsonl::message_from_line`), while a freshly-built [`contract_message`]
+/// defaults it to `false`. That divergence is a correct, documented
+/// round-trip behavior of the file format, not a logical-view difference, so
+/// the conformance suite must not assert byte-identical metadata across
+/// backends — only that the same messages, in the same order, are present.
+fn content_view(messages: &[TranscriptMessage]) -> Vec<(String, String)> {
+    messages
+        .iter()
+        .map(|m| (m.role.clone(), m.content.clone()))
+        .collect()
+}
+
 fn contract_meta() -> TranscriptMeta {
     TranscriptMeta {
         agent_name: "contract-agent".to_string(),
