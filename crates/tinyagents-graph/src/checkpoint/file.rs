@@ -435,9 +435,10 @@ where
         }
         match target {
             Some(line) => {
-                Ok(Some(serde_json::from_str(&line).map_err(|e| {
-                    decode_json_err("file checkpointer", "record", e)
-                })?))
+                let mut checkpoint: Checkpoint<State> = serde_json::from_str(&line)
+                    .map_err(|e| decode_json_err("file checkpointer", "record", e))?;
+                checkpoint.normalize();
+                Ok(Some(checkpoint))
             }
             None => Ok(None),
         }
