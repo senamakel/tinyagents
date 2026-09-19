@@ -48,14 +48,20 @@ pub(crate) struct UsageInfo {
     pub(crate) charged_amount_usd: f64,
 }
 
+/// Aggregated result of one CC turn, assembled by `EventMapper` as the
+/// stream is consumed.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ChatResponse {
     pub(crate) text: Option<String>,
     pub(crate) usage: Option<UsageInfo>,
 }
 
+/// One incremental chunk forwarded to a streaming caller while a turn is in
+/// flight.
 #[derive(Clone, Debug)]
 pub(crate) enum ProviderDelta {
+    /// Visible response text delta.
     TextDelta { delta: String },
+    /// Extended-thinking / reasoning text delta.
     ThinkingDelta { delta: String },
 }

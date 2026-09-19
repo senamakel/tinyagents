@@ -34,8 +34,21 @@ use super::types::{
     WorkflowRunUpsert,
 };
 
+/// Grep prefix for run-ledger logging.
 const LOG_PREFIX: &str = "[session_db:run_ledger]";
 
+/// Inserts a new [`AgentRun`] or merges fields into an existing one with the
+/// same id, returning the row as stored.
+///
+/// Most fields are `COALESCE`d against the existing row on conflict, so
+/// passing `None` leaves them unchanged rather than clearing them — except
+/// `status` and `updated_at`, which are always overwritten, and `metadata`,
+/// which only replaces the stored value when the incoming JSON is non-empty
+/// (`{}` is treated as "no metadata supplied"). `kind` additionally refuses
+/// to downgrade a `worker_thread` run back to `subagent`, since a run that
+/// has already been promoted to a worker thread should not silently revert.
+/// Use [`transition_agent_run_status`] instead when a caller needs to
+/// *clear* `error` or `completed_at`.
 pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<AgentRun> {
     let now = Utc::now();
     let started_at = upsert.started_at.unwrap_or(now);
