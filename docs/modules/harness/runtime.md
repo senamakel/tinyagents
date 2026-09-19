@@ -129,6 +129,21 @@ Hard limits:
 
 The loop must fail closed when a limit is reached.
 
+A per-call ceiling (`RunLimits::max_model_call_ms`) firing raises
+`TinyAgentsError::CallTimeout`, distinct from a run-deadline
+`TinyAgentsError::Timeout`: `CallTimeout` is retryable and is still consulted
+against the fallback chain (the model wedged, not the run), while `Timeout`
+is terminal (the run itself is out of wall-clock budget).
+
+Step 12's text-dialect recovery (parsing `<tool_call>` markup out of an
+assistant's visible text when the provider returned no native tool calls) is
+gated by `RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On |
+Auto`, default `Auto`): it only runs when the resolved model's profile does
+not report native tool calling, and it always skips markup that appears only
+inside a fenced code block. A model that quotes the syntax while explaining
+it (or answers under a model that *does* support native tool calling) is
+never executed as a real call.
+
 ## Middleware
 
 Middleware is the main extension point for behavior that cuts across providers,
