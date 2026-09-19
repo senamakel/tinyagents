@@ -353,6 +353,64 @@ where
             serde_json::from_str::<Checkpoint<State>>(line)
         })
     }
+
+    /// Loads a checkpoint for `thread_id`, optionally scoped to `namespace`.
+    ///
+    /// Streams lines and fully decodes only the single target line, instead of
+    /// deserializing every record's `State` just to pick one — the same
+    /// header-then-full-decode shape [`FileCheckpointer::read_headers`] uses
+    /// for `list`. Selection matches the historical `rev().find` /
+    /// `next_back` semantics: the last matching line (or the last line
+    /// overall, for `checkpoint_id == None`) wins. `namespace` is `None` for
+    /// [`Checkpointer::get`] (no scoping) and `Some` for
+    /// [`Checkpointer::get_scoped`].
+    fn get_sync(
+        &self,
+        thread_id: &str,
+        checkpoint_id: Option<&str>,
+        namespace: Option<&[String]>,
+    ) -> Result<Option<Checkpoint<State>>> {
+        let path = self.thread_path(thread_id);
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io_err("open thread file", e)),
+        };
+        let reader = BufReader::new(file);
+        let mut target: Option<String> = None;
+        for line in reader.lines() {
+            let line = line.map_err(|e| io_err("read line", e))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            // Decode only the header to test the match, not `State` — unless
+            // there is nothing to filter on (no id, no namespace), in which
+            // case every line matches and decoding one would be wasted work.
+            if checkpoint_id.is_some() || namespace.is_some() {
+                let header: CheckpointHeader = serde_json::from_str(&line)
+                    .map_err(|e| decode_json_err("file checkpointer", "header", e))?;
+                if let Some(namespace) = namespace
+                    && header.namespace.as_slice() != namespace
+                {
+                    continue;
+                }
+                if let Some(id) = checkpoint_id
+                    && header.checkpoint_id != id
+                {
+                    continue;
+                }
+            }
+            target = Some(line);
+        }
+        match target {
+            Some(line) => {
+                Ok(Some(serde_json::from_str(&line).map_err(|e| {
+                    decode_json_err("file checkpointer", "record", e)
+                })?))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 /// Decodes one JSON object per line, tolerating a **torn trailing line**.
@@ -525,7 +583,7 @@ where
             match checkpoint_id {
                 Some(id) => {
                     // Decode only the id header to test the match, not `State`.
-                    let header: CheckpointIdHeader = serde_json::from_str(&line)
+                    let header: CheckpointHeader = serde_json::from_str(&line)
                         .map_err(|e| decode_json_err("file checkpointer", "header", e))?;
                     if header.checkpoint_id == id {
                         target = Some(line);
