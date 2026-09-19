@@ -285,12 +285,21 @@ are handled separately:
 - **Unparseable** (malformed JSON the provider could not parse into arguments at
   all) is surfaced by the provider as a `ToolCall` with `invalid: Some(reason)`
   and the raw string preserved in `arguments`. Small local models (Ollama, LM
-  Studio, llama.cpp, vLLM) emit this occasionally. The agent loop **always**
-  recovers here — independent of `InvalidArgsPolicy`, since an unparseable
-  payload is a transport-level defect, not a schema violation — by injecting the
-  parse `reason` back to the model as an error tool result so it can retry. The
-  recovery emits `AgentEvent::InvalidToolArgs { call_id, tool_name, arguments,
-  error, recovery: "tool_error" }` and consumes one tool-call budget slot, so
+  Studio, llama.cpp, vLLM) emit this occasionally. Before giving up, admission
+  first tries `relaxed_json::recover_relaxed_object` on the raw string —
+  conservative, meaning-preserving repairs for the shapes those gateways
+  actually produce (unquoted object keys, redundant wrapping braces, leaked
+  chat-template quote tokens; see that module's doc comment). On success the
+  call's `invalid` flag is cleared, its `arguments` become the repaired
+  object, `AgentEvent::InvalidToolArgs { recovery: "repaired" }` is emitted,
+  and the call proceeds through normal (schema) validation as if the provider
+  had sent it clean. Only when the repair also fails does the agent loop fall
+  back to its **always**-on recovery — independent of `InvalidArgsPolicy`,
+  since an unparseable payload is a transport-level defect, not a schema
+  violation — injecting the parse `reason` back to the model as an error tool
+  result so it can retry. That fallback recovery emits
+  `AgentEvent::InvalidToolArgs { call_id, tool_name, arguments, error,
+  recovery: "tool_error" }` and consumes one tool-call budget slot, so
   `RunLimits::max_tool_calls` bounds the retry loop. Because the call always
   resolves, a malformed argument blob can never become a never-resolving tool
   call that stalls the loop. See the OpenAI provider README for how the wire
