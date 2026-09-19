@@ -415,7 +415,7 @@ pub fn list_sessions(
 /// tool, channel, parent, status, thread), most-recently-started first.
 ///
 /// `params.query` is plain text, not raw FTS5 syntax — see
-/// [`fts_match_query`] for how it is escaped. `limit` is capped at 500.
+/// `fts_match_query` for how it is escaped. `limit` is capped at 500.
 pub fn search_sessions(
     workspace_dir: &Path,
     params: &SessionSearchParams,
