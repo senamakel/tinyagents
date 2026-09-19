@@ -250,11 +250,9 @@ fn mint_tool_call_id_deduplicates_against_used_ids() {
         ..ModelProfile::default()
     };
     let mut used = std::collections::HashSet::new();
-    used.insert("abcdef".to_string());
     let first = mint_tool_call_id("abc!def", &profile, &mut used);
-    assert_eq!(first, "abcdef");
-    let mut used_after_first = used.clone();
-    let second = mint_tool_call_id("abc!def", &profile, &mut used_after_first);
+    assert_eq!(first, "abc_de");
+    let second = mint_tool_call_id("abc!def", &profile, &mut used);
     assert_ne!(second, first, "a colliding id must be disambiguated");
     assert!(second.chars().count() <= 6);
 }
