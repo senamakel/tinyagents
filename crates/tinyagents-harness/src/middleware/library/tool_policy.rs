@@ -354,7 +354,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         _state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        request.tools.retain(|schema| (self.predicate)(schema));
+        // Delegates to `PreparedToolSet`'s retain helper — see
+        // `crate::tool::toolset::retain_matching_schemas`'s doc comment for
+        // why this is shared rather than a second `retain` implementation.
+        crate::tool::toolset::retain_matching_schemas(&mut request.tools, self.predicate.as_ref());
         Ok(())
     }
 }
