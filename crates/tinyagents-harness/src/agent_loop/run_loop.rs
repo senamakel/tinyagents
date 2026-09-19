@@ -947,30 +947,77 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Drains any pending [`MiddlewareControl`] and turns it into a loop
     /// decision.
     ///
-    /// Returns `Ok(None)` when nothing was requested, `Ok(Some(exit))` when the
-    /// loop must stop, and `Err` for
-    /// [`MiddlewareControl::Interrupt`]. Called at every safe checkpoint — the
-    /// top of an iteration, after the model call, and after tool execution — so
-    /// a control raised anywhere in a turn takes effect on that turn.
+    /// Returns [`ControlEffect::None`] when nothing was requested (or the
+    /// pending request needed no loop-level action, e.g.
+    /// [`MiddlewareControl::UpdateState`]), [`ControlEffect::ContinueLoop`]
+    /// when the current turn must be abandoned in favor of a fresh iteration
+    /// (`JumpTo(Model)`), and [`ControlEffect::Exit`] when the run is done.
+    /// `Err` surfaces [`MiddlewareControl::Interrupt`]. Called at every safe
+    /// checkpoint — the top of an iteration, after the model call, and after
+    /// tool execution — so a control raised anywhere in a turn takes effect on
+    /// that turn.
     fn apply_pending_control(
         &self,
         ctx: &mut RunContext<Ctx>,
         run: &mut AgentRun,
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
-    ) -> Result<Option<LoopExit>> {
+    ) -> Result<ControlEffect> {
         let Some(control) = ctx.take_control() else {
-            return Ok(None);
+            return Ok(ControlEffect::None);
         };
+        // `UpdateState` is applied (queued, really — see `RunContext::
+        // push_state_update`) silently: it carries no loop-level decision, so
+        // audit-logging it as a `ControlApplied` event alongside jumps and
+        // stops would be noise. It still shows up wherever the host inspects
+        // `RunContext::take_state_updates`.
+        if let MiddlewareControl::UpdateState(update) = control {
+            ctx.push_state_update(update);
+            return Ok(ControlEffect::None);
+        }
         let record = ctx.emit(AgentEvent::ControlApplied {
             control: control.kind().to_string(),
             detail: match &control {
+                MiddlewareControl::Continue => String::new(),
+                MiddlewareControl::JumpTo(target) => format!("{target:?}"),
+                MiddlewareControl::UpdateState(_) => unreachable!("handled above"),
                 MiddlewareControl::StopWithFinal(text) => text.clone(),
                 MiddlewareControl::Interrupt { node, message } => format!("{node}: {message}"),
             },
         });
         status.set_last_event(record.id);
         match control {
+            MiddlewareControl::Continue => Ok(ControlEffect::None),
+            MiddlewareControl::UpdateState(_) => unreachable!("handled above"),
+            MiddlewareControl::JumpTo(LoopTarget::Tools) => {
+                // Tool execution already runs whenever the turn produced real
+                // tool calls; there is nothing else to route to when it did
+                // not. Either way, this is a no-op at the loop level.
+                Ok(ControlEffect::None)
+            }
+            MiddlewareControl::JumpTo(LoopTarget::Model) => {
+                // Abandon whatever the rest of this turn would have done
+                // (typically: running tools the model just requested) and go
+                // straight to a fresh model call. Close out any tool calls on
+                // the last assistant row first so the transcript stays
+                // replayable (see the `StopWithFinal` arm below for why).
+                Self::close_unanswered_tool_calls(
+                    messages,
+                    "run jumped back to the model before this tool call was executed",
+                );
+                Ok(ControlEffect::ContinueLoop)
+            }
+            MiddlewareControl::JumpTo(LoopTarget::End) => {
+                Self::close_unanswered_tool_calls(
+                    messages,
+                    "run stopped before this tool call was executed",
+                );
+                if run.final_response.is_none() {
+                    let text = Self::last_assistant_text(messages);
+                    run.final_response = Some(ModelResponse::assistant(text));
+                }
+                Ok(ControlEffect::Exit(LoopExit::Finished))
+            }
             MiddlewareControl::StopWithFinal(text) => {
                 // The most recently appended assistant row may carry
                 // `tool_calls` that were never answered — e.g. a middleware
@@ -986,12 +1033,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     "run stopped before this tool call was executed",
                 );
                 run.final_response = Some(ModelResponse::assistant(text));
-                Ok(Some(LoopExit::Finished))
+                Ok(ControlEffect::Exit(LoopExit::Finished))
             }
             MiddlewareControl::Interrupt { node, message } => {
                 Err(TinyAgentsError::Interrupted { node, message })
             }
         }
+    }
+
+    /// The text of the most recent assistant message, or empty when there is
+    /// none. Used to synthesize a final response for
+    /// [`MiddlewareControl::JumpTo`]`(`[`LoopTarget::End`]`)`, which (unlike
+    /// [`MiddlewareControl::StopWithFinal`]) carries no text of its own.
+    fn last_assistant_text(messages: &[Message]) -> String {
+        messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::Assistant(assistant) => Some(assistant.text()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// Appends a synthetic [`Message::tool`] result for every tool call on
