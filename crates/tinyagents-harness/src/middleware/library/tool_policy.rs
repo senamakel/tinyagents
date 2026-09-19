@@ -461,6 +461,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         if !excluded.is_empty() {
             ctx.emit(AgentEvent::ToolsFiltered {
                 by: self.label.to_string(),
+                explanations: excluded
+                    .iter()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            crate::tool::ToolExposureExplanation::FilteredOut,
+                        )
+                    })
+                    .collect(),
                 excluded,
                 remaining: request.tools.len(),
             });
