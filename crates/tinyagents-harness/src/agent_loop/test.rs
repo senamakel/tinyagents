@@ -483,6 +483,49 @@ impl ChatModel<()> for ToolStructuredModel {
     }
 }
 
+/// A model whose profile lacks native structured output, paired with a
+/// forced P-Format dialect: unlike [`ToolStructuredModel`], the loop strips
+/// *every* schema off the wire for a text dialect (including the synthetic
+/// structured-output fallback tool), so this narrates the call back in
+/// P-Format syntax — `name[0|value|1|value]` — instead of returning a
+/// structured `tool_calls` entry.
+struct PFormatStructuredModel {
+    profile: ModelProfile,
+    received: Mutex<Vec<ModelRequest>>,
+}
+
+impl PFormatStructuredModel {
+    fn new() -> Self {
+        Self {
+            profile: ModelProfile {
+                tool_calling: true,
+                native_structured_output: false,
+                json_schema: false,
+                ..ModelProfile::default()
+            },
+            received: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for PFormatStructuredModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+    async fn invoke(
+        &self,
+        _state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.received
+            .lock()
+            .expect("PFormatStructuredModel received lock poisoned")
+            .push(request);
+        Ok(ModelResponse::assistant("answer[0|viatool|1|7]"))
+    }
+}
+
 /// A model that always fails with a retryable error and counts attempts.
 struct FailingModel {
     attempts: Mutex<usize>,
