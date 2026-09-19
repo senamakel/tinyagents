@@ -370,9 +370,16 @@ where
             ..
         } = seed;
 
-        let mut ctx =
-            RunCtx::start(self, run_id, thread_id, resume_map, initial_barriers, initial_parent, binding)
-                .await?;
+        let mut ctx = RunCtx::start(
+            self,
+            run_id,
+            thread_id,
+            resume_map,
+            initial_barriers,
+            initial_parent,
+            binding,
+        )
+        .await?;
         let runner = StepRunner { graph: self };
 
         // Record the run as live before the first superstep is scheduled.
