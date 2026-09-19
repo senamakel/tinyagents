@@ -72,6 +72,10 @@ Implemented today:
 - committed state (`state: State`, not a per-channel value map)
 - next active nodes (`next_nodes`) and pending activations (`pending_activations`,
   the richer `Send`-argument-carrying superset)
+- explicit routing for completed-but-not-yet-routed siblings (`completed_routes`,
+  positionally aligned with `completed_tasks`): persists a carried-forward
+  branch's `Command::goto` so it survives an interrupt/failure + resume
+  instead of re-resolving via static/conditional edges only
 - barrier (waiting-edge) arrivals (`barrier_arrivals`)
 - pending writes
 - interrupts
