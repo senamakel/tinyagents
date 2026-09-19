@@ -216,7 +216,7 @@ where
                     merged.push(Activation {
                         node: tnode,
                         send_arg,
-                        task_id: String::new(),
+                        task_id: TaskId::from(String::new()),
                     });
                 }
             }

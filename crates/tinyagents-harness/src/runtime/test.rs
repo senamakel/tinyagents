@@ -1107,8 +1107,7 @@ async fn per_model_call_limit_bounds_initial_host_resolution() {
         )
         .await
         .expect_err("per-model-call cap must bound host resolution");
-    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)));
-    assert!(error.to_string().contains("per-model-call ceiling"));
+    assert_eq!(error.kind, crate::runtime::HostedErrorKind::Timeout);
 }
 
 async fn assert_rebound_host_resolution_stops(

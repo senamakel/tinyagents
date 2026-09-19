@@ -323,7 +323,7 @@ where
             active.push(Activation {
                 node,
                 send_arg: input.payload,
-                task_id: String::new(),
+                task_id: TaskId::from(String::new()),
             });
         }
         if active.is_empty() {

@@ -68,13 +68,13 @@ where
                     next.push(Activation {
                         node: tnode,
                         send_arg,
-                        task_id: String::new(),
+                        task_id: TaskId::from(String::new()),
                     });
                 } else if next_seen.insert(tnode.clone()) {
                     next.push(Activation {
                         node: tnode,
                         send_arg: None,
-                        task_id: String::new(),
+                        task_id: TaskId::from(String::new()),
                     });
                 }
             }
@@ -145,7 +145,7 @@ where
                 next.push(Activation {
                     node: relief.barrier_node.clone(),
                     send_arg: None,
-                    task_id: String::new(),
+                    task_id: TaskId::from(String::new()),
                 });
             }
         }
