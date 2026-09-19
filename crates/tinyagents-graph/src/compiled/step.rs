@@ -539,11 +539,22 @@ where
             let node_id = activation.node.clone();
             match result {
                 Err(error) => {
-                    self.graph.emit(GraphEvent::NodeFailed {
-                        node: node_id,
-                        step,
-                        error: error.to_string(),
-                    });
+                    self.graph.emit(
+                        run_id,
+                        GraphEvent::NodeFailed {
+                            node: node_id,
+                            step,
+                            error: error.to_string(),
+                        },
+                    );
+                    self.graph.emit(
+                        run_id,
+                        GraphEvent::TaskCompleted {
+                            node: activation.node.clone(),
+                            step,
+                            cached: false,
+                        },
+                    );
                     if failure.is_none() {
                         failure = Some(StepFailure {
                             failed_index: index,
