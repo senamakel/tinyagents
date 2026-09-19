@@ -57,6 +57,20 @@ run resumes exactly like an interrupted one:
 See the `resilient_graph` example (`cargo run --example resilient_graph`) for
 both mechanisms end to end.
 
+### Per-thread execution lease
+
+`CompiledGraph::execute` holds a per-`(thread_id, namespace)` lock for a run's
+whole lifetime: an in-process `ThreadLockMap` guard first (always active), and,
+when a checkpointer is configured, a durable lease claimed via
+`Checkpointer::try_claim`/`renew`/`release` (owner = run id, default TTL 5
+minutes). A second concurrent `run_with_thread`/`resume`/`retry` call for the
+same thread either waits on the in-process lock (same process) or is refused
+with `TinyAgentsError::Validation` if a live lease is held by another owner
+(cross-process). A lease whose owner crashed without releasing it is
+reclaimable once its TTL elapses. `SqliteCheckpointer` and `FileCheckpointer`
+both implement the lease; the trait's default is a no-op that always succeeds,
+so out-of-tree backends keep compiling unprotected.
+
 ## Error taxonomy
 
 `TinyAgentsError` distinguishes structural/config errors (non-resumable) from
@@ -76,5 +90,8 @@ node failures (resumable on a checkpointed thread):
 - Cooperative drain/shutdown with a drain reason.
 - Populate the checkpoint `pending_writes` list explicitly (today partial
   progress is folded into committed state instead).
+- Renew the durable execution lease mid-run for long-running steps that could
+  outlive its TTL (today it is claimed once, at `execute` entry, and released
+  at exit — no heartbeat loop).
 
 [retryable]: ../../../crates/tinyagents-harness/src/retry/mod.rs

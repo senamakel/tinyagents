@@ -36,6 +36,7 @@ use tinyinference_llm::usage::{Usage, UsageTotals};
 /// the event type without inspecting nested fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
 pub enum AgentEvent {
     /// A new harness run has been initiated.
     RunStarted {
