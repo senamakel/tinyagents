@@ -119,6 +119,8 @@ pub async fn resolve_image(
     resolve_local_image(source, max_bytes).await
 }
 
+/// Resolve a `data:` source: decompresses a gzip-wrapped payload when present,
+/// then validates MIME and size before re-encoding.
 fn resolve_image_data_uri(source: &str, max_bytes: usize) -> Result<String> {
     let parsed = parse_data_uri(source).map_err(|reason| MultimodalError::InvalidMarker {
         input: source.to_string(),
