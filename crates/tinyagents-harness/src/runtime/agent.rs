@@ -672,6 +672,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         })
     }
 
+    /// Wires a terminal observer that hands the finished (or cancelled)
+    /// `AgentRun` off to [`spawn_host_finalizer`] exactly once.
+    ///
+    /// Returns the shared `Option` slot so a caller (`AgentStream::drop`) can
+    /// also fire the observer if the stream is abandoned before a terminal
+    /// item is produced — the `Option::take` inside both closures is what
+    /// keeps "run finished" and "stream dropped early" from double-firing.
     fn install_host_terminal_observer(
         &self,
         context: &mut RunContext<Ctx>,
