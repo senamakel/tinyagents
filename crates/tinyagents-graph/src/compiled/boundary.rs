@@ -462,9 +462,13 @@ where
             }),
         };
         let id = checkpointer.put(checkpoint).await?;
-        self.emit(GraphEvent::CheckpointSaved {
-            checkpoint_id: id.clone(),
-        });
+        self.emit(
+            &ctx.run_id,
+            GraphEvent::CheckpointSaved {
+                checkpoint_id: id.clone(),
+                step: Some(ctx.steps),
+            },
+        );
         Ok(Some(id))
     }
 
