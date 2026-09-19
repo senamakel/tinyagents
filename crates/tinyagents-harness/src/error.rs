@@ -57,7 +57,7 @@ pub enum TinyAgentsError {
     SubAgentDepth(usize),
 
     /// A single graph node was activated more times within one run than the
-    /// [`crate::graph::RecursionPolicy`]'s `max_visits_per_node` allows (an
+    /// `RecursionPolicy`'s (in `tinyagents-graph`) `max_visits_per_node` allows (an
     /// unbounded node-loop). This is node-loop recursion, tracked separately
     /// from [`TinyAgentsError::RecursionLimit`] (total super-steps) and
     /// [`TinyAgentsError::SubAgentDepth`] (run-tree depth).
@@ -200,12 +200,10 @@ pub enum TinyAgentsError {
     Interrupted { node: String, message: String },
 
     /// Two or more concurrent branches in a single superstep wrote the same
-    /// non-aggregate channel (for example a [`crate::graph::channel::LastValue`]
-    /// channel), so the merge cannot pick a single deterministic winner. Use an
-    /// aggregate channel (one whose
-    /// [`crate::graph::channel::Channel::allows_concurrent`] is `true`, such as
-    /// [`crate::graph::channel::Topic`] or
-    /// [`crate::graph::channel::BinaryAggregate`]) when fan-out branches must
+    /// non-aggregate channel (for example a `LastValue` channel, in
+    /// `tinyagents-graph`), so the merge cannot pick a single deterministic winner. Use an
+    /// aggregate channel (one whose `Channel::allows_concurrent` is `true`, such as
+    /// `Topic` or `BinaryAggregate`) when fan-out branches must
     /// write the same key. The payload describes the offending channel.
     #[error("invalid concurrent update: {0}")]
     InvalidConcurrentUpdate(String),
