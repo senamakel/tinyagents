@@ -126,7 +126,7 @@ fn build_graph_lowers_command_update_to_metadata() {
 fn build_graph_lowers_graph_level_joins_to_waiting_edges() {
     let bp = blueprint(
         "graph g { start a \
-         node a { kind model routes { toB -> b, toC -> c } } \
+         node a { kind model routes { toB -> b toC -> c } } \
          node b { kind model next d } \
          node c { kind model next d } \
          node d { kind model next END } \
@@ -147,7 +147,7 @@ fn build_graph_lowers_graph_level_joins_to_waiting_edges() {
 fn build_graph_lowers_node_join_sources_to_waiting_edges() {
     let bp = blueprint(
         "graph g { start a \
-         node a { kind model routes { toB -> b, toC -> c } } \
+         node a { kind model routes { toB -> b toC -> c } } \
          node b { kind model next d } \
          node c { kind model next d } \
          node d { kind join sources [b, c] next END } }",
