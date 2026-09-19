@@ -274,22 +274,15 @@ where
                     .collect::<Vec<_>>()
             );
         }
-        let checkpoint = Checkpoint {
-            thread_id: thread_id.to_string(),
-            checkpoint_id,
-            run_id: None,
-            parent_checkpoint_id: Some(parent_id),
-            namespace: self.namespace.clone(),
-            state: new_state,
-            next_nodes,
-            completed_tasks,
-            completed_routes: Vec::new(),
-            pending_writes: Vec::new(),
-            interrupts,
-            pending_activations,
-            barrier_arrivals,
-            metadata,
-        };
+        let checkpoint = Checkpoint::new(new_state, tasks)
+            .with_thread_id(thread_id.to_string())
+            .with_checkpoint_id(checkpoint_id)
+            .with_parent_checkpoint_id(Some(parent_id))
+            .with_namespace(self.namespace.clone())
+            .with_completed(completed)
+            .with_interrupts(interrupts)
+            .with_barrier_arrivals(barrier_arrivals)
+            .with_metadata(metadata);
         let id = checkpointer.put(checkpoint).await?;
         self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
         Ok(config)
