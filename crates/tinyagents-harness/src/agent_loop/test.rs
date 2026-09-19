@@ -3087,7 +3087,7 @@ async fn per_model_call_ceiling_times_out_a_slow_call_with_run_time_left() {
 async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting() {
     use std::time::Duration;
 
-    use crate::testkit::SlowModel;
+    use crate::testkit::{ScriptedModel, SlowModel};
 
     // Same setup as `per_model_call_ceiling_times_out_a_slow_call_with_run_time_left`,
     // but with a fallback model registered. Before the fix, the per-call
