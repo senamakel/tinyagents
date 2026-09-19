@@ -182,6 +182,26 @@ impl PayloadCapture {
     }
 }
 
+/// Declarative, run-scoped policy shared by every invocation of an
+/// [`AgentHarness`].
+///
+/// A `RunPolicy` carries the four cross-cutting concerns the agent loop needs
+/// to bound and steer a run:
+///
+/// - `limits`: hard caps (model calls, tool calls, wall-clock) enforced
+///   fail-closed by the loop.
+/// - `retry`: exponential-backoff retry policy applied to each model call.
+/// - `fallback`: optional ordered chain of model names to try when the current
+///   model exhausts its retries.
+/// - `default_response_format`: when set, attached to every [`tinyinference_llm::model::ModelRequest`]
+///   the loop builds; a [`ResponseFormat::JsonSchema`] also drives structured
+///   output extraction on the final response.
+///
+/// [`RunPolicy::default`] yields the crate-default limits and retry policy, no
+/// fallback chain, no response format, and a [`CachePolicy`] whose response
+/// caching is enabled — caching only takes effect once a [`ResponseCache`] is
+/// actually attached via [`AgentHarness::with_response_cache`], so the default
+/// is safe even without a cache.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunPolicy {
     /// Hard run limits enforced fail-closed by the agent loop.

@@ -141,9 +141,8 @@ impl ClaudeAgentSdkProvider {
     }
 
     /// Creates a provider pinned to `model`, overriding `config.default_model`
-    /// for this instance's [`ModelProfile`] (a per-request `model` on
-    /// [`ModelRequest`] still takes precedence — see
-    /// [`ChatModel::invoke`][crate::providers::claude_agent_sdk::ClaudeAgentSdkProvider]).
+    /// for this instance's [`ModelProfile`]. A `model` set explicitly on a
+    /// given [`ModelRequest`] still takes precedence over both.
     pub fn for_model(config: ClaudeAgentSdkConfig, model: impl Into<String>) -> Self {
         Self {
             config,

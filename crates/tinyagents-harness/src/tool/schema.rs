@@ -301,6 +301,11 @@ impl SchemaCleanr {
         decoded
     }
 
+    /// Attempts to replace an `anyOf`/`oneOf` union with something a
+    /// restrictive provider will accept: a single non-null variant, or a flat
+    /// literal `enum` when every non-null variant is a same-typed constant.
+    /// Returns `None` when the union genuinely needs multiple distinct
+    /// schemas and cannot be simplified.
     fn try_simplify_union(
         obj: &Map<String, Value>,
         defs: &HashMap<String, Value>,
@@ -336,6 +341,9 @@ impl SchemaCleanr {
         None
     }
 
+    /// Recognizes the three JSON Schema shapes that denote "null" so a
+    /// nullable union variant (`X | null`) can be dropped when a provider
+    /// disallows nullable types outright.
     fn is_null_schema(value: &Value) -> bool {
         if let Some(obj) = value.as_object() {
             if let Some(Value::Null) = obj.get("const") {
