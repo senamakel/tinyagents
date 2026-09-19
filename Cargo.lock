@@ -1553,6 +1553,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tinyagents-definition",
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-language",
