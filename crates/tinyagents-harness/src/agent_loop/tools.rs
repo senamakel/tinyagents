@@ -203,14 +203,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 &self.policy.discovery,
                 &call.arguments,
             );
+            // `query` is model-supplied tool-call content, same privacy
+            // class as a normal tool call's arguments, so it honors the same
+            // `RunPolicy::capture.tool_io` gate (default `false`, payload
+            // free) instead of always recording potentially user/tenant
+            // sensitive search text regardless of the run's capture policy.
             let record = ctx.emit(AgentEvent::ToolSearched {
                 call_id: CallId::new(call.id.clone()),
-                query: call
-                    .arguments
-                    .get("query")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
+                query: if self.policy.capture.tool_io {
+                    call.arguments
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                } else {
+                    String::new()
+                },
                 matched,
             });
             status.set_last_event(record.id);
