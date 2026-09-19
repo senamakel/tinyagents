@@ -92,6 +92,37 @@ where
         (channel_versions, channel_deltas, versions_seen)
     }
 
+    /// Real `defer` scheduling (A1/D2): holds back every activation in
+    /// `next` whose effective [`NodePolicy::defer`] is set, so long as
+    /// `next` also contains at least one non-deferred activation —
+    /// accumulating the held-back set in `ctx.deferred_pending` across
+    /// however many supersteps that takes. The *first* time this would
+    /// otherwise route to an empty frontier (nothing non-deferred left
+    /// anywhere), every pending deferred activation is released at once.
+    ///
+    /// This makes a deferred node behave as a "run once everything else is
+    /// done" synthesis/join, without needing an explicit barrier naming
+    /// every other node in the graph. [`crate::GraphBuilder::mark_deferred`]
+    /// is a thin alias over the same per-node [`NodePolicy::defer`] flag
+    /// this reads via [`Self::effective_policy`].
+    pub(super) fn apply_defer(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        next: Vec<Activation>,
+    ) -> Vec<Activation> {
+        if next.is_empty() && ctx.deferred_pending.is_empty() {
+            return next;
+        }
+        let (deferred, immediate): (Vec<Activation>, Vec<Activation>) = next
+            .into_iter()
+            .partition(|activation| self.effective_policy(&activation.node).defer);
+        ctx.deferred_pending.extend(deferred);
+        if !immediate.is_empty() {
+            return immediate;
+        }
+        std::mem::take(&mut ctx.deferred_pending)
+    }
+
     /// The normal (non-interrupt/non-failure) step boundary: routes the
     /// completed active set into the next superstep's activations and
     /// persists a boundary checkpoint per the configured
