@@ -628,3 +628,80 @@ fn pause_with_round_trips_through_json() {
     let back: SteeringCommand = serde_json::from_value(json).expect("deserialize");
     assert_eq!(back, command);
 }
+
+// ── I-5: a child run only drains commands addressed to it ─────────────────────
+
+#[test]
+fn root_addressed_command_is_not_consumed_by_a_child() {
+    // Regression test (I-5): `RunContext::child` used to hand the child a bare
+    // clone of the parent's `SteeringHandle`, so a command an orchestrator
+    // addressed to the parent (the default target) could be drained and
+    // applied by whichever sub-agent reached its checkpoint first.
+    let handle = SteeringHandle::allow_all();
+    let mut parent: RunContext =
+        RunContext::new(RunConfig::new("parent"), ()).with_steering(handle.clone());
+    let child_config = RunConfig::new("child");
+    let mut child: RunContext = parent.child(child_config, ()).unwrap();
+
+    // Addressed to the default target (Root == the parent).
+    handle.send(SteeringCommand::InjectMessage(Message::user(
+        "for the parent",
+    )));
+
+    let mut child_messages = Vec::new();
+    let outcome = apply_pending_steering(&mut child, &mut child_messages).unwrap();
+    assert_eq!(outcome, SteeringOutcome::Continue);
+    assert!(
+        child_messages.is_empty(),
+        "child drained a command addressed to the root: {child_messages:?}"
+    );
+
+    // The parent's own checkpoint still sees it.
+    let mut parent_messages = Vec::new();
+    apply_pending_steering(&mut parent, &mut parent_messages).unwrap();
+    assert_eq!(parent_messages, vec![Message::user("for the parent")]);
+}
+
+#[test]
+fn run_addressed_command_reaches_only_that_run() {
+    let handle = SteeringHandle::allow_all();
+    let parent: RunContext =
+        RunContext::new(RunConfig::new("parent"), ()).with_steering(handle.clone());
+    let mut child_a: RunContext = parent.child(RunConfig::new("child-a"), ()).unwrap();
+    let mut child_b: RunContext = parent.child(RunConfig::new("child-b"), ()).unwrap();
+
+    handle.send_to(
+        SteeringTarget::Run(child_a.run_id().clone()),
+        SteeringCommand::InjectMessage(Message::user("for child-a only")),
+    );
+
+    let mut a_messages = Vec::new();
+    apply_pending_steering(&mut child_a, &mut a_messages).unwrap();
+    assert_eq!(a_messages, vec![Message::user("for child-a only")]);
+
+    let mut b_messages = Vec::new();
+    apply_pending_steering(&mut child_b, &mut b_messages).unwrap();
+    assert!(
+        b_messages.is_empty(),
+        "a command addressed to child-a leaked into child-b: {b_messages:?}"
+    );
+}
+
+#[test]
+fn all_addressed_command_reaches_every_run_sharing_the_handle() {
+    let handle = SteeringHandle::allow_all();
+    let parent: RunContext =
+        RunContext::new(RunConfig::new("parent"), ()).with_steering(handle.clone());
+    let mut child: RunContext = parent.child(RunConfig::new("child"), ()).unwrap();
+    let mut parent = parent;
+
+    handle.send_all(SteeringCommand::InjectMessage(Message::user("broadcast")));
+
+    let mut child_messages = Vec::new();
+    apply_pending_steering(&mut child, &mut child_messages).unwrap();
+    assert_eq!(child_messages, vec![Message::user("broadcast")]);
+
+    let mut parent_messages = Vec::new();
+    apply_pending_steering(&mut parent, &mut parent_messages).unwrap();
+    assert_eq!(parent_messages, vec![Message::user("broadcast")]);
+}
