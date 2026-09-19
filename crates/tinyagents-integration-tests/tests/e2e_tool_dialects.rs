@@ -499,6 +499,76 @@ async fn a_flushed_stream_tail_that_was_only_a_marker_false_alarm_still_hits_del
     );
 }
 
+/// Middleware that suppresses a visible delta entirely, standing in for a
+/// redaction/policy middleware that decides a whole fragment must not reach
+/// the transcript.
+struct SuppressAllMiddleware;
+
+#[async_trait]
+impl Middleware<(), ()> for SuppressAllMiddleware {
+    fn name(&self) -> &str {
+        "suppress-all"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut ModelDelta,
+    ) -> tinyagents_harness::Result<()> {
+        delta.content.clear();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_fully_suppressed_flushed_tail_does_not_restore_raw_provider_content() {
+    // The whole stream is a single fragment that looks like it could be
+    // opening a tool-call marker (`<too`), so the scrubber holds it back and
+    // no ordinary delta ever reaches `on_model_delta` through the live path.
+    // The held-back text turns out to be ordinary after all and is released
+    // at `Completed`, where a middleware suppresses it entirely (as a
+    // redaction middleware legitimately might). Reconciling terminal content
+    // must still happen in that case — gating it on the *post*-middleware
+    // content being non-empty would skip reconciliation and leave the
+    // provider's raw (un-suppressed) `Completed` text in the transcript,
+    // silently restoring exactly what the middleware just removed.
+    let text = "<too";
+    let items = vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::MessageDelta(MessageDelta::text(text)),
+        ModelStreamItem::Completed(ModelResponse::assistant(text)),
+    ];
+    let model = Arc::new(StreamingMock::new(items));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model, &listener);
+    harness
+        .push_middleware(Arc::new(SuppressAllMiddleware))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                behavior: tinyagents_harness::limits::LimitBehavior::StopWithPartial,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run stops cleanly");
+
+    let assistant = run
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::Assistant(_)))
+        .expect("assistant turn");
+    assert!(
+        !assistant.text().contains("too"),
+        "the raw provider content was restored, defeating the suppression middleware: {assistant:?}"
+    );
+}
+
 #[tokio::test]
 async fn streamed_tool_call_markup_never_reaches_consumers() {
     let chunks = [
