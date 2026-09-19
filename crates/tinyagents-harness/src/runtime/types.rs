@@ -292,6 +292,48 @@ pub struct RunPolicy {
     /// text as a real call would silently strip visible text the caller
     /// asked to see). See [`TextDialectRecovery`].
     pub text_dialect_recovery: TextDialectRecovery,
+    /// Bounds the output-validation retry loop (A3): how many times the loop
+    /// re-asks the model after the final turn's structured extraction fails
+    /// schema validation, or a registered
+    /// [`crate::structured::OutputValidator`] rejects an otherwise
+    /// schema-valid value with
+    /// [`crate::error::TinyAgentsError::ModelRetry`]. See
+    /// [`OutputRetryPolicy`].
+    pub output_retry: OutputRetryPolicy,
+}
+
+/// Policy for the output-validation retry loop (A3), mirroring Pydantic AI's
+/// `retries={'output': N}`.
+///
+/// On the agent loop's final turn, a structured-extraction failure or a
+/// registered [`crate::structured::OutputValidator`] rejection no longer
+/// immediately fails the run: the error is pushed back to the model as a
+/// repair prompt (built from [`Self::message_template`]) and the loop asks
+/// again, up to [`Self::max_attempts`] times total for the run. Each retry
+/// still counts against [`RunLimits::max_model_calls`] like any other model
+/// call — this policy only bounds how many of those calls may be spent on
+/// output repair specifically.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutputRetryPolicy {
+    /// How many times the loop may re-ask the model after an output
+    /// validation failure. `0` disables the retry loop entirely — the first
+    /// failure fails the run, exactly as before A3.
+    pub max_attempts: u8,
+    /// The repair-prompt template pushed to the model as a
+    /// [`tinyinference_llm::message::Message::user`] turn. `{error}` is
+    /// replaced with the extraction/validation error text; a template
+    /// without that placeholder still works (the error is simply omitted)
+    /// but loses the specific reason.
+    pub message_template: String,
+}
+
+impl Default for OutputRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 1,
+            message_template: "{error}\n\nFix the errors and try again.".to_string(),
+        }
+    }
 }
 
 /// Policy for recovering `<tool_call>`-style text-dialect tool calls from an
