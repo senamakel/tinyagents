@@ -456,7 +456,12 @@ where
                 loop_state
                     .messages
                     .push(tinyinference_llm::message::Message::user(prompt));
-                return Ok(goto(loop_state, node::MODEL));
+                // Back to `plan`, not `model` directly: the direct loop's
+                // retry re-enters its outer loop, which rebuilds the
+                // `ModelRequest` from `messages` (now including the repair
+                // prompt) — `model_node` needs a fresh `pending_request`,
+                // which only `plan_node` produces.
+                return Ok(goto(loop_state, node::PLAN));
             }
             return Err(TinyAgentsError::StructuredOutput(error));
         }
