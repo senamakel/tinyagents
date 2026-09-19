@@ -76,9 +76,14 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     }
 
     /// Executes with the full typed parent run when the dispatch needs it.
+    ///
+    /// `call_id` is the admitted call's id — the one the transcript row and
+    /// the `ToolStarted`/`ToolCompleted` events carry — so a dispatch that
+    /// builds a [`ToolExecutionContext`] hands the tool the real id (B1).
     async fn execute(
         &self,
         state: &State,
+        call_id: crate::ids::CallId,
         arguments: Value,
         options: tinytools::ToolCallOptions,
         parent: &crate::context::RunContext<Ctx>,
@@ -98,11 +103,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
     async fn execute(
         &self,
         _state: &State,
+        call_id: crate::ids::CallId,
         arguments: Value,
         options: tinytools::ToolCallOptions,
         parent: &crate::context::RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
-        let context = ToolExecutionContext::from_run_context(parent);
+        let context = ToolExecutionContext::from_run_context(parent, call_id);
         self.tool
             .execute_with_context(arguments, options, Some(&context))
             .await

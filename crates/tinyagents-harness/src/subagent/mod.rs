@@ -741,6 +741,7 @@ where
     async fn execute(
         &self,
         state: &State,
+        _call_id: crate::ids::CallId,
         arguments: Value,
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,

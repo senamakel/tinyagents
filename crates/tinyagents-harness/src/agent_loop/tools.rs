@@ -1417,6 +1417,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             futures.push(async move {
                 let fut = execute_tool_recovering_model_retry(dispatch.execute(
                     state,
+                    CallId::new(call.id),
                     call.arguments,
                     options,
                     parent_ctx,

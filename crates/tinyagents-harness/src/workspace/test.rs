@@ -108,7 +108,7 @@ fn run_context_workspace_threads_into_tool_execution_context() {
     let ws = WorkspaceDescriptor::new("/work/agent-a").with_policy_id("run-9");
     let ctx: RunContext = RunContext::new(RunConfig::new("run-9"), ()).with_workspace(ws.clone());
 
-    let tool_ctx = ToolExecutionContext::from_run_context(&ctx);
+    let tool_ctx = ToolExecutionContext::from_run_context(&ctx, crate::ids::CallId::new("c"));
     assert_eq!(tool_ctx.workspace, Some(ws));
 }
 

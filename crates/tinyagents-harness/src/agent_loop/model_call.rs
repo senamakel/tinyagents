@@ -1254,6 +1254,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
             let timeout_result = super::tools::timeout_result(&call, timeout);
             let future = super::tools::execute_tool_recovering_model_retry(self.dispatch.execute(
                 state,
+                CallId::new(call.id),
                 call.arguments,
                 self.options,
                 ctx,
