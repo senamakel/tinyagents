@@ -387,14 +387,18 @@ pub struct NodeSpec {
 }
 
 /// How control flows out of a [`NodeSpec`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Routing {
     /// A single static successor node.
     Next(String),
     /// Conditional routing: `(label, target)` pairs in declaration order.
     Conditional(Vec<(String, String)>),
-    /// The node terminates the run.
+    /// The node terminates the run. The default: a stored `NodeSpec` missing
+    /// its `routing` field (an old shape, or a hand-authored fixture) fails
+    /// safe to "no successor" rather than silently deserializing to some
+    /// other target.
+    #[default]
     Terminal,
 }
 
