@@ -65,7 +65,8 @@ pub trait TaskCache: Send + Sync {
 /// [`CompiledGraph`]: crate::CompiledGraph
 pub(crate) struct CachedNode<State, Update> {
     /// Derives the cache key for one activation (state + optional send arg).
-    pub(crate) key: std::sync::Arc<dyn Fn(&State, Option<&serde_json::Value>) -> String + Send + Sync>,
+    pub(crate) key:
+        std::sync::Arc<dyn Fn(&State, Option<&serde_json::Value>) -> String + Send + Sync>,
     /// Optional time-to-live for a cached entry.
     pub(crate) ttl: Option<Duration>,
     /// Encodes an `Update` for storage.

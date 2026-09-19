@@ -19,8 +19,7 @@ use tinyagents_harness::retry::RetryPolicy;
 
 /// Computes a task-cache key from the committed state snapshot and the
 /// activation's [`crate::NodeContext::send_arg`] (if any).
-pub type CacheKeyFn<State> =
-    dyn Fn(&State, Option<&serde_json::Value>) -> String + Send + Sync;
+pub type CacheKeyFn<State> = dyn Fn(&State, Option<&serde_json::Value>) -> String + Send + Sync;
 
 /// Recovers from a node failure: given the state the node ran against and
 /// the error that survived its retry policy, optionally produce a

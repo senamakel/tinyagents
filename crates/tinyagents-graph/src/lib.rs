@@ -50,8 +50,8 @@ pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 // --- Durable execution model ---
 pub use builder::{
-    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext,
-    NodeFuture, NodeHandler, NodePolicy, Route, RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext, NodeFuture,
+    NodeHandler, NodePolicy, Route, RouterFn, START,
 };
 #[cfg(feature = "sqlite")]
 pub use cache::SqliteTaskCache;

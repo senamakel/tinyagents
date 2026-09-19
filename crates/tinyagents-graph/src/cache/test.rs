@@ -37,11 +37,20 @@ async fn in_memory_entry_expires_after_ttl() {
 #[tokio::test]
 async fn in_memory_clear_only_drops_one_graph() {
     let cache = InMemoryTaskCache::new();
-    cache.put(&key("a", "n", "h"), json!(1), None).await.unwrap();
-    cache.put(&key("b", "n", "h"), json!(2), None).await.unwrap();
+    cache
+        .put(&key("a", "n", "h"), json!(1), None)
+        .await
+        .unwrap();
+    cache
+        .put(&key("b", "n", "h"), json!(2), None)
+        .await
+        .unwrap();
     cache.clear(&GraphId::new("a")).await.unwrap();
     assert_eq!(cache.get(&key("a", "n", "h")).await.unwrap(), None);
-    assert_eq!(cache.get(&key("b", "n", "h")).await.unwrap(), Some(json!(2)));
+    assert_eq!(
+        cache.get(&key("b", "n", "h")).await.unwrap(),
+        Some(json!(2))
+    );
 }
 
 #[cfg(feature = "sqlite")]
@@ -77,11 +86,20 @@ mod sqlite_backend {
     #[tokio::test]
     async fn sqlite_clear_only_drops_one_graph() {
         let cache = SqliteTaskCache::in_memory().unwrap();
-        cache.put(&key("a", "n", "h"), json!(1), None).await.unwrap();
-        cache.put(&key("b", "n", "h"), json!(2), None).await.unwrap();
+        cache
+            .put(&key("a", "n", "h"), json!(1), None)
+            .await
+            .unwrap();
+        cache
+            .put(&key("b", "n", "h"), json!(2), None)
+            .await
+            .unwrap();
         cache.clear(&GraphId::new("a")).await.unwrap();
         assert_eq!(cache.get(&key("a", "n", "h")).await.unwrap(), None);
-        assert_eq!(cache.get(&key("b", "n", "h")).await.unwrap(), Some(json!(2)));
+        assert_eq!(
+            cache.get(&key("b", "n", "h")).await.unwrap(),
+            Some(json!(2))
+        );
     }
 
     #[tokio::test]
@@ -90,9 +108,15 @@ mod sqlite_backend {
         let path = dir.path().join("cache.db");
         {
             let cache = SqliteTaskCache::open(&path).unwrap();
-            cache.put(&key("g", "n", "h"), json!(7), None).await.unwrap();
+            cache
+                .put(&key("g", "n", "h"), json!(7), None)
+                .await
+                .unwrap();
         }
         let reopened = SqliteTaskCache::open(&path).unwrap();
-        assert_eq!(reopened.get(&key("g", "n", "h")).await.unwrap(), Some(json!(7)));
+        assert_eq!(
+            reopened.get(&key("g", "n", "h")).await.unwrap(),
+            Some(json!(7))
+        );
     }
 }

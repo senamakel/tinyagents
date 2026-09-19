@@ -66,7 +66,11 @@ async fn per_node_retry_policy_overrides_graph_wide_retry() {
 
     let run = graph.run(10).await.unwrap();
     assert_eq!(run.state, 11);
-    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 4, "1 try + 3 retries");
+    assert_eq!(
+        attempts.load(AtomicOrdering::SeqCst),
+        4,
+        "1 try + 3 retries"
+    );
 }
 
 /// With no graph-wide retry at all, a per-node retry policy still applies.
@@ -140,7 +144,10 @@ async fn node_defaults_timeout_beats_legacy_graph_wide_timeout() {
         .unwrap();
 
     let run = graph.run(0).await.unwrap();
-    assert_eq!(run.state, 1, "the 5s default timeout let the 60ms node finish");
+    assert_eq!(
+        run.state, 1,
+        "the 5s default timeout let the 60ms node finish"
+    );
 }
 
 // ── A.1: idle timeout + heartbeat ────────────────────────────────────────────
@@ -276,10 +283,10 @@ async fn cache_hit_skips_handler_and_emits_cached_task_completed() {
     assert_eq!(first.state, 40);
     assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
     assert!(
-        !sink.events().iter().any(|e| matches!(
-            e,
-            GraphEvent::TaskCompleted { cached: true, .. }
-        )),
+        !sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, GraphEvent::TaskCompleted { cached: true, .. })),
         "the first run was a miss"
     );
 
@@ -321,7 +328,11 @@ async fn cache_ttl_expiry_reruns_the_handler() {
 
     graph.run(1).await.unwrap();
     graph.run(1).await.unwrap();
-    assert_eq!(calls.load(AtomicOrdering::SeqCst), 1, "second run was a hit");
+    assert_eq!(
+        calls.load(AtomicOrdering::SeqCst),
+        1,
+        "second run was a hit"
+    );
 
     tokio::time::sleep(Duration::from_millis(80)).await;
     let run = graph.run(1).await.unwrap();
@@ -404,7 +415,11 @@ async fn cache_key_receives_send_arg_per_fanout_activation() {
     let second = graph.run(vec![]).await.unwrap();
     let mut got = second.state.clone();
     got.sort();
-    assert_eq!(got, vec!["work:a", "work:b"], "cached updates were replayed");
+    assert_eq!(
+        got,
+        vec!["work:a", "work:b"],
+        "cached updates were replayed"
+    );
     assert_eq!(
         calls.load(AtomicOrdering::SeqCst),
         2,
@@ -470,7 +485,11 @@ async fn on_error_none_falls_through_to_the_original_error() {
 
     let err = graph.run(10).await.unwrap_err();
     assert!(matches!(err, TinyAgentsError::Model(_)), "got {err:?}");
-    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1, "no retry policy set");
+    assert_eq!(
+        attempts.load(AtomicOrdering::SeqCst),
+        1,
+        "no retry policy set"
+    );
 }
 
 // ── A.4: real defer ──────────────────────────────────────────────────────
