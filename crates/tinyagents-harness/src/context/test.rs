@@ -490,3 +490,85 @@ fn token_estimation_includes_assistant_tool_names_and_arguments() {
     assert!(rendered.contains("search_docs"));
     assert!(rendered.contains("one two three"));
 }
+
+// ── RunContext::bounded (R-1) ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn bounded_returns_the_futures_ok_value_with_no_deadline() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-ok"), ());
+    let result: Result<u32> = ctx
+        .bounded(None, async { Ok(42) }, || "unused".to_string())
+        .await;
+    assert_eq!(result.unwrap(), 42);
+}
+
+#[tokio::test]
+async fn bounded_passes_through_the_futures_own_error() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-err"), ());
+    let result: Result<u32> = ctx
+        .bounded(
+            None,
+            async { Err(crate::error::TinyAgentsError::Model("boom".to_string())) },
+            || "unused".to_string(),
+        )
+        .await;
+    match result {
+        Err(crate::error::TinyAgentsError::Model(message)) => assert_eq!(message, "boom"),
+        other => panic!("expected a passthrough Model error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bounded_fires_the_timeout_message_only_when_the_deadline_elapses() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-timeout"), ());
+    let mut message_built = false;
+    let result: Result<u32> = ctx
+        .bounded(
+            Some(std::time::Duration::from_millis(5)),
+            async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(1)
+            },
+            || {
+                message_built = true;
+                "call-specific timeout message".to_string()
+            },
+        )
+        .await;
+    assert!(message_built);
+    match result {
+        Err(crate::error::TinyAgentsError::Timeout(message)) => {
+            assert_eq!(message, "call-specific timeout message");
+        }
+        other => panic!("expected Timeout, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bounded_does_not_build_the_timeout_message_on_the_success_path() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-no-timeout"), ());
+    let result: Result<u32> = ctx
+        .bounded(Some(std::time::Duration::from_secs(60)), async { Ok(7) }, || {
+            panic!("timeout_message must not be called when the future finishes first")
+        })
+        .await;
+    assert_eq!(result.unwrap(), 7);
+}
+
+#[tokio::test]
+async fn bounded_returns_cancelled_when_the_run_is_cancelled_before_the_future_resolves() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-cancel"), ());
+    let cancellation = ctx.cancellation.clone();
+    cancellation.cancel();
+    let result: Result<u32> = ctx
+        .bounded(
+            None,
+            async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(1)
+            },
+            || "unused".to_string(),
+        )
+        .await;
+    assert!(matches!(result, Err(crate::error::TinyAgentsError::Cancelled)));
+}
