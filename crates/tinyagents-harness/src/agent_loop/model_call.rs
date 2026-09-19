@@ -126,9 +126,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
-        streaming: bool,
-        recovery: &super::dialect::TextRecovery,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let streaming = shape.streaming;
         let policy = self.effective_cache_policy(request);
         // The identity of the model that is actually about to be called — known
         // only *after* resolution, which is why the key cannot be finalized by
@@ -254,15 +254,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         };
 
         let response = self
-            .invoke_model_resolving(
-                state,
-                ctx,
-                effective_request,
-                call_id,
-                binding,
-                streaming,
-                recovery,
-            )
+            .invoke_model_resolving(state, ctx, effective_request, call_id, binding, shape)
             .await?;
 
         if let Some((cache, key)) = decision.as_ref() {
@@ -477,9 +469,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
-        streaming: bool,
-        recovery: &super::dialect::TextRecovery,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let streaming = shape.streaming;
         let mut current_name = binding.resolved.name.clone();
         let mut model = binding.model;
         let mut resolved = binding.resolved;
@@ -528,7 +520,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         request,
                         call_id,
                         &mut deltas_emitted,
-                        recovery,
+                        &shape.recovery,
                     );
                     Self::with_call_budget(remaining, run_id.as_str(), "model call", bound, fut)
                         .await
@@ -1063,8 +1055,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) resolved: ResolvedModel,
     pub(super) model: Arc<dyn ChatModel<State>>,
     pub(super) required_capabilities: Option<tinyinference_llm::model::CapabilitySet>,
-    pub(super) streaming: bool,
-    pub(super) recovery: super::dialect::TextRecovery,
+    pub(super) shape: super::dialect::CallShape,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
@@ -1157,15 +1148,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         Box::pin(async move {
             let binding = self.rebind(ctx, &request).await?;
             self.harness
-                .invoke_model_with_retry(
-                    state,
-                    ctx,
-                    &request,
-                    &self.call_id,
-                    binding,
-                    self.streaming,
-                    &self.recovery,
-                )
+                .invoke_model_with_retry(state, ctx, &request, &self.call_id, binding, &self.shape)
                 .await
         })
     }

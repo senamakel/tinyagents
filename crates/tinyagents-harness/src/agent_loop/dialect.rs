@@ -116,6 +116,16 @@ impl TextRecovery {
     }
 }
 
+/// How one model call is made: streamed or unary, and what it needs to
+/// recover text-dialect calls from the answer.
+#[derive(Debug, Clone, Default)]
+pub(super) struct CallShape {
+    /// Whether the provider's streaming path is used.
+    pub(super) streaming: bool,
+    /// Offered tools and P-Format registry for text recovery.
+    pub(super) recovery: TextRecovery,
+}
+
 /// Converts a recovered call into the harness's [`ToolCall`], minting an id
 /// scoped to the model call it came from.
 ///

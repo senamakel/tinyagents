@@ -537,8 +537,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 resolved: binding.resolved,
                 model: binding.model,
                 required_capabilities: request.required_capabilities.clone(),
-                streaming,
-                recovery: recovery.clone(),
+                shape: super::dialect::CallShape {
+                    streaming,
+                    recovery: recovery.clone(),
+                },
             };
             // Snapshot the request messages for observability before `request`
             // is moved into the model-wrap onion, gated by the capture policy so
