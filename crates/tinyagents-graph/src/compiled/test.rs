@@ -1334,6 +1334,18 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
         "every node's update must be applied exactly once in both runs, \
          regardless of fan-in order"
     );
+    // The core C2 property: in both runs, `y` observed a state that already
+    // included both `hi`'s (20) and `lo`'s (2) updates.
+    assert_eq!(
+        baseline_y_observed.load(AtomicOrdering::SeqCst),
+        22,
+        "baseline: y must observe both hi's and lo's updates"
+    );
+    assert_eq!(
+        resumed_y_observed.load(AtomicOrdering::SeqCst),
+        22,
+        "resumed: y must observe both hi's and lo's updates, not just hi's"
+    );
     // Every node completed exactly once in both runs — no double-execution
     // and no missing execution introduced by the interrupt/resume path.
     assert_eq!(baseline_hi.load(AtomicOrdering::SeqCst), 1);
