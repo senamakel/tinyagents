@@ -173,17 +173,28 @@ fn compile_graph(graph: &crate::types::GraphDecl) -> Result<Blueprint> {
         let has_static_edge = edge_targets.contains_key(node.name.as_str());
         let has_command_goto = node.command.as_ref().is_some_and(|c| c.goto.is_some());
 
+        if has_routes && (has_next || has_static_edge) {
+            return Err(compile_err(format!(
+                "node `{}` mixes static routing (`next`/edge) with command routing (`routes`); use one or the other",
+                node.name
+            )));
+        }
+
         // A node may declare at most one of `routes`, `next`, `command { goto
         // … }`, or a top-level edge as its routing source. Silently resolving
         // by precedence hides a real authoring mistake (e.g. a model-authored
         // revision that adds a `command.goto` without removing the old
-        // `next`), so any combination of more than one is a compile error —
-        // this one check covers every pair (routes+next, routes+edge,
-        // next+command.goto, …), so there is no separate "routes vs
-        // next/edge" check above it (M13 in
-        // `docs/runtime-comparison/code-review-workspace.md`: that redundant
-        // check used to exist here, duplicating this one with a different
-        // message for the same mistake).
+        // `next`), so any additional combination is a compile error.
+        //
+        // NOTE (M13 in `docs/runtime-comparison/code-review-workspace.md`):
+        // the check above (routes vs next/edge) is redundant with this one —
+        // both `active.len() > 1` below and the check above catch
+        // routes+next/routes+edge, with two different messages for the same
+        // mistake. Removing the redundant check is left undone here: an
+        // integration test outside this change's file boundary
+        // (`feature_language_compiler_semantics.rs::mixing_routes_with_next_is_rejected`)
+        // asserts on the "mixes static routing" message text specifically,
+        // and this change cannot edit that file to migrate the assertion.
         let routing_sources = [
             (has_routes, "routes"),
             (has_next, "`next`"),
