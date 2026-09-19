@@ -775,7 +775,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // yet approved. A call the resume path already approved
         // (`RunContext::is_call_approved`) goes straight through.
         if !ctx.is_call_approved(&call.id) {
-            let original = ToolCall::new(call.id.clone(), call.name.clone(), model_arguments);
+            let original =
+                ToolCall::new(call.id.clone(), call.name.clone(), model_arguments.clone());
             if crate::tool::is_external_tool(tool.as_ref()) {
                 ctx.limits.rollback_tool_calls(1);
                 return Ok(ResolvedToolCall::Deferred(DeferredRequest::external(
