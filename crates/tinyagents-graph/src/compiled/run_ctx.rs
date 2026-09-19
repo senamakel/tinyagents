@@ -210,31 +210,48 @@ where
         serde_json::to_value(&step_child_runs).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Builds the per-task [`NodeContext`] for `node_id`, consuming its entry
-    /// from `resume_map` (a node can only be handed its resume value once).
+    /// Builds the per-task [`NodeContext`] for `activation`, consuming its
+    /// entry from `resume_map` (a task can only be handed its resume value
+    /// once).
     ///
     /// `fork` carries the branch identity in a concurrent step (`None` in
-    /// sequential mode or single-node steps).
+    /// sequential mode or single-node steps). `siblings` is the number of
+    /// activations of `activation.node` in this same step's active set
+    /// (I1): more than one means a `Send` fan-out of the same node, which is
+    /// what a subgraph node consults to namespace its child checkpoint by
+    /// task id instead of sharing one namespace across every fan-out branch.
+    ///
+    /// Resume lookup prefers `resume_map`'s task-id key (I1/R5: distinguishes
+    /// concurrent same-node activations) and falls back to the node-id key
+    /// (legacy/whole-node resume, or a resume value fanned across every
+    /// pending node with no interrupt provenance).
     pub(super) fn node_context(
         &mut self,
-        node_id: &NodeId,
+        activation: &Activation,
         step: usize,
         fork: Option<ForkId>,
-        send_arg: Option<serde_json::Value>,
+        siblings: usize,
     ) -> NodeContext {
+        let node_id = &activation.node;
+        let resume = self
+            .resume_map
+            .remove(activation.task_id.as_str())
+            .or_else(|| self.resume_map.remove(node_id.as_str()));
         NodeContext {
             graph_id: self.graph.graph_id.clone(),
             node_id: node_id.clone(),
             run_id: self.run_id.clone(),
             thread_id: self.thread_id.clone(),
             step,
-            resume: self.resume_map.remove(node_id),
+            resume,
             fork,
-            send_arg,
+            send_arg: activation.send_arg.clone(),
             root_run_id: Some(self.root_run_id.clone()),
             recursion_frames: self.live_frames.clone(),
             child_runs: Some(self.child_sink.clone()),
             agent_binding: self.binding.clone(),
+            task_id: activation.task_id.clone(),
+            siblings,
         }
     }
 }
