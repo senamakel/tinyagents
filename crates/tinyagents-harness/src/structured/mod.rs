@@ -314,12 +314,19 @@ impl StructuredExtractor {
     ///
     /// See strategy descriptions above.
     pub fn extract(&self, response: &ModelResponse) -> Result<StructuredOutput> {
-        let output = match self.strategy {
-            StructuredStrategy::ProviderSchema => self.extract_provider_schema(response)?,
-            StructuredStrategy::ToolCall => self.extract_tool_call(response)?,
-        };
-        validate::validate_value(&self.schema, &output.value, &self.instance_root())?;
-        Ok(output)
+        match &self.strategy {
+            StructuredStrategy::ProviderSchema | StructuredStrategy::Prompted { .. } => {
+                let output = self.extract_provider_schema(response)?;
+                validate::validate_value(&self.schema, &output.value, &self.instance_root())?;
+                Ok(output)
+            }
+            StructuredStrategy::ToolCall => {
+                let output = self.extract_tool_call(response)?;
+                validate::validate_value(&self.schema, &output.value, &self.instance_root())?;
+                Ok(output)
+            }
+            StructuredStrategy::ToolCallUnion => self.extract_tool_call_union(response),
+        }
     }
 
     /// Extracts without failing: records the error instead of raising it.
