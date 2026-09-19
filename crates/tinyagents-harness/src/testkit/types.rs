@@ -37,6 +37,10 @@ pub struct StreamingMock {
     pub(crate) items: Vec<ModelStreamItem>,
     /// Number of `stream`/`invoke` calls made so far.
     pub(crate) calls: Mutex<u64>,
+    /// The capability profile returned by [`tinyinference_llm::model::ChatModel::profile`],
+    /// when set via [`StreamingMock::with_profile`]. `None` reproduces the
+    /// trait's conservative default.
+    pub(crate) profile: Option<tinyinference_llm::model::ModelProfile>,
 }
 
 // ---------------------------------------------------------------------------
