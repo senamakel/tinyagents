@@ -95,6 +95,48 @@ in Phase 1c — see below.
   an explicit default instead, returning `TinyAgentsError::ModelNotFound` if
   `name` is not registered.
 
+## Capability bundle (gap G3)
+
+`CapabilityRegistry::register_capability(name, Capability<State, Ctx>)`
+(`capability/mod.rs`) registers a
+`tinyagents_harness::capability::Capability<State, Ctx>` — instructions +
+toolset + middleware + model defaults + exposure + `defer_loading`, the
+runtime-level unit Pydantic AI v2's `AbstractCapability` occupies
+(`docs/runtime-comparison/pydantic-ai.md` §4). The bundle type itself lives
+in `tinyagents-harness::capability` rather than in `tinyagents-registry` or
+the dependency-free `tinyagents-definition` crate: it composes
+`tool::toolset::ToolSet<State, Ctx>` and `middleware::Middleware<State, Ctx>`
+trait objects that are native to `tinyagents-harness`, and
+`tinyagents-definition` has zero dependency on `tinyagents-harness` by
+design (that asymmetry is what keeps the crate graph acyclic). Since
+`CapabilityRegistry<State>` carries no `Ctx` type parameter (none of its
+other stored kinds need one), registry storage for this specific
+`Ctx`-generic bundle goes through type-erased `Box<dyn Any>` storage instead
+of adding a `Ctx` parameter to the whole registry for one feature; see
+`capability/mod.rs`'s `register_capability`/`capability` doc comments for the
+erasure mechanics.
+
+`Capability::from_spec(serde_json::Value)` builds a bundle from data (no
+toolset/middleware — those are still wired programmatically), which is what
+a `.rag` `capability "name"` node item resolves against
+(`crates/tinyagents-language/src/{ast,parser,compiler,resolver}.rs`,
+`AstNode::capability: Option<String>`); `CapabilityResolver`/`Resolver` gate
+it the same way they gate `tool`/`model`/`subgraph` references — unconditional
+membership in the host-registered capability allowlist
+(`resolver.rs`'s `capability_allowed`).
+
+On the harness side, `AgentHarness::with_capability(capability)` installs a
+bundle: its middleware is appended in installation order, its model defaults
+are applied onto the harness's `ModelRequestPolicy`, and its toolset is
+folded into a `CapabilityToolSet` combined with whatever toolset was already
+installed via `with_toolset` before the first `with_capability` call. When
+any installed capability has `defer_loading: true`, a synthetic
+`load_capability` tool (`LOAD_CAPABILITY_TOOL_NAME`) is auto-registered so a
+model can bring a deferred capability's tools into scope on demand; the
+resulting mid-run tool-set change is recorded through the B6 transcript
+patch mechanism (`agent_loop/tool_changes.rs`) rather than silently
+reshaping the next request.
+
 ## Why the gap
 
 `design.md`/`events.md`/`operations.md` were written as a forward-looking
