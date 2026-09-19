@@ -36,16 +36,19 @@
 //! ephemeral clearing) — so existing whole-state habits keep working and
 //! conflict detection is strictly opt-in.
 
+mod registry;
 mod types;
 
+pub use registry::ReducerRegistry;
 pub use types::{
-    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, Delta, Ephemeral,
-    LastValue, Messages, NamedBarrier, Topic, Untracked,
+    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
+    Delta, Ephemeral, LastValue, Messages, NamedBarrier, Topic, Untracked,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::reducer::StateReducer;
