@@ -114,6 +114,7 @@ where
     /// `RunStarted` and a terminal `Failed` status — before any node
     /// executes), then emits `RunStarted`/`RecursionDepthChanged` for a
     /// successful push.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn start(
         graph: &'a CompiledGraph<State, Update>,
         run_id: RunId,
