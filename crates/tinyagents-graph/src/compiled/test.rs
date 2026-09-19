@@ -1107,6 +1107,290 @@ async fn parallel_interrupt_schedules_completed_branch_successors() {
     assert_eq!(done.state.value, 111);
 }
 
+/// R2/C1 regression: a higher-index parallel sibling that completed with a
+/// visible side effect (`hi_calls`) must not be re-run when a lower-index
+/// sibling interrupts and the thread is later resumed. Before the fix,
+/// `fold_step` stopped folding at the first stalled branch by *position*,
+/// so a completed higher-index branch was discarded and unconditionally
+/// re-scheduled — a second call here would double the side effect and (for
+/// a non-idempotent handler) double-apply its update.
+#[tokio::test]
+async fn higher_index_completed_sibling_not_rerun_after_interrupt_then_resume() {
+    let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
+    let hi_calls = Arc::new(AtomicUsize::new(0));
+    let interrupted_once = Arc::new(AtomicBool::new(false));
+    let hi_calls_for_node = hi_calls.clone();
+    let interrupted_once_for_node = interrupted_once.clone();
+    let graph = GraphBuilder::<Counter, i32>::new()
+        .with_parallel(true)
+        .set_reducer(ClosureStateReducer::new(|mut s: Counter, u: i32| {
+            s.value += u;
+            s.log.push(format!("+{u}"));
+            Ok(s)
+        }))
+        .add_node("super", |_s: Counter, _c: NodeContext| async move {
+            Ok(NodeResult::Command(
+                Command::default().with_goto(["lo", "hi"]),
+            ))
+        })
+        .add_node("lo", move |_s: Counter, c: NodeContext| {
+            let once = interrupted_once_for_node.clone();
+            async move {
+                match c.resume {
+                    Some(_) => Ok(NodeResult::Update(2)),
+                    None => {
+                        once.store(true, AtomicOrdering::SeqCst);
+                        Ok(NodeResult::Interrupt(Interrupt::new("lo", json!({}))))
+                    }
+                }
+            }
+        })
+        .add_node("hi", move |_s: Counter, _c: NodeContext| {
+            let calls = hi_calls_for_node.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(20))
+            }
+        })
+        .set_entry("super")
+        .mark_command_routing("super")
+        .set_finish("lo")
+        .set_finish("hi")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let paused = graph
+        .run_with_thread(
+            "t-higher-index",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(paused.is_interrupted());
+    assert!(interrupted_once.load(AtomicOrdering::SeqCst));
+    // hi (index 1, higher than lo's index 0) still completed and its update
+    // applied, despite lo (lower index) interrupting the same step.
+    assert_eq!(hi_calls.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(paused.state.value, 20, "hi's update must be applied");
+
+    let done = graph
+        .resume("t-higher-index", Command::resume(json!(null)))
+        .await
+        .unwrap();
+    assert_eq!(
+        hi_calls.load(AtomicOrdering::SeqCst),
+        1,
+        "hi must not be re-run by the resume"
+    );
+    assert_eq!(done.state.value, 22, "20 (hi) + 2 (lo's resume value)");
+}
+
+/// R2/C2 regression: an interrupted-then-resumed run must reach the same
+/// final state as the same graph run straight through, with each node
+/// completing exactly once in both cases. Before the fix, a completed
+/// sibling's successor was routed immediately at the interrupt boundary —
+/// before the interrupted sibling's own eventual update was known — so a
+/// downstream node could observe a state missing that update, an ordering
+/// an uninterrupted run never produces.
+#[tokio::test]
+async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
+    fn build(
+        enable_interrupt: bool,
+        hi_completions: Arc<AtomicUsize>,
+        lo_completions: Arc<AtomicUsize>,
+        y_completions: Arc<AtomicUsize>,
+    ) -> CompiledGraph<Counter, i32> {
+        GraphBuilder::<Counter, i32>::new()
+            .with_parallel(true)
+            .set_reducer(ClosureStateReducer::new(|mut s: Counter, u: i32| {
+                s.value += u;
+                s.log.push(format!("+{u}"));
+                Ok(s)
+            }))
+            .add_node("super", |_s: Counter, _c: NodeContext| async move {
+                Ok(NodeResult::Command(
+                    Command::default().with_goto(["lo", "hi"]),
+                ))
+            })
+            .add_node("lo", move |_s: Counter, c: NodeContext| {
+                let completions = lo_completions.clone();
+                async move {
+                    if enable_interrupt && c.resume.is_none() {
+                        return Ok(NodeResult::Interrupt(Interrupt::new("lo", json!({}))));
+                    }
+                    completions.fetch_add(1, AtomicOrdering::SeqCst);
+                    Ok(NodeResult::Update(2))
+                }
+            })
+            .add_node("hi", move |_s: Counter, _c: NodeContext| {
+                let completions = hi_completions.clone();
+                async move {
+                    completions.fetch_add(1, AtomicOrdering::SeqCst);
+                    Ok(NodeResult::Update(20))
+                }
+            })
+            .add_node("y", move |_s: Counter, _c: NodeContext| {
+                let completions = y_completions.clone();
+                async move {
+                    completions.fetch_add(1, AtomicOrdering::SeqCst);
+                    Ok(NodeResult::Update(5))
+                }
+            })
+            .set_entry("super")
+            .mark_command_routing("super")
+            .add_edge("hi", "y")
+            .set_finish("lo")
+            .set_finish("y")
+            .compile()
+            .unwrap()
+    }
+
+    // Baseline: no interrupt, straight through.
+    let baseline_hi = Arc::new(AtomicUsize::new(0));
+    let baseline_lo = Arc::new(AtomicUsize::new(0));
+    let baseline_y = Arc::new(AtomicUsize::new(0));
+    let baseline_graph = build(
+        false,
+        baseline_hi.clone(),
+        baseline_lo.clone(),
+        baseline_y.clone(),
+    );
+    let baseline = baseline_graph
+        .run(Counter {
+            value: 0,
+            log: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Interrupted at `lo`, then resumed with the value it would otherwise
+    // have produced on its own.
+    let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
+    let resumed_hi = Arc::new(AtomicUsize::new(0));
+    let resumed_lo = Arc::new(AtomicUsize::new(0));
+    let resumed_y = Arc::new(AtomicUsize::new(0));
+    let resumed_graph = build(
+        true,
+        resumed_hi.clone(),
+        resumed_lo.clone(),
+        resumed_y.clone(),
+    )
+    .with_checkpointer(cp.clone());
+    let paused = resumed_graph
+        .run_with_thread(
+            "t-equivalence",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(paused.is_interrupted());
+    let resumed = resumed_graph
+        .resume("t-equivalence", Command::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resumed.state, baseline.state,
+        "an interrupted-then-resumed run must reach the same final state \
+         as the same graph run straight through"
+    );
+    // Every node completed exactly once in both runs — no double-execution
+    // and no missing execution introduced by the interrupt/resume path.
+    assert_eq!(baseline_hi.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(resumed_hi.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(baseline_lo.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(resumed_lo.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(baseline_y.load(AtomicOrdering::SeqCst), 1);
+    assert_eq!(resumed_y.load(AtomicOrdering::SeqCst), 1);
+}
+
+/// R2/C1 regression, failure/`retry` variant: a higher-index parallel
+/// sibling that completed must not be re-run when a lower-index sibling
+/// fails (survives no retry policy, so the run aborts with a resumable
+/// failure-boundary checkpoint) and the thread is later retried.
+#[tokio::test]
+async fn higher_index_completed_sibling_not_rerun_after_failure_then_retry() {
+    let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
+    let hi_calls = Arc::new(AtomicUsize::new(0));
+    let failed_once = Arc::new(AtomicBool::new(false));
+    let hi_calls_for_node = hi_calls.clone();
+    let failed_once_for_node = failed_once.clone();
+    let graph = GraphBuilder::<Counter, i32>::new()
+        .with_parallel(true)
+        .set_reducer(ClosureStateReducer::new(|mut s: Counter, u: i32| {
+            s.value += u;
+            s.log.push(format!("+{u}"));
+            Ok(s)
+        }))
+        .add_node("super", |_s: Counter, _c: NodeContext| async move {
+            Ok(NodeResult::Command(
+                Command::default().with_goto(["lo", "hi"]),
+            ))
+        })
+        .add_node("lo", move |_s: Counter, _c: NodeContext| {
+            let once = failed_once_for_node.clone();
+            async move {
+                if once.swap(true, AtomicOrdering::SeqCst) {
+                    Ok(NodeResult::Update(2))
+                } else {
+                    Err(TinyAgentsError::Graph("transient boom".to_string()))
+                }
+            }
+        })
+        .add_node("hi", move |_s: Counter, _c: NodeContext| {
+            let calls = hi_calls_for_node.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(20))
+            }
+        })
+        .set_entry("super")
+        .mark_command_routing("super")
+        .set_finish("lo")
+        .set_finish("hi")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let failed = graph
+        .run_with_thread(
+            "t-higher-index-fail",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        )
+        .await;
+    assert!(failed.is_err(), "lo's failure must abort the run");
+    assert_eq!(hi_calls.load(AtomicOrdering::SeqCst), 1);
+
+    let checkpoint = cp
+        .get("t-higher-index-fail", None)
+        .await
+        .unwrap()
+        .expect("a resumable failure-boundary checkpoint must be persisted");
+    assert_eq!(
+        checkpoint.completed_tasks,
+        vec![NodeId::from("hi")],
+        "hi's completion must be recorded so retry does not re-run it"
+    );
+
+    let done = graph.retry("t-higher-index-fail").await.unwrap();
+    assert_eq!(
+        hi_calls.load(AtomicOrdering::SeqCst),
+        1,
+        "hi must not be re-run by retry"
+    );
+    assert_eq!(done.state.value, 22, "20 (hi) + 2 (lo, on retry)");
+}
+
 #[tokio::test]
 async fn send_args_survive_interrupt_and_resume() {
     // A `Send` fanout schedules three workers (args 1, 2, 3); the arg-1 worker
