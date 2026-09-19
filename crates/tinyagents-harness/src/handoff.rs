@@ -215,22 +215,28 @@ pub fn apply_handoff(
 
 /// Build the placeholder text that replaces an oversized tool result in
 /// the sub-agent's history. Shows the payload size (estimated tokens and
-/// raw bytes), a preview, and a call shape for the `extract_from_result`
-/// tool. The sub-agent decides whether to answer from the preview or
-/// dispatch the extractor.
+/// raw bytes), a preview, and a call shape for the configured extractor
+/// tool ([`HandoffConfig::extractor_tool_name`]). The sub-agent decides
+/// whether to answer from the preview or dispatch the extractor.
 ///
 /// Token count is estimated at ~4 chars/token (same heuristic as the
 /// trigger threshold in [`HANDOFF_OVERSIZE_THRESHOLD_TOKENS`]), so the
 /// unit the sub-agent sees matches the unit the runtime used to decide
 /// to hand off in the first place.
-pub fn build_handoff_placeholder(tool_name: &str, result_id: &str, raw: &str) -> String {
+pub fn build_handoff_placeholder(
+    config: &HandoffConfig,
+    tool_name: &str,
+    result_id: &str,
+    raw: &str,
+) -> String {
     let preview: String = raw.chars().take(HANDOFF_PREVIEW_CHARS).collect();
     let raw_tokens = raw.len().div_ceil(4);
+    let extractor = &config.extractor_tool_name;
     format!(
         "[oversized tool output: {raw_tokens} tokens ({raw_bytes} bytes) — stashed as result_id=\"{result_id}\"]\n\
          Preview (first {preview_chars} chars):\n{preview}\n\n\
          If the preview does not answer your task, call:\n\
-         extract_from_result(result_id=\"{result_id}\", query=\"<specific question>\")\n\
+         {extractor}(result_id=\"{result_id}\", query=\"<specific question>\")\n\
          Good queries name the exact fields/identifiers you need \
          (e.g. \"subject and sender of the 5 most recent messages\"). \
          Tool: {tool_name}",
