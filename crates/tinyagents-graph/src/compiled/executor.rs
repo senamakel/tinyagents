@@ -343,17 +343,60 @@ where
         seed: RunSeed<State, Update>,
     ) -> Result<GraphExecution<State>> {
         let run_id = tinyagents_harness::ids::new_run_id();
+
+        // C3/R4: hold this thread's execution lock for the run's whole
+        // lifetime, in-process first (cheap, always available) then a
+        // durable lease when a checkpointer is configured (cross-process).
+        // Held across the entire `execute_run` below — including checkpoint
+        // reads that would otherwise race a concurrent caller's — not just
+        // around the write, which is what closes the interleaving the C3
+        // finding describes (two concurrent `run_with_thread`/`resume` on
+        // one thread id previously had nothing serializing them at this
+        // layer at all).
+        let _in_process_guard = if let Some(thread) = &seed.thread_id {
+            let key = execution_lock_key(thread.as_str(), &self.namespace);
+            Some(execution_lock_map().lock_for(&key).lock_owned().await)
+        } else {
+            None
+        };
+        let lease_owner = if let (Some(checkpointer), Some(thread)) =
+            (&self.checkpointer, &seed.thread_id)
+        {
+            match checkpointer
+                .try_claim(thread.as_str(), run_id.as_str(), THREAD_LEASE_TTL)
+                .await
+            {
+                Ok(true) => Some((checkpointer.clone(), thread.clone())),
+                Ok(false) => {
+                    return Err(TinyAgentsError::Validation(format!(
+                        "thread `{thread}` is leased by another run"
+                    )));
+                }
+                // A lease-claim I/O error must not silently degrade to
+                // running unprotected: propagate it rather than proceeding
+                // as if the claim had succeeded.
+                Err(err) => return Err(err),
+            }
+        } else {
+            None
+        };
+
         // When a durable journal is configured, run against a clone whose event
         // sink wraps every emitted event into a `GraphObservation` and appends
         // it (while still forwarding to any pre-existing live sink). The journal
         // sink carries this graph's checkpoint namespace so subgraph runs record
         // their nested path. Default (no journal) leaves `self` untouched.
-        if self.journal.is_some() {
+        let result = if self.journal.is_some() {
             let this = self.clone_with_journal_sink(&run_id, &seed.thread_id);
-            this.execute_run(run_id, seed).await
+            this.execute_run(run_id.clone(), seed).await
         } else {
-            self.execute_run(run_id, seed).await
+            self.execute_run(run_id.clone(), seed).await
+        };
+
+        if let Some((checkpointer, thread)) = lease_owner {
+            let _ = checkpointer.release(thread.as_str(), run_id.as_str()).await;
         }
+        result
     }
 
     /// Builds a clone whose `event_sink` is a [`JournalGraphSink`] for `run_id`,
