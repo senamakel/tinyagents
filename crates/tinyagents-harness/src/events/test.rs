@@ -476,3 +476,55 @@ fn every_started_variant_pairs_with_both_a_completed_and_a_failed_variant() {
         );
     }
 }
+
+#[test]
+fn custom_event_round_trips_with_its_call_id_and_payload() {
+    let event = AgentEvent::Custom {
+        call_id: Some(crate::ids::CallId::new("call-9")),
+        payload: serde_json::json!({ "progress": 0.5 }),
+    };
+    assert_eq!(event.kind(), "custom");
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["kind"], "custom");
+    assert_eq!(json["call_id"], "call-9");
+    assert_eq!(json["payload"]["progress"], 0.5);
+    let back: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+
+    // Outside a tool call the correlation is absent and omitted on the wire.
+    let event = AgentEvent::Custom {
+        call_id: None,
+        payload: serde_json::json!("ping"),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert!(json.get("call_id").is_none());
+    let back: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+}
+
+#[test]
+fn tool_completed_metadata_is_optional_and_round_trips() {
+    let event: AgentEvent =
+        serde_json::from_str(r#"{"kind":"tool_completed","call_id":"t1","tool_name":"lookup"}"#)
+            .expect("pre-metadata tool_completed still deserializes");
+    assert!(matches!(
+        event,
+        AgentEvent::ToolCompleted { metadata: None, .. }
+    ));
+
+    let event = AgentEvent::ToolCompleted {
+        call_id: crate::ids::CallId::new("t2"),
+        tool_name: "lookup".to_string(),
+        started_at_ms: None,
+        input: None,
+        output: None,
+        duration_ms: None,
+        output_bytes: None,
+        error: None,
+        metadata: Some(serde_json::json!({ "coords": [1, 2] })),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["metadata"]["coords"][0], 1);
+    let back: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+}
