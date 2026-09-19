@@ -27,7 +27,7 @@ use tinyagents_harness::error::TinyAgentsError;
 /// (see [`ModelCatalogSnapshot::validate`]) rather than being silently
 /// accepted, since an unrecognized provider id is the most common way a bad
 /// snapshot generator run slips through review.
-const KNOWN_PROVIDERS: &[&str] = &[
+pub const KNOWN_PROVIDERS: &[&str] = &[
     "openai",
     "anthropic",
     "gemini",
