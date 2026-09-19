@@ -210,6 +210,37 @@ impl Diagnostic {
         }
     }
 
+    /// Converts this diagnostic into a [`RenderedDiagnostic`] — the
+    /// crate-boundary-safe payload of [`TinyAgentsError::Diagnostics`].
+    ///
+    /// `tinyagents_harness::error::TinyAgentsError` cannot hold this crate's
+    /// [`Diagnostic`] directly (this crate depends on `tinyagents-harness` for
+    /// `Result`/`TinyAgentsError`, so the reverse dependency would cycle), so
+    /// this renders the diagnostic down to its message, code, resolved
+    /// `line`/`column`, and (when `source` is available) the caret-underline
+    /// presentation instead.
+    pub fn to_rendered(&self, source: Option<&SourceFile>) -> RenderedDiagnostic {
+        let has_offsets = self.primary.start != 0 || self.primary.end != 0;
+        let (line, column, rendered) = match source {
+            Some(file) if has_offsets => {
+                let (line, column) = file.location(self.primary.start);
+                (line, column, self.render(file))
+            }
+            _ => (
+                self.primary.line,
+                self.primary.column,
+                self.render_plain(),
+            ),
+        };
+        RenderedDiagnostic {
+            code: self.code.clone(),
+            message: self.message.clone(),
+            line,
+            column,
+            rendered,
+        }
+    }
+
     fn write_header(&self, out: &mut String) {
         match &self.code {
             Some(code) => {
