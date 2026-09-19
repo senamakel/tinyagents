@@ -62,13 +62,18 @@ pub enum StructuredStrategy {
 /// text that was parsed (useful for debugging or provider-native mode).
 ///
 /// [`ModelResponse`]: tinyinference_llm::model::ModelResponse
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StructuredOutput {
     /// The extracted JSON value.
     pub value: Value,
     /// The raw assistant text that was parsed, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_text: Option<String>,
+    /// Which schema variant matched, for
+    /// [`StructuredStrategy::ToolCallUnion`]. `None` for every other
+    /// strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
