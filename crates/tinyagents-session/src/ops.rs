@@ -98,6 +98,8 @@ pub fn record_session_start(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Marks a session terminal (`status`, final token/cost totals, `ended_at`)
+/// and returns the updated row.
 #[allow(clippy::too_many_arguments)]
 pub fn record_session_end(
     workspace_dir: &Path,
@@ -144,6 +146,8 @@ pub fn record_session_end(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Records a visible-text-only session message. Shorthand for
+/// [`record_message_with_reasoning`] with `reasoning_content: None`.
 #[allow(clippy::too_many_arguments)]
 pub fn record_message(
     workspace_dir: &Path,
