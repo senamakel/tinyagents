@@ -422,6 +422,57 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             }
 
+            // B6 (`docs/runtime-comparison/plan.md`, `declare_tool_changes`):
+            // re-consult the toolset chain (documented as "called once per
+            // turn", `ToolSet::tools`) and diff its live set against what
+            // this transcript has declared so far. A caller whose toolset
+            // never varies turn to turn sees no diff and pays nothing here —
+            // this only fires for a genuine mid-run change. Deliberately
+            // runs before the request/`ModelStarted` below, so the patch (if
+            // any) is part of *this* turn's request.
+            if let Some(toolset) = &self.toolset {
+                let mut live_schemas: Vec<ToolSchema> = self
+                    .tools
+                    .schemas()
+                    .into_iter()
+                    .filter(|schema| host_allows(&schema.name))
+                    .collect();
+                let existing: std::collections::HashSet<&str> =
+                    live_schemas.iter().map(|schema| schema.name.as_str()).collect();
+                let extra: Vec<_> = toolset
+                    .tools(ctx)
+                    .await?
+                    .into_iter()
+                    .filter(|tool| tool.exposure() == tinytools::ToolExposure::Direct)
+                    .filter(|tool| host_allows(tool.name()))
+                    .filter(|tool| !existing.contains(tool.name()))
+                    .map(|tool| crate::tool::provider_schema(tool.as_ref()))
+                    .collect();
+                live_schemas.extend(extra);
+                live_schemas.sort_by(|left, right| left.name.cmp(&right.name));
+                if let Some(preparation) = &self.policy.tool_schemas {
+                    live_schemas = crate::tool::prepare_tool_schemas(&live_schemas, preparation);
+                }
+                if let Some(patch) = tool_changes::diff_tool_set(&declared_tool_schemas, &live_schemas) {
+                    // A cheap, non-mutating preview resolution against the
+                    // transcript as it stands (pre-patch) decides fold vs.
+                    // insert. It is a pure registry lookup (no network call,
+                    // see `ModelRegistry::resolve_request`), so this stays
+                    // proportional to the diff it gates. An unresolved
+                    // preview conservatively folds (`false`): folding is
+                    // always correct, only less cache-friendly.
+                    let mid_conversation = self
+                        .models
+                        .resolve_request(&ModelRequest::new(messages.clone()), None, None)
+                        .and_then(|binding| binding.model.profile().cloned())
+                        .is_some_and(|profile| profile.mid_conversation_system_messages);
+                    tool_changes::apply_tool_change_patch(messages, patch, mid_conversation);
+                    declared_tool_schemas = live_schemas.clone();
+                    tool_schemas = declared_tool_schemas.clone();
+                    tool_schemas.extend(bridge_schemas.clone());
+                }
+            }
+
             // Build the request from the working transcript, tool schemas, and
             // policy response format.  Go through `PromptBuilder` rather than
             // constructing `ModelRequest` directly: a provider KV cache needs
