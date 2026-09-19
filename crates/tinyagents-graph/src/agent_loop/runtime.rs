@@ -39,68 +39,37 @@ use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
 /// nodes ever run concurrently (it is a strictly sequential chain), so the
 /// locks are never contended — they exist to satisfy `Send + Sync + 'static`
 /// and the `Fn` bound, not to arbitrate real concurrency.
-///
-/// The `harness`/`app_state`/`ctx`/`run`/`status` fields are all borrowed
-/// (`&'static` / `Mutex<&'static mut _>`) rather than owned, so this same
-/// type serves both [`super::LoopIter`] (which owns the referenced values in
-/// heap-boxed fields kept alive alongside this runtime) and
-/// [`super::GraphLoopDriver::drive`] (which is handed a transient `&mut`
-/// bundle by [`tinyagents_harness::agent_loop::phases::LoopDriver`] and must
-/// hand the exact same memory to the compiled graph's node closures — the
-/// only way those closures can mutate the caller's `run`/`status`/`ctx` in
-/// place without a fallible/allocating "swap the value out and back"
-/// dance). See [`LoopRuntime::new_unchecked`] for the safety contract that
-/// makes the `'static` upgrade sound at both call sites.
 pub(crate) struct LoopRuntime<State: Send + Sync, Ctx: Send + Sync> {
-    pub(crate) harness: &'static AgentHarness<State, Ctx>,
-    pub(crate) app_state: &'static State,
-    pub(crate) ctx: Mutex<&'static mut RunContext<Ctx>>,
-    pub(crate) run: Mutex<&'static mut AgentRun>,
-    pub(crate) status: Mutex<&'static mut HarnessRunStatus>,
+    pub(crate) harness: Arc<AgentHarness<State, Ctx>>,
+    pub(crate) app_state: Arc<State>,
+    pub(crate) ctx: Mutex<RunContext<Ctx>>,
+    pub(crate) run: Mutex<AgentRun>,
+    pub(crate) status: Mutex<HarnessRunStatus>,
     pub(crate) streaming: bool,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> LoopRuntime<State, Ctx> {
-    /// Builds a [`LoopRuntime`] that reborrows `harness`/`app_state`/`ctx`/
-    /// `run`/`status` as `'static`, so they can be captured by the `'static`
-    /// node closures [`crate::GraphBuilder::add_node`] requires.
-    ///
-    /// # Safety
-    ///
-    /// The caller must guarantee that `harness`, `app_state`, `ctx`, `run`,
-    /// and `status` remain valid, and are not read or written through any
-    /// other alias, for the entire lifetime of the returned `LoopRuntime`
-    /// **and** of every value derived from it (in particular a
-    /// [`crate::CompiledGraph`] built by [`super::compile_loop`] over it, and
-    /// any in-flight `run`/`resume`/step future on that graph). This is the
-    /// same discipline `async-scoped`-style APIs use to hand borrowed data
-    /// into a `'static`-bounded task: it is sound only because the caller
-    /// (either [`super::LoopIter`], which stores the referenced values in
-    /// its own heap-boxed fields for exactly as long as this runtime lives,
-    /// or [`super::GraphLoopDriver::drive`], which awaits the compiled
-    /// graph to completion — dropping it, and this runtime, before
-    /// returning — while its `&mut` parameters remain exclusively borrowed
-    /// for that entire call) never lets the `'static` reborrow outlive the
-    /// real borrow it stands in for.
-    pub(crate) unsafe fn new_unchecked(
-        harness: &AgentHarness<State, Ctx>,
-        app_state: &State,
-        ctx: &mut RunContext<Ctx>,
-        run: &mut AgentRun,
-        status: &mut HarnessRunStatus,
+    /// Builds a fresh, owned [`LoopRuntime`] for one run: [`super::LoopIter`]
+    /// (which owns `ctx`/`input` for the run's whole lifetime) is the
+    /// intended caller. [`super::GraphLoopDriver`] does **not** use this —
+    /// see its module doc for why it drives the same node bodies directly
+    /// over borrowed `&mut` state instead of through an owned
+    /// `LoopRuntime`/`CompiledGraph`.
+    pub(crate) fn new(
+        harness: Arc<AgentHarness<State, Ctx>>,
+        app_state: Arc<State>,
+        ctx: RunContext<Ctx>,
+        run: AgentRun,
+        status: HarnessRunStatus,
         streaming: bool,
     ) -> Self {
-        // SAFETY: upheld by the caller per this function's documented
-        // contract.
-        unsafe {
-            Self {
-                harness: &*(harness as *const AgentHarness<State, Ctx>),
-                app_state: &*(app_state as *const State),
-                ctx: Mutex::new(&mut *(ctx as *mut RunContext<Ctx>)),
-                run: Mutex::new(&mut *(run as *mut AgentRun)),
-                status: Mutex::new(&mut *(status as *mut HarnessRunStatus)),
-                streaming,
-            }
+        Self {
+            harness,
+            app_state,
+            ctx: Mutex::new(ctx),
+            run: Mutex::new(run),
+            status: Mutex::new(status),
+            streaming,
         }
     }
 }
