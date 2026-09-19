@@ -265,6 +265,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for RedactionM
                     }
                 }
                 ToolContent::Json { data } => hits += self.redact_value(data),
+                // Image/File blocks carry no free text to redact; the media
+                // type/name fields are structural, not user data.
+                ToolContent::Image { .. } | ToolContent::File { .. } => {}
             }
         }
         if let Some(markdown) = &mut result.markdown_formatted {
