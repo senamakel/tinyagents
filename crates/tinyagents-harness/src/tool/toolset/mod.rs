@@ -61,8 +61,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use tinytools::{
-    PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolContent, ToolExposure,
-    ToolInjectedArgument, ToolPolicy, ToolResult, ToolScope, ToolTimeout,
+    PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolExposure, ToolInjectedArgument,
+    ToolPolicy, ToolResult, ToolScope, ToolTimeout,
 };
 
 use crate::context::RunContext;
