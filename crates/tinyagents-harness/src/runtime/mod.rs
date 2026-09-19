@@ -55,6 +55,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             policy: RunPolicy::default(),
             tool_timeouts: None,
             response_cache: None,
+            output_validator: None,
         }
     }
 
