@@ -5,7 +5,7 @@
 //!
 //! Every entry point opens its own connection or transaction via
 //! `crate::store::with_connection` / `crate::store::with_transaction`
-//! (aliased here through [`init_run_ledger_schema`], now a no-op kept as the
+//! (aliased here through `init_run_ledger_schema`, now a no-op kept as the
 //! conventional call site — see `super::store`). Anything that reads state
 //! and then acts on it (an upsert reading its own write back, a claim, a
 //! compare-and-swap) uses `with_transaction`; plain single-statement reads
