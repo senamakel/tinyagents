@@ -183,9 +183,15 @@ pub(super) struct CallShape {
 /// ids already are — and visibly distinct from any provider's, so a
 /// recovered call can never be confused with a native one in a transcript.
 fn to_tool_call(call: ParsedToolCall, model_call_id: &CallId, slot: usize) -> ToolCall {
-    let id = call
-        .id
-        .unwrap_or_else(|| format!("{model_call_id}-tool-{slot}"));
+    // `call.id` is intentionally never used, even when a grammar or a future
+    // change to `tinytools-agent` happens to populate one: this function's
+    // whole contract (see its doc comment) is that a text-recovered call's id
+    // is always host-minted and unique per run, so it can never collide with
+    // another recovered call or be confused with a native provider one. A
+    // parser-supplied id would be model-controlled input; trusting it here
+    // would let two calls collide on an id the model chose, or let a
+    // narrated call impersonate a specific native one.
+    let id = format!("{model_call_id}-tool-{slot}");
     ToolCall::new(id, call.name, call.arguments)
 }
 
