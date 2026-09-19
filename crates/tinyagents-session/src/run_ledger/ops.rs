@@ -135,6 +135,14 @@ pub fn upsert_workflow_run(workspace_dir: &Path, upsert: WorkflowRunUpsert) -> R
                 summary = COALESCE(excluded.summary, workflow_runs.summary),
                 updated_at = excluded.updated_at,
                 completed_at = COALESCE(excluded.completed_at, workflow_runs.completed_at),
+                lease_owner = CASE
+                    WHEN excluded.status IN ('completed', 'failed', 'cancelled', 'interrupted') THEN NULL
+                    ELSE workflow_runs.lease_owner
+                END,
+                lease_expires_at = CASE
+                    WHEN excluded.status IN ('completed', 'failed', 'cancelled', 'interrupted') THEN NULL
+                    ELSE workflow_runs.lease_expires_at
+                END,
                 revision = workflow_runs.revision + 1",
             params![
                 upsert.id,

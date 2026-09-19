@@ -116,6 +116,38 @@ fn workflow_driver_lease_is_atomic_and_cas_rejects_a_stale_writer() {
         .is_none(),
         "stale revision must not overwrite the winner"
     );
+
+    // Host stop/recovery uses ordinary upsert. A terminal write must release
+    // the lease so a later resume can acquire its own driver ownership.
+    let current = get_workflow_run(workspace.as_path(), "workflow-race")
+        .unwrap()
+        .unwrap();
+    upsert_workflow_run(
+        workspace.as_path(),
+        WorkflowRunUpsert {
+            id: current.id.clone(),
+            definition_id: current.definition_id.clone(),
+            parent_thread_id: current.parent_thread_id.clone(),
+            input: current.input.clone(),
+            phase_states: current.phase_states.clone(),
+            child_run_ids: current.child_run_ids.clone(),
+            status: WorkflowRunStatus::Interrupted,
+            summary: None,
+            started_at: Some(current.started_at),
+            completed_at: None,
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        try_claim_workflow_run(
+            workspace.as_path(),
+            "workflow-race",
+            "resumer",
+            chrono::Duration::minutes(1),
+        )
+        .unwrap(),
+        WorkflowLeaseClaim::Acquired(_)
+    ));
 }
 
 // ── Regressions for the review findings on PR #90 ─────────────────────
