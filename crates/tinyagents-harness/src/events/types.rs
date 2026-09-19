@@ -645,6 +645,22 @@ pub enum AgentEvent {
         error: String,
     },
 
+    /// A cross-provider handoff transform rewrote part of the outgoing
+    /// transcript immediately before a model call, because it carried
+    /// assistant content from a different provider/api/model than the one
+    /// about to receive it (a mid-session model switch, an explicit
+    /// per-request override, or a fallback to a different provider). Emitted
+    /// only when at least one message changed — same-origin runs (the
+    /// common case) never emit this.
+    ///
+    /// See `crate::agent_loop::handoff_transform` for the exact rules
+    /// (redacted/signed thinking, tool-call id normalization, image
+    /// downgrade).
+    HandoffTransformApplied {
+        /// Number of messages rewritten by the transform for this call.
+        changes: usize,
+    },
+
     /// A streaming model call's chunk stream was closed (gracefully or by
     /// cancellation).
     ///
