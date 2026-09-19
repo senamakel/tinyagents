@@ -4228,6 +4228,7 @@ fn slow_node_graph() -> CompiledGraph<i32, i32> {
 /// `Cancelled`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_the_run_future_marks_status_cancelled_not_running() {
+    use crate::observability::GraphStatusStore;
     let store = Arc::new(crate::observability::InMemoryGraphStatusStore::default());
     let sink = Arc::new(CollectingSink::new());
     let graph = slow_node_graph()
