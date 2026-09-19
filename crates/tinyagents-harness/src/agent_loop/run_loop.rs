@@ -955,8 +955,9 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
         .count();
     let harness_layout = request.cache_segments.is_empty()
         || request.cache_segments.iter().all(|segment| {
-            (segment.id == "system" && segment.role == SegmentRole::System)
-                || (segment.id == "tools" && segment.role == SegmentRole::Tools)
+            segment.cacheable
+                && ((segment.id == "system" && segment.role == SegmentRole::System)
+                    || (segment.id == "tools" && segment.role == SegmentRole::Tools))
         });
 
     if harness_layout {
