@@ -439,6 +439,7 @@ mod file_backend {
     #[tokio::test]
     async fn v1_fixture_decodes_to_normalized_v2_and_resumes() {
         let tmp = TempDir::new("v1-fixture");
+        std::fs::create_dir_all(tmp.path()).unwrap();
         // Write the fixture line directly — bypassing `put`, which (this
         // build) only ever writes v2 — to prove the *decode* path, not just
         // `Checkpoint::normalize` called directly on a value built in Rust.
@@ -480,6 +481,7 @@ mod file_backend {
     #[tokio::test]
     async fn mixed_v1_and_v2_thread_lists_and_walks_state_history() {
         let tmp = TempDir::new("mixed-v1-v2");
+        std::fs::create_dir_all(tmp.path()).unwrap();
         // c1: hand-written v1 fixture. c2: written through `put`, which is
         // always v2. Same thread, same file.
         std::fs::write(
