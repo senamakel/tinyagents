@@ -82,29 +82,22 @@ impl ToolSet<(), ()> for StubToolSet {
     }
 }
 
-/// A middleware whose `name()` calls are countable, so tests can assert a
-/// capability's middleware actually reached the harness's stack.
-struct CountingMiddleware {
-    calls: Arc<AtomicUsize>,
-}
+/// A no-op middleware; the tests only assert it reached the harness's stack.
+struct StubMiddleware;
 
 #[async_trait]
-impl Middleware<(), ()> for CountingMiddleware {
+impl Middleware<(), ()> for StubMiddleware {
     fn name(&self) -> &str {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        "counting-middleware"
+        "stub-middleware"
     }
 }
 
 #[tokio::test]
 async fn with_capability_installs_toolset_middleware_and_model_defaults() {
-    let calls = Arc::new(AtomicUsize::new(0));
     let capability: Capability<(), ()> = Capability::new("research")
         .with_instructions("Use the research tool for lookups.")
         .with_toolset(Arc::new(StubToolSet::new("lookup")))
-        .with_middleware(Arc::new(CountingMiddleware {
-            calls: calls.clone(),
-        }))
+        .with_middleware(Arc::new(StubMiddleware))
         .with_model_defaults(ModelRequestDefaults {
             default_response_format: Some(tinyinference_llm::model::ResponseFormat::JsonObject),
             fallback: None,
