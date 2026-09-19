@@ -48,6 +48,49 @@ pub const HANDOFF_PREVIEW_CHARS: usize = 1500;
 /// user/orchestrator to narrow the request.
 pub const HANDOFF_MAX_ENTRIES: usize = 8;
 
+// ── Host configuration ───────────────────────────────────────────────────────
+
+/// Host-specific naming this module needs but does not own: which tool name
+/// is the extractor (so its own output passes through uncleaned/unstashed),
+/// and which literal prefixes mark a result as already an error.
+///
+/// Both were previously hardcoded to one particular host's conventions
+/// (`extract_from_result`, a bare `result_text.starts_with("Error")`) even
+/// though the rest of this module is host-agnostic (M-9). A different host
+/// — a different extractor tool name, or error-carrying results that do not
+/// start with the literal word "Error" — could not use this cache without
+/// forking the module. [`HandoffConfig::default`] reproduces the historical
+/// behaviour exactly, so existing callers are unaffected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HandoffConfig {
+    /// The tool name whose own output skips cleaning/stashing (it is already
+    /// a narrowed, host-curated response to a targeted query).
+    pub extractor_tool_name: String,
+    /// Literal prefixes that mark `result_text` as already an error, which
+    /// also skips cleaning/stashing (an error message should reach the model
+    /// verbatim, not truncated or placeholder-replaced).
+    pub error_prefixes: Vec<String>,
+}
+
+impl Default for HandoffConfig {
+    fn default() -> Self {
+        Self {
+            extractor_tool_name: "extract_from_result".to_string(),
+            error_prefixes: vec!["Error".to_string()],
+        }
+    }
+}
+
+impl HandoffConfig {
+    /// `true` when `result_text` starts with any of
+    /// [`HandoffConfig::error_prefixes`].
+    fn is_error_result(&self, result_text: &str) -> bool {
+        self.error_prefixes
+            .iter()
+            .any(|prefix| result_text.starts_with(prefix.as_str()))
+    }
+}
+
 // ── Store ──────────────────────────────────────────────────────────────────
 
 /// Per-spawn cache of oversized tool payloads. One instance is built at
