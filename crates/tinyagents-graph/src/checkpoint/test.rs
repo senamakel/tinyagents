@@ -1301,3 +1301,59 @@ mod sqlite_backend {
         assert_eq!(stored[0].channel, "out");
     }
 }
+
+#[test]
+fn replay_memo_writes_are_distinguished_from_completion_markers() {
+    use tinyagents_harness::ids::TaskId;
+
+    let marker = PendingWrite::completion_marker("n", "task-1");
+    assert!(!marker.is_task_replay());
+    assert!(!marker.is_durable_task());
+    assert!(!marker.is_interrupt_after());
+
+    let memo = PendingWrite::durable_task("n", "task-1", 1, "call-api", json!({ "id": 7 }));
+    assert!(memo.is_task_replay());
+    assert!(memo.is_durable_task());
+    assert!(
+        !memo.is_control_plane(),
+        "memos are append-once data writes"
+    );
+    assert_eq!(memo.durable_task_key(), Some("call-api"));
+    assert_eq!(
+        memo.channel,
+        format!("{DURABLE_TASK_CHANNEL_PREFIX}call-api")
+    );
+    assert_eq!(memo.task_id, TaskId::from("task-1"));
+
+    let deferred = PendingWrite::interrupt_after("n", "task-1", json!({ "update": 1, "goto": [] }));
+    assert!(deferred.is_task_replay());
+    assert!(deferred.is_interrupt_after());
+    assert!(
+        deferred.is_control_plane(),
+        "one deferred result per task, upserted"
+    );
+    assert_eq!(deferred.idx, WRITES_IDX_INTERRUPT_AFTER);
+    assert_eq!(deferred.channel, INTERRUPT_AFTER_CHANNEL);
+
+    // Merge semantics follow from the idx classes: a second memo under a
+    // fresh idx appends, a re-put deferred result replaces.
+    let mut stored = vec![marker.clone(), memo.clone(), deferred.clone()];
+    let second_memo = PendingWrite::durable_task("n", "task-1", 2, "other", json!(2));
+    let replaced = PendingWrite::interrupt_after("n", "task-1", json!({ "update": 9, "goto": [] }));
+    let changed = merge_writes(&mut stored, &[memo.clone(), second_memo, replaced.clone()]);
+    assert_eq!(changed, 2);
+    assert_eq!(stored.len(), 4);
+    assert_eq!(
+        stored
+            .iter()
+            .find(|w| w.is_interrupt_after())
+            .unwrap()
+            .payload,
+        replaced.payload
+    );
+
+    // Round-trips through JSON with the reserved channel/idx intact.
+    let decoded: PendingWrite =
+        serde_json::from_value(serde_json::to_value(&deferred).unwrap()).unwrap();
+    assert_eq!(decoded, deferred);
+}

@@ -291,3 +291,35 @@ async fn durable_task_does_not_memoise_a_failed_future() {
     assert_eq!(run.state, 3);
     assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
 }
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn durable_task_memo_survives_a_sqlite_checkpointer_restart() {
+    use crate::checkpoint::SqliteCheckpointer;
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("checkpoints.db");
+    let effects = Arc::new(AtomicUsize::new(0));
+    {
+        let cp: Arc<dyn Checkpointer<i32>> =
+            Arc::new(SqliteCheckpointer::<i32>::open(&db_path).unwrap());
+        let graph = interrupting_graph(effects.clone())
+            .compile()
+            .unwrap()
+            .with_checkpointer(cp);
+        let paused = graph.run_with_thread("sqlite", 0).await.unwrap();
+        assert!(paused.is_interrupted());
+        assert_eq!(effects.load(AtomicOrdering::SeqCst), 1);
+    }
+    let cp: Arc<dyn Checkpointer<i32>> =
+        Arc::new(SqliteCheckpointer::<i32>::open(&db_path).unwrap());
+    let graph = interrupting_graph(effects.clone())
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp);
+    let resumed = graph
+        .resume("sqlite", Command::resume(json!({})))
+        .await
+        .unwrap();
+    assert_eq!(resumed.state, 1);
+    assert_eq!(effects.load(AtomicOrdering::SeqCst), 1);
+}
