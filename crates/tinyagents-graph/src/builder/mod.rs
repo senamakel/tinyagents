@@ -455,11 +455,26 @@ where
             ));
         }
 
-        // entry must exist
-        let entry = self
+        // entry must exist, and be exactly one node: START does not fan out.
+        let start_targets = self
             .edges
             .get(&NodeId::from(START))
             .cloned()
+            .unwrap_or_default();
+        if start_targets.len() > 1 {
+            return Err(TinyAgentsError::Validation(format!(
+                "START must route to exactly one entry node, got {}: {}",
+                start_targets.len(),
+                start_targets
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let entry = start_targets
+            .into_iter()
+            .next()
             .ok_or(TinyAgentsError::MissingStart)?;
         if entry.as_str() == END {
             return Err(TinyAgentsError::Validation(
@@ -469,24 +484,29 @@ where
         self.require_node(&entry)?;
 
         // static edges
-        for (from, to) in &self.edges {
+        for (from, targets) in &self.edges {
             if from.as_str() != START {
                 self.require_node(from)?;
-            }
-            if to.as_str() != END {
-                self.require_node(to)?;
-            }
-            if to.as_str() == START {
-                return Err(TinyAgentsError::Validation(
-                    "START cannot be an edge target".to_string(),
-                ));
             }
             if from.as_str() == END {
                 return Err(TinyAgentsError::Validation(
                     "END cannot be an edge source".to_string(),
                 ));
             }
+            for to in targets {
+                if to.as_str() != END {
+                    self.require_node(to)?;
+                }
+                if to.as_str() == START {
+                    return Err(TinyAgentsError::Validation(
+                        "START cannot be an edge target".to_string(),
+                    ));
+                }
+            }
         }
+
+        // conditional route labels declared exhaustive must all have a route
+        self.validate_routes()?;
 
         // conditional edges
         for (from, branch) in &self.branches {
