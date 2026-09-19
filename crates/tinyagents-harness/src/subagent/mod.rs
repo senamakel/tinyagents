@@ -658,6 +658,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
+            Some((parent.run_id().as_str(), parent.limits.tool_calls() as u64)),
         ) {
             Ok(config) => config,
             Err(error) => {
