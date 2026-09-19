@@ -124,8 +124,10 @@ Tool schemas are advertised by exposure, not by registration. Only
 `ToolExposure::Direct` tools appear in a request's `tools` array; `Deferred`
 tools are indexed per run and reached through the intrinsic `tool_search` /
 `tool_call` bridge, whose `tool_call` is unwrapped to the real tool before
-admission so policy and authorization see the true name. The `tools` array is
-therefore byte-stable for a whole run, which provider prompt caches depend on.
+admission so policy and authorization see the true name. The `tools` array
+therefore stays byte-stable for a whole run when no per-turn exposure
+middleware (dynamic/contextual tool selection, tool-policy filtering) changes
+the advertised direct set, which is what a provider prompt cache depends on.
 `RunPolicy::tool_schemas` optionally projects and byte-budgets every schema.
 
 ## Module 2: Graph
