@@ -32,32 +32,25 @@ fn assistant_calling(ids: &[&str]) -> Message {
 
 #[test]
 fn find_cut_point_never_splits_a_tool_pair() {
-    // A tight token budget would naively land the cut on the `tool(c1)`
-    // message (the newest few messages alone exceed it); the repair must
-    // pull the boundary back to the owning assistant turn.
-    let messages = vec![
-        Message::system("sys"),
-        Message::user("weather?"),
-        assistant_calling(&["c1"]),
-        Message::tool("c1", "sunny and warm today, 21 degrees"),
-        Message::assistant("It's sunny and warm."),
-    ];
-    let cut = find_cut_point(&messages, 1, estimate_message_tokens)
+    // `[user, assistant(tool_calls=[c1]), tool(c1), assistant("done")]`. The
+    // budget below is chosen (from the messages' own estimated weights) so
+    // the *naive* newest-first walk lands the cut exactly on `tool(c1)` —
+    // precisely the split the repair exists to prevent.
+    let user = Message::user("weather?");
+    let call = assistant_calling(&["c1"]);
+    let result = Message::tool("c1", "sunny and warm today, 21 degrees");
+    let done = Message::assistant("It's sunny and warm.");
+    let non_system = vec![user, call, result.clone(), done.clone()];
+
+    let budget = estimate_message_tokens(&result) + estimate_message_tokens(&done);
+    let cut = find_cut_point(&non_system, budget, estimate_message_tokens)
         .expect("some cut point should be found");
 
-    let (_, non_system): (Vec<Message>, Vec<Message>) = {
-        let system: Vec<Message> = messages
-            .iter()
-            .filter(|m| matches!(m, Message::System(_)))
-            .cloned()
-            .collect();
-        let rest: Vec<Message> = messages
-            .iter()
-            .filter(|m| !matches!(m, Message::System(_)))
-            .cloned()
-            .collect();
-        (system, rest)
-    };
+    // The naive (unrepaired) boundary would be index 2 (`tool(c1)` itself);
+    // confirm the repair actually moved it, not that it happened to already
+    // be safe.
+    assert_ne!(cut.index, 2, "test setup did not land the naive cut on the tool result");
+    assert!(!matches!(non_system[cut.index], Message::Tool(_)));
 
     let kept = &non_system[cut.index..];
     assert!(
@@ -65,9 +58,6 @@ fn find_cut_point_never_splits_a_tool_pair() {
         "cut point {} orphans a tool pair: {kept:?}",
         cut.index
     );
-    // The assistant tool-call turn travelled with its result rather than
-    // being split off into the summarized half.
-    assert!(!matches!(non_system[cut.index], Message::Tool(_)));
 }
 
 #[test]
