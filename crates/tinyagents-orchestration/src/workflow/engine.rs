@@ -907,25 +907,40 @@ where
             })
     }
 
-    fn emit(&self, event: tinyagents_graph::GraphEvent) {
+    fn emit(&self, run_id: &str, event: tinyagents_graph::GraphEvent) {
         if let Some(sink) = &self.event_sink {
-            sink.emit(event);
+            let seq = self
+                .sequence
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            sink.emit(tinyagents_graph::GraphEventEnvelope {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                task_id: None,
+                ns: Vec::new(),
+                seq,
+                event,
+            });
         }
     }
 
     fn finish_completed(&self, run_id: &str, steps: usize) {
-        self.emit(tinyagents_graph::GraphEvent::RunCompleted {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-            steps,
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunCompleted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                steps,
+            },
+        );
         self.flush_terminal_events();
     }
 
     fn finish_failed(&self, run_id: &str, error: String) {
-        self.emit(tinyagents_graph::GraphEvent::RunFailed {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-            error,
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunFailed {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                error,
+            },
+        );
         self.flush_terminal_events();
     }
 
