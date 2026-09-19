@@ -8,7 +8,7 @@
 //! full agentic (multi-turn, tool-using) mode via a long-lived session
 //! instead of a single stateless invocation; use this module when a plain
 //! one-shot completion is enough. Wire message shapes for the NDJSON stream
-//! live in [`protocol`].
+//! live in `protocol`.
 
 mod protocol;
 

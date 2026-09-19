@@ -6,7 +6,7 @@
 //! `--session-id`/`--resume` UUID across a conversation). This is the
 //! agentic sibling of [`crate::providers::claude_agent_sdk`]: Claude Code
 //! runs its own built-in tools internally and never returns them to this
-//! harness as `ToolCall`s (see [`event_mapper`]), so from the harness's
+//! harness as `ToolCall`s (see `event_mapper`), so from the harness's
 //! point of view it behaves as a prompt-guided chat model even though the
 //! CLI itself is doing real multi-step tool use.
 //!
@@ -15,17 +15,17 @@
 //!   `model_response`) and owns per-thread concurrency
 //!   ([`MAX_CONCURRENT_TURNS`] semaphore + per-thread mutex in `run_chat`).
 //! - [`driver`] spawns the CLI once per turn and drives its stdin/stdout.
-//! - [`input_builder`] renders the JSONL stdin payload; [`stream_parser`]
-//!   parses the JSONL stdout back into typed events; [`event_mapper`] folds
+//! - `input_builder` renders the JSONL stdin payload; `stream_parser`
+//!   parses the JSONL stdout back into typed events; `event_mapper` folds
 //!   those events into deltas and a final response.
-//! - [`session_store`] persists the thread-key → CC session UUID mapping so
+//! - `session_store` persists the thread-key → CC session UUID mapping so
 //!   a conversation resumes instead of restarting.
 //! - [`auth`] resolves which credential the spawned CLI uses;
 //!   [`auth_status`] separately probes the CLI's own sign-in state for UIs.
 //! - [`settings`] persists the user's full-access opt-in;
 //!   [`version_check`] locates and version-gates the CLI binary; [`types`]
 //!   holds the small shared value types.
-//! - [`bridge`] holds the crate-private normalized message/response shapes
+//! - `bridge` holds the crate-private normalized message/response shapes
 //!   these modules pass between each other.
 //!
 //! See `README.md` in this directory for the CLI invocation shape, the

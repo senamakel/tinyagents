@@ -15,7 +15,7 @@ use super::types::{CliStatus, MIN_CLI_VERSION};
 /// Resolution order:
 /// 1. `OPENHUMAN_CLAUDE_CLI` env override (tests / power users / a fixed path).
 /// 2. `PATH` search.
-/// 3. Well-known absolute install locations ([`well_known_candidates`]).
+/// 3. Well-known absolute install locations (`well_known_candidates`).
 ///
 /// Step 3 exists because a macOS app launched from Finder/Dock inherits only
 /// the stripped launchd `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which never
