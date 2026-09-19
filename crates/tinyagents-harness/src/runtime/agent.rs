@@ -772,7 +772,9 @@ pub(crate) fn emit_host_progress<State: Send + Sync, Ctx: Send + Sync>(
 
 fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError {
     match error {
-        TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+        TinyAgentsError::Cancelled
+        | TinyAgentsError::Timeout(_)
+        | TinyAgentsError::CallTimeout(_) => error,
         _ => TinyAgentsError::Model("hosted agent invocation failed".to_string()),
     }
 }
