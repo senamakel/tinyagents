@@ -85,6 +85,22 @@ surfaces as `TinyAgentsError::Timeout`. The run context's own
 `limits::LimitTracker` is also advanced so its counters stay consistent with
 the enforced caps.
 
+## Cancellation and wall-clock bounding
+
+Every host/provider I/O boundary on the loop path (model resolution, budget
+admission and usage recording, tool authorization, tool-output screening,
+host turn preparation, the unary provider call) races cooperative
+cancellation against an optional wall-clock deadline through one shared
+helper, `context::RunContext::bounded(deadline, fut, timeout_message)`,
+instead of each call site copying its own `tokio::select! { biased; _ =
+cancelled() => .., _ = timeout(remaining, fut) => .. }` block (R-1 from
+`docs/runtime-comparison/code-review-harness.md`). `timeout_message` is a
+closure so the call-specific message is only built on the timeout path, not
+on every call. The streaming provider loop's per-chunk pull races
+cancellation against `stream.next()` directly — its future yields an
+`Option`, not a `Result`, so it does not fit `bounded`'s signature and stays
+a bespoke `select!`.
+
 ## Backoff
 
 Retry backoff durations are *computed* via
