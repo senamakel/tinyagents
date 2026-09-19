@@ -781,26 +781,10 @@ mod sqlite_backend {
 
     #[tokio::test]
     async fn v1_row_decodes_to_normalized_v2_and_resumes() {
-        let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
-        {
-            let conn = rusqlite::Connection::open_in_memory().unwrap();
-            let _ = conn; // placeholder to keep the helper's shape obvious
-        }
-        // Insert the v1 row through the checkpointer's own (idempotent) schema
-        // by writing straight past `put`, using the same in-memory database:
-        // `SqliteCheckpointer::in_memory` already ran the DDL + migration, so
-        // the table has `format_version`/`created_at` with their defaults —
-        // exactly the shape a pre-v2 row would have left behind before this
-        // build ever wrote to it.
-        cp.put(checkpoint("v1thread", "placeholder", None, 0))
-            .await
-            .unwrap();
-        cp.delete_checkpoints("v1thread", &["placeholder".to_string()])
-            .await
-            .unwrap();
-
-        // `insert_v1_row` needs direct SQL access; reach it through a second
-        // handle backed by the same file so both share one database.
+        // `insert_v1_row` needs direct SQL access, so this uses a file-backed
+        // database (opened once to run the schema/migration, then written to
+        // directly, then reopened through the checkpointer) rather than
+        // `in_memory`, whose connection is private to one handle.
         let tmp = std::env::temp_dir().join(format!(
             "tinyagents-ckpt-sqlite-v1-{}.db",
             std::process::id()
