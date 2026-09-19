@@ -817,10 +817,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         match budget {
             Some(budget) => match tokio::time::timeout(budget, fut).await {
                 Ok(result) => result,
-                Err(_) => Err(TinyAgentsError::Timeout(format!(
-                    "{what} for run `{run_id}` exceeded its {bound} ({} ms)",
-                    budget.as_millis()
-                ))),
+                Err(_) => {
+                    let message = format!(
+                        "{what} for run `{run_id}` exceeded its {bound} ({} ms)",
+                        budget.as_millis()
+                    );
+                    // Only the per-model-call ceiling is retryable: it means
+                    // this one call wedged, not that the run is out of time.
+                    // Every other bound this helper is used with (the run's
+                    // remaining wall-clock budget, for model calls, tool
+                    // calls, host resolution, tool authorization/screening,
+                    // and host turn preparation) is terminal.
+                    if bound == PER_CALL_BOUND_LABEL {
+                        Err(TinyAgentsError::CallTimeout(message))
+                    } else {
+                        Err(TinyAgentsError::Timeout(message))
+                    }
+                }
             },
             None => fut.await,
         }
