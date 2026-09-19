@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use tinytools::Tool;
 
+use crate::tool::toolset::ToolSet;
+
 /// A predicate deciding whether a declared [`Tool`] should be exposed.
 pub type ToolFilterPredicate = Arc<dyn Fn(&dyn Tool) -> bool + Send + Sync>;
 
