@@ -27,6 +27,7 @@
 //! `"artifacts"`. The registry does not enforce a naming scheme, but
 //! consistent names make multi-store applications easier to audit.
 
+pub mod conformance;
 pub mod namespaced;
 mod types;
 
