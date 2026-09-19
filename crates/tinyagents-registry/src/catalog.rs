@@ -256,7 +256,9 @@ impl ModelCatalogSnapshot {
                 )));
             }
 
-            if !KNOWN_PROVIDERS.contains(&entry.provider.as_str()) {
+            if let Some(allowed) = allowed_providers
+                && !allowed.contains(&entry.provider.as_str())
+            {
                 return Err(fail(format!(
                     "entry {}/{} names an unrecognized provider id",
                     entry.provider, entry.model_id
