@@ -122,7 +122,7 @@ where
         graph: &'a CompiledGraph<State, Update>,
         run_id: RunId,
         thread_id: Option<ThreadId>,
-        resume_map: HashMap<NodeId, serde_json::Value>,
+        resume_map: HashMap<String, serde_json::Value>,
         initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
         initial_parent: Option<String>,
         binding: Option<crate::subagent_node::AgentInvocationBinding>,
