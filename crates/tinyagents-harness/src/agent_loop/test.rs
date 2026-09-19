@@ -3142,6 +3142,9 @@ async fn per_model_call_ceiling_bounds_calls_without_any_run_deadline() {
     );
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(20)),
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
         ..RunPolicy::default()
     });
 
@@ -3151,10 +3154,10 @@ async fn per_model_call_ceiling_bounds_calls_without_any_run_deadline() {
         .expect_err("the ceiling alone must bound an otherwise-unbounded call");
 
     match &err {
-        TinyAgentsError::Timeout(msg) => {
+        TinyAgentsError::CallTimeout(msg) => {
             assert!(msg.contains("per-model-call ceiling"), "{msg}");
         }
-        other => panic!("expected Timeout, got {other:?}"),
+        other => panic!("expected CallTimeout, got {other:?}"),
     }
 }
 
