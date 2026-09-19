@@ -644,7 +644,7 @@ mod file_backend {
 #[cfg(feature = "sqlite")]
 mod sqlite_backend {
     use super::checkpoint;
-    use crate::checkpoint::{CheckpointConfig, Checkpointer, PendingActivation, SqliteCheckpointer};
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, SqliteCheckpointer};
 
     #[tokio::test]
     async fn put_get_list_roundtrip_in_memory() {
