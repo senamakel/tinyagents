@@ -2199,7 +2199,10 @@ async fn native_tool_dispatcher_gates_on_auto_structured_output_with_no_ordinary
         .set_default_model("mock")
         .with_policy(RunPolicy {
             tool_dialect: crate::config::ToolDispatcher::Native,
-            default_response_format: Some(ResponseFormat::auto("answer", json!({"type": "object"}))),
+            default_response_format: Some(ResponseFormat::auto(
+                "answer",
+                json!({"type": "object"}),
+            )),
             ..RunPolicy::default()
         });
 

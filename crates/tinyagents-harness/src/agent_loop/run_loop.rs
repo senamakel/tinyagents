@@ -518,7 +518,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // bother declaring a profile). Only an explicit
                     // `tool_calling: false` triggers the documented Xml
                     // fallback.
-                    if binding.model.profile().is_none_or(|profile| profile.tool_calling) {
+                    if binding
+                        .model
+                        .profile()
+                        .is_none_or(|profile| profile.tool_calling)
+                    {
                         crate::config::ToolDispatcher::Native
                     } else {
                         crate::config::ToolDispatcher::Xml
