@@ -603,12 +603,17 @@ async fn budget_warns_then_blocks_on_token_exhaustion() {
             .any(|e| matches!(e, AgentEvent::BudgetExceeded { blocked: false, .. }))
     );
 
-    // Now preflight fails closed.
-    let err = stack
+    // Now preflight fails closed — gracefully (A1): the control-outcome hook
+    // the stack actually drives (`before_model_control`) requests
+    // `JumpTo(End)` instead of erroring the whole run out.
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("budget exhausted should block");
-    assert!(matches!(err, TinyAgentsError::LimitExceeded(_)));
+        .expect("an exhausted budget stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(crate::context::LoopTarget::End))
+    ));
 }
 
 #[tokio::test]
