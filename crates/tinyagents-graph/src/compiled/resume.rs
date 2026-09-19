@@ -154,16 +154,32 @@ where
         // the lineage spine stays connected across the resume.
         let initial_parent = Some(checkpoint.checkpoint_id.clone());
 
-        // A mid-step checkpoint (an interrupt/failure boundary — stamped
-        // with `interrupted_nodes` or `failed_node`) leaves its completed
-        // siblings unrouted (see `boundary::advance`'s `carried_completed`
-        // doc, the C2 fix): carry their node ids forward so this resumed
-        // run's *first* boundary routes the whole original step together,
-        // rather than routing only the freshly re-run pending set in
-        // isolation (which would let a successor observe a state missing
-        // whatever the other, already-completed siblings wrote).
-        let mid_step = checkpoint.metadata.get("interrupted_nodes").is_some()
-            || checkpoint.metadata.get("failed_node").is_some();
+        // A mid-step checkpoint (an interrupt/failure `loop`-source boundary
+        // — stamped with `interrupted_nodes` or `failed_node`) leaves its
+        // completed siblings unrouted (see `boundary::advance`'s
+        // `carried_completed` doc, the C2 fix): carry their node ids forward
+        // so this resumed run's *first* boundary routes the whole original
+        // step together, rather than routing only the freshly re-run
+        // pending set in isolation (which would let a successor observe a
+        // state missing whatever the other, already-completed siblings
+        // wrote).
+        //
+        // The `source == "loop"` check matters: `update_state` (I2) can
+        // *also* stamp `interrupted_nodes` onto an `update`-sourced
+        // checkpoint, purely to preserve resume-value provenance — but
+        // `update_state` always fully resolves every carried completion's
+        // routing itself before writing (see `state_api::update_state`), so
+        // its `completed_tasks` never represents owed work. Treating it as
+        // mid-step here would route those already-resolved completions a
+        // second time, scheduling their successors twice.
+        let source_is_loop = checkpoint
+            .metadata
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            == Some("loop");
+        let mid_step = source_is_loop
+            && (checkpoint.metadata.get("interrupted_nodes").is_some()
+                || checkpoint.metadata.get("failed_node").is_some());
         let carried_completed = if mid_step && !checkpoint.completed_tasks.is_empty() {
             Some(checkpoint.completed_tasks.clone())
         } else {

@@ -3083,7 +3083,7 @@ fn host_invocation_binding_fails_closed_on_a_state_mismatch() {
     let mismatched = crate::runtime::host_invocation_binding::<OtherState, ()>(&context);
     assert!(
         matches!(mismatched, Err(crate::error::TinyAgentsError::Validation(_))),
-        "expected a fail-closed Validation error, got {mismatched:?}"
+        "expected a fail-closed Validation error"
     );
 }
 
