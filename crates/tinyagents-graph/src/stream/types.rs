@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::command::Interrupt;
-use tinyagents_harness::ids::{CheckpointId, NodeId, RunId};
+use tinyagents_harness::ids::{CheckpointId, NodeId, RunId, TaskId};
 
 /// A low-level graph lifecycle event emitted through a [`super::GraphEventSink`].
 ///
