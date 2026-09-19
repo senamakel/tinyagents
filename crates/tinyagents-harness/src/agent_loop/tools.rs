@@ -325,11 +325,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // Hosted turns carry an explicit definition allowlist. Do not merely
         // hide disallowed schemas: a model can still fabricate a name, so the
         // dispatch boundary must reject it too.
-        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
-            .map(|binding| binding.allowed_tools.clone());
+        let allowed_tools = self.resolve_tool_allowlist(ctx)?;
         let is_allowed = allowed_tools
             .as_ref()
-            .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
+            .is_none_or(|allowed| allowed.contains(&call.name));
         let (dispatch, tool) = match is_allowed
             .then(|| self.tools.dispatch(&call.name))
             .flatten()
