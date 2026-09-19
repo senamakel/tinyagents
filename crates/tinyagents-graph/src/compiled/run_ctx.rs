@@ -77,6 +77,17 @@ pub(super) struct RunCtx<'a, State, Update> {
     /// consuming it) to keep carrying it forward across a step that
     /// interrupts or fails more than once in a row.
     pub(super) carried_completed: Option<Vec<(NodeId, Vec<RouteTarget>)>>,
+    /// Deferred activations (a node whose [`NodePolicy::defer`] is set) held
+    /// back from the frontier while a non-deferred activation was also
+    /// ready, per [`super::boundary::CompiledGraph::apply_defer`]. Released
+    /// (all at once) the first time a boundary's routed frontier would
+    /// otherwise be empty — i.e. once nothing *else* is left to run.
+    ///
+    /// Not persisted in any checkpoint: a run resumed mid-way through a
+    /// deferred hold starts this back at empty, so a held deferred
+    /// activation does not survive a crash/resume. Real durability for
+    /// deferred scheduling is future work.
+    pub(super) deferred_pending: Vec<Activation>,
     /// Optional cooperative-cancellation token for this run (I4 part 2), from
     /// [`super::RunOptions::cancellation`]. Checked at every superstep
     /// boundary and raced against the step's in-flight node handlers by
