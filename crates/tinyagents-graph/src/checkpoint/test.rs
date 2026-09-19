@@ -410,6 +410,105 @@ mod file_backend {
         }
     }
 
+    /// The on-disk shape a pre-v2 build wrote: no `version`/`created_at`/
+    /// `tasks`/`completed` fields at all, just the v1
+    /// `next_nodes`/`completed_tasks`/`completed_routes`/`pending_activations`
+    /// quartet. Hand-written (not produced by this build) so the test proves
+    /// the *wire format*, not just today's `Checkpoint::normalize` logic
+    /// agreeing with itself.
+    fn v1_fixture_line(thread: &str, id: &str, parent: Option<&str>, step: usize) -> String {
+        serde_json::json!({
+            "thread_id": thread,
+            "checkpoint_id": id,
+            "run_id": null,
+            "parent_checkpoint_id": parent,
+            "namespace": [],
+            "state": step as i64,
+            "next_nodes": ["b"],
+            "completed_tasks": ["a"],
+            "completed_routes": [[]],
+            "pending_writes": [],
+            "interrupts": [],
+            "pending_activations": null,
+            "barrier_arrivals": [],
+            "metadata": { "source": "loop", "step": step },
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn v1_fixture_decodes_to_normalized_v2_and_resumes() {
+        let tmp = TempDir::new("v1-fixture");
+        // Write the fixture line directly — bypassing `put`, which (this
+        // build) only ever writes v2 — to prove the *decode* path, not just
+        // `Checkpoint::normalize` called directly on a value built in Rust.
+        std::fs::write(
+            tmp.path().join("v1thread.jsonl"),
+            format!("{}\n", v1_fixture_line("v1thread", "c1", None, 1)),
+        )
+        .unwrap();
+
+        let cp = FileCheckpointer::<i32>::new(tmp.path());
+        let loaded = cp.get("v1thread", None).await.unwrap().unwrap();
+        assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(
+            loaded.tasks.iter().map(|t| t.node.to_string()).collect::<Vec<_>>(),
+            vec!["b".to_string()],
+            "tasks derived from the v1 next_nodes field"
+        );
+        assert_eq!(
+            loaded.completed.iter().map(|c| c.node.to_string()).collect::<Vec<_>>(),
+            vec!["a".to_string()],
+            "completed derived from the v1 completed_tasks/completed_routes pair"
+        );
+        assert!(loaded.next_nodes.is_empty(), "legacy fields cleared by normalize");
+        assert!(loaded.completed_tasks.is_empty());
+
+        // get_scoped, list, state_history, and get_thread all go through the
+        // same normalize-on-decode path.
+        let scoped = cp.get_scoped("v1thread", None, &[]).await.unwrap().unwrap();
+        assert_eq!(scoped.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        let listed = cp.list("v1thread").await.unwrap();
+        assert_eq!(listed[0].next_nodes, vec![tinyagents_harness::ids::NodeId::from("b")]);
+        let history = cp.state_history("v1thread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].checkpoint.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        let thread = cp.get_thread("v1thread").await.unwrap();
+        assert_eq!(thread[0].version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+    }
+
+    #[tokio::test]
+    async fn mixed_v1_and_v2_thread_lists_and_walks_state_history() {
+        let tmp = TempDir::new("mixed-v1-v2");
+        // c1: hand-written v1 fixture. c2: written through `put`, which is
+        // always v2. Same thread, same file.
+        std::fs::write(
+            tmp.path().join("mixedthread.jsonl"),
+            format!("{}\n", v1_fixture_line("mixedthread", "c1", None, 1)),
+        )
+        .unwrap();
+        let cp = FileCheckpointer::<i32>::new(tmp.path());
+        cp.put(checkpoint("mixedthread", "c2", Some("c1"), 2))
+            .await
+            .unwrap();
+
+        let list = cp.list("mixedthread").await.unwrap();
+        assert_eq!(list.len(), 2, "both the v1 and v2 record are listed");
+        assert_eq!(list[0].checkpoint_id, "c1");
+        assert_eq!(list[1].checkpoint_id, "c2");
+
+        let history = cp.state_history("mixedthread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 2, "the walk crosses the v1/v2 boundary");
+        assert_eq!(history[0].checkpoint.checkpoint_id, "c2");
+        assert_eq!(history[1].checkpoint.checkpoint_id, "c1");
+        // Both normalize to v2 regardless of which format they were stored in.
+        assert!(
+            history
+                .iter()
+                .all(|t| t.checkpoint.version == crate::checkpoint::CHECKPOINT_FORMAT_VERSION)
+        );
+    }
+
     #[tokio::test]
     async fn put_get_list_roundtrip_survives_a_fresh_handle() {
         let tmp = TempDir::new("roundtrip");
