@@ -476,10 +476,14 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     where
         State: 'static,
     {
-        let (runner, context, prepared) = self
+        let (runtime, context, prepared) = self
             .prepare_hosted_turn(invocation)
             .await
             .map_err(|error| hosted_error(&error, AgentRun::new()))?;
+        let runner = runtime
+            .as_deref()
+            .map(InvocationRuntime::harness)
+            .unwrap_or(self);
 
         let outcome = runner
             .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
