@@ -640,14 +640,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // already ran above; the wrap onion runs here; lifecycle
             // `after_model` runs below — so ordering is:
             // before_model -> wrap onion (outer..inner..base) -> after_model.
-            // What was offered is fixed here, before a text dialect strips
-            // the schemas off the wire: recovery and the stream scrubber need
-            // the names, and the structured-output schema tool counts.
-            let recovery = super::dialect::TextRecovery {
-                offered: Arc::new(request.tools.clone()),
-                registry: run_dialect.registry(),
-            };
-            run_dialect.apply_to_request(&mut request);
+            // `recovery` and the dialect rewrite were computed above, before
+            // budget preflight (see the comment there for why).
             let base = ModelCallBase {
                 harness: self,
                 call_id: call_id.clone(),
