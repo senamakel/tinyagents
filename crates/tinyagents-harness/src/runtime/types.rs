@@ -300,6 +300,43 @@ pub struct RunPolicy {
     /// [`crate::error::TinyAgentsError::ModelRetry`]. See
     /// [`OutputRetryPolicy`].
     pub output_retry: OutputRetryPolicy,
+    /// What the loop does when one turn's tool calls include both a
+    /// structured-output "schema" call ([`StructuredStrategy::ToolCall`]'s
+    /// synthetic tool) and one or more genuine function-tool calls (A6).
+    /// Defaults to [`EndStrategy::Graceful`].
+    pub end_strategy: EndStrategy,
+}
+
+/// Resolves the "output tool + function tools in one turn" ambiguity (A6),
+/// mirroring Pydantic AI's `end_strategy`.
+///
+/// The ambiguity: the model can, in a single turn, both answer (via the
+/// structured-output schema call) *and* ask to run further tools. Each
+/// strategy answers "what happens to those tool calls, and does the run end
+/// this turn?" differently.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EndStrategy {
+    /// Run the accompanying function-tool calls (so their side effects still
+    /// happen and their results are not silently dropped), then finish the
+    /// run with the structured output already recorded. The default: it
+    /// never discards a tool call the model asked for, but also never spends
+    /// an extra model call once the model has already answered.
+    #[default]
+    Graceful,
+    /// Finish the run immediately on the first output-tool call. The
+    /// accompanying function-tool calls are **not** executed; their
+    /// `tool_calls` entries are closed with a synthetic "run stopped before
+    /// this tool call was executed" result so the transcript stays
+    /// replayable. Use when the structured answer must win even if it means
+    /// dropping tool calls the model also happened to request.
+    Early,
+    /// Ignore the output-tool call this turn (do not record it, do not
+    /// finish): run the function-tool calls and give the model another turn,
+    /// exactly as if the output tool had not been called. The run only
+    /// finishes once a turn produces the output tool with **no** accompanying
+    /// function-tool calls. Use when function tools must always be allowed to
+    /// run to completion before an answer is accepted.
+    Exhaustive,
 }
 
 /// Policy for the output-validation retry loop (A3), mirroring Pydantic AI's
