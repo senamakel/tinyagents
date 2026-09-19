@@ -162,6 +162,26 @@ impl<State> SqliteCheckpointer<State> {
         conn.query_row("PRAGMA synchronous", [], |row| row.get(0))
             .map_err(|e| sqlite_err("read synchronous pragma", e))
     }
+
+    /// Test-only: whether `checkpoints` currently has a column named `column`
+    /// — used to assert [`migrate_checkpoint_format_columns`] actually ran
+    /// against a database opened from a pre-v2 schema.
+    #[cfg(test)]
+    pub(crate) fn has_checkpoints_column(&self, column: &str) -> Result<bool> {
+        let conn = lock_conn(&self.conn)?;
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(checkpoints)")
+            .map_err(|e| sqlite_err("inspect checkpoints schema", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| sqlite_err("query checkpoints schema", e))?;
+        for row in rows {
+            if row.map_err(|e| sqlite_err("read schema column", e))? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 }
 
 /// Locks a checkpointer's shared connection, mapping a poisoned mutex to a
