@@ -969,25 +969,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // value can reach the provider.
         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
             let rendered = result.output_for_llm(prepared.options.prefer_markdown);
-            let cancellation = ctx.cancellation.clone();
             let screening = binding
                 .host
                 .security
                 .screen_input(&rendered, prepared.output_origin);
-            let screened = match self.call_budget(ctx) {
-                Some(remaining) => tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                    result = tokio::time::timeout(remaining, screening) => result.map_err(|_| TinyAgentsError::Timeout(format!(
-                        "tool-output screening for run `{}` exceeded its remaining wall-clock budget", ctx.run_id()
-                    )))?,
-                },
-                None => tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                    result = screening => result,
-                },
-            };
+            let screened = ctx
+                .bounded(self.call_budget(ctx), screening, || {
+                    format!(
+                        "tool-output screening for run `{}` exceeded its remaining wall-clock budget",
+                        ctx.run_id()
+                    )
+                })
+                .await;
             match screened {
                 Ok(crate::host::ScreenOutcome::Pass) => {}
                 Ok(crate::host::ScreenOutcome::Redacted(text)) => {
