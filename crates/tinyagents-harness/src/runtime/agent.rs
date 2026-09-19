@@ -227,7 +227,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .await;
         match outcome.error {
             None => Ok(outcome.run),
-            Some(error) => Err(error),
+            Some(TinyAgentsError::Cancelled) => Err(TinyAgentsError::Cancelled),
+            Some(TinyAgentsError::Timeout(message)) => Err(TinyAgentsError::Timeout(message)),
+            Some(error @ TinyAgentsError::Validation(_))
+            | Some(error @ TinyAgentsError::Tool(_)) => Err(error),
+            Some(_) => Err(TinyAgentsError::Model(
+                "hosted agent invocation failed".to_string(),
+            )),
         }
     }
 
@@ -253,7 +259,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         while let Some(item) = stream.next().await {
             match item {
                 AgentStreamItem::Completed(run) => return Ok(*run),
-                AgentStreamItem::Failed { error, .. } => return Err(TinyAgentsError::Model(error)),
+                AgentStreamItem::Failed { .. } => {
+                    return Err(TinyAgentsError::Model(
+                        "hosted agent invocation failed".to_string(),
+                    ));
+                }
                 AgentStreamItem::Event(_) => {}
             }
         }
@@ -508,7 +518,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     run,
                     succeeded,
                     error.map(|error| {
-                        tinyagents_tracing::warn!(%error, "[host] agent run failed");
+                        let _ = error;
+                        tinyagents_tracing::warn!("[host] agent run failed");
                         "agent run failed".to_string()
                     }),
                 );
@@ -551,8 +562,15 @@ fn spawn_host_finalizer<State: Send + Sync + 'static>(
     } else {
         tinyagents_tracing::warn!(
             run_id = %prepared.run_id,
-            "[host] dropping terminal host bookkeeping because no Tokio runtime is available"
+            "[host] no Tokio runtime during terminal cleanup; starting fallback finalizer"
         );
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("fallback host finalizer runtime must initialize");
+            runtime.block_on(finish_host_turn(prepared, run, succeeded, error));
+        });
     }
 }
 

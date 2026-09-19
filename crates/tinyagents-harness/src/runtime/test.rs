@@ -320,16 +320,13 @@ impl crate::host::ExperienceStore for RecordingExperience {
 }
 
 async fn yield_until(mut predicate: impl FnMut() -> bool) {
-    for _ in 0..64 {
-        if predicate() {
-            return;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !predicate() {
+            tokio::task::yield_now().await;
         }
-        tokio::task::yield_now().await;
-    }
-    assert!(
-        predicate(),
-        "background terminal finalizer did not complete"
-    );
+    })
+    .await
+    .expect("background terminal finalizer did not complete within one second");
 }
 
 #[async_trait]
@@ -1577,9 +1574,16 @@ async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
         )
         .await
         .expect("stream starts");
-    while model.calls.load(Ordering::SeqCst) < 2 {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(10), stream.next()).await;
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while model.calls.load(Ordering::SeqCst) < 2 {
+            assert!(
+                stream.next().await.is_some(),
+                "stream ended before second model call"
+            );
+        }
+    })
+    .await
+    .expect("stream did not reach its second model call within one second");
     drop(stream);
     yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
     assert_eq!(
