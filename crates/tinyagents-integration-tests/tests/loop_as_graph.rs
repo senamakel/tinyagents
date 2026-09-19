@@ -18,7 +18,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use tinyagents_graph::agent_loop::{
-    compile_loop, node, AgentLoopGraphExt, GraphLoopDriver, LoopRuntimeHandle,
+    compile_loop, node, AgentLoopGraphExt, GraphLoopDriver, LoopRuntime, LoopState,
 };
 use tinyagents_graph::{FileCheckpointer, InMemoryCheckpointer};
 use tinyagents_harness::TinyAgentsError;
