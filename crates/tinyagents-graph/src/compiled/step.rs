@@ -60,6 +60,15 @@ pub(super) struct StepRun<Update> {
     pub(super) failure: Option<StepFailure>,
 }
 
+/// The two accumulators [`StepRunner::fold_result`] fills in as it walks a
+/// step's results: branch updates and explicit routing. Bundled so
+/// `fold_result` takes one accumulator instead of two separate `&mut`
+/// parameters.
+struct FoldAccum<Update> {
+    updates: Vec<Update>,
+    goto_map: HashMap<usize, Vec<RouteTarget>>,
+}
+
 /// Runs one superstep's active node set against a [`CompiledGraph`].
 ///
 /// A thin wrapper around a `&CompiledGraph` borrow — it exists to give the
