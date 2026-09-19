@@ -13,6 +13,8 @@
 
 use super::*;
 
+use crate::compiled::run_ctx::RunCtx;
+
 /// The step data a boundary persist needs beyond the (possibly narrowed)
 /// pending/completed activation slices: the committed state snapshot and
 /// this step's child-run metadata. Bundled so the persist helpers below stay
