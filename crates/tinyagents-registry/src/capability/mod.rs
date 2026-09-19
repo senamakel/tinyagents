@@ -44,6 +44,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
             agents: std::collections::HashMap::new(),
             meta: std::collections::HashMap::new(),
             aliases: std::collections::HashMap::new(),
+            capabilities: std::collections::HashMap::new(),
         }
     }
 
