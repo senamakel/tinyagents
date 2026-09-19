@@ -283,6 +283,11 @@ impl MiddlewareControl {
     /// A stable label for this control outcome, used in audit events.
     pub fn kind(&self) -> &'static str {
         match self {
+            MiddlewareControl::Continue => "continue",
+            MiddlewareControl::JumpTo(LoopTarget::Model) => "jump_to:model",
+            MiddlewareControl::JumpTo(LoopTarget::Tools) => "jump_to:tools",
+            MiddlewareControl::JumpTo(LoopTarget::End) => "jump_to:end",
+            MiddlewareControl::UpdateState(_) => "update_state",
             MiddlewareControl::StopWithFinal(_) => "stop_with_final",
             MiddlewareControl::Interrupt { .. } => "interrupt",
         }
@@ -293,10 +298,19 @@ impl MiddlewareControl {
     /// [`StopWithFinal`](Self::StopWithFinal) because pausing to preserve state
     /// for a later resume is stronger than terminating with a final answer, so
     /// a pause request is never silently downgraded to a stop.
+    /// [`Continue`](Self::Continue) is the lowest rank: it carries no
+    /// instruction and is never itself installed as a pending request (see
+    /// [`RunContext::request_control`]). [`UpdateState`](Self::UpdateState)
+    /// and [`JumpTo`](Self::JumpTo) sit below the two run-ending outcomes so a
+    /// state patch or a soft reroute never displaces a stop or an interrupt
+    /// that a later hook in the same phase also requested.
     pub fn precedence(&self) -> u8 {
         match self {
-            MiddlewareControl::StopWithFinal(_) => 1,
-            MiddlewareControl::Interrupt { .. } => 2,
+            MiddlewareControl::Continue => 0,
+            MiddlewareControl::UpdateState(_) => 1,
+            MiddlewareControl::JumpTo(_) => 2,
+            MiddlewareControl::StopWithFinal(_) => 3,
+            MiddlewareControl::Interrupt { .. } => 4,
         }
     }
 }
