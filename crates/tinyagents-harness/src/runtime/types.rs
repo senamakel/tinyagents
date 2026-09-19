@@ -393,6 +393,7 @@ impl Default for RunPolicy {
             text_dialect_recovery: TextDialectRecovery::default(),
             discovery: crate::tool::discover::ToolDiscoveryPolicy::default(),
             tool_schemas: None,
+            output_retry: OutputRetryPolicy::default(),
         }
     }
 }
