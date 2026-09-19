@@ -399,20 +399,17 @@ where
         .push_middleware(Arc::new(pause_middleware::PauseOnce::new()));
     let harness = Arc::new(harness);
 
-    let rt = LoopRuntimeHandle::new(
+    let rt = Arc::new(LoopRuntime::for_run(
         harness.clone(),
         Arc::new(()),
         RunContext::new(RunConfig::new("checkpoint-resume"), ()),
-    );
+    ));
     let graph = compile_loop(rt).expect("graph compiles").with_checkpointer(checkpointer);
 
     let execution = graph
         .run_with_thread(
             "checkpoint-resume-thread",
-            tinyagents_graph::agent_loop::LoopState {
-                messages: vec![Message::user("look something up")],
-                ..Default::default()
-            },
+            LoopState::seed(vec![Message::user("look something up")]),
         )
         .await
         .expect("first leg completes to the interrupt");
