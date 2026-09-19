@@ -281,7 +281,28 @@ where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
-    ctx.record_model_call()?;
+    // `ctx.record_model_call()` itself raises a bare `Validation` error on a
+    // cap hit; `run_loop_body` wraps that into `LimitExceeded` (and honors
+    // `LimitBehavior::StopWithPartial` by finishing cleanly instead of
+    // erroring) — mirrored here so a caller sees the identical outcome
+    // regardless of which engine is driving the run.
+    if let Err(error) = ctx.record_model_call() {
+        let record = ctx.emit(AgentEvent::LimitReached {
+            kind: tinyagents_harness::limits::LimitKind::ModelCalls,
+        });
+        status.set_last_event(record.id);
+        if matches!(
+            harness.policy().limits.behavior,
+            tinyagents_harness::limits::LimitBehavior::StopWithPartial
+        ) {
+            loop_state.finished = true;
+            if loop_state.final_text.is_none() {
+                loop_state.final_text = Some(last_assistant_text(&loop_state.messages));
+            }
+            return Ok(goto(loop_state, node::SETTLE));
+        }
+        return Err(TinyAgentsError::LimitExceeded(error.to_string()));
+    }
 
     let request = loop_state
         .pending_request
