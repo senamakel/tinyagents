@@ -53,8 +53,7 @@ pub trait TaskCache: Send + Sync {
 }
 
 /// Encodes an `Update` for cache storage.
-type EncodeFn<Update> =
-    dyn Fn(&Update) -> serde_json::Result<serde_json::Value> + Send + Sync;
+type EncodeFn<Update> = dyn Fn(&Update) -> serde_json::Result<serde_json::Value> + Send + Sync;
 /// Decodes a stored value back into an `Update`.
 type DecodeFn<Update> = dyn Fn(serde_json::Value) -> serde_json::Result<Update> + Send + Sync;
 
