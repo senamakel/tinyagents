@@ -124,6 +124,15 @@ pub struct NodeContext {
     /// activation; greater than `1` means a `Send` fan-out scheduled several
     /// concurrent activations of this node this step.
     pub siblings: usize,
+    /// The channel versions (I5/R3) as this node's state snapshot sees them
+    /// — [`crate::channel::ChannelState::channel_versions`] for a channel
+    /// graph, or a single `{"state": n}` entry for a plain whole-state
+    /// graph. Compared against [`Self::versions_seen`] by
+    /// [`Self::changed_since_last_run`].
+    pub channel_versions: BTreeMap<String, u64>,
+    /// This node's own snapshot of [`Self::channel_versions`] as of the last
+    /// time it ran (empty on a node's first-ever activation in the thread).
+    pub versions_seen: BTreeMap<String, u64>,
 }
 
 impl NodeContext {
@@ -131,6 +140,17 @@ impl NodeContext {
     /// [`Self::task_id`].
     pub fn task_id(&self) -> &TaskId {
         &self.task_id
+    }
+
+    /// Whether `channel` has been written since the last time this node ran
+    /// (I5/R3): compares [`Self::channel_versions`] (current) against
+    /// [`Self::versions_seen`] (this node's own last-observed snapshot). A
+    /// channel this node has never seen before (including a node's very
+    /// first activation) counts as changed whenever it has ever been
+    /// written at all.
+    pub fn changed_since_last_run(&self, channel: &str) -> bool {
+        self.channel_versions.get(channel).copied().unwrap_or(0)
+            != self.versions_seen.get(channel).copied().unwrap_or(0)
     }
 }
 
