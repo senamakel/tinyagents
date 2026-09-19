@@ -46,13 +46,13 @@ pub trait GraphEventSink: Send + Sync {
 pub struct NoopSink;
 
 impl GraphEventSink for NoopSink {
-    fn emit(&self, _event: GraphEvent) {}
+    fn emit(&self, _envelope: GraphEventEnvelope) {}
 }
 
 /// A sink that records every event for inspection in tests and UIs.
 #[derive(Clone, Default)]
 pub struct CollectingSink {
-    events: Arc<Mutex<Vec<GraphEvent>>>,
+    events: Arc<Mutex<Vec<GraphEventEnvelope>>>,
 }
 
 impl CollectingSink {
@@ -61,9 +61,20 @@ impl CollectingSink {
         Self::default()
     }
 
-    /// Returns a clone of the recorded events.
-    pub fn events(&self) -> Vec<GraphEvent> {
+    /// Returns a clone of the recorded envelopes.
+    pub fn events(&self) -> Vec<GraphEventEnvelope> {
         self.events.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Returns a clone of the recorded events, discarding their envelopes.
+    ///
+    /// Convenience for callers (mostly tests) that only care about event
+    /// shape, not run/namespace/sequence attribution.
+    pub fn bare_events(&self) -> Vec<GraphEvent> {
+        self.events()
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect()
     }
 
     /// Returns the number of recorded events.
@@ -78,9 +89,9 @@ impl CollectingSink {
 }
 
 impl GraphEventSink for CollectingSink {
-    fn emit(&self, event: GraphEvent) {
+    fn emit(&self, envelope: GraphEventEnvelope) {
         if let Ok(mut guard) = self.events.lock() {
-            guard.push(event);
+            guard.push(envelope);
         }
     }
 }
