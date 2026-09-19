@@ -1492,6 +1492,103 @@ async fn hosted_model_resolution_marks_only_root_contexts_as_team_leads() {
     );
 }
 
+/// I-6 regression: a hosted invocation that exhausts a configured run limit
+/// must classify as `HostedErrorKind::LimitExceeded`, distinguishable from
+/// other hosted failure modes (here, a policy rejection) rather than every
+/// non-cancel/timeout failure collapsing into one generic
+/// `Model("hosted agent invocation failed")`.
+#[tokio::test]
+async fn hosted_limit_exceeded_is_distinguishable_from_other_hosted_errors() {
+    // A model that always requests the same tool call, so the run never
+    // finishes on its own and must hit `max_model_calls`.
+    let looping_model = Arc::new(ScriptedModel::new(std::iter::repeat_with(|| {
+        let mut response = ModelResponse::assistant("");
+        response
+            .message
+            .tool_calls
+            .push(tinyinference_llm::tool::ToolCall::new(
+                "call", "noop", json!({}),
+            ));
+        response
+    })
+    .take(8)
+    .collect()));
+    let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]);
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(looping_model)),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+
+    let limit_error = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("limit-exceeded").with_max_model_calls(1), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect_err("the model-call cap must eventually fail the run");
+    assert_eq!(
+        limit_error.kind,
+        crate::runtime::HostedErrorKind::LimitExceeded
+    );
+    // The run accumulated before failing is still available.
+    assert!(limit_error.run.is_some());
+
+    // A different hosted failure mode (a security-gate denial of the user's
+    // input) classifies differently, proving `kind` genuinely discriminates
+    // rather than every non-cancel/timeout error collapsing together.
+    let denied_definition =
+        AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]);
+    let denied_host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![denied_definition])),
+        Arc::new(BlockExtensionGate),
+        Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::replies(
+            vec!["unused"],
+        )))),
+    );
+    let mut denied_harness: AgentHarness<()> = AgentHarness::new();
+    denied_harness.register_tool(Arc::new(NoopTool));
+    let policy_error = denied_harness
+        .invoke_agent(
+            AgentInvocation::new(
+                denied_host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::User(
+                        tinyinference_llm::message::UserMessage {
+                            content: vec![
+                                tinyinference_llm::message::ContentBlock::ProviderExtension(
+                                    json!({"secret": "block me"}),
+                                ),
+                            ],
+                        },
+                    )],
+                ),
+                RunContext::new(RunConfig::new("policy-denied"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect_err("the security gate must deny this input");
+    assert_eq!(policy_error.kind, crate::runtime::HostedErrorKind::Policy);
+
+    assert_ne!(
+        limit_error.kind, policy_error.kind,
+        "distinct hosted failure modes must classify to distinct kinds"
+    );
+}
+
 #[tokio::test]
 async fn hosted_definition_tool_allowlist_filters_schemas_and_rejects_fabricated_calls() {
     let mut blocked_call = ModelResponse::assistant("");
