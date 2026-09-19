@@ -304,7 +304,7 @@ pub struct RenderedDiagnostic {
 /// more than one.
 fn render_diagnostics_summary(diagnostics: &[RenderedDiagnostic]) -> String {
     match diagnostics.split_first() {
-        Some((first, rest)) if rest.is_empty() => first.rendered.clone(),
+        Some((first, [])) => first.rendered.clone(),
         Some((first, rest)) => format!(
             "{} (and {} more diagnostic{})",
             first.rendered,
