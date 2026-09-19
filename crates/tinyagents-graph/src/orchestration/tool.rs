@@ -1,4 +1,13 @@
 //! Ordinary harness tools for graph orchestration controls.
+//!
+//! This file is the model-facing edge of the module: it turns each
+//! [`OrchestrationToolKind`](super::OrchestrationToolKind) into a normal
+//! [`Tool`] backed by a [`TaskStore`], parses/validates the JSON tool-call
+//! arguments, and hands off to the store for the actual state transition.
+//! `types.rs` owns the data model these tools read and write; `store.rs` owns
+//! persistence and transition validation; this file owns argument shape and
+//! tool wiring only — it holds no orchestration state of its own beyond the
+//! optional [`SteeringRegistry`] used by the `steer` control.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
