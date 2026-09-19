@@ -1548,7 +1548,6 @@ name = "tinyagents-session"
 version = "2.1.2"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "log",
  "rusqlite",
@@ -1557,7 +1556,6 @@ dependencies = [
  "tempfile",
  "tinyagents-harness",
  "tinyagents-tracing",
- "tinyinference-llm",
 ]
 
 [[package]]
