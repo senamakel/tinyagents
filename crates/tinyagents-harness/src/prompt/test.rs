@@ -8,6 +8,74 @@ use super::*;
 use serde_json::{Map, json};
 
 #[test]
+fn section_assembly_preserves_order_budget_and_truncation_provenance() {
+    let sections = vec![
+        PromptSection::new("first", "α"),
+        PromptSection::new("second", "second section"),
+    ];
+    let assembled = assemble_sections(&sections, "α\n\nse".len());
+    assert_eq!(assembled.text, "α\n\nse");
+    assert_eq!(assembled.included_sections, vec!["first"]);
+    assert_eq!(
+        assembled.truncation,
+        Some(PromptTruncation {
+            section: "second".into(),
+            omitted_bytes: "cond section".len(),
+        })
+    );
+}
+
+#[test]
+fn reusable_render_helpers_are_exact_and_stable() {
+    assert_eq!(render_heading("Tools"), "## Tools");
+    assert_eq!(render_optional_section("Empty", Some("  ")), "");
+    assert_eq!(
+        render_optional_section("Notes", Some("keep")),
+        "## Notes\n\nkeep"
+    );
+    assert_eq!(
+        render_tool_catalogue(&[("z".into(), "last".into()), ("a".into(), "first".into())]),
+        "- `a`: first\n- `z`: last"
+    );
+    let sections = [
+        PromptSection::new("one", "one two"),
+        PromptSection::new("two", "three"),
+    ];
+    let assembled = assemble_sections_with_budget(
+        &sections,
+        PromptBudget {
+            max_bytes: 64,
+            max_tokens: 2,
+        },
+        |text| text.split_whitespace().count(),
+    );
+    assert_eq!(assembled.text, "one two");
+    assert_eq!(assembled.truncation.unwrap().section, "two");
+}
+
+#[test]
+fn section_budget_tokenizes_rendered_separators() {
+    let sections = [
+        PromptSection::new("first", "first"),
+        PromptSection::new("second", "second"),
+    ];
+    // This deliberately charges a token for the renderer's `\n\n` separator.
+    // Counting only each section's content would incorrectly accept both.
+    let tokenize = |text: &str| text.split_whitespace().count() + text.matches("\n\n").count();
+    let budget = PromptBudget {
+        max_bytes: 64,
+        max_tokens: 2,
+    };
+
+    let assembled = assemble_sections_with_budget(&sections, budget, tokenize);
+
+    assert_eq!(assembled.text, "first");
+    assert_eq!(assembled.included_sections, vec!["first"]);
+    assert_eq!(assembled.truncation.unwrap().section, "second");
+    assert!(tokenize(&assembled.text) <= budget.max_tokens);
+}
+
+#[test]
 fn renders_simple_placeholder() {
     let tpl = PromptTemplate::new("Hello, {name}!");
     let mut vars = Map::new();
@@ -106,7 +174,7 @@ fn messages_template_propagates_render_error() {
 
 #[test]
 fn builder_cacheability_by_segment_type() {
-    use crate::tool::ToolSchema;
+    use tinyinference_llm::tool::ToolSchema;
 
     let mut builder = PromptBuilder::new();
     builder
@@ -178,7 +246,7 @@ fn fingerprint_is_64_hex_and_deterministic() {
 
 #[test]
 fn fingerprint_changes_with_tool_schema_not_just_name() {
-    use crate::tool::ToolSchema;
+    use tinyinference_llm::tool::ToolSchema;
 
     let tool_v1 = ToolSchema::new("calc", "adds numbers", json!({"type": "object"}));
     let mut tool_v2 = tool_v1.clone();

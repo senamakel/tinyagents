@@ -28,13 +28,13 @@ use serde_json::json;
 
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::cost::ModelPricing;
 use tinyagents_harness::events::AgentEvent;
 use tinyagents_harness::middleware::{
     BudgetLimits, BudgetMiddleware, BudgetTracker, MiddlewareStack,
 };
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool};
-use tinyagents_registry::catalog::ModelPricing;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{ModelRequest, ModelResolutionSource, ModelResponse, ResolvedModel};
 use tinyinference_llm::providers::MockModel;
@@ -58,6 +58,8 @@ fn tool_call_response(id: &str, name: &str, input: u64, output: u64) -> ModelRes
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -76,6 +78,8 @@ fn text_response(text: &str, input: u64, output: u64) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -294,6 +298,8 @@ async fn cost_pricing_records_and_enforces_money_budget() {
         }),
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     };
 
     stack
@@ -521,6 +527,8 @@ async fn cached_input_budget_blocks_next_call() {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     };
     stack
         .run_after_model(&mut ctx, &(), &mut resp)

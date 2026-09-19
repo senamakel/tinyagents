@@ -21,8 +21,8 @@ use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, Trajectory};
-use tinyagents_harness::tool::Tool;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
@@ -31,7 +31,8 @@ use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
 
 /// Builds a child harness whose model always asks for the `broken` tool, which
-/// fails with `Err(TinyAgentsError::Tool("boom"))`.
+/// fails with a foreign `anyhow` error. The harness maps that to its stable,
+/// non-sensitive tool-failure surface before a sub-agent can propagate it.
 fn failing_child_harness() -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
@@ -56,8 +57,8 @@ async fn subagent_invoke_propagates_tool_failure() {
         .expect_err("the child tool failure must propagate out of SubAgent::invoke");
 
     match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected TinyAgentsError::Tool(\"boom\"), got {other:?}"),
+        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
+        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
     }
 }
 
@@ -70,19 +71,22 @@ async fn subagent_tool_call_surfaces_failure_as_err() {
         "a worker whose tool always fails",
         Arc::new(failing_child_harness()),
     ));
-    let tool = SubAgentTool::new(subagent);
+    let tool = SubAgentTool::new(subagent, ChildDataPolicy::new(|parent: &()| *parent));
+    let parent = RunContext::new(RunConfig::new("parent"), ());
 
     let err = tool
-        .call(
+        .invoke_in_parent_context(
             &(),
-            ToolCall::new("c1", "broken_worker", json!({ "input": "x" })),
+            json!({ "input": "x" }),
+            tinytools::ToolCallOptions::default(),
+            &parent,
         )
         .await
         .expect_err("SubAgentTool::call must surface the child failure as an Err");
 
     match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected TinyAgentsError::Tool(\"boom\"), got {other:?}"),
+        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
+        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
     }
 }
 
@@ -96,10 +100,13 @@ async fn orchestrator_observes_failing_subagent_tool() {
         "a worker whose tool always fails",
         Arc::new(failing_child_harness()),
     ));
-    let tool = Arc::new(SubAgentTool::new(subagent));
+    let tool = Arc::new(SubAgentTool::new(
+        subagent,
+        ChildDataPolicy::new(|parent: &()| *parent),
+    ));
 
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
-    orchestrator.register_tool(tool);
+    orchestrator.register_tool_dispatch(tool);
     orchestrator.register_model(
         "parent-model",
         Arc::new(MockModel::with_tool_call(
@@ -117,8 +124,8 @@ async fn orchestrator_observes_failing_subagent_tool() {
         .expect_err("the failing sub-agent tool must abort the orchestrator run");
 
     match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected TinyAgentsError::Tool(\"boom\"), got {other:?}"),
+        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
+        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
     }
 
     // The orchestrator run emitted a RunFailed event (on_error fan-out path).

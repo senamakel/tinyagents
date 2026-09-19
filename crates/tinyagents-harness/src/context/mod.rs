@@ -33,8 +33,10 @@
 //! assert_eq!(ctx.limits.model_calls(), 1);
 //! ```
 
+mod stats;
 mod types;
 
+pub use stats::*;
 pub use types::*;
 
 use crate::cancel::CancellationToken;
@@ -43,6 +45,57 @@ use crate::events::{AgentEvent, EventRecord, EventSink};
 use crate::ids::{RunId, ThreadId};
 use crate::limits::{LimitTracker, RunLimits};
 use crate::store::StoreRegistry;
+
+#[derive(serde::Deserialize)]
+struct RunConfigWire {
+    run_id: RunId,
+    #[serde(default)]
+    thread_id: Option<ThreadId>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    metadata: serde_json::Value,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    #[serde(default)]
+    max_model_calls: Option<usize>,
+    #[serde(default)]
+    max_tool_calls: Option<usize>,
+    #[serde(default)]
+    max_turn_output_tokens: Option<u32>,
+    // Legacy wire fields, accepted only while reading old persisted configs.
+    #[serde(default)]
+    depth: Option<usize>,
+    #[serde(default)]
+    max_depth: Option<usize>,
+    #[serde(default)]
+    lineage: Option<RunLineage>,
+}
+
+impl<'de> serde::Deserialize<'de> for RunConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let wire = RunConfigWire::deserialize(deserializer)?;
+        let lineage = wire.lineage.unwrap_or_else(|| RunLineage {
+            root_run_id: wire.run_id.clone(),
+            parent_run_id: None,
+            depth: wire.depth.unwrap_or(0),
+            max_depth: wire.max_depth.unwrap_or(RunLimits::DEFAULT_MAX_DEPTH),
+        });
+        Ok(Self {
+            run_id: wire.run_id,
+            thread_id: wire.thread_id,
+            tags: wire.tags,
+            metadata: wire.metadata,
+            timeout_ms: wire.timeout_ms,
+            max_model_calls: wire.max_model_calls,
+            max_tool_calls: wire.max_tool_calls,
+            max_turn_output_tokens: wire.max_turn_output_tokens,
+            lineage,
+        })
+    }
+}
 
 /// Mints the next process-unique [`RunContext::instance_id`].
 fn next_context_instance_id() -> u64 {
@@ -61,8 +114,15 @@ impl RunConfig {
     /// is what lets a harness-wide `RunPolicy` raise them; see
     /// [`RunConfig::max_model_calls`].
     pub fn new(run_id: impl Into<String>) -> Self {
+        let run_id = RunId::new(run_id);
         Self {
-            run_id: RunId::new(run_id),
+            lineage: RunLineage {
+                root_run_id: run_id.clone(),
+                parent_run_id: None,
+                depth: 0,
+                max_depth: RunLimits::default().max_depth,
+            },
+            run_id,
             thread_id: None,
             tags: Vec::new(),
             metadata: serde_json::Value::Null,
@@ -70,8 +130,6 @@ impl RunConfig {
             max_model_calls: None,
             max_tool_calls: None,
             max_turn_output_tokens: None,
-            depth: 0,
-            max_depth: RunLimits::default().max_depth,
         }
     }
 
@@ -143,14 +201,24 @@ impl RunConfig {
     /// Top-level runs are depth `0`; child runs spawned by a
     /// [`crate::subagent::SubAgent`] carry the parent depth plus one.
     pub fn with_depth(mut self, depth: usize) -> Self {
-        self.depth = depth;
+        self.lineage.depth = depth;
         self
     }
 
     /// Sets the maximum sub-agent / recursion depth permitted for this run tree.
     pub fn with_max_depth(mut self, max_depth: usize) -> Self {
-        self.max_depth = max_depth;
+        self.lineage.max_depth = max_depth;
         self
+    }
+
+    /// This run's recursive depth.
+    pub fn depth(&self) -> usize {
+        self.lineage.depth
+    }
+
+    /// The inclusive recursion-depth cap for this run tree.
+    pub fn max_depth(&self) -> usize {
+        self.lineage.max_depth
     }
 
     /// Derives a child run's depth from its parent, enforcing the recursion cap.
@@ -171,16 +239,26 @@ impl RunConfig {
 
     /// Builds the [`RunConfig`] for a child run one level deeper than this one.
     ///
-    /// The returned config keeps this config's `max_depth` and thread, sets
-    /// `depth = self.depth + 1`, and uses `child_run_id` as the run identity.
+    /// The returned config keeps the stricter of this config's and the child
+    /// config's `max_depth`, inherits the thread, sets `depth = self.depth +
+    /// 1`, and uses `child_run_id` as the run identity.
     /// It does **not** copy tags or metadata, which are run-specific.
-    pub fn child(&self, child_run_id: impl Into<String>) -> Self {
-        let mut config = Self::new(child_run_id);
-        config.depth = self.depth + 1;
-        config.max_depth = self.max_depth;
-        config.thread_id = self.thread_id.clone();
-        config.max_turn_output_tokens = self.max_turn_output_tokens;
-        config
+    pub fn child(&self, mut config: Self) -> Result<Self> {
+        let max_depth = self.max_depth().min(config.max_depth());
+        let child_depth = Self::checked_child_depth(self.depth(), max_depth)?;
+        config.lineage = RunLineage {
+            root_run_id: self.lineage.root_run_id.clone(),
+            parent_run_id: Some(self.run_id.clone()),
+            depth: child_depth,
+            max_depth,
+        };
+        if config.thread_id.is_none() {
+            config.thread_id = self.thread_id.clone();
+        }
+        if config.max_turn_output_tokens.is_none() {
+            config.max_turn_output_tokens = self.max_turn_output_tokens;
+        }
+        Ok(config)
     }
 
     /// Builds the [`RunLimits`] policy implied by this config.
@@ -193,7 +271,7 @@ impl RunConfig {
             .with_max_model_calls(self.effective_max_model_calls())
             .with_max_tool_calls(self.effective_max_tool_calls())
             .with_max_wall_clock_ms(self.timeout_ms)
-            .with_max_depth(self.max_depth)
+            .with_max_depth(self.max_depth())
     }
 }
 
@@ -225,7 +303,50 @@ impl<Ctx> RunContext<Ctx> {
             workspace: None,
             on_error_dispatched: false,
             streaming: false,
+            host_agent_id: None,
+            host_authority: None,
+            terminal_observer: None,
         }
+    }
+
+    /// Builds an isolated child context from this live parent context.
+    ///
+    /// A child gets a new run id, lineage record, [`LimitTracker`], control
+    /// slot, and instance id.  It deliberately shares the capabilities that
+    /// describe one recursive operation: cancellation, events, stores,
+    /// workspace policy, steering, streaming mode, thread identity, output
+    /// cap, and depth cap.  The child starts with the parent's metadata; use
+    /// [`Self::child_with_metadata`] to shallowly overlay child-specific keys.
+    pub fn child<ChildCtx>(
+        &self,
+        child_config: RunConfig,
+        data: ChildCtx,
+    ) -> Result<RunContext<ChildCtx>> {
+        let mut config = self.config.child(child_config)?;
+        config.metadata = shallow_merge_metadata(&self.config.metadata, config.metadata);
+        let mut child = RunContext::new(config, data)
+            .with_stores(self.stores.clone())
+            .with_events(self.events.clone())
+            .with_cancellation(self.cancellation.clone())
+            .with_optional_steering(self.steering.clone())
+            .with_optional_workspace(self.workspace.clone())
+            .with_streaming(self.streaming);
+        child.host_agent_id = self.host_agent_id.clone();
+        child.host_authority = self.host_authority.clone();
+        Ok(child)
+    }
+
+    /// Installs runtime-owned terminal bookkeeping for this invocation.
+    ///
+    /// This is crate-private because public callers must not couple their
+    /// behavior to future cancellation mechanics.
+    pub(crate) fn set_terminal_observer(&mut self, observer: TerminalObserver) {
+        self.terminal_observer = Some(observer);
+    }
+
+    /// Returns this run's recursive ancestry.
+    pub fn lineage(&self) -> &RunLineage {
+        &self.config.lineage
     }
 
     /// Returns this context's process-unique instance id.
@@ -259,8 +380,26 @@ impl<Ctx> RunContext<Ctx> {
     /// provider (emitting the workspace lifecycle events), use
     /// [`crate::workspace::prepare_workspace`] to obtain the descriptor
     /// first.
-    pub fn with_workspace(mut self, workspace: crate::workspace::WorkspaceDescriptor) -> Self {
+    pub fn with_workspace(mut self, workspace: tinytools::WorkspaceDescriptor) -> Self {
         self.workspace = Some(workspace);
+        self
+    }
+
+    fn with_optional_workspace(
+        mut self,
+        workspace: Option<tinytools::WorkspaceDescriptor>,
+    ) -> Self {
+        self.workspace = workspace;
+        self
+    }
+
+    fn with_optional_steering(mut self, steering: Option<crate::steering::SteeringHandle>) -> Self {
+        self.steering = steering;
+        self
+    }
+
+    fn with_streaming(mut self, streaming: bool) -> Self {
+        self.streaming = streaming;
         self
     }
 
@@ -343,13 +482,13 @@ impl<Ctx> RunContext<Ctx> {
 
     /// Returns this run's depth in the sub-agent / recursion tree.
     pub fn depth(&self) -> usize {
-        self.config.depth
+        self.config.depth()
     }
 
     /// Returns the maximum sub-agent / recursion depth permitted for this run
     /// tree.
     pub fn max_depth(&self) -> usize {
-        self.config.max_depth
+        self.config.max_depth()
     }
 
     /// Records one model call against the run's limits.
@@ -382,6 +521,24 @@ impl<Ctx> RunContext<Ctx> {
     /// this to bound each individual model call.
     pub fn remaining_wall_clock(&self) -> Option<std::time::Duration> {
         self.limits.remaining_wall_clock()
+    }
+}
+
+/// Applies the child metadata semantics used by [`RunContext::child_with_metadata`].
+fn shallow_merge_metadata(
+    parent: &serde_json::Value,
+    child: serde_json::Value,
+) -> serde_json::Value {
+    if child.is_null() {
+        return parent.clone();
+    }
+    match (parent, child) {
+        (serde_json::Value::Object(parent), serde_json::Value::Object(child)) => {
+            let mut merged = parent.clone();
+            merged.extend(child);
+            serde_json::Value::Object(merged)
+        }
+        (_, child) => child,
     }
 }
 

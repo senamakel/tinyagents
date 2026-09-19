@@ -1,4 +1,5 @@
 use super::*;
+use tinyinference_llm::tool::ToolCall;
 
 #[test]
 fn provider_constructs_with_default_config() {
@@ -162,11 +163,18 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
         ..Default::default()
     };
     let provider = ClaudeAgentSdkProvider::for_model(config, "profile-model");
+    let mut prior_call = ModelResponse::assistant("calling").message;
+    prior_call.tool_calls.push(ToolCall {
+        id: "call-1".to_string(),
+        name: "lookup".to_string(),
+        arguments: serde_json::json!({"query": "needle"}),
+        invalid: None,
+    });
     let request = ModelRequest {
         messages: vec![
             Message::system("Base system"),
             Message::user("original question"),
-            Message::assistant("calling"),
+            Message::Assistant(prior_call),
             Message::tool("call-1", "first result"),
             Message::tool("call-2", "second result"),
         ],
@@ -197,12 +205,32 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
     let stdin =
         std::fs::read_to_string(format!("{}.stdin", script.display())).expect("captured stdin");
     assert!(stdin.contains("Base system"));
+    assert!(
+        stdin.contains("[USER]\noriginal question\n[/USER]"),
+        "unexpected CLI stdin: {stdin:?}"
+    );
+    assert!(
+        stdin.contains("[ASSISTANT]\ncalling\n<tool_call>"),
+        "the assistant transcript must retain its text before the prior tool call: {stdin:?}"
+    );
     assert!(stdin.contains("## Tool Use Protocol"));
+    let prior_call = stdin
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("<tool_call>")?
+                .strip_suffix("</tool_call>")
+        })
+        .map(|body| serde_json::from_str::<serde_json::Value>(body).expect("tool call JSON"));
+    assert_eq!(
+        prior_call,
+        Some(serde_json::json!({"name": "lookup", "arguments": {"query": "needle"}})),
+        "prior structured tool call must survive in CLI stdin: {stdin:?}"
+    );
     assert!(
         stdin.contains("[Tool results]\n<tool_result>\nfirst result\n</tool_result>"),
         "unexpected CLI stdin: {stdin:?}"
     );
-    assert!(stdin.ends_with("<tool_result>\nsecond result\n</tool_result>"));
+    assert!(stdin.contains("<tool_result>\nsecond result\n</tool_result>"));
     let args =
         std::fs::read_to_string(format!("{}.args", script.display())).expect("captured args");
     assert!(args.contains("request-model"));

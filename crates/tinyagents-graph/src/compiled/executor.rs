@@ -23,6 +23,28 @@ where
             HashMap::new(),
             HashMap::new(),
             None,
+            None,
+        )
+        .await
+    }
+
+    /// Runs one execution with an explicit host-bound recursive-agent binding.
+    ///
+    /// The binding is scoped to this run and descendants spawned from it; it is
+    /// never retained by this reusable graph value.
+    pub async fn run_with_agent_binding(
+        &self,
+        state: State,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.execute(
+            state,
+            vec![Activation::node(self.entry.clone())],
+            None,
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            Some(binding),
         )
         .await
     }
@@ -41,8 +63,16 @@ where
         inputs: impl IntoIterator<Item = GraphInput>,
     ) -> Result<GraphExecution<State>> {
         let active = self.initial_inputs(inputs)?;
-        self.execute(state, active, None, HashMap::new(), HashMap::new(), None)
-            .await
+        self.execute(
+            state,
+            active,
+            None,
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            None,
+        )
+        .await
     }
 
     /// Runs the graph under a thread id, persisting checkpoints at every
@@ -59,6 +89,26 @@ where
             HashMap::new(),
             HashMap::new(),
             None,
+            None,
+        )
+        .await
+    }
+
+    /// Runs one threaded execution with an explicit recursive-agent binding.
+    pub async fn run_with_thread_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        state: State,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.execute(
+            state,
+            vec![Activation::node(self.entry.clone())],
+            Some(thread_id.into()),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            Some(binding),
         )
         .await
     }
@@ -80,6 +130,7 @@ where
             HashMap::new(),
             HashMap::new(),
             None,
+            None,
         )
         .await
     }
@@ -95,6 +146,22 @@ where
         command: Command<Update>,
     ) -> Result<GraphExecution<State>> {
         self.resume_from(thread_id, ResumeTarget::Latest, command)
+            .await
+    }
+
+    /// Resumes an interrupted run with a host-bound recursive-agent binding.
+    ///
+    /// Like [`Self::resume`], this reloads the latest checkpoint for `thread_id`.
+    /// The binding is scoped solely to the resumed execution and is propagated
+    /// to every resumed node and nested subgraph; it is never retained by this
+    /// reusable graph value.
+    pub async fn resume_with_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        command: Command<Update>,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_with_agent_binding(thread_id, ResumeTarget::Latest, command, binding)
             .await
     }
 
@@ -119,6 +186,24 @@ where
             .await
     }
 
+    /// Retries a failed run with a host-bound recursive-agent binding.
+    ///
+    /// This is the binding-aware counterpart to [`Self::retry`]. The supplied
+    /// binding is available only to this retry and any descendants it spawns.
+    pub async fn retry_with_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_with_agent_binding(
+            thread_id,
+            ResumeTarget::Latest,
+            Command::new(),
+            binding,
+        )
+        .await
+    }
+
     /// Resumes a run from a specific checkpoint (time-travel resume).
     ///
     /// [`ResumeTarget::Latest`] behaves exactly like [`CompiledGraph::resume`];
@@ -136,11 +221,39 @@ where
         target: ResumeTarget,
         command: Command<Update>,
     ) -> Result<GraphExecution<State>> {
+        self.resume_from_inner(thread_id.into(), target, command, None)
+            .await
+    }
+
+    /// Resumes a run from `target` with a host-bound recursive-agent binding.
+    ///
+    /// This is the binding-aware counterpart to [`Self::resume_from`]. It is
+    /// useful when a durable continuation reaches a
+    /// [`SubAgentNode`](crate::SubAgentNode) after an interrupt or retry.
+    /// The binding remains execution-scoped, including for resumed nested
+    /// subgraphs, and is not stored on [`CompiledGraph`](crate::CompiledGraph).
+    pub async fn resume_from_with_agent_binding(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        target: ResumeTarget,
+        command: Command<Update>,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_inner(thread_id.into(), target, command, Some(binding))
+            .await
+    }
+
+    async fn resume_from_inner(
+        &self,
+        thread_id: ThreadId,
+        target: ResumeTarget,
+        command: Command<Update>,
+        binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    ) -> Result<GraphExecution<State>> {
         let checkpointer = self
             .checkpointer
             .as_ref()
             .ok_or_else(|| TinyAgentsError::Resume("no checkpointer configured".to_string()))?;
-        let thread_id = thread_id.into();
 
         let checkpoint_id = match &target {
             ResumeTarget::Latest => None,
@@ -273,6 +386,7 @@ where
             resume_map,
             initial_barriers,
             initial_parent,
+            binding,
         )
         .await
     }
@@ -313,6 +427,7 @@ where
 
     /// Returns the configured checkpointer or a [`TinyAgentsError::Checkpoint`]
     /// when inspection is attempted on a graph without durability.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         state: State,
@@ -321,6 +436,7 @@ where
         resume_map: HashMap<NodeId, serde_json::Value>,
         initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
         initial_parent: Option<String>,
+        binding: Option<crate::subagent_node::AgentInvocationBinding>,
     ) -> Result<GraphExecution<State>> {
         let run_id = tinyagents_harness::ids::new_run_id();
         // When a durable journal is configured, run against a clone whose event
@@ -338,6 +454,7 @@ where
                 resume_map,
                 initial_barriers,
                 initial_parent,
+                binding,
             )
             .await
         } else {
@@ -349,6 +466,7 @@ where
                 resume_map,
                 initial_barriers,
                 initial_parent,
+                binding,
             )
             .await
         }
@@ -393,6 +511,7 @@ where
         mut resume_map: HashMap<NodeId, serde_json::Value>,
         initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
         initial_parent: Option<String>,
+        binding: Option<crate::subagent_node::AgentInvocationBinding>,
     ) -> Result<GraphExecution<State>> {
         let started_at = SystemTime::now();
         let mut visited: Vec<NodeId> = Vec::new();
@@ -561,6 +680,7 @@ where
                     &root_run_id,
                     &live_frames,
                     &child_sink,
+                    &binding,
                 )
                 .await
             } else {
@@ -575,6 +695,7 @@ where
                     &root_run_id,
                     &live_frames,
                     &child_sink,
+                    &binding,
                 )
                 .await
             };
@@ -1115,8 +1236,10 @@ where
         root_run_id: &RunId,
         frames: &[RecursionFrame],
         child_runs: &ChildRunSink,
+        binding: &Option<crate::subagent_node::AgentInvocationBinding>,
     ) -> NodeContext {
         NodeContext {
+            graph_id: self.graph_id.clone(),
             node_id: node_id.clone(),
             run_id: run_id.clone(),
             thread_id: thread_id.clone(),
@@ -1127,6 +1250,7 @@ where
             root_run_id: Some(root_run_id.clone()),
             recursion_frames: frames.to_vec(),
             child_runs: Some(child_runs.clone()),
+            agent_binding: binding.clone(),
         }
     }
 
@@ -1262,6 +1386,7 @@ where
         root_run_id: &RunId,
         frames: &[RecursionFrame],
         child_runs: &ChildRunSink,
+        binding: &Option<crate::subagent_node::AgentInvocationBinding>,
     ) -> Result<StepRun<Update>> {
         let mut updates: Vec<Update> = Vec::new();
         let mut goto_map: HashMap<usize, Vec<RouteTarget>> = HashMap::new();
@@ -1295,6 +1420,7 @@ where
                 root_run_id,
                 frames,
                 child_runs,
+                binding,
             );
             let result = match self
                 .run_node_with_retry(node_id, &node.handler, state, ctx, step)
@@ -1366,6 +1492,7 @@ where
         root_run_id: &RunId,
         frames: &[RecursionFrame],
         child_runs: &ChildRunSink,
+        binding: &Option<crate::subagent_node::AgentInvocationBinding>,
     ) -> Result<StepRun<Update>> {
         // Build one forked context + future per branch. Node lookup and resume
         // consumption happen up front so the futures borrow nothing mutable; each
@@ -1406,6 +1533,7 @@ where
                 root_run_id,
                 frames,
                 child_runs,
+                binding,
             );
             let handler = node.handler.clone();
             let owned_node = node_id.clone();

@@ -47,6 +47,8 @@ fn multi_tool_call_response(calls: Vec<ToolCall>) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -68,6 +70,8 @@ fn text_response(text: &str) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 

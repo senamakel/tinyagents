@@ -12,9 +12,10 @@ use std::process::Command;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::tool::SandboxMode;
-use crate::workspace::{WorkspaceDescriptor, WorkspaceIsolation};
+use crate::workspace::WorkspaceIsolation;
 use crate::{Result, TinyAgentsError};
+use tinytools::SandboxMode;
+use tinytools::WorkspaceDescriptor;
 
 /// Directory, relative to the repository root, where isolated worktrees are
 /// created.

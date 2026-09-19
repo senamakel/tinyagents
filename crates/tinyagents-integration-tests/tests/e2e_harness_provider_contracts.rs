@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::stream;
 use serde::Deserialize;
 use serde_json::json;
-use tinyagents_harness::cost::{CostTotals, estimate_cost};
+use tinyagents_harness::cost::{CostTotals, ModelPricing, estimate_cost};
 use tinyagents_harness::model_registry::{ModelRegistry, ModelSelection};
 use tinyagents_harness::stream::{StreamChunk, StreamMode, StreamSink, stream as filter_stream};
 use tinyagents_harness::structured::{
@@ -11,13 +11,12 @@ use tinyagents_harness::structured::{
 };
 use tinyagents_registry::catalog::{
     ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
-    ModelPricing,
 };
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
     CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
-    ModelResponse, ModelStreamItem, PromptSegment, ProviderError, ResponseFormat, SegmentRole,
-    StreamAccumulator, ToolChoice, collect_model_stream,
+    ModelResponse, ModelStream, ModelStreamItem, PromptSegment, ProviderError, ResponseFormat,
+    SegmentRole, StreamAccumulator, ToolChoice, collect_model_stream,
 };
 use tinyinference_llm::providers::{MockModel, ProviderKind, ProviderSpec};
 use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
@@ -269,18 +268,19 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
     assert_eq!(final_response.text(), "final");
     assert_eq!(final_response.usage.unwrap().effective_total(), 2);
 
-    let failed_stream = Box::pin(stream::iter([ModelStreamItem::ProviderFailed(
-        ProviderError {
-            provider: "mock".into(),
-            model: Some("bad".into()),
-            status: Some(500),
-            code: Some("internal".into()),
-            message: "nope".into(),
-            retryable: true,
-            retry_after_ms: None,
-            raw: Some(json!({ "error": "nope" })),
-        },
-    )]));
+    let failed_stream =
+        ModelStream::new(Box::pin(stream::iter([ModelStreamItem::ProviderFailed(
+            ProviderError {
+                provider: "mock".into(),
+                model: Some("bad".into()),
+                status: Some(500),
+                code: Some("internal".into()),
+                message: "nope".into(),
+                retryable: true,
+                retry_after_ms: None,
+                raw: Some(json!({ "error": "nope" })),
+            },
+        )])));
     let err = collect_model_stream(failed_stream).await.unwrap_err();
     // A streamed `ProviderFailed` now surfaces as a structured
     // `TinyAgentsError::Provider` whose `Display` renders the provider, HTTP
@@ -457,6 +457,8 @@ fn structured_output_supports_provider_schema_and_tool_fallbacks() {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     };
     let tool_output = StructuredExtractor::new(StructuredStrategy::ToolCall, "score", schema)
         .extract(&tool_response)

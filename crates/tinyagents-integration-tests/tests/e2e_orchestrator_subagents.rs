@@ -20,17 +20,21 @@
 //!   resolve each name from the registry, run in parallel, compose
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::join_all;
 use serde_json::{Value, json};
 
 use tinyagents_graph::*;
+use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::events::{AgentEvent, EventSink};
 use tinyagents_harness::ids::{CallId, RunId};
 use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
+use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
@@ -49,7 +53,10 @@ fn specialist(name: &str, description: &str, model: Arc<ScriptedModel>) -> SubAg
         .set_default_model("model");
     let subagent = SubAgent::new(name, description, Arc::new(harness))
         .with_system_prompt(format!("You are the {name}."));
-    SubAgentTool::new(Arc::new(subagent))
+    SubAgentTool::new(
+        Arc::new(subagent),
+        ChildDataPolicy::new(|parent: &()| *parent),
+    )
 }
 
 /// Reads the `{ "agents": [..] }` selection out of an [`AgentRun`], preferring
@@ -83,22 +90,24 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
 
     // 1. Register three named specialist sub-agents in the capability registry.
     let mut registry: CapabilityRegistry<()> = CapabilityRegistry::new();
-    registry
-        .register_tool(Arc::new(specialist(
+    let mut dispatches: HashMap<String, Arc<SubAgentTool<()>>> = HashMap::new();
+    for (name, description, model) in [
+        (
             "researcher",
             "Gathers factual background.",
             researcher_model.clone(),
-        )))?
-        .register_tool(Arc::new(specialist(
-            "coder",
-            "Writes code snippets.",
-            coder_model.clone(),
-        )))?
-        .register_tool(Arc::new(specialist(
+        ),
+        ("coder", "Writes code snippets.", coder_model.clone()),
+        (
             "summarizer",
             "Condenses material.",
             summarizer_model.clone(),
-        )))?;
+        ),
+    ] {
+        let dispatch = Arc::new(specialist(name, description, model));
+        registry.register_tool(dispatch.tool())?;
+        dispatches.insert(name.to_owned(), dispatch);
+    }
 
     let available = registry.names(ComponentKind::Tool);
     assert_eq!(available, vec!["coder", "researcher", "summarizer"]);
@@ -157,18 +166,26 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
 
     let dispatches = chosen.iter().enumerate().map(|(i, name)| {
         let name = name.clone();
-        let tool = registry
-            .tool(&name)
+        let dispatch = dispatches
+            .get(&name)
+            .cloned()
             .expect("a chosen name must resolve in the registry");
         let sink = sink.clone();
         let call_id = format!("dispatch-{i}");
-        let call = ToolCall::new(call_id.clone(), name.clone(), json!({ "input": task }));
         async move {
             sink.emit(AgentEvent::ToolStarted {
                 call_id: CallId::new(call_id.clone()),
                 tool_name: name.clone(),
             });
-            let result = tool.call(&(), call).await?;
+            let parent = RunContext::new(RunConfig::new(format!("dispatch-{i}")), ());
+            let result = dispatch
+                .invoke_in_parent_context(
+                    &(),
+                    json!({ "input": task }),
+                    tinytools::ToolCallOptions::default(),
+                    &parent,
+                )
+                .await?;
             sink.emit(AgentEvent::ToolCompleted {
                 call_id: CallId::new(call_id),
                 tool_name: name.clone(),
@@ -179,7 +196,7 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
                 output_bytes: None,
                 error: None,
             });
-            Ok::<(String, String), TinyAgentsError>((name, result.content))
+            Ok::<(String, String), TinyAgentsError>((name, result.output()))
         }
     });
     let outputs: Vec<(String, String)> = join_all(dispatches)

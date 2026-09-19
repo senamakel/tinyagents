@@ -25,13 +25,45 @@ use async_trait::async_trait;
 use crate::cache::CacheLayoutEvent;
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
-use crate::ids::RunId;
+use crate::ids::{CallId, RunId};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
-use crate::tool::{ToolCall, ToolDelta, ToolResult};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::{ToolCall, ToolDelta};
 use tinyinference_llm::usage::UsageTotals;
+use tinytools::ToolResult;
 
 // ── AgentRun ────────────────────────────────────────────────────────────────
+
+/// Harness-owned identity for one completed tool invocation.
+///
+/// [`Middleware::after_tool`] receives this separately from
+/// [`ToolResult`][tinytools::ToolResult] so canonical TinyTools results remain
+/// correlation-free and a tool cannot forge its own execution identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolInvocationIdentity {
+    call_id: CallId,
+    tool_name: String,
+}
+
+impl ToolInvocationIdentity {
+    /// Creates an identity for a completed invocation.
+    pub fn new(call_id: impl Into<CallId>, tool_name: impl Into<String>) -> Self {
+        Self {
+            call_id: call_id.into(),
+            tool_name: tool_name.into(),
+        }
+    }
+
+    /// The provider/harness correlation id for this invocation.
+    pub fn call_id(&self) -> &CallId {
+        &self.call_id
+    }
+
+    /// The canonical name of the invoked tool.
+    pub fn tool_name(&self) -> &str {
+        &self.tool_name
+    }
+}
 
 /// The accumulated result of a single agent run.
 ///
@@ -65,6 +97,11 @@ pub struct AgentRun {
     pub model_calls: usize,
     /// Number of tool invocations executed during the run.
     pub tool_calls: usize,
+    /// Names of calls that reached a tool executor, in execution order.
+    ///
+    /// Recovery messages for denied, unknown, or invalid calls intentionally do
+    /// not appear here: they produced a transcript response but never acted.
+    pub executed_tools: Vec<String>,
     /// Number of loop iterations (model/tool super-steps) executed.
     pub steps: usize,
     /// Set when the run stopped because steering latched a **pause** rather
@@ -189,11 +226,12 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
     }
 
     /// Runs after each tool invocation completes, allowing the middleware to
-    /// mutate the [`ToolResult`].
+    /// inspect harness-owned invocation identity and mutate the [`ToolResult`].
     async fn after_tool(
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
+        _invocation: &ToolInvocationIdentity,
         _result: &mut ToolResult,
     ) -> Result<()> {
         Ok(())

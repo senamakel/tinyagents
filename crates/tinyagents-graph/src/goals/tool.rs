@@ -11,7 +11,7 @@
 //! [`ToolExecutionContext::thread_id`](tinyagents_harness::tool::ToolExecutionContext),
 //! the harness analogue of an ambient thread id: a tool never takes a
 //! `thread_id` argument, so a model can't address another thread's goal. The
-//! bare [`Tool::call`] entry point (no context) errors, matching the "tools
+//! bare [`Tool::execute`] entry point (no context) errors, matching the "tools
 //! require an active thread" contract.
 
 use std::sync::Arc;
@@ -23,10 +23,8 @@ use super::store;
 use super::types::ThreadGoal;
 use tinyagents_harness::error::Result;
 use tinyagents_harness::store::Store;
-use tinyagents_harness::tool::{
-    Tool, ToolExecutionContext, ToolPolicy, ToolRegistry, ToolResult, ToolSideEffects,
-};
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyagents_harness::tool::ToolRegistry;
+use tinytools::{Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
 
 /// Which thread-goal control a [`GoalTool`] implements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -203,15 +201,8 @@ fn render_goal(goal: &ThreadGoal) -> String {
     )
 }
 
-fn error_result(call_id: String, name: &str, message: impl Into<String>) -> ToolResult {
-    ToolResult {
-        call_id,
-        name: name.to_string(),
-        content: String::new(),
-        raw: None,
-        error: Some(message.into()),
-        elapsed_ms: 0,
-    }
+fn error_result(message: impl Into<String>) -> ToolResult {
+    ToolResult::error(message)
 }
 
 /// Builds the default **model-facing** goal controls (`goal_get`, `goal_set`,
@@ -224,10 +215,10 @@ pub fn goal_tools(store: Arc<dyn Store>) -> Vec<Arc<GoalTool>> {
 }
 
 /// Registers the default model-facing goal controls into a tool registry.
-pub fn register_goal_tools<State: Send + Sync>(
-    registry: &mut ToolRegistry<State>,
+pub fn register_goal_tools<State: Send + Sync, Ctx: Send + Sync>(
+    registry: &mut ToolRegistry<State, Ctx>,
     store: Arc<dyn Store>,
-) -> &mut ToolRegistry<State> {
+) -> &mut ToolRegistry<State, Ctx> {
     for tool in goal_tools(store) {
         registry.register(tool);
     }
@@ -235,7 +226,7 @@ pub fn register_goal_tools<State: Send + Sync>(
 }
 
 #[async_trait]
-impl<State: Send + Sync> Tool<State> for GoalTool {
+impl Tool for GoalTool {
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -244,13 +235,12 @@ impl<State: Send + Sync> Tool<State> for GoalTool {
         self.kind.description()
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: self.kind.name().to_string(),
-            description: self.kind.description().to_string(),
-            parameters: self.kind.parameters(),
-            format: Default::default(),
-        }
+    fn parameters_schema(&self) -> Value {
+        self.kind.parameters()
+    }
+
+    fn supports_markdown(&self) -> bool {
+        true
     }
 
     fn policy(&self) -> ToolPolicy {
@@ -264,35 +254,27 @@ impl<State: Send + Sync> Tool<State> for GoalTool {
         }
     }
 
-    async fn call(&self, _state: &State, call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         Ok(error_result(
-            call.id,
-            self.kind.name(),
             "goal tools require an active thread (no thread_id in tool context)",
         ))
     }
 
-    async fn call_with_context(
+    async fn execute_with_context(
         &self,
-        _state: &State,
-        call: ToolCall,
-        context: ToolExecutionContext,
-    ) -> Result<ToolResult> {
-        let Some(thread_id) = context.thread_id.as_ref() else {
+        args: Value,
+        _options: tinytools::ToolCallOptions,
+        context: Option<&dyn ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        let Some(thread_id) = context.and_then(ToolRunContext::thread_id) else {
             return Ok(error_result(
-                call.id,
-                self.kind.name(),
                 "goal tools require an active thread (no thread_id in tool context)",
             ));
         };
-        let (content, raw) = self.dispatch(thread_id.as_str(), &call.arguments).await?;
-        Ok(ToolResult {
-            call_id: call.id,
-            name: self.kind.name().to_string(),
-            content,
-            raw,
-            error: None,
-            elapsed_ms: 0,
+        let (content, raw) = self.dispatch(thread_id, &args).await?;
+        Ok(match raw {
+            Some(raw) => ToolResult::json(raw).with_markdown(content),
+            None => ToolResult::success(content),
         })
     }
 }

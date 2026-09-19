@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use crate::error::Result;
 use crate::ids::CallId;
-use crate::tool::ToolCall;
+use tinyinference_llm::tool::ToolCall;
 
 // ── ContentOrigin ─────────────────────────────────────────────────────────────
 

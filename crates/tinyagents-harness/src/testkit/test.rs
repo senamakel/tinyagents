@@ -12,11 +12,11 @@ use crate::testkit::{
     DeterministicClock, DeterministicIds, EventRecorder, FakeTool, ScriptedModel, StreamingMock,
     Trajectory,
 };
-use crate::tool::{Tool, ToolCall};
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStreamItem, collect_model_stream,
 };
 use tinyinference_llm::usage::Usage;
+use tinytools::Tool;
 
 // ---------------------------------------------------------------------------
 // StreamingMock
@@ -143,63 +143,52 @@ async fn scripted_model_with_usage() {
 #[tokio::test]
 async fn fake_tool_returning_produces_text_result() {
     let tool = FakeTool::returning("search", "42");
-    let state = ();
-    let call = ToolCall::new("c1", "search", serde_json::json!({}));
-    let result = tool.call(&state, call).await.unwrap();
-    assert_eq!(result.content, "42");
-    assert!(result.error.is_none());
+    let result = tool.execute(serde_json::json!({})).await.unwrap();
+    assert_eq!(result.output(), "42");
+    assert!(!result.is_error);
 }
 
 #[tokio::test]
 async fn fake_tool_failing_returns_error() {
     let tool = FakeTool::failing("explode", "boom");
-    let state = ();
-    let call = ToolCall::new("c1", "explode", serde_json::json!({}));
-    let err = tool.call(&state, call).await.unwrap_err();
+    let err = tool.execute(serde_json::json!({})).await.unwrap_err();
     assert!(err.to_string().contains("boom"));
 }
 
 #[tokio::test]
 async fn fake_tool_new_returns_empty_result() {
     let tool = FakeTool::new("noop");
-    let state = ();
-    let call = ToolCall::new("c1", "noop", serde_json::json!({}));
-    let result = tool.call(&state, call).await.unwrap();
-    assert_eq!(result.content, "");
+    let result = tool.execute(serde_json::json!({})).await.unwrap();
+    assert_eq!(result.output(), "");
 }
 
 #[tokio::test]
 async fn fake_tool_records_calls() {
     let tool = FakeTool::returning("search", "ok");
-    let state = ();
-
-    let c1 = ToolCall::new("id1", "search", serde_json::json!({"q": "rust"}));
-    let c2 = ToolCall::new("id2", "search", serde_json::json!({"q": "cargo"}));
-
-    tool.call(&state, c1.clone()).await.unwrap();
-    tool.call(&state, c2.clone()).await.unwrap();
+    tool.execute(serde_json::json!({"q": "rust"}))
+        .await
+        .unwrap();
+    tool.execute(serde_json::json!({"q": "cargo"}))
+        .await
+        .unwrap();
 
     let calls = tool.calls();
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].id, "id1");
-    assert_eq!(calls[1].id, "id2");
+    assert_eq!(calls[0]["q"], "rust");
+    assert_eq!(calls[1]["q"], "cargo");
 }
 
 #[tokio::test]
 async fn fake_tool_name_and_description() {
-    use crate::tool::Tool;
     let tool = FakeTool::returning("my_tool", "res");
-    // Access via explicit trait disambiguation to resolve the generic State.
-    assert_eq!(<FakeTool as Tool<()>>::name(&tool), "my_tool");
-    assert!(<FakeTool as Tool<()>>::description(&tool).contains("my_tool"));
+    assert_eq!(<FakeTool as Tool>::name(&tool), "my_tool");
+    assert!(<FakeTool as Tool>::description(&tool).contains("my_tool"));
 }
 
 #[tokio::test]
 async fn fake_tool_schema_is_valid() {
-    use crate::tool::Tool;
     let tool = FakeTool::new("echo");
-    let schema = <FakeTool as Tool<()>>::schema(&tool);
-    assert_eq!(schema.name, "echo");
+    assert_eq!(<FakeTool as Tool>::spec(&tool).name, "echo");
 }
 
 // ---------------------------------------------------------------------------

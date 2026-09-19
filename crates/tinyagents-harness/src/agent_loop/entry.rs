@@ -6,6 +6,45 @@
 
 use super::*;
 
+/// Owns the accumulating run until the driver reaches a terminal outcome.
+///
+/// If the driving future is dropped at any await point, this guard observes the
+/// real partial run and invokes the host terminal hook exactly once. That is
+/// what makes cancellation accounting truthful for both unary and streaming
+/// hosted entry points.
+struct TerminalRunGuard {
+    run: AgentRun,
+    observer: Option<crate::context::TerminalObserver>,
+}
+
+impl TerminalRunGuard {
+    fn new(observer: Option<crate::context::TerminalObserver>) -> Self {
+        Self {
+            run: AgentRun::new(),
+            observer,
+        }
+    }
+
+    fn complete(mut self, succeeded: bool, error: Option<String>) -> AgentRun {
+        if let Some(observer) = self.observer.take() {
+            observer(self.run.clone(), succeeded, error);
+        }
+        std::mem::take(&mut self.run)
+    }
+}
+
+impl Drop for TerminalRunGuard {
+    fn drop(&mut self) {
+        if let Some(observer) = self.observer.take() {
+            observer(
+                self.run.clone(),
+                false,
+                Some("hosted invocation cancelled by caller".to_string()),
+            );
+        }
+    }
+}
+
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Runs the default agent loop and returns the accumulated [`AgentRun`].
     ///
@@ -201,6 +240,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.drive_collecting(state, ctx, input, false).await
     }
 
+    /// Streaming counterpart of [`Self::invoke_in_context_collecting_partial`].
+    ///
+    /// This preserves the accumulated run on a streaming provider failure so
+    /// host-owned terminal sinks can report the actual usage and executed
+    /// tools instead of inventing an empty failure record.
+    pub async fn invoke_streaming_in_context_collecting_partial(
+        &self,
+        state: &State,
+        ctx: RunContext<Ctx>,
+        input: Vec<Message>,
+    ) -> PartialRunOutcome {
+        self.drive_collecting(state, ctx, input, true).await
+    }
+
     async fn drive(
         &self,
         state: &State,
@@ -239,23 +292,34 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             status = status.with_thread(thread);
         }
 
-        let mut run = AgentRun::new();
+        let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
         match self
-            .run_loop(state, &mut ctx, &mut run, &mut status, input, streaming)
+            .run_loop(
+                state,
+                &mut ctx,
+                &mut terminal.run,
+                &mut status,
+                input,
+                streaming,
+            )
             .await
         {
             Ok(()) => {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical
                 // to "the model produced an empty final answer".
-                if run.paused.is_some() {
+                let paused = terminal.run.paused.is_some();
+                if paused {
                     status.mark_interrupted();
                 } else {
                     status.mark_completed();
                 }
                 PartialRunOutcome {
-                    run,
+                    run: terminal.complete(
+                        !paused,
+                        paused.then(|| "hosted turn paused before completion".to_string()),
+                    ),
                     status,
                     error: None,
                 }
@@ -276,7 +340,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let _ = self.middleware.run_on_error(&mut ctx, &error).await;
                 }
                 PartialRunOutcome {
-                    run,
+                    run: terminal.complete(false, Some(error.to_string())),
                     status,
                     error: Some(error),
                 }

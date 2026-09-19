@@ -386,9 +386,9 @@ mod pairing {
         MessageRole, SummarizationPolicy, TrimOptions, TrimStrategy, tool_pairing_is_intact,
         trim_messages, trim_messages_with,
     };
-    use crate::tool::ToolCall;
     use serde_json::json;
     use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+    use tinyinference_llm::tool::ToolCall;
 
     /// An assistant turn that only calls tools: no visible text at all, which
     /// is precisely the shape that used to estimate to zero tokens and to be
@@ -629,9 +629,9 @@ mod pairing {
 #[cfg(test)]
 mod rendering {
     use crate::summarization::{ConcatSummarizer, Summarizer, render_message_for_summary};
-    use crate::tool::ToolCall;
     use serde_json::json;
     use tinyinference_llm::message::{AssistantMessage, Message};
+    use tinyinference_llm::tool::ToolCall;
 
     #[tokio::test]
     async fn default_summarizer_keeps_tool_history() {

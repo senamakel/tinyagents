@@ -21,6 +21,61 @@ use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache
 use tinyinference_llm::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    pub(super) async fn resolve_host_model(
+        &self,
+        ctx: &RunContext<Ctx>,
+        request: &ModelRequest,
+    ) -> Result<Option<ResolvedModelBinding<State>>> {
+        let Some(host_run) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
+            return Ok(None);
+        };
+        let mut resolve = crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
+        if ctx.depth() == 0 {
+            resolve = resolve.as_team_lead();
+        }
+        if let Some(role) = host_run.role.clone() {
+            resolve = resolve.with_role(role);
+        }
+        if let Some(pin) = request.model.clone().or(host_run.model_pin.clone()) {
+            resolve = resolve.with_model_pin(pin);
+        }
+        if let Some(capabilities) = request.required_capabilities.clone() {
+            resolve = resolve.with_required_capabilities(capabilities);
+        }
+        let resolution = host_run.host.models.resolve(&resolve);
+        let (budget, bound) = self.model_call_budget(ctx);
+        let model = match budget {
+            Some(remaining) => tokio::select! {
+                biased;
+                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its {bound}", ctx.run_id())))?,
+            },
+            None => tokio::select! {
+                biased;
+                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                result = resolution => result,
+            },
+        }.map_err(|error| match error {
+            TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+            _ => { tinyagents_tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
+        })?;
+        let name = model
+            .profile()
+            .and_then(|profile| profile.model.clone())
+            .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
+        Ok(Some(ResolvedModelBinding {
+            resolved: ResolvedModel {
+                name,
+                requested: resolve.model_pin,
+                source: if request.model.is_some() {
+                    ModelResolutionSource::RequestOverride
+                } else {
+                    ModelResolutionSource::AgentDefault
+                },
+            },
+            model,
+        }))
+    }
     /// Invokes a model, consulting the local response cache around the
     /// retry/fallback path.
     ///
@@ -80,17 +135,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let identity = binding.model.cache_identity();
         let primary_name = binding.resolved.name.clone();
 
-        let decision = self.response_cache_decision(request).map(|(cache, base)| {
-            let key = scoped_cache_key(
-                &base,
-                identity.as_deref(),
-                streaming,
-                policy.namespace.as_deref(),
-            );
-            (cache, key)
-        });
+        // Claude Code executes file and shell tools inside the provider turn.
+        // Replaying a cached first turn would skip those side effects entirely,
+        // so this provider is never response-cacheable. Other providers retain
+        // the normal request-policy behavior.
+        let side_effecting_provider = binding
+            .model
+            .profile()
+            .and_then(|profile| profile.provider.as_deref())
+            == Some("claude-code");
+        let decision = (!side_effecting_provider)
+            .then(|| self.response_cache_decision(request))
+            .flatten()
+            .map(|(cache, base)| {
+                let key = scoped_cache_key(
+                    &base,
+                    identity.as_deref(),
+                    streaming,
+                    policy.namespace.as_deref(),
+                );
+                (cache, key)
+            });
 
-        if decision.is_none() {
+        if side_effecting_provider {
+            tinyagents_tracing::debug!(
+                call_id = %call_id.as_str(),
+                provider = "claude-code",
+                "[cache] response cache disabled for side-effecting provider"
+            );
+        } else if decision.is_none() {
             let reason = self.cache_skip_reason(request);
             tinyagents_tracing::debug!(
                 call_id = %call_id.as_str(),
@@ -125,7 +198,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     cached.resolved_model = Some(binding.resolved.clone());
                 }
                 if streaming {
-                    self.replay_cached_response_as_deltas(state, ctx, call_id, &cached)
+                    cached = self
+                        .replay_cached_response_as_deltas(state, ctx, call_id, cached)
                         .await?;
                 }
                 return Ok(cached);
@@ -265,30 +339,42 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         state: &State,
         ctx: &mut RunContext<Ctx>,
         call_id: &CallId,
-        cached: &ModelResponse,
-    ) -> Result<()> {
-        let text = cached.text();
+        mut cached: ModelResponse,
+    ) -> Result<ModelResponse> {
+        let content = cached.message.content.clone();
         let tool_calls = cached.tool_calls().to_vec();
         tinyagents_tracing::debug!(
             call_id = %call_id.as_str(),
-            text_len = text.len(),
+            text_len = cached.text().len(),
             tool_calls = tool_calls.len(),
             "[cache] replaying a cache hit as synthetic stream deltas"
         );
 
         let mut deltas: Vec<MessageDelta> = Vec::new();
-        if !text.is_empty() {
-            deltas.push(MessageDelta {
-                text,
-                reasoning: String::new(),
-                tool_call: None,
-            });
+        for block in &content {
+            match block {
+                tinyinference_llm::message::ContentBlock::Text(text) => {
+                    deltas.push(MessageDelta {
+                        text: text.clone(),
+                        reasoning: String::new(),
+                        tool_call: None,
+                    });
+                }
+                tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                    deltas.push(MessageDelta {
+                        text: String::new(),
+                        reasoning: text.clone(),
+                        tool_call: None,
+                    });
+                }
+                _ => {}
+            }
         }
         for call in &tool_calls {
             deltas.push(MessageDelta {
                 text: String::new(),
                 reasoning: String::new(),
-                tool_call: Some(crate::tool::ToolDelta {
+                tool_call: Some(tinyinference_llm::tool::ToolDelta {
                     call_id: call.id.clone(),
                     content: serde_json::to_string(&call.arguments).unwrap_or_default(),
                     tool_name: Some(call.name.clone()),
@@ -296,23 +382,74 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
         }
 
+        let mut streamed_text = String::new();
+        let mut streamed_reasoning = String::new();
+        let mut saw_streamed_content = false;
+        let mut transformed_tools = StreamAccumulator::new();
+        let mut saw_tool_delta = false;
         for delta in deltas {
+            saw_tool_delta |= delta.tool_call.is_some();
             let mut model_delta = ModelDelta {
                 call_id: call_id.as_str().to_string(),
                 content: delta.text.clone(),
                 reasoning: delta.reasoning.clone(),
                 tool_call: delta.tool_call.clone(),
             };
-            ctx.emit(AgentEvent::ModelDelta {
-                run_id: ctx.config.run_id.clone(),
-                call_id: call_id.clone(),
-                delta,
-            });
             self.middleware
                 .run_on_model_delta(ctx, state, &mut model_delta)
                 .await?;
+            if let Some(tool_call) = model_delta.tool_call.clone() {
+                transformed_tools.push(&ModelStreamItem::ToolCallDelta(tool_call));
+            }
+            saw_streamed_content |= !delta.text.is_empty()
+                || !delta.reasoning.is_empty()
+                || !model_delta.content.is_empty()
+                || !model_delta.reasoning.is_empty();
+            streamed_text.push_str(&model_delta.content);
+            streamed_reasoning.push_str(&model_delta.reasoning);
+            ctx.emit(AgentEvent::ModelDelta {
+                run_id: ctx.config.run_id.clone(),
+                call_id: call_id.clone(),
+                delta: MessageDelta {
+                    text: model_delta.content.clone(),
+                    reasoning: model_delta.reasoning.clone(),
+                    tool_call: model_delta.tool_call.clone(),
+                },
+            });
+            crate::runtime::emit_host_progress::<State, Ctx>(
+                ctx,
+                crate::host::ProgressEvent::Token {
+                    run: ctx.run_id().clone(),
+                    text: model_delta.content,
+                },
+            );
         }
-        Ok(())
+        if saw_streamed_content {
+            let mut transformed_content = Vec::new();
+            if !streamed_reasoning.is_empty() {
+                transformed_content.push(tinyinference_llm::message::ContentBlock::Thinking {
+                    text: streamed_reasoning,
+                    signature: None,
+                });
+            }
+            if !streamed_text.is_empty() {
+                transformed_content.push(tinyinference_llm::message::ContentBlock::Text(
+                    streamed_text,
+                ));
+            }
+            transformed_content.extend(cached.message.content.drain(..).filter(|block| {
+                !matches!(
+                    block,
+                    tinyinference_llm::message::ContentBlock::Text(_)
+                        | tinyinference_llm::message::ContentBlock::Thinking { .. }
+                )
+            }));
+            cached.message.content = transformed_content;
+        }
+        if saw_tool_delta {
+            cached.message.tool_calls = transformed_tools.finish()?.message.tool_calls;
+        }
+        Ok(cached)
     }
 
     /// Invokes a model with retry and fallback (no caching).
@@ -489,6 +626,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     if matches!(error, TinyAgentsError::Timeout(_)) {
                         return Err(error);
                     }
+                    // A hosted resolver owns routing authority. Its first
+                    // decision must not fall through to harness-local
+                    // fallback names the host did not approve.
+                    if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+                        return Err(error);
+                    }
                     // Retries exhausted (or non-retryable): walk the fallback
                     // chain for the next model, skipping any name already
                     // visited in this chain (so a chain with a repeated name
@@ -657,9 +800,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// [`on_model_delta`][crate::middleware::Middleware::on_model_delta]
     /// hook for each [`ModelStreamItem::MessageDelta`] (and standalone
     /// [`ModelStreamItem::ToolCallDelta`]), then folds the items into the final
-    /// [`ModelResponse`] via [`StreamAccumulator`]. The merged response is
-    /// equivalent to what the unary [`tinyinference_llm::model::ChatModel::invoke`]
-    /// path would have produced, so the rest of the loop is unaffected.
+    /// [`ModelResponse`] via [`StreamAccumulator`]. Terminal provider metadata
+    /// is retained, while terminal text/thinking is reconciled from those
+    /// transformed deltas so the returned response agrees with streaming
+    /// consumers.
     ///
     /// `deltas_emitted` is incremented for every delta actually handed to
     /// consumers, so the retry path can tell whether a failed attempt already
@@ -675,6 +819,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<ModelResponse> {
         let mut stream = model.stream(state, request.clone()).await?;
         let mut accumulator = StreamAccumulator::new();
+        // A terminal `Completed` response usually has richer provider metadata
+        // than deltas (message id, usage, tool calls, and route information),
+        // but its text is still the raw provider payload.  Keep the text and
+        // reasoning that actually crossed the middleware boundary so that the
+        // terminal item cannot restore content a delta middleware redacted or
+        // transformed before it reached consumers.
+        let mut streamed_text = String::new();
+        let mut streamed_reasoning = String::new();
+        let mut saw_streamed_content = false;
+        let mut transformed_tools = StreamAccumulator::new();
+        let mut saw_tool_delta = false;
 
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
@@ -685,7 +840,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Race the next provider chunk against cooperative cancellation. If
             // cancellation wins we drop the partially consumed stream and unwind
             // with `Cancelled`; the `cancelled()` future is cancel-safe.
-            let item = tokio::select! {
+            let mut item = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => {
                     return Err(TinyAgentsError::Cancelled);
@@ -709,6 +864,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
 
             if let Some(message_delta) = message_delta {
+                saw_tool_delta |= message_delta.tool_call.is_some();
                 // Build the middleware-facing delta first (it needs owned
                 // copies of the fields), then move `message_delta` into the
                 // event so the hot path clones the payload once instead of
@@ -719,15 +875,103 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     reasoning: message_delta.reasoning.clone(),
                     tool_call: message_delta.tool_call.clone(),
                 };
-                ctx.emit(AgentEvent::ModelDelta {
-                    run_id: ctx.config.run_id.clone(),
-                    call_id: call_id.clone(),
-                    delta: message_delta,
-                });
-                *deltas_emitted += 1;
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)
                     .await?;
+                saw_streamed_content |= !message_delta.text.is_empty()
+                    || !message_delta.reasoning.is_empty()
+                    || !model_delta.content.is_empty()
+                    || !model_delta.reasoning.is_empty();
+                streamed_text.push_str(&model_delta.content);
+                streamed_reasoning.push_str(&model_delta.reasoning);
+                let forwarded_delta = MessageDelta {
+                    text: model_delta.content.clone(),
+                    reasoning: model_delta.reasoning.clone(),
+                    tool_call: model_delta.tool_call.clone(),
+                };
+                ctx.emit(AgentEvent::ModelDelta {
+                    run_id: ctx.config.run_id.clone(),
+                    call_id: call_id.clone(),
+                    delta: forwarded_delta,
+                });
+                crate::runtime::emit_host_progress::<State, Ctx>(
+                    ctx,
+                    crate::host::ProgressEvent::Token {
+                        run: ctx.run_id().clone(),
+                        text: model_delta.content.clone(),
+                    },
+                );
+                item = match item {
+                    ModelStreamItem::MessageDelta(_) => {
+                        ModelStreamItem::MessageDelta(MessageDelta {
+                            text: model_delta.content,
+                            reasoning: model_delta.reasoning,
+                            tool_call: model_delta.tool_call,
+                        })
+                    }
+                    ModelStreamItem::ToolCallDelta(_) => model_delta.tool_call.map_or_else(
+                        || {
+                            // The middleware deliberately suppressed the raw
+                            // tool fragment.  Keep a content-free item so the
+                            // accumulator cannot reconstruct or dispatch it.
+                            ModelStreamItem::MessageDelta(MessageDelta::default())
+                        },
+                        ModelStreamItem::ToolCallDelta,
+                    ),
+                    _ => item,
+                };
+                if matches!(
+                    item,
+                    ModelStreamItem::ToolCallDelta(_)
+                        | ModelStreamItem::MessageDelta(MessageDelta {
+                            tool_call: Some(_),
+                            ..
+                        })
+                ) {
+                    transformed_tools.push(&item);
+                }
+                *deltas_emitted += 1;
+            }
+
+            if let ModelStreamItem::Completed(response) = &mut item
+                && saw_streamed_content
+            {
+                // Deltas represent only text/thinking, so preserve terminal
+                // blocks that cannot be streamed as a `ModelDelta` (JSON,
+                // images, and provider extensions).  Provider signatures on
+                // thinking are intentionally discarded: a transformed block
+                // can no longer be replayed as the signed raw one.
+                let mut content = Vec::new();
+                if !streamed_reasoning.is_empty() {
+                    content.push(tinyinference_llm::message::ContentBlock::Thinking {
+                        text: std::mem::take(&mut streamed_reasoning),
+                        signature: None,
+                    });
+                }
+                if !streamed_text.is_empty() {
+                    content.push(tinyinference_llm::message::ContentBlock::Text(
+                        std::mem::take(&mut streamed_text),
+                    ));
+                }
+                content.extend(response.message.content.drain(..).filter(|block| {
+                    !matches!(
+                        block,
+                        tinyinference_llm::message::ContentBlock::Text(_)
+                            | tinyinference_llm::message::ContentBlock::Thinking { .. }
+                    )
+                }));
+                response.message.content = content;
+            }
+            if let ModelStreamItem::Completed(response) = &mut item
+                && saw_tool_delta
+            {
+                // The terminal response carries richer metadata, but its raw
+                // tool calls are not authoritative after delta middleware has
+                // transformed them. Reconstruct from the exact forwarded
+                // fragments so a changed name, id, or argument payload cannot
+                // be restored just before dispatch.
+                response.message.tool_calls =
+                    transformed_tools.clone().finish()?.message.tool_calls;
             }
 
             accumulator.push(&item);
@@ -761,6 +1005,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) call_id: CallId,
     pub(super) resolved: ResolvedModel,
     pub(super) model: Arc<dyn ChatModel<State>>,
+    pub(super) required_capabilities: Option<tinyinference_llm::model::CapabilitySet>,
     pub(super) streaming: bool,
 }
 
@@ -779,20 +1024,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
     ///   fail-closed behaviour `run_loop` already has for a pre-wrap override.
     ///   Silently substituting a different model is the one outcome that is
     ///   never acceptable.
-    fn rebind(
+    async fn rebind(
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
-    ) -> ResolvedModelBinding<State> {
+    ) -> Result<ResolvedModelBinding<State>> {
         let captured = || ResolvedModelBinding {
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
         };
-        let Some(requested) = request.model.as_deref() else {
-            return captured();
+        let needs_host_resolution =
+            request.model.is_some() || request.required_capabilities.is_some();
+        if !needs_host_resolution {
+            return Ok(captured());
+        }
+        let requested = request.model.as_deref();
+        if request.required_capabilities == self.required_capabilities
+            && (requested.is_none()
+                || requested.is_some_and(|requested| {
+                    self.resolved.source == ModelResolutionSource::RequestOverride
+                        && self.resolved.requested.as_deref() == Some(requested)
+                }))
+        {
+            return Ok(captured());
+        }
+        if let Some(binding) = self.harness.resolve_host_model(ctx, request).await? {
+            return Ok(binding);
+        }
+        let Some(requested) = requested else {
+            return Ok(captured());
         };
         if requested == self.resolved.name {
-            return captured();
+            return Ok(captured());
         }
         match self.harness.models.resolve_request(request, None, None) {
             Some(binding)
@@ -805,7 +1068,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                     to = %binding.resolved.name,
                     "[model] wrap layer overrode the model; re-resolved the binding"
                 );
-                binding
+                Ok(binding)
             }
             _ => {
                 tinyagents_tracing::warn!(
@@ -818,7 +1081,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                     requested: requested.to_string(),
                     resolved: self.resolved.name.clone(),
                 });
-                captured()
+                Ok(captured())
             }
         }
     }
@@ -834,7 +1097,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
-            let binding = self.rebind(ctx, &request);
+            let binding = self.rebind(ctx, &request).await?;
             self.harness
                 .invoke_model_with_retry(
                     state,
@@ -854,12 +1117,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
 /// Implements [`ToolBaseCall`] over a single resolved [`Tool`] so a
 /// [`crate::middleware::ToolMiddleware`] can wrap the real tool
 /// invocation.
-pub(super) struct ToolCallBase<State: Send + Sync> {
-    pub(super) tool: Arc<dyn Tool<State>>,
+pub(super) struct ToolCallBase<State: Send + Sync, Ctx: Send + Sync> {
+    pub(super) dispatch: Arc<dyn crate::tool::ToolDispatch<State, Ctx>>,
+    pub(super) options: tinytools::ToolCallOptions,
     pub(super) timeout_settings: Option<crate::tool::ToolTimeoutSettings>,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCallBase<State> {
+impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCallBase<State, Ctx> {
     fn call<'a>(
         &'a self,
         ctx: &'a mut RunContext<Ctx>,
@@ -867,16 +1131,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
         call: ToolCall,
     ) -> BoxToolFuture<'a> {
         Box::pin(async move {
-            let timeout = self
-                .timeout_settings
-                .as_ref()
-                .map(|settings| settings.resolve(self.tool.timeout_policy(&call)));
+            let timeout = self.timeout_settings.as_ref().map(|settings| {
+                settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
+            });
             let timeout_result = super::tools::timeout_result(&call, timeout);
-            let future = self.tool.call_with_context(
-                state,
-                call,
-                crate::tool::ToolExecutionContext::from_run_context(ctx),
-            );
+            let future = async {
+                self.dispatch
+                    .execute(state, call.arguments, self.options, ctx)
+                    .await
+                    .map_err(super::tools::map_tool_dispatch_error)
+            };
             match timeout.and_then(|resolved| resolved.deadline) {
                 Some(deadline) => match tokio::time::timeout(deadline, future).await {
                     Ok(result) => result,

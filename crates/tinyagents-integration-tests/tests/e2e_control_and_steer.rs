@@ -30,14 +30,13 @@ use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyagents_harness::testkit::{EventRecorder, FakeTool};
-use tinyagents_harness::tool::Tool;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::providers::MockModel;
-use tinyinference_llm::tool::ToolCall;
+use tinytools::{Tool, ToolContent};
 
 // ── Part A: MiddlewareControl ────────────────────────────────────────────────
 
@@ -254,17 +253,17 @@ async fn steer_accepted(
     task_id: &TaskId,
     args: serde_json::Value,
 ) -> bool {
-    let call = ToolCall::new(
-        "call-steer",
-        "orchestrate_steer",
-        args_with_task(task_id, args),
-    );
-    let result = Tool::<()>::call(tool, &(), call)
+    let result = tool
+        .execute(args_with_task(task_id, args))
         .await
         .expect("steer tool call succeeds");
     result
-        .raw
-        .and_then(|raw| raw.get("accepted").and_then(|v| v.as_bool()))
+        .content
+        .into_iter()
+        .find_map(|block| match block {
+            ToolContent::Json { data } => data.get("accepted").and_then(|value| value.as_bool()),
+            ToolContent::Text { .. } => None,
+        })
         .unwrap_or_else(|| panic!("steer result missing `accepted` boolean"))
 }
 
@@ -349,17 +348,14 @@ async fn steer_rejects_unknown_command_with_validation_error() {
     registry.register(id.clone(), handle);
     let tool = OrchestrationTool::new(OrchestrationToolKind::Steer, store).with_steering(registry);
 
-    let call = ToolCall::new(
-        "call-steer",
-        "orchestrate_steer",
-        json!({"task_id": id.as_str(), "command": "explode"}),
-    );
-    let err = Tool::<()>::call(&tool, &(), call)
+    let err = tool
+        .execute(json!({"task_id": id.as_str(), "command": "explode"}))
         .await
         .expect_err("an unknown steering command must error");
 
     assert!(
-        matches!(err, TinyAgentsError::Validation(_)),
+        err.downcast_ref::<TinyAgentsError>()
+            .is_some_and(|error| matches!(error, TinyAgentsError::Validation(_))),
         "unknown steering command must surface as a validation error, got {err:?}"
     );
 }
@@ -414,13 +410,17 @@ fn store_with_two_kinds() -> Arc<dyn TaskStore> {
 /// Drives the `orchestrate_list` tool with `args` and returns the JSON array of
 /// task records from the result payload.
 async fn list_records(tool: &OrchestrationTool, args: serde_json::Value) -> Vec<serde_json::Value> {
-    let call = ToolCall::new("call-list", "orchestrate_list", args);
-    let result = Tool::<()>::call(tool, &(), call)
+    let result = tool
+        .execute(args)
         .await
         .expect("orchestrate_list call succeeds");
     result
-        .raw
-        .and_then(|raw| raw.as_array().cloned())
+        .content
+        .into_iter()
+        .find_map(|block| match block {
+            ToolContent::Json { data } => data.as_array().cloned(),
+            ToolContent::Text { .. } => None,
+        })
         .expect("orchestrate_list returns a JSON array of records")
 }
 

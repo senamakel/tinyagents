@@ -340,15 +340,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     let stored = ctx.session_store.get(&ctx.thread_id);
     let is_new = !stored.as_deref().map(is_uuid_v4).unwrap_or(false);
     let cc_session_id = if is_new {
-        let id = generate_uuid_v4();
-        if let Err(e) = ctx.session_store.set(&ctx.thread_id, &id) {
-            log::warn!(
-                "[claude-code][driver] failed to persist session uuid for thread {}: {}",
-                ctx.thread_id,
-                e
-            );
-        }
-        id
+        generate_uuid_v4()
     } else {
         stored.expect("checked Some above")
     };
@@ -611,6 +603,21 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     }
     if let Some(err) = mapper.error.clone() {
         anyhow::bail!("[claude-code][driver] {}", err);
+    }
+
+    // Do not make a session durable until Claude has accepted the launch and
+    // completed the turn. A spawn, input, timeout, or CLI validation failure
+    // must leave the thread eligible for a fresh `--session-id` retry rather
+    // than poisoning it with a UUID Claude never created.
+    if is_new {
+        let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
+        if let Err(error) = ctx.session_store.set(&ctx.thread_id, accepted_id) {
+            log::warn!(
+                "[claude-code][driver] failed to persist accepted session uuid for thread {}: {}",
+                ctx.thread_id,
+                error
+            );
+        }
     }
 
     Ok(mapper.into_response())

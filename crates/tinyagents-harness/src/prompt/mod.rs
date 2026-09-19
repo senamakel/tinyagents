@@ -39,9 +39,121 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Result, TinyAgentsError};
-use crate::tool::ToolSchema;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, PromptSegment, ResponseFormat, SegmentRole};
+use tinyinference_llm::tool::ToolSchema;
+
+/// Renders supplied sections in order without product prompt selection.
+///
+/// `max_bytes` is a caller-owned budget. The first section that does not fit
+/// is clipped at a UTF-8 boundary and recorded; later sections are omitted.
+pub fn assemble_sections(sections: &[PromptSection], max_bytes: usize) -> PromptAssembly {
+    let mut output = PromptAssembly::default();
+    for section in sections {
+        let separator = if output.text.is_empty() { "" } else { "\n\n" };
+        let available = max_bytes.saturating_sub(output.text.len());
+        let required = separator.len() + section.content.len();
+        if required <= available {
+            output.text.push_str(separator);
+            output.text.push_str(&section.content);
+            output.included_sections.push(section.name.clone());
+            continue;
+        }
+        if available > separator.len() {
+            output.text.push_str(separator);
+            let content_cap = available - separator.len();
+            let cut = utf8_prefix(&section.content, content_cap);
+            output.text.push_str(&section.content[..cut]);
+            output.truncation = Some(PromptTruncation {
+                section: section.name.clone(),
+                omitted_bytes: section.content.len().saturating_sub(cut),
+            });
+        } else {
+            output.truncation = Some(PromptTruncation {
+                section: section.name.clone(),
+                omitted_bytes: section.content.len(),
+            });
+        }
+        break;
+    }
+    output
+}
+
+/// Assembles sections under both caller-supplied byte and token budgets.
+pub fn assemble_sections_with_budget(
+    sections: &[PromptSection],
+    budget: PromptBudget,
+    tokenize: impl Fn(&str) -> usize,
+) -> PromptAssembly {
+    let mut assembled = PromptAssembly::default();
+    for section in sections {
+        // Tokenize the exact text the caller receives. In particular, the
+        // separator belongs to the candidate rather than being charged after
+        // the section's content, because tokenizers may assign it a cost.
+        let mut candidate = assembled.text.clone();
+        if !candidate.is_empty() {
+            candidate.push_str("\n\n");
+        }
+        candidate.push_str(&section.content);
+        if candidate.len() > budget.max_bytes || tokenize(&candidate) > budget.max_tokens {
+            assembled.truncation = Some(PromptTruncation {
+                section: section.name.clone(),
+                omitted_bytes: section.content.len(),
+            });
+            break;
+        }
+        assembled.text = candidate;
+        assembled.included_sections.push(section.name.clone());
+    }
+    assembled
+}
+
+/// Renders a stable Markdown heading.
+pub fn render_heading(title: &str) -> String {
+    format!("## {title}")
+}
+
+/// Renders an optional named section; blank bodies produce no bytes.
+pub fn render_optional_section(title: &str, body: Option<&str>) -> String {
+    body.filter(|body| !body.trim().is_empty())
+        .map(|body| format!("{}\n\n{}", render_heading(title), body))
+        .unwrap_or_default()
+}
+
+/// Renders a stable, name-sorted catalogue from caller-owned rows.
+pub fn render_tool_catalogue(rows: &[(String, String)]) -> String {
+    let mut rows = rows.to_vec();
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+    rows.into_iter()
+        .map(|(name, description)| format!("- `{name}`: {description}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Renders generic retrieved documents in ranked order for context composition.
+pub fn render_retrieved_documents(documents: &[crate::retriever::RetrievedDocument]) -> String {
+    documents
+        .iter()
+        .map(|document| {
+            format!(
+                "[{} score={}]\n{}",
+                document.id, document.score, document.content
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn utf8_prefix(text: &str, max_bytes: usize) -> usize {
+    if text.len() <= max_bytes {
+        return text.len();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
 
 // ---------------------------------------------------------------------------
 // PromptTemplate

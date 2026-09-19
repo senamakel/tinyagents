@@ -26,8 +26,9 @@ use std::time::{Duration, Instant};
 
 use crate::context::RunConfig;
 use crate::retry::RateLimiter;
-use crate::tool::{ToolCall, ToolSchema};
 use tinyinference_llm::model::ResponseFormat;
+use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinytools::{ToolPolicy, ToolSideEffects};
 
 // ── RetryMiddleware ───────────────────────────────────────────────────────────
 
@@ -286,10 +287,10 @@ pub struct BudgetMiddleware {
 /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
 pub struct ToolPolicyMiddleware {
     pub(crate) label: &'static str,
-    pub(crate) policies: std::collections::HashMap<String, crate::tool::ToolPolicy>,
+    pub(crate) policies: std::collections::HashMap<String, ToolPolicy>,
     pub(crate) require_classification: bool,
     pub(crate) require_background_safe: bool,
-    pub(crate) deny: crate::tool::ToolSideEffects,
+    pub(crate) deny: ToolSideEffects,
     /// When `true`, a tool whose runtime declares
     /// [`SandboxMode::Required`][crate::tool::SandboxMode::Required] is
     /// blocked unless the run carries a workspace whose sandbox is `Required`.

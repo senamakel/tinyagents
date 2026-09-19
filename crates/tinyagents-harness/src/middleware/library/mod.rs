@@ -40,12 +40,15 @@ use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use crate::ids::CallId;
-use crate::middleware::{Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
+use crate::middleware::{
+    Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware, ToolInvocationIdentity,
+};
 use crate::retry::{RateLimiter, RetryPolicy, is_retryable};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
-use crate::tool::{ToolCall, ToolDelta, ToolResult, ToolSchema};
 use tinyinference_llm::message::{ContentBlock, Message};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolSchema};
+use tinytools::ToolResult;
 
 mod budget;
 mod context;

@@ -20,8 +20,8 @@ use tinyagents_harness::ids::{
 };
 use tinyagents_harness::limits::{LimitTracker, RunLimits};
 use tinyagents_harness::store::{AppendStore, InMemoryAppendStore};
-use tinyagents_harness::tool::ToolResult;
 use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
+use tinytools::ToolResult;
 
 #[tokio::test]
 async fn graph_reducers_streams_observability_and_status_helpers_work() {
@@ -320,10 +320,10 @@ fn tool_schema_limits_and_ids_cover_public_helpers() {
             .contains("must be number")
     );
 
-    let ok = ToolResult::text("call-1", "make", "done");
-    assert!(!ok.is_error());
-    let err = ToolResult::error("call-2", "make", "bad");
-    assert!(err.is_error());
+    let ok = ToolResult::success("done");
+    assert!(!ok.is_error);
+    let err = ToolResult::error("bad");
+    assert!(err.is_error);
 
     let limits = RunLimits::default()
         .with_max_model_calls(1)

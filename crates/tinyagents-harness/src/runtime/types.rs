@@ -17,9 +17,11 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::cache::ResponseCache;
+use crate::host::HostCapabilities;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
 use crate::model_registry::ModelRegistry;
@@ -27,6 +29,45 @@ use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::cache::CachePolicy;
 use tinyinference_llm::model::ResponseFormat;
+
+/// Model and identity selected by one live host-driven invocation.
+///
+/// This is held only in that invocation's non-serializable
+/// [`RunContext`](crate::context::RunContext). It is never stored on the
+/// reusable harness, keyed by a run id, or written to graph/checkpoint state.
+pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
+    /// The capability bundle that prepared this exact invocation. This is
+    /// per-run rather than read from the harness so a recursively invoked
+    /// child cannot substitute its own installed (or missing) host policy.
+    pub(crate) host: Arc<HostCapabilities<State>>,
+    pub(crate) agent_id: String,
+    /// Definition-selected pin passed to the host resolver at every provider
+    /// call. It is advisory; the host remains the routing authority.
+    pub(crate) model_pin: Option<String>,
+    pub(crate) role: Option<String>,
+    /// Canonical names the resolved definition authorizes for this exact run.
+    /// An empty list retains the legacy unrestricted catalogue; a non-empty
+    /// list is a host boundary enforced for schemas and dispatch alike.
+    pub(crate) allowed_tools: HashSet<String>,
+    /// Per-turn ordered, nonblocking projection to the optional progress sink.
+    pub(crate) progress: Option<super::agent::ProgressSender>,
+    /// The exact invocation-local runtime inherited by authorized children.
+    pub(crate) runtime: Option<Arc<InvocationRuntime<State, Ctx>>>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State, Ctx> {
+    fn clone(&self) -> Self {
+        Self {
+            host: self.host.clone(),
+            agent_id: self.agent_id.clone(),
+            model_pin: self.model_pin.clone(),
+            role: self.role.clone(),
+            allowed_tools: self.allowed_tools.clone(),
+            progress: self.progress.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
 
 /// Declarative, run-scoped policy shared by every invocation of an
 /// [`AgentHarness`].
@@ -273,7 +314,7 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// Name-keyed registry of chat models with an optional default.
     pub(crate) models: ModelRegistry<State>,
     /// Name-keyed registry of tools exposed to the model.
-    pub(crate) tools: ToolRegistry<State>,
+    pub(crate) tools: ToolRegistry<State, Ctx>,
     /// Ordered middleware stack wrapping agent, model, and tool execution.
     pub(crate) middleware: MiddlewareStack<State, Ctx>,
     /// Cross-cutting run policy (limits, retry, fallback, response format).
@@ -287,4 +328,28 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// into it. Because it is owned by the harness rather than a single run, a
     /// repeated identical request can be served from an earlier run's result.
     pub(crate) response_cache: Option<Arc<dyn ResponseCache>>,
+}
+
+/// The non-serializable mechanics selected for one hosted invocation.
+///
+/// A durable [`AgentHarness`] remains the public entry point and retains only
+/// process-safe dependencies. Hosts whose model, tool, or middleware surface
+/// is selected per turn build an `InvocationRuntime` and attach it to the
+/// [`AgentInvocation`](super::AgentInvocation). It is never installed on the
+/// durable harness or serialized into graph/checkpoint state.
+pub struct InvocationRuntime<State: Send + Sync, Ctx: Send + Sync = ()> {
+    harness: Arc<AgentHarness<State, Ctx>>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> InvocationRuntime<State, Ctx> {
+    /// Freezes an already assembled, invocation-local runtime.
+    pub fn new(harness: AgentHarness<State, Ctx>) -> Self {
+        Self {
+            harness: Arc::new(harness),
+        }
+    }
+
+    pub(crate) fn harness(&self) -> &AgentHarness<State, Ctx> {
+        &self.harness
+    }
 }

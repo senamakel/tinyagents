@@ -12,11 +12,33 @@ use crate::builder::{GraphBuilder, NodeContext};
 use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
 use crate::command::NodeResult;
 use crate::reducer::ClosureStateReducer;
+use async_trait::async_trait;
 use tinyagents_harness::ids::{NodeId, RunId};
+
+#[derive(Default)]
+struct NestedRecordingInvoker(std::sync::Mutex<Vec<crate::subagent_node::AgentInvocation>>);
+
+#[async_trait]
+impl crate::subagent_node::AgentInvoker for NestedRecordingInvoker {
+    async fn invoke(
+        &self,
+        request: crate::subagent_node::AgentInvocation,
+    ) -> crate::Result<crate::subagent_node::SubAgentOutput> {
+        self.0.lock().unwrap().push(request.clone());
+        request
+            .events
+            .emit(tinyagents_harness::events::AgentEvent::StateUpdate);
+        Ok(crate::subagent_node::SubAgentOutput {
+            text: request.input.prompt,
+            ..Default::default()
+        })
+    }
+}
 
 /// Builds a minimal [`NodeContext`] standing in for the embedding node `id`.
 fn ctx_for(id: &str) -> NodeContext {
     NodeContext {
+        graph_id: tinyagents_harness::ids::GraphId::new("graph-test"),
         node_id: NodeId::from(id),
         run_id: RunId::new("run-test"),
         thread_id: None,
@@ -27,6 +49,7 @@ fn ctx_for(id: &str) -> NodeContext {
         root_run_id: None,
         recursion_frames: Vec::new(),
         child_runs: None,
+        agent_binding: None,
     }
 }
 
@@ -59,6 +82,47 @@ async fn shared_state_subgraph() {
     // 0 -> pre(+1) -> child(+10) = 11
     let run = parent.run(0).await.unwrap();
     assert_eq!(run.state, 11);
+}
+
+#[tokio::test]
+async fn embedded_graph_propagates_the_host_agent_invoker() {
+    let invoker = Arc::new(NestedRecordingInvoker::default());
+    let child = GraphBuilder::<String, String>::overwrite()
+        .add_node(
+            "delegate",
+            crate::subagent_node::subagent_node(crate::subagent_node::SubAgentNode::from_fns(
+                "researcher",
+                |state: &String| crate::subagent_node::SubAgentInput::prompt(state.clone()),
+                |out: crate::subagent_node::SubAgentOutput| out.text,
+            )),
+        )
+        .set_entry("delegate")
+        .set_finish("delegate")
+        .compile()
+        .unwrap();
+    let parent = GraphBuilder::<String, String>::overwrite()
+        .add_node("child", shared_subgraph_node(child))
+        .set_entry("child")
+        .set_finish("child")
+        .compile()
+        .unwrap();
+
+    let run = parent
+        .run_with_agent_binding(
+            "nested".to_string(),
+            crate::subagent_node::AgentInvocationBinding::new(
+                invoker.clone(),
+                tinyagents_harness::events::EventSink::new(),
+                tinyagents_harness::cancel::CancellationToken::new(),
+            ),
+        )
+        .await
+        .unwrap();
+    let requests = invoker.0.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].root_run_id, run.root_run_id);
+    assert_ne!(requests[0].parent_run_id, run.run_id);
+    assert_eq!(requests[0].input.prompt, "nested");
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -305,6 +369,88 @@ async fn subgraph_interrupt_resumes_child_from_its_own_checkpoint() {
     );
     // Child added 10 to the initial 0.
     assert_eq!(done.state, 10);
+}
+
+#[tokio::test]
+async fn resumed_subgraph_passes_the_supplied_binding_to_its_subagent() {
+    // The child pauses before its SubAgentNode. The parent resume must route
+    // the fresh binding into the child resume (rather than dropping it at the
+    // subgraph boundary), where it reaches the durable continuation.
+    let ckpt = Arc::new(InMemoryCheckpointer::<String>::new());
+    let child = GraphBuilder::<String, String>::overwrite()
+        .add_node("gate", |state: String, ctx: NodeContext| async move {
+            if ctx.resume.is_some() {
+                Ok(NodeResult::Update(state))
+            } else {
+                Ok(NodeResult::Interrupt(crate::command::Interrupt::new(
+                    "gate",
+                    serde_json::json!({ "ask": "continue?" }),
+                )))
+            }
+        })
+        .add_node(
+            "delegate",
+            crate::subagent_node::subagent_node(crate::subagent_node::SubAgentNode::from_fns(
+                "researcher",
+                |state: &String| crate::subagent_node::SubAgentInput::prompt(state.clone()),
+                |output: crate::subagent_node::SubAgentOutput| output.text,
+            )),
+        )
+        .set_entry("gate")
+        .add_edge("gate", "delegate")
+        .set_finish("delegate")
+        .compile()
+        .unwrap()
+        .with_checkpointer(ckpt.clone());
+    let parent = GraphBuilder::<String, String>::overwrite()
+        .add_node("child", shared_subgraph_node(child))
+        .set_entry("child")
+        .set_finish("child")
+        .compile()
+        .unwrap()
+        .with_checkpointer(ckpt);
+
+    let paused = parent
+        .run_with_thread("nested-resume", "question".to_string())
+        .await
+        .unwrap();
+    assert!(paused.is_interrupted());
+
+    let invoker = Arc::new(NestedRecordingInvoker::default());
+    let events = tinyagents_harness::events::EventSink::new();
+    let listener = Arc::new(tinyagents_harness::events::RecordingListener::new());
+    events.subscribe(listener.clone());
+    let cancellation = tinyagents_harness::cancel::CancellationToken::new();
+    cancellation.cancel();
+    let resumed = parent
+        .resume_with_agent_binding(
+            "nested-resume",
+            crate::command::Command::resume(serde_json::json!("go")),
+            crate::subagent_node::AgentInvocationBinding::new(
+                invoker.clone(),
+                events,
+                cancellation,
+            ),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resumed.state, "question");
+    assert_eq!(resumed.child_runs.len(), 1);
+    let request = invoker.0.lock().unwrap().pop().expect("child delegated");
+    assert_eq!(request.parent_run_id, resumed.child_runs[0].run_id);
+    assert_eq!(request.root_run_id, resumed.root_run_id);
+    assert!(
+        request
+            .cancellation
+            .expect("binding has cancellation")
+            .is_cancelled()
+    );
+    assert_eq!(
+        listener.len(),
+        1,
+        "sub-agent event used the resumed binding sink"
+    );
 }
 
 #[tokio::test]

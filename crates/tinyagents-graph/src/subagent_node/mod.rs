@@ -1,10 +1,9 @@
 //! Sub-agent nodes — the graph node that delegates to a harness *agent* (a
-//! model-driven agent loop) resolved by name from a
-//! [`CapabilityRegistry`](crate::registry::CapabilityRegistry).
+//! model-driven agent loop) invoked through an explicit host capability.
 //!
 //! Where [`crate::subgraph`] embeds an entire [`CompiledGraph`] as a
 //! node, this module embeds a *harness agent* as a node: a graph step hands its
-//! work to a registered, independently-observable agent and folds the agent's
+//! work to a host-selected, independently-observable agent and folds the agent's
 //! answer back into the parent graph state.
 //!
 //! The pieces:
@@ -12,16 +11,13 @@
 //! - [`SubAgentNode`] binds an agent [`ComponentId`] to an [`InputMapper`]
 //!   (parent `State` → [`SubAgentInput`]), an [`OutputMapper`]
 //!   ([`SubAgentOutput`] → parent `Update`), and a [`SubAgentPolicy`].
-//! - [`subagent_node`] lowers a [`SubAgentNode`] + a registry into an ordinary
-//!   graph node [`Handler`]: it resolves the agent by name, creates a distinct
+//! - [`subagent_node`] lowers a [`SubAgentNode`] into an ordinary graph node
+//!   [`Handler`]: it obtains the carried [`AgentInvoker`], creates a distinct
 //!   child `run_id` that preserves the run tree's `root_run_id` and is parented
 //!   to the enclosing graph run, applies timeout/retry/budget policy, maps the
 //!   child output into the parent update, records the child run (with its usage)
 //!   onto the parent execution rollup, and forwards the child run's harness
-//!   events onto the node's event sink.
-//! - [`HarnessSubAgent`] adapts a harness
-//!   [`SubAgent`](tinyagents_harness::subagent::SubAgent) into a registry-storable
-//!   [`HarnessAgent`].
+//!   events onto the host-provided event sink.
 //!
 //! See [`types`] for the data definitions and `test.rs` for focused tests.
 
@@ -34,16 +30,12 @@ use std::time::Duration;
 
 pub use types::*;
 
-use async_trait::async_trait;
-
 use crate::builder::NodeContext;
 use crate::command::NodeResult;
 use crate::recursion::ChildRun;
 use crate::{Result, TinyAgentsError};
-use tinyagents_harness::events::EventSink;
 use tinyagents_harness::ids::next_seq;
 use tinyagents_harness::ids::{GraphId, RunId};
-use tinyagents_harness::subagent::SubAgent;
 
 type Handler<S, U> = Box<
     dyn Fn(S, NodeContext) -> Pin<Box<dyn Future<Output = Result<NodeResult<U>>> + Send>>
@@ -64,7 +56,6 @@ impl<State, Update> SubAgentNode<State, Update> {
             input_mapper,
             output_mapper,
             policy: SubAgentPolicy::default(),
-            events: None,
         }
     }
 
@@ -83,18 +74,9 @@ impl<State, Update> SubAgentNode<State, Update> {
         self.policy = policy;
         self
     }
-
-    /// Forwards the child run's harness events onto `events`, returning `self`
-    /// for chaining. This is how a parent observer (or a testkit
-    /// [`EventRecorder`](tinyagents_harness::testkit::EventRecorder)) sees the nested
-    /// run's lifecycle.
-    pub fn with_events(mut self, events: EventSink) -> Self {
-        self.events = Some(events);
-        self
-    }
 }
 
-/// Lowers a [`SubAgentNode`] plus a capability `registry` into a graph node
+/// Lowers a [`SubAgentNode`] plus a host-bound `invoker` into a graph node
 /// [`Handler`].
 ///
 /// At each activation the handler:
@@ -109,10 +91,7 @@ impl<State, Update> SubAgentNode<State, Update> {
 /// 5. records the child run — with its rolled-up [`UsageTotals`] — onto the
 ///    enclosing run's child-run sink, and
 /// 6. folds the [`SubAgentOutput`] into a parent `Update` via the output mapper.
-pub fn subagent_node<State, Update>(
-    node: SubAgentNode<State, Update>,
-    registry: Arc<dyn AgentRegistry>,
-) -> Handler<State, Update>
+pub fn subagent_node<State, Update>(node: SubAgentNode<State, Update>) -> Handler<State, Update>
 where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
@@ -120,21 +99,17 @@ where
     let node = Arc::new(node);
     Box::new(move |state: State, ctx: NodeContext| {
         let node = node.clone();
-        let registry = registry.clone();
         Box::pin(async move {
-            let agent = registry.agent(&node.agent).ok_or_else(|| {
+            let input = (node.input_mapper)(&state);
+            let binding = ctx.agent_binding.clone().ok_or_else(|| {
                 TinyAgentsError::Capability(format!(
-                    "sub-agent `{}` is not a registered agent",
+                    "sub-agent `{}` requires an execution-scoped AgentInvocationBinding",
                     node.agent
                 ))
             })?;
+            let output = run_with_policy(&binding, &node.agent, input, &ctx, &node.policy).await?;
 
-            let input = (node.input_mapper)(&state);
-            let events = node.events.clone().unwrap_or_default();
-
-            let output = run_with_policy(&agent, input, events, &node.policy).await?;
-
-            record_child_run(&ctx, agent.name(), &output);
+            record_child_run(&ctx, &node.agent, &output);
 
             let update = (node.output_mapper)(output);
             Ok(NodeResult::Update(update))
@@ -145,27 +120,40 @@ where
 /// Runs `agent` under `policy`: applies the per-attempt timeout, retries
 /// transient failures per the retry policy, then enforces the work budget.
 async fn run_with_policy(
-    agent: &Arc<dyn HarnessAgent>,
+    binding: &AgentInvocationBinding,
+    agent_id: &str,
     input: SubAgentInput,
-    events: EventSink,
+    ctx: &NodeContext,
     policy: &SubAgentPolicy,
 ) -> Result<SubAgentOutput> {
     let mut attempt = 0;
     loop {
-        let fut = agent.run(input.clone(), events.clone());
+        let fut = binding.invoker.invoke(AgentInvocation {
+            agent_id: agent_id.to_string(),
+            input: input.clone(),
+            graph_id: ctx.graph_id.clone(),
+            node_id: ctx.node_id.clone(),
+            parent_run_id: ctx.run_id.clone(),
+            root_run_id: ctx
+                .root_run_id
+                .clone()
+                .unwrap_or_else(|| ctx.run_id.clone()),
+            events: binding.events.clone(),
+            cancellation: Some(binding.cancellation.clone()),
+        });
         let result = match policy.timeout {
             Some(timeout) => match tokio::time::timeout(timeout, fut).await {
                 Ok(result) => result,
                 Err(_) => Err(TinyAgentsError::Timeout(format!(
                     "sub-agent `{}` timed out after {timeout:?}",
-                    agent.name()
+                    agent_id
                 ))),
             },
             None => fut.await,
         };
 
         match result {
-            Ok(output) => return policy.budget.check(&output, agent.name()).map(|()| output),
+            Ok(output) => return policy.budget.check(&output, agent_id).map(|()| output),
             Err(err) => {
                 if policy.retry.should_retry(attempt)
                     && tinyagents_harness::retry::is_retryable(&err)
@@ -201,85 +189,6 @@ fn record_child_run(ctx: &NodeContext, agent: &str, output: &SubAgentOutput) {
         root_run_id,
         usage: output.usage,
     });
-}
-
-/// Adapts a harness [`SubAgent`] into a registry-storable [`HarnessAgent`].
-///
-/// The child run is created with a fresh `State::default()` and `Ctx::default()`
-/// — a sub-agent delegated from a graph node receives its task through the
-/// mapped [`SubAgentInput`] prompt, not through harness state. Use
-/// [`HarnessSubAgent::with_parent_depth`] to express deeper nesting (the child
-/// runs at `parent_depth + 1`).
-pub struct HarnessSubAgent<S = (), C = ()>
-where
-    S: Send + Sync,
-    C: Send + Sync,
-{
-    inner: Arc<SubAgent<S, C>>,
-    parent_depth: usize,
-    state: S,
-}
-
-impl<S, C> HarnessSubAgent<S, C>
-where
-    S: Send + Sync + Default,
-    C: Send + Sync + Default,
-{
-    /// Wraps `inner` as a registry-storable agent invoked at `parent_depth = 0`.
-    pub fn new(inner: Arc<SubAgent<S, C>>) -> Self {
-        Self {
-            inner,
-            parent_depth: 0,
-            state: S::default(),
-        }
-    }
-
-    /// Sets the caller depth the child runs at; the child runs at
-    /// `parent_depth + 1`. Returns `self` for chaining.
-    pub fn with_parent_depth(mut self, parent_depth: usize) -> Self {
-        self.parent_depth = parent_depth;
-        self
-    }
-
-    /// Wraps `inner` in an [`Arc`] as a `dyn HarnessAgent` ready to register.
-    pub fn into_dyn(self) -> Arc<dyn HarnessAgent>
-    where
-        S: 'static,
-        C: 'static,
-    {
-        Arc::new(self)
-    }
-}
-
-#[async_trait]
-impl<S, C> HarnessAgent for HarnessSubAgent<S, C>
-where
-    S: Send + Sync + Default + 'static,
-    C: Send + Sync + Default + 'static,
-{
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    async fn run(&self, input: SubAgentInput, events: EventSink) -> Result<SubAgentOutput> {
-        let run = self
-            .inner
-            .invoke_with_events(
-                &self.state,
-                C::default(),
-                self.parent_depth,
-                input.prompt,
-                &events,
-            )
-            .await?;
-        Ok(SubAgentOutput {
-            text: run.text().unwrap_or_default(),
-            structured: run.structured.clone(),
-            usage: run.usage,
-            model_calls: run.model_calls,
-            tool_calls: run.tool_calls,
-        })
-    }
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use super::{ToolTimeout, ToolTimeoutSettings};
+use super::ToolTimeoutSettings;
+use tinytools::ToolTimeout;
 
 #[test]
 fn inherited_timeout_updates_across_clones() {

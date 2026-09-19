@@ -7,8 +7,8 @@ use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, SecondsFormat,
 use chrono_tz::Tz;
 use serde_json::json;
 
-use crate::Result;
-use crate::tool::{Tool, ToolCall, ToolPolicy, ToolRegistry, ToolResult, ToolSchema};
+use crate::tool::ToolRegistry;
+use tinytools::{Tool, ToolPolicy, ToolResult};
 
 const CURRENT_TIME_NAME: &str = "current_time";
 const RESOLVE_TIME_NAME: &str = "resolve_time";
@@ -31,7 +31,7 @@ impl Default for CurrentTimeTool {
 }
 
 #[async_trait]
-impl<State: Send + Sync> Tool<State> for CurrentTimeTool {
+impl Tool for CurrentTimeTool {
     fn name(&self) -> &str {
         CURRENT_TIME_NAME
     }
@@ -44,33 +44,24 @@ impl<State: Send + Sync> Tool<State> for CurrentTimeTool {
          or 'tonight'."
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            CURRENT_TIME_NAME,
-            <Self as Tool<State>>::description(self),
-            json!({
-                "type": "object",
-                "properties": {
-                    "timezone": {
-                        "type": "string",
-                        "description": "Optional IANA timezone name, for example 'Europe/London'."
-                    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "timezone": {
+                    "type": "string",
+                    "description": "Optional IANA timezone name, for example 'Europe/London'."
                 }
-            }),
-        )
+            }
+        })
     }
 
     fn policy(&self) -> ToolPolicy {
         ToolPolicy::read_only()
     }
 
-    async fn call(&self, _state: &State, call: ToolCall) -> Result<ToolResult> {
-        let payload = current_time_payload(&call.arguments);
-        Ok(ToolResult::text(
-            call.id,
-            CURRENT_TIME_NAME,
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
-        ))
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::json(current_time_payload(&arguments)))
     }
 }
 
@@ -128,7 +119,7 @@ impl Default for ResolveTimeTool {
 }
 
 #[async_trait]
-impl<State: Send + Sync> Tool<State> for ResolveTimeTool {
+impl Tool for ResolveTimeTool {
     fn name(&self) -> &str {
         RESOLVE_TIME_NAME
     }
@@ -142,64 +133,48 @@ impl<State: Send + Sync> Tool<State> for ResolveTimeTool {
          'YYYY-MM-DD HH:MM:SS'."
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            RESOLVE_TIME_NAME,
-            <Self as Tool<State>>::description(self),
-            json!({
-                "type": "object",
-                "properties": {
-                    "expr": {
-                        "type": "string",
-                        "description": "Time expression to resolve."
-                    },
-                    "format": {
-                        "type": "string",
-                        "enum": ["unix_s", "unix_ms", "slack_ts", "rfc3339"],
-                        "description": "Representation to place in the top-level value field. Defaults to unix_s."
-                    },
-                    "timezone": {
-                        "type": "string",
-                        "description": "Optional IANA timezone used to interpret offset-less inputs."
-                    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "expr": {
+                    "type": "string",
+                    "description": "Time expression to resolve."
                 },
-                "required": ["expr"]
-            }),
-        )
+                "format": {
+                    "type": "string",
+                    "enum": ["unix_s", "unix_ms", "slack_ts", "rfc3339"],
+                    "description": "Representation to place in the top-level value field. Defaults to unix_s."
+                },
+                "timezone": {
+                    "type": "string",
+                    "description": "Optional IANA timezone used to interpret offset-less inputs."
+                }
+            },
+            "required": ["expr"]
+        })
     }
 
     fn policy(&self) -> ToolPolicy {
         ToolPolicy::read_only()
     }
 
-    async fn call(&self, _state: &State, call: ToolCall) -> Result<ToolResult> {
-        let expr = match call.arguments.get("expr").and_then(|value| value.as_str()) {
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let expr = match arguments.get("expr").and_then(|value| value.as_str()) {
             Some(expr) => expr,
             None => {
-                return Ok(ToolResult::error(
-                    call.id,
-                    RESOLVE_TIME_NAME,
-                    "resolve_time: `expr` is required",
-                ));
+                return Ok(ToolResult::error("resolve_time: `expr` is required"));
             }
         };
 
-        let zone = match call
-            .arguments
-            .get("timezone")
-            .and_then(|value| value.as_str())
-        {
+        let zone = match arguments.get("timezone").and_then(|value| value.as_str()) {
             Some(tz_name) if !tz_name.trim().is_empty() => match tz_name.trim().parse::<Tz>() {
                 Ok(tz) => ResolveZone::Iana(tz),
                 Err(_) => {
-                    return Ok(ToolResult::error(
-                        call.id,
-                        RESOLVE_TIME_NAME,
-                        format!(
-                            "resolve_time: unknown IANA timezone '{}' - use names like 'America/Los_Angeles'.",
-                            tz_name.trim()
-                        ),
-                    ));
+                    return Ok(ToolResult::error(format!(
+                        "resolve_time: unknown IANA timezone '{}' - use names like 'America/Los_Angeles'.",
+                        tz_name.trim()
+                    )));
                 }
             },
             _ => ResolveZone::Local,
@@ -208,20 +183,11 @@ impl<State: Send + Sync> Tool<State> for ResolveTimeTool {
         let dt = match resolve_expr(expr, zone) {
             Ok(dt) => dt,
             Err(error) => {
-                return Ok(ToolResult::error(
-                    call.id,
-                    RESOLVE_TIME_NAME,
-                    format!("resolve_time: {error}"),
-                ));
+                return Ok(ToolResult::error(format!("resolve_time: {error}")));
             }
         };
 
-        let payload = resolve_time_payload(expr, &call.arguments, dt);
-        Ok(ToolResult::text(
-            call.id,
-            RESOLVE_TIME_NAME,
-            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string()),
-        ))
+        Ok(ToolResult::json(resolve_time_payload(expr, &arguments, dt)))
     }
 }
 
@@ -393,7 +359,7 @@ impl ResolveZone {
 }
 
 /// Returns the builtin time tool set.
-pub fn time_tools<State: Send + Sync + 'static>() -> Vec<Arc<dyn Tool<State>>> {
+pub fn time_tools() -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(CurrentTimeTool::new()),
         Arc::new(ResolveTimeTool::new()),
@@ -401,7 +367,9 @@ pub fn time_tools<State: Send + Sync + 'static>() -> Vec<Arc<dyn Tool<State>>> {
 }
 
 /// Registers the builtin time tool set into an existing registry.
-pub fn register_time_tools<State: Send + Sync + 'static>(registry: &mut ToolRegistry<State>) {
+pub fn register_time_tools<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
+    registry: &mut ToolRegistry<State, Ctx>,
+) {
     for tool in time_tools() {
         registry.register(tool);
     }

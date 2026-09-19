@@ -18,7 +18,6 @@ use tinyagents_harness::store::{AppendStore, InMemoryAppendStore, JsonlAppendSto
 use tinyagents_harness::testkit::{FakeTool, Trajectory};
 use tinyagents_registry::{CapabilityRegistry, ComponentId, ComponentKind, ComponentMetadata};
 use tinyinference_llm::providers::MockModel;
-use tinyinference_llm::tool::ToolCall;
 
 #[tokio::test]
 async fn capability_registry_resolves_aliases_and_hands_off_runtime_registries() {
@@ -107,19 +106,16 @@ async fn capability_registry_resolves_aliases_and_hands_off_runtime_registries()
     assert_eq!(model_registry.names(), vec!["fast", "primary"]);
     assert!(model_registry.get("fast").is_some());
 
-    let tool_registry = registry.to_tool_registry();
+    let tool_registry = registry.to_tool_registry::<()>();
     assert_eq!(tool_registry.names(), vec!["lookup"]);
     assert_eq!(tool_registry.schemas()[0].name, "lookup");
     let result = tool_registry
         .get("lookup")
         .unwrap()
-        .call(
-            &(),
-            ToolCall::new("call-1", "lookup", json!({ "query": "rust" })),
-        )
+        .execute(json!({ "query": "rust" }))
         .await
         .unwrap();
-    assert_eq!(result.content, "new answer");
+    assert_eq!(result.text(), "new answer");
 
     let resolver = registry.capability_resolver();
     assert!(resolver.model_allowed("fast"));

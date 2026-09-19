@@ -9,10 +9,11 @@ use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, RecordingListener};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
-use crate::tool::{ToolCall, ToolResult};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, UserMessage};
 use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_llm::tool::ToolCall;
 use tinyinference_llm::usage::Usage;
+use tinytools::ToolResult;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,8 @@ fn response_with_usage(usage: Usage) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -1001,6 +1004,8 @@ fn response_text(text: &str) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -1221,7 +1226,7 @@ impl ToolBaseCall<(), ()> for CountingToolBase {
         &'a self,
         _ctx: &'a mut RunContext,
         _state: &'a (),
-        call: ToolCall,
+        _call: ToolCall,
     ) -> BoxToolFuture<'a> {
         Box::pin(async move {
             let attempt = {
@@ -1232,14 +1237,7 @@ impl ToolBaseCall<(), ()> for CountingToolBase {
             if attempt <= self.fail_times {
                 Err(TinyAgentsError::Middleware("transient".to_string()))
             } else {
-                Ok(ToolResult {
-                    call_id: call.id,
-                    name: call.name,
-                    content: self.content.to_string(),
-                    raw: None,
-                    error: None,
-                    elapsed_ms: 0,
-                })
+                Ok(ToolResult::success(self.content))
             }
         })
     }
@@ -1269,17 +1267,12 @@ impl ToolMiddleware<()> for ShortCircuitTool {
         &self,
         _ctx: &mut RunContext,
         _state: &(),
-        call: ToolCall,
+        _call: ToolCall,
         _next: ToolHandler<'_, (), ()>,
     ) -> Result<MiddlewareToolOutcome> {
-        Ok(MiddlewareToolOutcome::Result(ToolResult {
-            call_id: call.id,
-            name: call.name,
-            content: self.content.to_string(),
-            raw: None,
-            error: None,
-            elapsed_ms: 0,
-        }))
+        Ok(MiddlewareToolOutcome::Result(ToolResult::success(
+            self.content,
+        )))
     }
 }
 
@@ -1300,7 +1293,9 @@ impl ToolMiddleware<()> for MutateAfterTool {
         next: ToolHandler<'_, (), ()>,
     ) -> Result<MiddlewareToolOutcome> {
         let mut result = next.run(ctx, state, call).await?.into_result();
-        result.content = format!("{}!", result.content);
+        result.content = vec![tinytools::ToolContent::Text {
+            text: format!("{}!", result.output()),
+        }];
         Ok(result.into())
     }
 }
@@ -1353,7 +1348,7 @@ async fn wrap_tool_short_circuits_without_calling_base() {
         .unwrap()
         .into_result();
 
-    assert_eq!(result.content, "canned");
+    assert_eq!(result.output(), "canned");
     assert_eq!(*calls.lock().unwrap(), 0);
 }
 
@@ -1375,7 +1370,7 @@ async fn wrap_tool_calls_next_then_mutates_result() {
         .unwrap()
         .into_result();
 
-    assert_eq!(result.content, "ok!");
+    assert_eq!(result.output(), "ok!");
     assert_eq!(*calls.lock().unwrap(), 1);
 }
 
@@ -1397,7 +1392,7 @@ async fn wrap_tool_retries_next_until_success() {
         .unwrap()
         .into_result();
 
-    assert_eq!(result.content, "eventually");
+    assert_eq!(result.output(), "eventually");
     assert_eq!(*calls.lock().unwrap(), 3);
     assert_eq!(stack.tool_middleware_len(), 1);
 }

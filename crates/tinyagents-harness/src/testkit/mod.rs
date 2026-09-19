@@ -34,11 +34,11 @@ use serde_json::json;
 
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventSink, RecordingListener};
-use crate::tool::{Tool, ToolCall, ToolResult, ToolSchema};
 use tinyinference_llm::message::MessageDelta;
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem, StreamAccumulator,
 };
+use tinytools::{Tool, ToolResult};
 
 pub use types::*;
 
@@ -125,7 +125,7 @@ impl<State: Send + Sync> ChatModel<State> for StreamingMock {
             .lock()
             .expect("StreamingMock calls lock poisoned") += 1;
         let items = self.items.clone();
-        Ok(Box::pin(futures::stream::iter(items)))
+        Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
     }
 }
 
@@ -268,7 +268,7 @@ impl FakeTool {
     }
 
     /// Creates a `FakeTool` that always returns
-    /// `Err(`[`TinyAgentsError::Tool`]`(message))`.
+    /// a foreign `anyhow` error carrying `message`.
     pub fn failing(name: impl Into<String>, message: impl Into<String>) -> Self {
         let name = name.into();
         Self {
@@ -281,7 +281,7 @@ impl FakeTool {
 
     /// Returns a snapshot of every [`ToolCall`] received by this tool, in
     /// invocation order.
-    pub fn calls(&self) -> Vec<ToolCall> {
+    pub fn calls(&self) -> Vec<serde_json::Value> {
         self.received
             .lock()
             .expect("FakeTool received lock poisoned")
@@ -290,7 +290,7 @@ impl FakeTool {
 }
 
 #[async_trait]
-impl<State: Send + Sync> Tool<State> for FakeTool {
+impl Tool for FakeTool {
     fn name(&self) -> &str {
         &self.tool_name
     }
@@ -300,27 +300,21 @@ impl<State: Send + Sync> Tool<State> for FakeTool {
     }
 
     /// Returns a minimal schema advertising no required parameters.
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.tool_name.clone(),
-            self.tool_description.clone(),
-            json!({ "type": "object", "properties": {}, "required": [] }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({ "type": "object", "properties": {}, "required": [] })
     }
 
     /// Records the call and then either returns a fixed result or an error,
     /// depending on how the tool was constructed.
-    async fn call(&self, _state: &State, call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         self.received
             .lock()
             .expect("FakeTool received lock poisoned")
-            .push(call.clone());
+            .push(arguments);
 
         match &self.behavior {
-            FakeToolBehavior::Return(content) => {
-                Ok(ToolResult::text(call.id, call.name, content.clone()))
-            }
-            FakeToolBehavior::Fail(message) => Err(TinyAgentsError::Tool(message.clone())),
+            FakeToolBehavior::Return(content) => Ok(ToolResult::success(content.clone())),
+            FakeToolBehavior::Fail(message) => Err(anyhow::anyhow!(message.clone())),
         }
     }
 }

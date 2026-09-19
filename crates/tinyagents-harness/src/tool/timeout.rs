@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use super::ToolTimeout;
+use tinytools::ToolTimeout;
 
 #[derive(Debug)]
 struct ToolTimeoutSettingsInner {

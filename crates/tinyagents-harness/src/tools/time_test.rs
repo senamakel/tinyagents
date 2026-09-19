@@ -6,15 +6,12 @@ use chrono::{SecondsFormat, Utc};
 use chrono_tz::Tz;
 use serde_json::json;
 
-use crate::tool::{Tool, ToolCall, ToolRegistry};
-
-fn call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
-    ToolCall::new(id, name, arguments)
-}
+use crate::tool::ToolRegistry;
+use tinytools::Tool;
 
 #[test]
 fn time_tools_register_expected_names() {
-    let mut registry: ToolRegistry<()> = ToolRegistry::new();
+    let mut registry: ToolRegistry<(), ()> = ToolRegistry::new();
     register_time_tools(&mut registry);
 
     assert_eq!(
@@ -28,13 +25,10 @@ fn time_tools_register_expected_names() {
 #[tokio::test]
 async fn current_time_returns_utc_local_and_unix_seconds() {
     let tool = CurrentTimeTool::new();
-    let result = tool
-        .call(&(), call("c1", "current_time", json!({})))
-        .await
-        .unwrap();
+    let result = tool.execute(json!({})).await.unwrap();
 
-    assert!(!result.is_error());
-    let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+    assert!(!result.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
     assert!(payload["utc"].is_string());
     assert!(payload["local"].is_string());
     assert!(payload["local_timezone"].is_string());
@@ -45,14 +39,11 @@ async fn current_time_returns_utc_local_and_unix_seconds() {
 async fn current_time_converts_requested_timezone() {
     let tool = CurrentTimeTool::new();
     let result = tool
-        .call(
-            &(),
-            call("c1", "current_time", json!({ "timezone": "Asia/Kolkata" })),
-        )
+        .execute(json!({ "timezone": "Asia/Kolkata" }))
         .await
         .unwrap();
 
-    let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(payload["requested_timezone"]["name"], "Asia/Kolkata");
     assert!(payload["requested_timezone"]["time"].is_string());
 }
@@ -61,14 +52,11 @@ async fn current_time_converts_requested_timezone() {
 async fn current_time_unknown_timezone_reports_error_field() {
     let tool = CurrentTimeTool::new();
     let result = tool
-        .call(
-            &(),
-            call("c1", "current_time", json!({ "timezone": "Not/AZone" })),
-        )
+        .execute(json!({ "timezone": "Not/AZone" }))
         .await
         .unwrap();
 
-    let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
     assert!(payload["requested_timezone_error"].is_string());
 }
 
@@ -149,22 +137,15 @@ fn relative_resolution_tracks_now_with_expected_sign() {
 async fn resolve_time_returns_all_formats_and_selected_value() {
     let tool = ResolveTimeTool::new();
     let result = tool
-        .call(
-            &(),
-            call(
-                "c1",
-                "resolve_time",
-                json!({
-                    "expr": "2026-06-09T19:12:00Z",
-                    "format": "slack_ts"
-                }),
-            ),
-        )
+        .execute(json!({
+            "expr": "2026-06-09T19:12:00Z",
+            "format": "slack_ts"
+        }))
         .await
         .unwrap();
 
-    assert!(!result.is_error());
-    let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+    assert!(!result.is_error);
+    let payload: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(payload["unix_s"], 1_781_032_320_i64);
     assert_eq!(payload["unix_ms"], 1_781_032_320_000_i64);
     assert_eq!(payload["slack_ts"], "1781032320.000000");
@@ -175,24 +156,14 @@ async fn resolve_time_returns_all_formats_and_selected_value() {
 async fn resolve_time_errors_for_missing_expr_and_bad_timezone() {
     let tool = ResolveTimeTool::new();
 
-    let missing = tool
-        .call(&(), call("c1", "resolve_time", json!({})))
-        .await
-        .unwrap();
-    assert!(missing.is_error());
-    assert!(missing.content.contains("`expr` is required"));
+    let missing = tool.execute(json!({})).await.unwrap();
+    assert!(missing.is_error);
+    assert!(missing.output().contains("`expr` is required"));
 
     let bad_zone = tool
-        .call(
-            &(),
-            call(
-                "c2",
-                "resolve_time",
-                json!({ "expr": "today", "timezone": "Not/AZone" }),
-            ),
-        )
+        .execute(json!({ "expr": "today", "timezone": "Not/AZone" }))
         .await
         .unwrap();
-    assert!(bad_zone.is_error());
-    assert!(bad_zone.content.contains("unknown IANA timezone"));
+    assert!(bad_zone.is_error);
+    assert!(bad_zone.output().contains("unknown IANA timezone"));
 }

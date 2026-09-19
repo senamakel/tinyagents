@@ -18,17 +18,17 @@ use serde_json::json;
 use tinyagents_harness::Result;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::ScriptedModel;
-use tinyagents_harness::tool::{Tool, ToolResult};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::tool::ToolCall;
 use tinyinference_llm::usage::Usage;
+use tinytools::{Tool, ToolResult};
 
 /// A tiny calculator tool that adds two numbers from its JSON arguments.
 struct CalculatorTool;
 
 #[async_trait]
-impl Tool<()> for CalculatorTool {
+impl Tool for CalculatorTool {
     fn name(&self) -> &str {
         "add"
     }
@@ -37,34 +37,22 @@ impl Tool<()> for CalculatorTool {
         "Adds two numbers `a` and `b` and returns their sum."
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "add",
-            "Adds two numbers `a` and `b`.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "a": { "type": "number" },
-                    "b": { "type": "number" }
-                },
-                "required": ["a", "b"]
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "a": { "type": "number" },
+                "b": { "type": "number" }
+            },
+            "required": ["a", "b"]
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-        let a = call
-            .arguments
-            .get("a")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let b = call
-            .arguments
-            .get("b")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let a = arguments.get("a").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let b = arguments.get("b").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let sum = a + b;
-        Ok(ToolResult::text(call.id, "add", format!("{sum}")))
+        Ok(ToolResult::success(format!("{sum}")))
     }
 }
 
@@ -83,6 +71,8 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -101,6 +91,8 @@ fn text_response(text: &str) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 

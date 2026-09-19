@@ -19,17 +19,16 @@ use serde_json::json;
 
 use tinyagents_harness::Result;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::tool::{Tool, ToolResult};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::openai::OpenAiModel;
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinytools::{Tool, ToolResult};
 
 /// A tiny canned weather tool. In a real app this would call a weather API; for
 /// the example it returns a deterministic string so the loop is reproducible.
 struct WeatherTool;
 
 #[async_trait]
-impl Tool<()> for WeatherTool {
+impl Tool for WeatherTool {
     fn name(&self) -> &str {
         "get_weather"
     }
@@ -38,35 +37,28 @@ impl Tool<()> for WeatherTool {
         "Returns the current weather for a given city."
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "get_weather",
-            "Returns the current weather for a given city.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "City name, e.g. \"Paris\"."
-                    }
-                },
-                "required": ["city"]
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name, e.g. \"Paris\"."
+                }
+            },
+            "required": ["city"]
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-        let city = call
-            .arguments
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let city = arguments
             .get("city")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         eprintln!("[tool] get_weather(city = {city:?})");
-        Ok(ToolResult::text(
-            call.id,
-            "get_weather",
-            format!("It is sunny and 21C in {city}."),
-        ))
+        Ok(ToolResult::success(format!(
+            "It is sunny and 21C in {city}."
+        )))
     }
 }
 

@@ -10,9 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tool::ToolSchema;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{PromptSegment, ResponseFormat};
+use tinyinference_llm::tool::ToolSchema;
 
 /// The role a rendered message will take in the conversation.
 ///
@@ -106,6 +106,52 @@ pub struct PromptBuilder {
     ///
     /// [`build`]: PromptBuilder::build
     pub(crate) response_format: Option<ResponseFormat>,
+}
+
+/// One behavior-free, already-rendered prompt section.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptSection {
+    /// Stable caller-owned section label used in truncation provenance.
+    pub name: String,
+    /// Text to append in caller order.
+    pub content: String,
+}
+
+impl PromptSection {
+    /// Creates a named section.
+    pub fn new(name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            content: content.into(),
+        }
+    }
+}
+
+/// Evidence that a section was shortened to satisfy a caller-supplied cap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptTruncation {
+    /// Name of the section that did not fit.
+    pub section: String,
+    /// Number of source bytes omitted at a UTF-8 boundary.
+    pub omitted_bytes: usize,
+}
+
+/// Ordered assembly output and truncation provenance.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PromptAssembly {
+    /// The bounded assembled text.
+    pub text: String,
+    /// Names of whole sections included before any truncation.
+    pub included_sections: Vec<String>,
+    /// The first truncated section, if the byte cap was reached.
+    pub truncation: Option<PromptTruncation>,
+}
+
+/// Caller-supplied byte and token ceilings for pure prompt assembly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PromptBudget {
+    pub max_bytes: usize,
+    pub max_tokens: usize,
 }
 
 // ---------------------------------------------------------------------------

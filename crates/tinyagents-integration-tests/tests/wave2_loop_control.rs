@@ -16,13 +16,13 @@ use serde_json::json;
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::context::{MiddlewareControl, RunConfig, RunContext};
 use tinyagents_harness::ids::ExecutionStatus;
-use tinyagents_harness::middleware::Middleware;
+use tinyagents_harness::middleware::{Middleware, ToolInvocationIdentity};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle, SteeringPolicy};
 use tinyagents_harness::testkit::FakeTool;
-use tinyagents_harness::tool::ToolResult;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
+use tinytools::ToolResult;
 
 /// Requests a control outcome from `after_tool` — the natural place for a
 /// post-hoc guardrail or a budget stop that only knows once the result is in.
@@ -40,6 +40,7 @@ impl Middleware<(), ()> for StopAfterToolMiddleware {
         &self,
         ctx: &mut RunContext<()>,
         _state: &(),
+        _invocation: &ToolInvocationIdentity,
         _result: &mut ToolResult,
     ) -> tinyagents_harness::Result<()> {
         ctx.request_control(self.control.clone());

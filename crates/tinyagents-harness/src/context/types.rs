@@ -14,6 +14,8 @@
 //! `crate::context` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
+use std::any::Any;
+
 use serde::{Deserialize, Serialize};
 
 use crate::cancel::CancellationToken;
@@ -22,6 +24,32 @@ use crate::ids::{RunId, ThreadId};
 use crate::limits::LimitTracker;
 use crate::steering::SteeringHandle;
 use crate::store::StoreRegistry;
+
+/// One-shot observer invoked with the exact accumulated run when a driver
+/// completes or is dropped. Kept crate-private: it is runtime lifecycle glue,
+/// not a host policy extension point.
+pub(crate) type TerminalObserver =
+    Box<dyn FnOnce(crate::middleware::AgentRun, bool, Option<String>) + Send + Sync + 'static>;
+
+/// The immutable ancestry of a run in a recursive harness invocation tree.
+///
+/// A lineage names the root run, the immediate parent (when this is a child),
+/// and the depth cap shared by the complete tree.  It is deliberately data-only
+/// so hosts can persist, display, or replay ancestry without retaining a live
+/// [`RunContext`].  The live context remains the authority for cancellation,
+/// stores, events, and other process-local capabilities.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunLineage {
+    /// The top-level run that began this recursive tree.
+    pub root_run_id: RunId,
+    /// The run that directly created this run, or `None` for the root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<RunId>,
+    /// This run's zero-based depth in the tree.
+    pub depth: usize,
+    /// Inclusive maximum permitted child depth for the tree.
+    pub max_depth: usize,
+}
 
 /// Declarative, serializable configuration for a single harness run.
 ///
@@ -51,7 +79,7 @@ use crate::store::StoreRegistry;
 /// assert_eq!(defaulted.max_model_calls, None);
 /// assert_eq!(defaulted.effective_max_model_calls(), 25);
 /// ```
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RunConfig {
     /// Unique identifier for this run.
     pub run_id: RunId,
@@ -102,25 +130,8 @@ pub struct RunConfig {
     /// model call. Child sub-agent runs inherit the same cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turn_output_tokens: Option<u32>,
-    /// Current depth of this run in the sub-agent / recursion tree.
-    ///
-    /// A top-level run is depth `0`. When a [`crate::subagent::SubAgent`]
-    /// invokes a child harness, the child run's `depth` is the parent's depth
-    /// plus one. Defaults to `0` and is `#[serde(default)]` so configs written
-    /// before this field existed still deserialize.
-    #[serde(default)]
-    pub depth: usize,
-    /// Maximum sub-agent / recursion depth permitted for the run tree rooted at
-    /// this run. Carried into [`crate::limits::RunLimits`] so the agent
-    /// loop and sub-agent guard share one cap. Defaults to
-    /// [`crate::limits::RunLimits::DEFAULT_MAX_DEPTH`].
-    #[serde(default = "default_max_depth")]
-    pub max_depth: usize,
-}
-
-/// Serde default for [`RunConfig::max_depth`]: the crate-wide depth cap.
-fn default_max_depth() -> usize {
-    crate::limits::RunLimits::DEFAULT_MAX_DEPTH
+    /// Recursive ancestry and depth cap for this run.
+    pub lineage: RunLineage,
 }
 
 /// A structured control outcome a middleware (or any step) can request on the
@@ -232,7 +243,7 @@ pub struct RunContext<Ctx = ()> {
     /// [`RunContext::with_workspace`] or by preparing a
     /// [`WorkspaceIsolation`][crate::workspace::WorkspaceIsolation]
     /// provider; `None` means no workspace policy is in effect.
-    pub workspace: Option<crate::workspace::WorkspaceDescriptor>,
+    pub workspace: Option<tinytools::WorkspaceDescriptor>,
     /// Whether the middleware stack already fanned `on_error` out to every
     /// middleware for the error currently unwinding this run. The stack sets it
     /// when a lifecycle hook fails (it dispatches `on_error` itself before
@@ -247,4 +258,15 @@ pub struct RunContext<Ctx = ()> {
     /// shared [`EventSink`]. A non-streaming parent leaves this `false`, so its
     /// event stream is unchanged.
     pub streaming: bool,
+    /// Host definition id currently driving this context, propagated into a
+    /// child so recursive delegation can be authorized by the host registry.
+    pub(crate) host_agent_id: Option<String>,
+    /// Type-erased, runtime-owned host authority inherited by children.  This
+    /// is deliberately not serializable or public: it keeps a hosted parent
+    /// from accidentally delegating through a child's unrelated (or absent)
+    /// capability bundle.
+    pub(crate) host_authority: Option<std::sync::Arc<dyn Any + Send + Sync>>,
+    /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
+    /// agent-loop guard even when the driving future is cancelled or dropped.
+    pub(crate) terminal_observer: Option<TerminalObserver>,
 }

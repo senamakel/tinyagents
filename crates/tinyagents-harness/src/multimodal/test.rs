@@ -191,9 +191,26 @@ fn data_uri_parsing_lower_cases_the_mime_and_percent_decodes_parameters() {
 }
 
 #[test]
-fn data_uri_parsing_rejects_the_non_base64_form() {
-    let error = parse_data_uri("data:text/plain,hello").expect_err("rejected");
-    assert!(error.contains("base64"), "unexpected reason: {error}");
+fn data_uri_parsing_accepts_percent_encoded_payloads_and_rejects_malformed_ones() {
+    let parsed = parse_data_uri("data:text/plain,hello%20world%21").expect("percent form parses");
+    assert_eq!(parsed.mime, "text/plain");
+    assert_eq!(parsed.bytes, b"hello world!");
+
+    let error = parse_data_uri("data:text/plain,bad%Q0").expect_err("malformed escape rejected");
+    assert!(error.contains("percent"), "unexpected reason: {error}");
+
+    let binary =
+        parse_data_uri("data:application/octet-stream,%00%20%FF").expect("binary percent parses");
+    assert_eq!(binary.bytes, vec![0, b' ', 0xff]);
+    assert!(
+        parse_data_uri(" data:text/plain,hello").is_err(),
+        "leading whitespace is not a data URI"
+    );
+    assert_eq!(
+        parse_data_uri("data:text/plain,%20hello%20").unwrap().bytes,
+        b" hello ",
+        "literal payload spaces are data, not parser whitespace"
+    );
 }
 
 /// A malformed escape falls back to the raw value: a filename containing a bare
