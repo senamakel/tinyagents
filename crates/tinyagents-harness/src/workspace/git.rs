@@ -343,6 +343,10 @@ fn git_raw(cwd: &Path, args: &[&str]) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Confirms `repo_root` is inside a git work tree and returns the repo's
+/// top-level directory (`git rev-parse --show-toplevel`), which every
+/// worktree operation anchors on regardless of which subdirectory of the repo
+/// `repo_root` names.
 fn validate_repo_root(repo_root: &Path) -> GitResult<PathBuf> {
     if !repo_root.exists() {
         return Err(GitWorktreeError::NotAGitRepo(repo_root.to_path_buf()));
@@ -357,6 +361,9 @@ fn validate_repo_root(repo_root: &Path) -> GitResult<PathBuf> {
     Ok(PathBuf::from(top.trim()))
 }
 
+/// Resolves the ref [`GitWorktreeBaseRef::Fresh`] branches from: the remote's
+/// default branch (`origin/HEAD`) if set, else the local `HEAD`'s symbolic
+/// name, else the literal `"main"` as a last resort.
 fn resolve_fresh_base(repo_top: &Path) -> String {
     if let Ok(sym) = git(
         repo_top,

@@ -91,8 +91,8 @@ Grouped by extension shape:
 | `resilience.rs` | Constructors and `ModelMiddleware` impls for `RetryMiddleware`, `TimeoutMiddleware`, `ModelFallbackMiddleware`, `RateLimitMiddleware`. |
 | `budget.rs` | Constructors and `Middleware` impl for `BudgetMiddleware`, plus `BudgetTracker`/`BudgetLimits` helper methods and the shared input-token estimator. |
 | `tool_policy.rs` | Constructors and `Middleware` impls for `ToolAllowlistMiddleware`, `ToolPolicyMiddleware`, `DynamicToolSelectionMiddleware`, `ContextualToolSelectionMiddleware`, `HumanApprovalMiddleware`. |
-| `context.rs` | Re-exported from `middleware/types.rs`'s sibling `mod.rs`, **not** this directory — kept here only as a historical note; see `middleware/README.md`. |
-| `observe.rs` | Constructors and `Middleware` impls for `StructuredOutputValidatorMiddleware`, `DynamicPromptMiddleware`, `RedactionMiddleware`, `TracingMiddleware`. Also re-implements `LoggingMiddleware`/`UsageAccountingMiddleware` impls declared in `middleware/types.rs`. |
+| `context.rs` | Constructors and `Middleware` impls for `MessageTrimMiddleware`, `ContextCompressionMiddleware`, `MicrocompactMiddleware`, `PromptCacheGuardMiddleware` — note these structs are *defined* in `middleware/types.rs`, not here; this file only holds their behavior. See `middleware/README.md`. |
+| `observe.rs` | Constructors and `Middleware` impls for `StructuredOutputValidatorMiddleware`, `DynamicPromptMiddleware`, `RedactionMiddleware`, `TracingMiddleware`, and (also structs defined in `middleware/types.rs`) `LoggingMiddleware`/`UsageAccountingMiddleware`. |
 | `test.rs` | Unit tests for every middleware in this directory (construction, hook behavior, event emission, edge cases like poisoned mutexes and concurrent budget reservations). |
 
 ## Operational constraints

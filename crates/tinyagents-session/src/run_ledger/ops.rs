@@ -133,6 +133,17 @@ pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<
     })
 }
 
+/// Inserts a new [`WorkflowRun`] or merges fields into an existing one with
+/// the same id, returning the row as stored.
+///
+/// Bumps `revision` on every call, including the first insert, so
+/// [`compare_and_swap_workflow_run`] callers always have a fresh fencing
+/// token. When `status` transitions to a terminal value the driver lease
+/// (`lease_owner` / `lease_expires_at`) is cleared, since a finished run has
+/// nothing left to drive. Prefer [`compare_and_swap_workflow_run`] or
+/// [`compare_and_swap_workflow_run_lifecycle`] for a driver actively holding
+/// a lease — this plain upsert has no revision fencing of its own and can
+/// clobber a concurrent driver's write.
 pub fn upsert_workflow_run(workspace_dir: &Path, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
     let now = Utc::now();
     let started_at = upsert.started_at.unwrap_or(now);
