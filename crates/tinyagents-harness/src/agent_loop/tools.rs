@@ -1217,12 +1217,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let run_budget = self.call_budget(ctx);
             let run_id = ctx.run_id().as_str().to_string();
             futures.push(async move {
-                let fut = async move {
-                    dispatch
-                        .execute(state, call.arguments, options, parent_ctx)
-                        .await
-                        .map_err(map_tool_dispatch_error)
-                };
+                let fut = execute_tool_recovering_model_retry(dispatch.execute(
+                    state,
+                    call.arguments,
+                    options,
+                    parent_ctx,
+                ));
                 let fut = Self::with_tool_policy_timeout(tool_timeout, timeout_result, fut);
                 // As in serial mode, canonical execution errors remain fatal;
                 // reported tool errors travel in `ToolResult::is_error`.
