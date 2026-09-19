@@ -136,6 +136,31 @@ impl<State> SqliteCheckpointer<State> {
     pub fn schema_sql() -> &'static str {
         SCHEMA
     }
+
+    /// Test-only: reads back the live `journal_mode` pragma from this
+    /// checkpointer's own connection.
+    ///
+    /// Exists so the pragma regression test observes exactly what
+    /// [`prepare_connection`] set on `self`'s handle, rather than a second,
+    /// freshly opened connection (whose own pragmas default independently —
+    /// `synchronous` is per-connection, not persisted in the file, though
+    /// `journal_mode` is).
+    #[cfg(test)]
+    pub(crate) fn journal_mode(&self) -> Result<String> {
+        let conn = lock_conn(&self.conn)?;
+        conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .map_err(|e| sqlite_err("read journal_mode pragma", e))
+    }
+
+    /// Test-only: reads back the live `synchronous` pragma from this
+    /// checkpointer's own connection. SQLite reports it as an integer
+    /// (`0` = OFF, `1` = NORMAL, `2` = FULL, `3` = EXTRA).
+    #[cfg(test)]
+    pub(crate) fn synchronous(&self) -> Result<i64> {
+        let conn = lock_conn(&self.conn)?;
+        conn.query_row("PRAGMA synchronous", [], |row| row.get(0))
+            .map_err(|e| sqlite_err("read synchronous pragma", e))
+    }
 }
 
 /// Locks a checkpointer's shared connection, mapping a poisoned mutex to a
