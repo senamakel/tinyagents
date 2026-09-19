@@ -295,9 +295,9 @@ fn get_tool_effect_inner(
                 started_at, settled_at
          FROM tool_effects WHERE run_id = ?1 AND call_id = ?2",
     )?;
-    stmt.query_row(params![run_id, call_id], map_tool_effect_row)
-        .optional()
-        .map_err(Into::into)
+    Ok(stmt
+        .query_row(params![run_id, call_id], map_tool_effect_row)
+        .optional()?)
 }
 
 fn map_tool_effect_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ToolEffectRow> {
