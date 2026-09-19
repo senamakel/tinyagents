@@ -11,12 +11,13 @@ use tinyagents_graph::parallel::{FailurePolicy, ParallelOptions, map_reduce};
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{
     WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
-    compare_and_swap_workflow_run, get_workflow_run, try_claim_workflow_run, upsert_workflow_run,
+    compare_and_swap_workflow_run, get_workflow_run, renew_workflow_run_lease,
+    try_claim_workflow_run, upsert_workflow_run,
 };
 
 use super::state::{
     PhaseStatus, all_phases_completed, init_phase_states, next_runnable_phase, phase_prompt,
-    set_phase_reason, set_phase_status, synthesize_summary, upstream_outputs,
+    reset_running_phases, set_phase_reason, set_phase_status, synthesize_summary, upstream_outputs,
 };
 use super::{WorkflowDefinition, WorkflowPhase};
 
@@ -61,6 +62,8 @@ pub trait WorkflowStore: Send + Sync {
         owner: &str,
         lease_for: Duration,
     ) -> Result<Option<WorkflowRun>, OrchestrationError>;
+    fn renew(&self, id: &str, owner: &str, lease_for: Duration)
+    -> Result<bool, OrchestrationError>;
 }
 
 /// `tinyagents-session` run-ledger adapter with a caller-selected workspace.
@@ -123,6 +126,22 @@ impl WorkflowStore for SessionWorkflowStore {
         )
         .map_err(OrchestrationError::from)
     }
+
+    fn renew(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<bool, OrchestrationError> {
+        renew_workflow_run_lease(
+            &self.workspace_dir,
+            id,
+            owner,
+            chrono::Duration::from_std(lease_for)
+                .map_err(|error| OrchestrationError(error.to_string()))?,
+        )
+        .map_err(OrchestrationError::from)
+    }
 }
 
 /// One host-authorized child invocation.
@@ -168,6 +187,7 @@ pub struct WorkflowEngine<S, E> {
     store: Arc<S>,
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
+    lease_for: Duration,
 }
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
@@ -177,6 +197,7 @@ struct PhaseRegistration<S: WorkflowStore> {
     owner: String,
     run: parking_lot::Mutex<WorkflowRun>,
     phase_states: Value,
+    lease_for: Duration,
 }
 
 impl<S: WorkflowStore> PhaseRegistration<S> {
@@ -208,7 +229,7 @@ impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration
             },
             run.revision,
             &self.owner,
-            WORKFLOW_LEASE,
+            self.lease_for,
         )?
         else {
             return Err(OrchestrationError(
@@ -230,12 +251,20 @@ where
             store,
             executor,
             event_sink: None,
+            lease_for: WORKFLOW_LEASE,
         }
     }
 
     /// Attach an optional host sink for ordinary graph lifecycle tracing.
     pub fn with_event_sink(mut self, sink: Arc<dyn GraphEventSink>) -> Self {
         self.event_sink = Some(sink);
+        self
+    }
+
+    /// Override the driver lease for deterministic tests or hosts with a
+    /// deliberately shorter failure-detection window.
+    pub fn with_lease_duration(mut self, lease_for: Duration) -> Self {
+        self.lease_for = lease_for.max(Duration::from_millis(3));
         self
     }
 
@@ -274,7 +303,7 @@ where
         // resume can race in another process, and only the durable lease
         // prevents both drivers from spawning the same phase.
         let owner = uuid::Uuid::new_v4().to_string();
-        let mut run = match self.store.claim(run_id, &owner, WORKFLOW_LEASE)? {
+        let mut run = match self.store.claim(run_id, &owner, self.lease_for)? {
             WorkflowLeaseClaim::Acquired(run) => run,
             WorkflowLeaseClaim::Busy(_) => return Ok(()),
             WorkflowLeaseClaim::Missing => {
@@ -291,24 +320,32 @@ where
         loop {
             if cancel.is_cancelled() {
                 self.executor.cancel_children(&run.child_run_ids).await;
-                self.persist(
+                let mut phase_states = run.phase_states.clone();
+                reset_running_phases(
+                    &mut phase_states,
+                    "workflow interrupted; phase will retry on resume",
+                );
+                if let Err(error) = self.persist(
                     &run,
-                    run.phase_states.clone(),
+                    phase_states,
                     run.child_run_ids.clone(),
                     WorkflowRunStatus::Interrupted,
                     None,
                     false,
                     &owner,
-                )?;
-                self.emit(tinyagents_graph::GraphEvent::RunCompleted {
-                    run_id: tinyagents_harness::ids::RunId::new(run_id),
-                    steps: 0,
-                });
+                ) {
+                    if self.emit_recorded_terminal(run_id, total_spawned as usize) {
+                        return Ok(());
+                    }
+                    self.finish_failed(run_id, error.to_string());
+                    return Err(error);
+                }
+                self.finish_cancelled(run_id);
                 return Ok(());
             }
             let Some(phase) = next_runnable_phase(definition, &run.phase_states).cloned() else {
                 if all_phases_completed(definition, &run.phase_states) {
-                    self.persist(
+                    if let Err(error) = self.persist(
                         &run,
                         run.phase_states.clone(),
                         run.child_run_ids.clone(),
@@ -316,29 +353,34 @@ where
                         synthesize_summary(definition, &run.phase_states),
                         true,
                         &owner,
-                    )?;
+                    ) {
+                        self.finish_failed(run_id, error.to_string());
+                        return Err(error);
+                    }
+                    self.finish_completed(run_id, total_spawned as usize);
                 } else {
-                    self.persist(
+                    let reason = "no runnable phase (dependency deadlock)".to_owned();
+                    if let Err(error) = self.persist(
                         &run,
                         run.phase_states.clone(),
                         run.child_run_ids.clone(),
                         WorkflowRunStatus::Failed,
-                        Some("no runnable phase (dependency deadlock)".to_owned()),
+                        Some(reason.clone()),
                         true,
                         &owner,
-                    )?;
+                    ) {
+                        self.finish_failed(run_id, error.to_string());
+                        return Err(error);
+                    }
+                    self.finish_failed(run_id, reason);
                 }
-                self.emit(tinyagents_graph::GraphEvent::RunCompleted {
-                    run_id: tinyagents_harness::ids::RunId::new(run_id),
-                    steps: 0,
-                });
                 return Ok(());
             };
             self.emit(tinyagents_graph::GraphEvent::NodeStarted {
                 node: tinyagents_harness::ids::NodeId::new("run_phase"),
                 step: total_spawned as usize + 1,
             });
-            let (updated, spawned) = self
+            let phase_result = self
                 .run_phase(
                     &run,
                     definition,
@@ -347,7 +389,20 @@ where
                     cancel.clone(),
                     &owner,
                 )
-                .await?;
+                .await;
+            let (updated, spawned) = match phase_result {
+                Ok(result) => result,
+                Err(error) => {
+                    // A host stop/resume fences this owner with a revision CAS.
+                    // Do not turn that intentional hand-off into a stale
+                    // failure event or overwrite the newer durable state.
+                    if self.emit_recorded_terminal(run_id, total_spawned as usize) {
+                        return Ok(());
+                    }
+                    self.finish_failed(run_id, error.to_string());
+                    return Err(error);
+                }
+            };
             run = updated;
             self.emit(tinyagents_graph::GraphEvent::NodeCompleted {
                 node: tinyagents_harness::ids::NodeId::new("run_phase"),
@@ -355,6 +410,21 @@ where
             });
             total_spawned += spawned;
             if run.status != WorkflowRunStatus::Running {
+                match run.status {
+                    WorkflowRunStatus::Completed => {
+                        self.finish_completed(run_id, total_spawned as usize)
+                    }
+                    WorkflowRunStatus::Interrupted | WorkflowRunStatus::Cancelled => {
+                        self.finish_cancelled(run_id)
+                    }
+                    WorkflowRunStatus::Failed => self.finish_failed(
+                        run_id,
+                        run.summary
+                            .clone()
+                            .unwrap_or_else(|| "workflow phase failed".to_owned()),
+                    ),
+                    WorkflowRunStatus::Pending | WorkflowRunStatus::Running => {}
+                }
                 return Ok(());
             }
         }
@@ -415,6 +485,7 @@ where
             owner: owner.to_owned(),
             run: parking_lot::Mutex::new(running.clone()),
             phase_states: phase_states.clone(),
+            lease_for: self.lease_for,
         });
         let executor = self.executor.clone();
         let worker_cancel = cancel.clone();
@@ -438,13 +509,37 @@ where
                         })
                 }
             },
-        )
-        .await;
+        );
+        tokio::pin!(outcomes);
+        let renew_every = self.lease_for.div_f32(3.0).max(Duration::from_millis(1));
+        let mut heartbeat = tokio::time::interval(renew_every);
+        // Ignore interval's eager first tick: `claim` has just installed this
+        // lease, so renewals begin only while a child can be in flight.
+        heartbeat.tick().await;
+        let outcomes = loop {
+            tokio::select! {
+                outcomes = &mut outcomes => break outcomes,
+                _ = heartbeat.tick() => {
+                    if !self.store.renew(&run.id, owner, self.lease_for)? {
+                        cancel.cancel();
+                        let children = registration.current().child_run_ids;
+                        self.executor.cancel_children(&children).await;
+                        return Err(OrchestrationError(
+                            "workflow lease renewal failed; cancelled registered children".to_owned(),
+                        ));
+                    }
+                }
+            }
+        };
         let outcomes = match outcomes {
             Ok(outcomes) => outcomes,
             Err(tinyagents_harness::TinyAgentsError::Cancelled) => {
                 let children = registration.current().child_run_ids;
                 self.executor.cancel_children(&children).await;
+                reset_running_phases(
+                    &mut phase_states,
+                    "workflow interrupted; phase will retry on resume",
+                );
                 let updated = self.persist(
                     &registration.current(),
                     phase_states,
@@ -472,9 +567,13 @@ where
                     if !child_ids.iter().any(|id| id == &result.child_id) {
                         child_ids.push(result.child_id.clone());
                     }
-                    outputs.push(
-                        json!({ "orchestrationId": result.child_id, "output": result.output }),
-                    );
+                    outputs.push(json!({
+                        // Preserve the persisted/RPC v1 projection while the
+                        // v2 metadata remains lossless for engine consumers.
+                        "agentId": phase.agent_ids[outcome.index],
+                        "output": render_compat_output(&result.output),
+                        "metadata": { "version": 2, "rawOutput": result.output },
+                    }));
                 }
                 Err(error) if failure.is_none() => failure = Some(error),
                 Err(_) => {}
@@ -483,6 +582,10 @@ where
         if cancel.is_cancelled() {
             let children = registration.current().child_run_ids;
             self.executor.cancel_children(&children).await;
+            reset_running_phases(
+                &mut phase_states,
+                "workflow interrupted; phase will retry on resume",
+            );
             let updated = self.persist(
                 &registration.current(),
                 phase_states,
@@ -583,7 +686,7 @@ where
                 },
                 run.revision,
                 owner,
-                WORKFLOW_LEASE,
+                self.lease_for,
             )?
             .ok_or_else(|| {
                 OrchestrationError("workflow lease lost before durable state transition".to_owned())
@@ -594,5 +697,68 @@ where
         if let Some(sink) = &self.event_sink {
             sink.emit(event);
         }
+    }
+
+    fn finish_completed(&self, run_id: &str, steps: usize) {
+        self.emit(tinyagents_graph::GraphEvent::RunCompleted {
+            run_id: tinyagents_harness::ids::RunId::new(run_id),
+            steps,
+        });
+        self.flush_terminal_events();
+    }
+
+    fn finish_failed(&self, run_id: &str, error: String) {
+        self.emit(tinyagents_graph::GraphEvent::RunFailed {
+            run_id: tinyagents_harness::ids::RunId::new(run_id),
+            error,
+        });
+        self.flush_terminal_events();
+    }
+
+    fn finish_cancelled(&self, run_id: &str) {
+        // GraphEvent has no cancellation variant. Its terminal error event is
+        // the truthful durable signal for a cooperatively aborted run; callers
+        // distinguish cancellation from failure in the workflow ledger status.
+        self.finish_failed(run_id, "workflow cancelled".to_owned());
+    }
+
+    fn flush_terminal_events(&self) {
+        if let Some(sink) = &self.event_sink {
+            sink.flush();
+        }
+    }
+
+    /// Returns true after emitting the terminal event already committed by a
+    /// newer lifecycle owner. This is the stale-driver escape hatch: it never
+    /// writes, so a stop/resume hand-off cannot be overwritten by its loser.
+    fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
+        let Ok(Some(current)) = self.store.load(run_id) else {
+            return false;
+        };
+        if !current.status.is_terminal() {
+            return false;
+        }
+        match current.status {
+            WorkflowRunStatus::Completed => self.finish_completed(run_id, steps),
+            WorkflowRunStatus::Interrupted | WorkflowRunStatus::Cancelled => {
+                self.finish_cancelled(run_id)
+            }
+            WorkflowRunStatus::Failed => self.finish_failed(
+                run_id,
+                current
+                    .summary
+                    .unwrap_or_else(|| "workflow phase failed".to_owned()),
+            ),
+            WorkflowRunStatus::Pending | WorkflowRunStatus::Running => return false,
+        }
+        true
+    }
+}
+
+fn render_compat_output(output: &Value) -> String {
+    match output {
+        Value::String(text) => text.clone(),
+        _ => serde_json::to_string(output)
+            .unwrap_or_else(|_| "<unserializable workflow output>".to_owned()),
     }
 }

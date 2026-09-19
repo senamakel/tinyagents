@@ -67,6 +67,26 @@ pub(crate) fn set_phase_reason(phase_states: &mut Value, name: &str, reason: &st
     }
 }
 
+/// Make an interrupted phase runnable again. A stopped phase may have spawned
+/// children whose results were never durably collected; retrying the whole
+/// phase is the only safe, deterministic recovery. Completed phases remain
+/// immutable and are never retried.
+pub fn reset_running_phases(phase_states: &mut Value, reason: &str) {
+    let Some(phases) = phase_states.as_object_mut() else {
+        return;
+    };
+    for entry in phases.values_mut() {
+        let Some(state) = entry.as_object_mut() else {
+            continue;
+        };
+        if state.get("status").and_then(Value::as_str) == Some("running") {
+            state.insert("status".to_owned(), json!(PhaseStatus::Pending.as_str()));
+            state.insert("outputs".to_owned(), json!([]));
+            state.insert("reason".to_owned(), json!(reason));
+        }
+    }
+}
+
 pub fn next_runnable_phase<'a>(
     definition: &'a WorkflowDefinition,
     phase_states: &Value,
@@ -101,8 +121,7 @@ pub fn upstream_outputs(phase: &WorkflowPhase, phase_states: &Value) -> Vec<Valu
                 .into_iter()
                 .flatten()
                 .filter_map(move |item| {
-                    item.get("output")
-                        .cloned()
+                    durable_output(item)
                         .filter(|output| match output {
                             Value::Null => false,
                             Value::String(text) => !text.trim().is_empty(),
@@ -159,7 +178,7 @@ pub fn synthesize_summary(definition: &WorkflowDefinition, phase_states: &Value)
             .map(|outputs| {
                 outputs
                     .iter()
-                    .filter_map(|output| output.get("output").map(render_output))
+                    .filter_map(|output| durable_output(output).map(|value| render_output(&value)))
                     .filter(|output| !output.trim().is_empty() && output != "null")
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -173,6 +192,22 @@ pub fn synthesize_summary(definition: &WorkflowDefinition, phase_states: &Value)
             .rev()
             .find_map(|phase| outputs_for(&phase.name))
     })
+}
+
+/// The public/RPC projection remains `{ agentId, output: String }` for
+/// compatibility. New rows carry the exact result in `metadata.rawOutput` so
+/// future phases retain arbitrary JSON without changing the old wire shape.
+fn durable_output(item: &Value) -> Option<Value> {
+    item.get("metadata")
+        .and_then(|metadata| metadata.get("version"))
+        .and_then(Value::as_u64)
+        .filter(|version| *version >= 2)
+        .and_then(|_| {
+            item.get("metadata")
+                .and_then(|metadata| metadata.get("rawOutput"))
+        })
+        .cloned()
+        .or_else(|| item.get("output").cloned())
 }
 
 /// Preserve every JSON output in prompt context and summaries.  JSON object's

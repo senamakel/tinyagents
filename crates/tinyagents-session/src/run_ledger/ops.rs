@@ -241,6 +241,84 @@ pub fn compare_and_swap_workflow_run(
     })
 }
 
+/// Renew a live workflow driver's lease without changing its durable revision.
+///
+/// A phase can legitimately run longer than the lease interval.  Renewing is
+/// deliberately not a state transition: child registration and phase commits
+/// retain their revision fencing, while this small heartbeat only proves that
+/// the same owner is still alive. `false` means ownership was lost and the
+/// caller must cancel its children and stop driving immediately.
+pub fn renew_workflow_run_lease(
+    workspace_dir: &Path,
+    id: &str,
+    owner: &str,
+    lease_for: chrono::Duration,
+) -> Result<bool> {
+    let now = Utc::now();
+    let expires = now + lease_for;
+    crate::store::with_transaction(workspace_dir, |conn| {
+        init_run_ledger_schema(conn)?;
+        Ok(conn.execute(
+            "UPDATE workflow_runs
+             SET lease_expires_at = ?1, updated_at = ?2
+             WHERE id = ?3 AND lease_owner = ?4 AND lease_expires_at > ?2",
+            params![expires.to_rfc3339(), now.to_rfc3339(), id, owner],
+        )? == 1)
+    })
+}
+
+/// Compare-and-swap a host lifecycle transition (stop or resume).
+///
+/// Lifecycle commands are allowed to fence an in-flight driver, but only from
+/// the exact revision their caller observed.  The write always clears the
+/// driver lease.  That makes a stop→resume hand-off safe: the old driver can no
+/// longer commit, and a resumer gets a fresh owner through `try_claim_*`.
+pub fn compare_and_swap_workflow_run_lifecycle(
+    workspace_dir: &Path,
+    upsert: WorkflowRunUpsert,
+    expected_revision: u64,
+) -> Result<Option<WorkflowRun>> {
+    let now = Utc::now();
+    let id = upsert.id.clone();
+    let input_json =
+        serde_json::to_string(&upsert.input).storage_context("serialize workflow input")?;
+    let phase_states_json = serde_json::to_string(&upsert.phase_states)
+        .storage_context("serialize workflow phase states")?;
+    let child_run_ids_json =
+        serde_json::to_string(&upsert.child_run_ids).storage_context("serialize child run ids")?;
+    crate::store::with_transaction(workspace_dir, |conn| {
+        init_run_ledger_schema(conn)?;
+        let changed = conn.execute(
+            "UPDATE workflow_runs SET
+                definition_id = ?1, parent_thread_id = COALESCE(?2, parent_thread_id),
+                input_json = ?3, phase_states_json = ?4, child_run_ids_json = ?5,
+                status = ?6, summary = COALESCE(?7, summary), updated_at = ?8,
+                completed_at = COALESCE(?9, completed_at),
+                lease_owner = NULL, lease_expires_at = NULL,
+                revision = revision + 1
+             WHERE id = ?10 AND revision = ?11",
+            params![
+                upsert.definition_id,
+                upsert.parent_thread_id,
+                input_json,
+                phase_states_json,
+                child_run_ids_json,
+                upsert.status.as_str(),
+                upsert.summary,
+                now.to_rfc3339(),
+                upsert.completed_at.map(|dt| dt.to_rfc3339()),
+                id,
+                expected_revision as i64,
+            ],
+        )?;
+        if changed == 0 {
+            Ok(None)
+        } else {
+            Ok(get_workflow_run_inner(conn, &upsert.id)?)
+        }
+    })
+}
+
 pub fn append_run_event(workspace_dir: &Path, event: RunEventAppend) -> Result<RunEvent> {
     let now = Utc::now();
     let payload_json =

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::json;
+use tinyagents_graph::CollectingSink;
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{
     WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
@@ -151,6 +152,70 @@ impl WorkflowStore for MemoryStore {
         rows.insert(row.id.clone(), row.clone());
         Ok(Some(row))
     }
+
+    fn renew(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<bool, OrchestrationError> {
+        let mut rows = self.0.lock();
+        let Some(row) = rows.get_mut(id) else {
+            return Ok(false);
+        };
+        let now = Utc::now();
+        if row.lease_owner.as_deref() != Some(owner)
+            || row.lease_expires_at.is_none_or(|expires| expires <= now)
+        {
+            return Ok(false);
+        }
+        row.lease_expires_at = chrono::Duration::from_std(lease_for)
+            .ok()
+            .map(|duration| now + duration);
+        Ok(true)
+    }
+}
+
+#[derive(Default)]
+struct RenewFailStore(MemoryStore);
+
+impl WorkflowStore for RenewFailStore {
+    fn load(&self, id: &str) -> Result<Option<WorkflowRun>, OrchestrationError> {
+        self.0.load(id)
+    }
+
+    fn upsert(&self, update: WorkflowRunUpsert) -> Result<WorkflowRun, OrchestrationError> {
+        self.0.upsert(update)
+    }
+
+    fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<WorkflowLeaseClaim, OrchestrationError> {
+        self.0.claim(id, owner, lease_for)
+    }
+
+    fn compare_and_swap(
+        &self,
+        update: WorkflowRunUpsert,
+        expected_revision: u64,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<Option<WorkflowRun>, OrchestrationError> {
+        self.0
+            .compare_and_swap(update, expected_revision, owner, lease_for)
+    }
+
+    fn renew(
+        &self,
+        _id: &str,
+        _owner: &str,
+        _lease_for: Duration,
+    ) -> Result<bool, OrchestrationError> {
+        Ok(false)
+    }
 }
 
 #[derive(Default)]
@@ -264,8 +329,8 @@ fn structural_validation_covers_invalid_definitions() {
 }
 
 #[test]
-fn scheduler_topology_exposes_dispatch_run_and_done() {
-    let topology = scheduler_graph().expect("topology");
+fn scheduler_topology_preview_exposes_dispatch_run_and_done() {
+    let topology = scheduler_topology_preview().expect("topology");
     let nodes = topology
         .nodes
         .iter()
@@ -429,6 +494,11 @@ async fn cancellation_after_workers_start_cancels_durably_registered_children() 
     drive.await.unwrap().unwrap();
     let run = store.load("run").unwrap().unwrap();
     assert_eq!(run.status, WorkflowRunStatus::Interrupted);
+    assert_eq!(
+        run.phase_states["live"]["status"],
+        json!("pending"),
+        "an interrupted in-flight phase must be retryable on resume"
+    );
     assert!(!run.child_run_ids.is_empty());
     let cancelled = executor.cancelled.lock().clone();
     for id in &run.child_run_ids {
@@ -463,6 +533,120 @@ async fn concurrent_drives_acquire_one_lease_and_do_not_duplicate_children() {
     assert_eq!(executor.calls.lock().len(), 4, "one driver owns all phases");
 }
 
+#[tokio::test]
+async fn heartbeat_renews_a_short_lease_while_a_child_is_running() {
+    let store = Arc::new(MemoryStore::default());
+    let executor = Arc::new(BlockingExecutor::default());
+    let engine = Arc::new(
+        WorkflowEngine::new(store.clone(), executor.clone())
+            .with_lease_duration(Duration::from_millis(30)),
+    );
+    let mut def = definition();
+    def.phases = vec![WorkflowPhase {
+        name: "live".into(),
+        description: "live".into(),
+        agent_ids: vec!["one".into()],
+        depends_on: vec![],
+    }];
+    engine
+        .initialise("run".into(), &def, json!("q"), None)
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let first = {
+        let engine = engine.clone();
+        let def = def.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move { engine.drive("run", &def, cancel).await })
+    };
+    executor.started.notified().await;
+    tokio::time::sleep(Duration::from_millis(75)).await;
+    // This exceeds the original lease, so it only remains busy if the
+    // in-flight driver's heartbeat kept renewing it.
+    engine
+        .drive("run", &def, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    cancel.cancel();
+    first.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn lost_heartbeat_cancels_registered_children_and_fails_closed() {
+    let store = Arc::new(RenewFailStore::default());
+    let executor = Arc::new(BlockingExecutor::default());
+    let engine = Arc::new(
+        WorkflowEngine::new(store.clone(), executor.clone())
+            .with_lease_duration(Duration::from_millis(30)),
+    );
+    let mut def = definition();
+    def.phases = vec![WorkflowPhase {
+        name: "live".into(),
+        description: "live".into(),
+        agent_ids: vec!["one".into()],
+        depends_on: vec![],
+    }];
+    engine
+        .initialise("run".into(), &def, json!("q"), None)
+        .unwrap();
+    let drive = {
+        let engine = engine.clone();
+        let def = def.clone();
+        tokio::spawn(async move { engine.drive("run", &def, CancellationToken::new()).await })
+    };
+    executor.started.notified().await;
+    let error = drive
+        .await
+        .unwrap()
+        .expect_err("renewal loss must fail closed");
+    assert!(error.0.contains("lease renewal failed"));
+    assert!(
+        executor
+            .cancelled
+            .lock()
+            .iter()
+            .any(|id| id == "live-live-0"),
+        "the child registered before waiting must be cancelled"
+    );
+}
+
+#[tokio::test]
+async fn terminal_events_are_truthful_and_flushed() {
+    let (store, executor, engine) = engine();
+    let sink = Arc::new(CollectingSink::new());
+    let engine = engine.with_event_sink(sink.clone());
+    let def = definition();
+    engine
+        .initialise("ok".into(), &def, json!("q"), None)
+        .unwrap();
+    engine
+        .drive("ok", &def, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        sink.events()
+            .iter()
+            .any(|event| matches!(event, tinyagents_graph::GraphEvent::RunCompleted { .. }))
+    );
+
+    *executor.fail_agent.lock() = Some("planner".into());
+    engine
+        .initialise("failed".into(), &def, json!("q"), None)
+        .unwrap();
+    engine
+        .drive("failed", &def, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(sink.events().iter().any(|event| matches!(
+        event,
+        tinyagents_graph::GraphEvent::RunFailed { error, .. } if error.contains("child failure")
+    )));
+    assert_eq!(
+        store.load("failed").unwrap().unwrap().status,
+        WorkflowRunStatus::Failed
+    );
+}
+
 #[test]
 fn structured_outputs_are_preserved_in_context_and_summary() {
     let def = definition();
@@ -490,4 +674,28 @@ fn structured_outputs_are_preserved_in_context_and_summary() {
         synthesize_summary(&def, &states).as_deref(),
         Some(r#"{"answer":"kept"}"#)
     );
+}
+
+#[tokio::test]
+async fn output_wire_shape_remains_compatible_while_json_stays_lossless() {
+    let (store, _executor, engine) = engine();
+    let mut def = definition();
+    def.phases = vec![WorkflowPhase {
+        name: "only".into(),
+        description: "only".into(),
+        agent_ids: vec!["planner".into()],
+        depends_on: vec![],
+    }];
+    engine
+        .initialise("run".into(), &def, json!("q"), None)
+        .unwrap();
+    engine
+        .drive("run", &def, CancellationToken::new())
+        .await
+        .unwrap();
+    let output = store.load("run").unwrap().unwrap().phase_states["only"]["outputs"][0].clone();
+    assert_eq!(output["agentId"], json!("planner"));
+    assert!(output["output"].is_string());
+    assert_eq!(output["metadata"]["version"], json!(2));
+    assert_eq!(output["metadata"]["rawOutput"], json!("only output"));
 }

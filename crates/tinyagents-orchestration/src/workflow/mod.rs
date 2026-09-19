@@ -15,10 +15,10 @@ pub use engine::{
     OrchestrationError, SessionWorkflowStore, WorkflowChildRegistration, WorkflowChildRequest,
     WorkflowChildResult, WorkflowEngine, WorkflowExecutor, WorkflowStore,
 };
-pub use graph::scheduler_graph;
+pub use graph::scheduler_topology_preview;
 pub use state::{
     PhaseStatus, all_phases_completed, init_phase_states, next_runnable_phase, phase_prompt,
-    phase_status, synthesize_summary, upstream_outputs,
+    phase_status, reset_running_phases, synthesize_summary, upstream_outputs,
 };
 pub use types::{
     DefinitionError, WorkflowDefinition, WorkflowDefinitionListResponse, WorkflowPhase,

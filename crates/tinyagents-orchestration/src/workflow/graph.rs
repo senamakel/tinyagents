@@ -12,8 +12,12 @@ pub(crate) enum SchedulerUpdate {
     Noop,
 }
 
-/// Structure-only topology for the phase scheduler.
-pub fn scheduler_graph() -> Result<GraphTopology> {
+/// Structure-only *preview* of the scheduler topology.
+///
+/// `WorkflowEngine` is the effectful scheduler. This helper deliberately does
+/// not execute that engine; it only supplies a stable topology to diagnostic
+/// UIs, so callers must never present it as the graph that ran a workflow.
+pub fn scheduler_topology_preview() -> Result<GraphTopology> {
     Ok(build_scheduler_graph(1)?.topology())
 }
 

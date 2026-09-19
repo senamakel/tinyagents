@@ -150,6 +150,89 @@ fn workflow_driver_lease_is_atomic_and_cas_rejects_a_stale_writer() {
     ));
 }
 
+#[test]
+fn lifecycle_fences_an_old_driver_and_lease_renewal_keeps_takeover_out() {
+    let dir = TempDir::new().unwrap();
+    let workspace = test_workspace(&dir);
+    seed_workflow(workspace, "workflow-lifecycle-fence");
+    let first = match try_claim_workflow_run(
+        workspace,
+        "workflow-lifecycle-fence",
+        "first",
+        chrono::Duration::milliseconds(300),
+    )
+    .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected first lease, got {other:?}"),
+    };
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert!(
+        renew_workflow_run_lease(
+            workspace,
+            &first.id,
+            "first",
+            chrono::Duration::milliseconds(500),
+        )
+        .unwrap()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(matches!(
+        try_claim_workflow_run(
+            workspace,
+            &first.id,
+            "second",
+            chrono::Duration::milliseconds(500),
+        )
+        .unwrap(),
+        WorkflowLeaseClaim::Busy(_)
+    ));
+
+    let stopped = compare_and_swap_workflow_run_lifecycle(
+        workspace,
+        WorkflowRunUpsert {
+            id: first.id.clone(),
+            definition_id: first.definition_id.clone(),
+            parent_thread_id: first.parent_thread_id.clone(),
+            input: first.input.clone(),
+            phase_states: json!({"phase": {"status": "pending"}}),
+            child_run_ids: first.child_run_ids.clone(),
+            status: WorkflowRunStatus::Interrupted,
+            summary: None,
+            started_at: Some(first.started_at),
+            completed_at: None,
+        },
+        first.revision,
+    )
+    .unwrap()
+    .expect("lifecycle transition wins");
+    assert!(stopped.lease_owner.is_none());
+
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace,
+            WorkflowRunUpsert {
+                id: first.id.clone(),
+                definition_id: first.definition_id,
+                parent_thread_id: first.parent_thread_id,
+                input: first.input,
+                phase_states: json!({"phase": {"status": "failed"}}),
+                child_run_ids: first.child_run_ids,
+                status: WorkflowRunStatus::Failed,
+                summary: Some("stale driver".into()),
+                started_at: Some(first.started_at),
+                completed_at: Some(Utc::now()),
+            },
+            first.revision,
+            "first",
+            chrono::Duration::seconds(1),
+        )
+        .unwrap()
+        .is_none(),
+        "a fenced driver must never overwrite stop/resume state"
+    );
+}
+
 // ── Regressions for the review findings on PR #90 ─────────────────────
 
 /// An upsert that moves a claimed task off `in_progress` must drop the
