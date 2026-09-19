@@ -60,6 +60,39 @@ impl RunDialect {
         }
     }
 
+    /// The P-Format registry for one call, extended with any tool in `tools`
+    /// beyond the run-level set the registry was built from.
+    ///
+    /// The run-level registry is built once from the schemas offered at the
+    /// start of the run (see [`Self::resolve`]); a synthetic per-turn tool —
+    /// the structured-output fallback schema pushed onto `request.tools`
+    /// after that — is advertised in the P-Format catalogue (rendered fresh
+    /// from the final tool list on every call) but would otherwise have no
+    /// positional layout to decode a call against. Extending here, rather
+    /// than rebuilding from scratch every call, keeps the common case (no
+    /// new tool this turn) a cheap `Arc::clone`.
+    pub(super) fn registry_for(&self, tools: &[ToolSchema]) -> Option<Arc<PFormatRegistry>> {
+        match self {
+            Self::PFormat(registry) => {
+                let extra: Vec<&ToolSchema> = tools
+                    .iter()
+                    .filter(|schema| !registry.contains_key(&schema.name))
+                    .collect();
+                if extra.is_empty() {
+                    return Some(Arc::clone(registry));
+                }
+                let mut merged = (**registry).clone();
+                merged.extend(tinytools_agent::build_registry(
+                    extra
+                        .into_iter()
+                        .map(|schema| (schema.name.clone(), schema.parameters.clone())),
+                ));
+                Some(Arc::new(merged))
+            }
+            _ => None,
+        }
+    }
+
     /// Rewrites `request` onto this dialect's text protocol: the transcript
     /// is folded into forms a prompt-guided model can read, the protocol block
     /// and catalogue go into the system prompt, and no schema goes on the
