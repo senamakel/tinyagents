@@ -9,16 +9,11 @@ This document lists TinyAgents SDK features that are missing or only partially
 available from the perspective of migrating OpenHuman's Rust agent core onto
 TinyAgents.
 
-Scope:
-
-- Source baseline: local TinyAgents checkout at `6f898fb`.
-- OpenHuman evidence: `src/openhuman/tinyagents/*`,
-  `src/openhuman/agent/*`, `src/openhuman/cost/*`, and
-  `src/openhuman/tokenjuice/*`.
-- This is not the OpenHuman migration plan. That plan lives in
-  `docs/tinyagents-migration-spec.md`.
-- Items here are upstream TinyAgents implementation candidates.
-- Tests should be implemented last, after the API and storage surfaces settle.
+Scope: source baseline is the local TinyAgents checkout at `6f898fb`;
+OpenHuman evidence is `src/openhuman/{tinyagents,agent,cost,tokenjuice}/*`.
+This is not the OpenHuman migration plan (that is
+`docs/tinyagents-migration-spec.md`); items here are upstream TinyAgents
+implementation candidates, with tests last once API and storage surfaces settle.
 
 ## Executive Summary
 
@@ -29,11 +24,11 @@ policy metadata, durable orchestration stores, richer streaming events,
 recoverable tool-call behavior, graph fanout ergonomics, and SDK-owned adapters
 for the lifecycle controls OpenHuman currently implements around the SDK.
 
-OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows these
-features:
+OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows:
 
 - First-class reasoning and tool-call argument streaming events (tool
-  metadata, unknown-tool recovery, and deferred approvals have since shipped).
+  metadata, unknown-tool recovery, deferred approvals, and queued
+  steering/follow-ups have since shipped).
 - Durable `TaskStore` and event/status stores with replay, lineage, cursors,
   redaction, and cancellation semantics.
 - Storage compatibility options for SQLite users that already depend on a
