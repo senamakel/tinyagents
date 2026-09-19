@@ -172,15 +172,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> Capability<State, Ctx> {
             instructions: self.instructions.clone(),
             exposure: self.exposure.into(),
             defer_loading: self.defer_loading,
-            model_defaults: self.model_defaults.as_ref().map(|defaults| {
-                crate::capability::ModelDefaultsSpec {
-                    response_format: defaults.default_response_format.clone(),
-                    fallback_models: defaults
-                        .fallback
-                        .as_ref()
-                        .map(|fallback| fallback.models.clone())
-                        .unwrap_or_default(),
-                }
+            model_defaults: self.model_defaults.as_ref().map(|defaults| ModelDefaultsSpec {
+                response_format: defaults.default_response_format.clone(),
+                fallback_models: defaults
+                    .fallback
+                    .as_ref()
+                    .map(|fallback| fallback.models.clone())
+                    .unwrap_or_default(),
             }),
         };
         serde_json::to_value(spec).expect("CapabilitySpec always serializes")
