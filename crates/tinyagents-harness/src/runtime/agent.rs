@@ -458,7 +458,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         &self,
         invocation: AgentInvocation<State, Ctx>,
         state: &State,
-    ) -> Result<AgentRun>
+    ) -> std::result::Result<AgentRun, HostedError>
     where
         State: 'static,
     {
@@ -472,10 +472,75 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         &self,
         invocation: AgentInvocation<State, Ctx>,
         state: &State,
-    ) -> Result<AgentRun>
+    ) -> std::result::Result<AgentRun, HostedError>
     where
         State: 'static,
     {
+        let (runner, context, prepared) = self
+            .prepare_hosted_turn(invocation)
+            .await
+            .map_err(|error| hosted_error(&error, AgentRun::new()))?;
+
+        let outcome = runner
+            .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
+            .await;
+        match outcome.error {
+            None => Ok(outcome.run),
+            Some(error) => Err(hosted_error(&error, outcome.run)),
+        }
+    }
+
+    /// Collects a hosted turn through the streaming driver while preserving the
+    /// parent's exact capability bundle. Recursive streaming delegation uses
+    /// this rather than the unary entry point so model deltas and delta
+    /// middleware remain part of the shared parent event stream.
+    ///
+    /// Drives [`AgentHarness::invoke_streaming_in_context_collecting_partial`]
+    /// directly rather than going through [`AgentHarness::invoke_agent_stream`]:
+    /// the public stream sanitizes every item (see
+    /// [`sanitize_hosted_stream_item`]), which would throw away the real
+    /// [`TinyAgentsError`] this method needs to classify into a
+    /// [`HostedErrorKind`] before its own, separate sanitization.
+    pub(crate) async fn invoke_agent_streaming_with_capabilities(
+        &self,
+        invocation: AgentInvocation<State, Ctx>,
+        state: &State,
+    ) -> std::result::Result<AgentRun, HostedError>
+    where
+        Ctx: 'static,
+        State: 'static,
+    {
+        let (runner, context, prepared) = self
+            .prepare_hosted_turn(invocation)
+            .await
+            .map_err(|error| hosted_error(&error, AgentRun::new()))?;
+
+        let outcome = runner
+            .invoke_streaming_in_context_collecting_partial(
+                state,
+                context,
+                prepared.messages.clone(),
+            )
+            .await;
+        match outcome.error {
+            None => Ok(outcome.run),
+            Some(error) => Err(hosted_error(&error, outcome.run)),
+        }
+    }
+
+    /// Shared setup for both hosted drivers: resolves and authorizes the
+    /// turn, installs the host authority and terminal observer on `context`,
+    /// and emits [`ProgressEvent::Started`]. Returns the harness that should
+    /// actually run the turn (`self` or an invocation-local
+    /// [`InvocationRuntime`]), the prepared `context`, and the prepared turn.
+    async fn prepare_hosted_turn(
+        &self,
+        invocation: AgentInvocation<State, Ctx>,
+    ) -> Result<(
+        &AgentHarness<State, Ctx>,
+        RunContext<Ctx>,
+        PreparedAgentTurn<State, Ctx>,
+    )> {
         let AgentInvocation {
             host,
             request,
@@ -504,51 +569,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 agent: agent_id,
             },
         );
-
-        let outcome = runner
-            .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
-            .await;
-        match outcome.error {
-            None => Ok(outcome.run),
-            Some(TinyAgentsError::Cancelled) => Err(TinyAgentsError::Cancelled),
-            Some(TinyAgentsError::Timeout(message)) => Err(TinyAgentsError::Timeout(message)),
-            Some(_) => Err(TinyAgentsError::Model(
-                "hosted agent invocation failed".to_string(),
-            )),
-        }
-    }
-
-    /// Collects a hosted turn through the streaming driver while preserving the
-    /// parent's exact capability bundle. Recursive streaming delegation uses
-    /// this rather than the unary entry point so model deltas and delta
-    /// middleware remain part of the shared parent event stream.
-    pub(crate) async fn invoke_agent_streaming_with_capabilities(
-        &self,
-        invocation: AgentInvocation<State, Ctx>,
-        state: &State,
-    ) -> Result<AgentRun>
-    where
-        Ctx: 'static,
-        State: 'static,
-    {
-        let stream = self
-            .invoke_agent_stream_with_capabilities(invocation, state)
-            .await?;
-        futures::pin_mut!(stream);
-        while let Some(item) = stream.next().await {
-            match item {
-                AgentStreamItem::Completed(run) => return Ok(*run),
-                AgentStreamItem::Failed { .. } => {
-                    return Err(TinyAgentsError::Model(
-                        "hosted agent invocation failed".to_string(),
-                    ));
-                }
-                AgentStreamItem::Event(_) => {}
-            }
-        }
-        Err(TinyAgentsError::Model(
-            "hosted stream ended without a terminal result".to_string(),
-        ))
+        Ok((runner, context, prepared))
     }
 
     /// Starts a hosted streaming turn.
