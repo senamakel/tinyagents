@@ -241,6 +241,127 @@ impl<State: Send + Sync> ChatModel<State> for ScriptedModel {
 }
 
 // ---------------------------------------------------------------------------
+// SchemaDrivenModel
+// ---------------------------------------------------------------------------
+
+impl SchemaDrivenModel {
+    /// Creates a model that calls every tool declared on a request once,
+    /// with schema-generated arguments, then returns `final_response`.
+    pub fn new(final_response: ModelResponse) -> Self {
+        Self {
+            final_response,
+            calls: Mutex::new(0),
+            received: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Creates a model whose configured final response is plain assistant
+    /// text.
+    pub fn with_final_text(text: impl Into<String>) -> Self {
+        Self::new(ModelResponse::assistant(text))
+    }
+
+    /// Number of `invoke`/`stream` calls made so far.
+    pub fn call_count(&self) -> u64 {
+        *self.calls.lock().expect("SchemaDrivenModel calls lock poisoned")
+    }
+
+    /// Every request received by `invoke`, in call order.
+    pub fn requests(&self) -> Vec<ModelRequest> {
+        self.received
+            .lock()
+            .expect("SchemaDrivenModel received lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync> ChatModel<State> for SchemaDrivenModel {
+    async fn invoke(
+        &self,
+        _state: &State,
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let index = {
+            let mut calls = self
+                .calls
+                .lock()
+                .expect("SchemaDrivenModel calls lock poisoned");
+            let index = *calls;
+            *calls += 1;
+            index as usize
+        };
+        self.received
+            .lock()
+            .expect("SchemaDrivenModel received lock poisoned")
+            .push(request.clone());
+
+        let Some(tool) = request.tools.get(index) else {
+            return Ok(self.final_response.clone());
+        };
+        let arguments = generate_args_from_schema(&tool.parameters);
+        Ok(ModelResponse {
+            message: AssistantMessage {
+                id: None,
+                content: Vec::new(),
+                tool_calls: vec![ToolCall::new(
+                    format!("schema-driven-{index}"),
+                    tool.name.clone(),
+                    arguments,
+                )],
+                usage: None,
+            },
+            usage: None,
+            finish_reason: None,
+            raw: None,
+            resolved_model: None,
+            continue_turn: None,
+            served_from_cache: false,
+            correlation: request.correlation,
+            resolved_route: None,
+        })
+    }
+}
+
+/// Synthesizes a JSON value satisfying `schema`'s declared shape.
+///
+/// A minimal, deterministic JSON-Schema-to-value generator: an `object`
+/// schema recurses into every declared property, an `array` schema produces
+/// a single-element array from its `items` schema, `string`/`integer`/
+/// `number`/`boolean` produce a fixed placeholder of that type, and anything
+/// unrecognized (including a schema with no `type`) produces `null` — except
+/// a top-level object with `properties` and no explicit `type`, which is
+/// still treated as an object. This is intended for
+/// [`SchemaDrivenModel`], not as a general JSON Schema example generator: it
+/// does not honor `enum`, `const`, `minimum`/`maximum`, `pattern`, or other
+/// constraining keywords, and always fills every declared property
+/// regardless of `required`.
+pub fn generate_args_from_schema(schema: &Value) -> Value {
+    let object_like = schema.get("type").and_then(Value::as_str) == Some("object")
+        || (schema.get("type").is_none() && schema.get("properties").is_some());
+    if object_like {
+        let mut object = serde_json::Map::new();
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (name, property_schema) in properties {
+                object.insert(name.clone(), generate_args_from_schema(property_schema));
+            }
+        }
+        return Value::Object(object);
+    }
+    match schema.get("type").and_then(Value::as_str) {
+        Some("string") => Value::String("test".to_string()),
+        Some("integer") => Value::from(0),
+        Some("number") => Value::from(0.0),
+        Some("boolean") => Value::Bool(false),
+        Some("array") => {
+            let items_schema = schema.get("items").cloned().unwrap_or(Value::Null);
+            Value::Array(vec![generate_args_from_schema(&items_schema)])
+        }
+        _ => Value::Null,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FakeTool
 // ---------------------------------------------------------------------------
 
