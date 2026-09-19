@@ -564,7 +564,7 @@ where
                     stalled.push((index, activation));
                 }
                 Ok(result) => {
-                    match self.fold_result(index, &node_id, step, result, &mut accum, visited) {
+                    match self.fold_result(run_id, index, &node_id, step, result, &mut accum, visited) {
                         Some(found) => {
                             interrupted.push(found);
                             stalled.push((index, activation));
