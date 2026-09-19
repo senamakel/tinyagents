@@ -664,6 +664,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
                     error,
                     TinyAgentsError::LimitExceeded(_)
                         | TinyAgentsError::Timeout(_)
+                        | TinyAgentsError::CallTimeout(_)
                         | TinyAgentsError::SubAgentDepth(_)
                 ) {
                     return Ok(tinytools::ToolResult::error(format!(
