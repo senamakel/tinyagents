@@ -276,4 +276,17 @@ pub struct RunContext<Ctx = ()> {
     /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
     /// agent-loop guard even when the driving future is cancelled or dropped.
     pub(crate) terminal_observer: Option<TerminalObserver>,
+    /// The [`CallId`] the agent loop minted for the model call currently in
+    /// flight through the model-wrap middleware onion, mirroring
+    /// [`crate::events::HarnessRunStatus::active_model_call`].
+    ///
+    /// Set by the loop immediately before invoking
+    /// [`crate::middleware::MiddlewareStack::run_wrapped_model`] and cleared
+    /// right after, so a `ModelMiddleware` such as
+    /// [`crate::middleware::library::RetryMiddleware`] can correlate its own
+    /// `RetryScheduled` events with the same call id the loop uses, instead of
+    /// deriving an uncorrelated one from `ctx.run_id()` alone (see I-7).
+    /// `None` outside that window, and always `None` for a caller that never
+    /// goes through the agent loop.
+    pub active_model_call: Option<CallId>,
 }
