@@ -9,16 +9,58 @@
 //! `EndStrategy` variant and both new structured modes end to end through
 //! `AgentHarness`.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use serde_json::json;
 
 use tinyagents_harness::runtime::{AgentHarness, EndStrategy, RunPolicy, StructuredStrategyOverride};
 use tinyagents_harness::testkit::FakeTool;
 use tinyinference_llm::message::Message;
-use tinyinference_llm::model::{ModelResponse, ResponseFormat};
+use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse, ResponseFormat};
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
+
+/// A model that records every request it receives, for the Prompted-mode
+/// test's assertion that the schema landed in a system message.
+struct RecordingModel {
+    script: Mutex<Vec<ModelResponse>>,
+    seen: Mutex<Vec<ModelRequest>>,
+}
+
+impl RecordingModel {
+    fn new(script: Vec<ModelResponse>) -> Self {
+        Self {
+            script: Mutex::new(script),
+            seen: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn requests(&self) -> Vec<ModelRequest> {
+        self.seen.lock().expect("poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for RecordingModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        None
+    }
+
+    async fn invoke(
+        &self,
+        _state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.seen.lock().expect("poisoned").push(request);
+        let mut script = self.script.lock().expect("poisoned");
+        if script.len() > 1 {
+            Ok(script.remove(0))
+        } else {
+            Ok(script[0].clone())
+        }
+    }
+}
 
 fn schema() -> serde_json::Value {
     json!({
