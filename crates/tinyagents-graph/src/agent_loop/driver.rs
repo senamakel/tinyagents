@@ -65,6 +65,7 @@ where
         // function's docs on why the limit tracker restarts here rather
         // than at `RunContext::new`).
         ctx.limits.restart();
+        runtime::reconcile_call_limits(ctx, harness.policy());
         ctx.streaming = streaming;
 
         let record = ctx.emit(AgentEvent::RunStarted {
