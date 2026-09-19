@@ -27,7 +27,9 @@ Superstep lifecycle:
 
 1. Load checkpoint, active tasks, and pending writes.
 2. Emit step started event.
-3. Match cached task writes when cache policy allows it.
+3. **Target (not implemented):** match cached task writes when cache policy
+   allows it — no `cache_policy`/cached-writes-replay mechanism exists in
+   `crates/tinyagents-graph/src` today; every active task re-runs.
 4. Run active tasks under concurrency, timeout, retry, and cancellation policy.
 5. Collect writes, commands, sends, interrupts, and errors.
 6. Persist task writes as pending writes when checkpointing supports it.
