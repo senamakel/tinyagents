@@ -474,6 +474,61 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // the final response below.
             let structured_plan: Option<(StructuredStrategy, String, Value)> =
                 match request.response_format.clone() {
+                    Some(ResponseFormat::Auto { name, schema })
+                        if matches!(
+                            self.policy.structured_strategy_override,
+                            Some(crate::runtime::StructuredStrategyOverride::Prompted { .. })
+                        ) =>
+                    {
+                        let template = match &self.policy.structured_strategy_override {
+                            Some(crate::runtime::StructuredStrategyOverride::Prompted {
+                                template,
+                            }) => template.clone(),
+                            _ => unreachable!("guarded by the match arm above"),
+                        };
+                        request.response_format = Some(ResponseFormat::Text);
+                        let instructions = template
+                            .clone()
+                            .unwrap_or_else(|| StructuredStrategy_default_prompted_template());
+                        let schema_text = serde_json::to_string_pretty(&schema).unwrap_or_default();
+                        request.messages.insert(
+                            0,
+                            Message::system(format!(
+                                "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
+                            )),
+                        );
+                        Some((StructuredStrategy::Prompted { template }, name, schema))
+                    }
+                    Some(ResponseFormat::Auto { name, schema })
+                        if matches!(
+                            self.policy.structured_strategy_override,
+                            Some(crate::runtime::StructuredStrategyOverride::ToolCallUnion { .. })
+                        ) =>
+                    {
+                        let variants = match &self.policy.structured_strategy_override {
+                            Some(crate::runtime::StructuredStrategyOverride::ToolCallUnion {
+                                variants,
+                            }) => variants.clone(),
+                            _ => unreachable!("guarded by the match arm above"),
+                        };
+                        request.response_format = Some(ResponseFormat::Text);
+                        for (variant_name, variant_schema) in &variants {
+                            let schema_tool = ToolSchema {
+                                name: variant_name.clone(),
+                                description: format!("Return the result as `{variant_name}`."),
+                                parameters: variant_schema.clone(),
+                                format: tinyinference_llm::tool::ToolFormat::Json,
+                            };
+                            request.tools.push(match &self.policy.tool_schemas {
+                                Some(preparation) => {
+                                    crate::tool::prepare_tool_schema(&schema_tool, preparation)
+                                }
+                                None => schema_tool,
+                            });
+                        }
+                        let _ = schema;
+                        Some((StructuredStrategy::ToolCallUnion, name, Value::Null))
+                    }
                     Some(ResponseFormat::Auto { name, schema }) => {
                         let strategy = StructuredStrategy::for_profile(binding.model.profile());
                         match strategy {
