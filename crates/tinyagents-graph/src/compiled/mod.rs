@@ -614,7 +614,13 @@ impl<State, Update> CompiledGraph<State, Update> {
 }
 
 #[cfg(test)]
+mod drain_test;
+#[cfg(test)]
+mod durable_task_test;
+#[cfg(test)]
 mod durable_test;
+#[cfg(test)]
+mod interrupt_selectors_test;
 #[cfg(test)]
 mod policy_test;
 #[cfg(test)]

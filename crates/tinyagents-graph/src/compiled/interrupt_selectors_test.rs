@@ -100,7 +100,7 @@ async fn mark_interrupt_is_an_alias_for_interrupt_before() {
 
     // Export marker still set...
     let topology = graph.topology();
-    let b = topology.nodes.iter().find(|n| n.id.as_str() == "b").unwrap();
+    let b = topology.nodes.iter().find(|n| n.id == "b").unwrap();
     assert!(b.interrupt);
 
     // ...and the runtime pause is real.
