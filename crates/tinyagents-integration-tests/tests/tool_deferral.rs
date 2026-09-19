@@ -537,3 +537,62 @@ async fn tool_schemas_projection_applies_to_wire_and_catalog() {
         "bridge schema description was not projected through the run's SchemaPreparation"
     );
 }
+
+#[tokio::test]
+async fn tool_call_wrapping_a_non_deferred_name_emits_no_deferred_event() {
+    let listener = Arc::new(RecordingListener::new());
+    let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
+    let direct = ExposedTool::new("read_file", "Read.", ToolExposure::Direct);
+    let hidden = ExposedTool::new("internal_step", "Host-only.", ToolExposure::Hidden);
+    let model = RecordingModel::new(vec![
+        // A wrapped *direct* tool: runs, but is not a deferred call.
+        tool_call(
+            "c1",
+            TOOL_CALL_NAME,
+            json!({"name": "read_file", "arguments": {"symbol": "A"}}),
+        ),
+        // A wrapped *hidden* tool: rejected as unknown, not a deferred call.
+        tool_call(
+            "c2",
+            TOOL_CALL_NAME,
+            json!({"name": "internal_step", "arguments": {"symbol": "B"}}),
+        ),
+        // A wrapped deferred tool: the one case that is a deferred call.
+        tool_call(
+            "c3",
+            TOOL_CALL_NAME,
+            json!({"name": "stock_quote", "arguments": {"symbol": "C"}}),
+        ),
+        text("done"),
+    ]);
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(direct.clone())
+        .register_tool(deferred.clone())
+        .register_tool(hidden.clone())
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }));
+
+    harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(direct.calls.lock().unwrap().len(), 1);
+    assert!(hidden.calls.lock().unwrap().is_empty());
+    assert_eq!(deferred.calls.lock().unwrap().len(), 1);
+
+    let deferred_events: Vec<String> = listener
+        .events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+            AgentEvent::DeferredToolCall { tool_name, .. } => Some(tool_name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deferred_events, vec!["stock_quote"]);
+}
