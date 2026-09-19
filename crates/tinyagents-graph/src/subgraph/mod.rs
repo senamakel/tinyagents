@@ -106,9 +106,23 @@ where
 
 /// Clones `child` and extends its checkpoint namespace with the embedding node
 /// id, preventing parent/child checkpoint collisions.
+///
+/// I1: when this node is activated more than once in the same superstep (a
+/// `Send` fan-out of a subgraph node — map-reduce over a subgraph), each
+/// concurrent activation gets its own namespace (`[node_id, task_id]`)
+/// instead of sharing one (`[node_id]`) across every fan-out branch. Sharing
+/// one namespace is what let N concurrent activations write interleaved
+/// lineages under the same key and made every fan-out branch's `resume`
+/// non-deterministically pick up whichever child checkpoint was written
+/// last. With exactly one activation (`ctx.siblings <= 1`, the overwhelmingly
+/// common case) the namespace stays `[node_id]` so existing checkpoints
+/// remain readable — this is purely additive.
 fn namespaced<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledGraph<S, U> {
     let mut namespace = child.namespace().to_vec();
     namespace.push(ctx.node_id.to_string());
+    if ctx.siblings > 1 {
+        namespace.push(ctx.task_id().as_str().to_string());
+    }
     child.clone().with_namespace(namespace)
 }
 
