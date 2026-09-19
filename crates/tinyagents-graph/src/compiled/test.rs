@@ -4030,13 +4030,11 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
     assert!(paused.is_interrupted());
 
     // Round-trip the checkpoint through JSON, stripping every `task_id` key
-    // to simulate a pre-R5 record.
+    // to simulate a pre-R5 record (checkpoint format v2's `tasks` field is
+    // where a task id lives today — see `Checkpoint::tasks`).
     let mut raw =
         serde_json::to_value(cp.get("t-legacy-task-id", None).await.unwrap().unwrap()).unwrap();
-    if let Some(activations) = raw
-        .get_mut("pending_activations")
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(activations) = raw.get_mut("tasks").and_then(|v| v.as_array_mut()) {
         for activation in activations {
             activation.as_object_mut().unwrap().remove("task_id");
         }
@@ -4048,12 +4046,7 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
     }
     let legacy: Checkpoint<i32> = serde_json::from_value(raw)
         .expect("a pre-R5 checkpoint with no task_id keys at all must still decode");
-    assert!(
-        legacy.pending_activations.as_ref().unwrap()[0]
-            .task_id
-            .as_str()
-            .is_empty()
-    );
+    assert!(legacy.tasks[0].task_id.as_str().is_empty());
     assert!(legacy.interrupts[0].task_id.is_none());
     cp.put(legacy).await.unwrap();
 
