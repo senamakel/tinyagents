@@ -1,2 +1,5 @@
     Blocking waiting for file lock on build directory
    Compiling tinyagents-harness v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-harness)
+   Compiling tinyagents-language v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-language)
+   Compiling tinyagents-session v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-session)
+   Compiling tinyagents-graph v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-graph)
