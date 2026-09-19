@@ -4,6 +4,11 @@ The tool feature owns typed capabilities exposed to agents. It defines tool
 metadata, JSON-schema-compatible model-visible inputs, hidden runtime injection,
 validation, execution, retry policy, artifacts, and result formatting.
 
+For composing *which* tools are visible/callable per run — the `ToolSet`
+trait, its `Combined`/`Filtered`/`Prefixed`/`Renamed`/`Prepared`/
+`ApprovalRequired`/`External` adaptors, and how OpenHuman's MCP layer plugs
+into `ExternalToolSet` — see [toolsets.md](./toolsets.md).
+
 ## Source Inspiration
 
 LangChain tool behavior is spread across core tools, v1 tool-node re-exports,
