@@ -339,6 +339,7 @@ fn transcript_message_to_message(message: &crate::transcript::TranscriptMessage)
             content: vec![ContentBlock::Text(text)],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         }),
         other => Message::Custom(CustomMessage {
             kind: format!("legacy:{other}"),
