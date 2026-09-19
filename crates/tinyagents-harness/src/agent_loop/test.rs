@@ -2176,6 +2176,49 @@ async fn native_tool_dispatcher_gates_on_the_post_middleware_tool_set() {
 }
 
 #[tokio::test]
+async fn native_tool_dispatcher_gates_on_auto_structured_output_with_no_ordinary_tools() {
+    // `StructuredStrategy` resolution only ever appends a synthetic
+    // tool-call schema for a model whose profile already has `tool_calling`
+    // (`StructuredStrategy::for_profile`'s `ToolCall` arm) — but that
+    // resolution happens *after* the model is already chosen, so gating on
+    // `request.tools` alone (empty here, since no ordinary tool is
+    // registered and the synthetic schema hasn't been appended yet at gate
+    // time) let an incapable model be selected for a run that would go on to
+    // need native tool calling for its `Auto` structured-output fallback.
+    let incapable = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        text: "should never be reached",
+        attempts: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", incapable.clone())
+        .set_default_model("mock")
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Native,
+            default_response_format: Some(ResponseFormat::auto("answer", json!({"type": "object"}))),
+            ..RunPolicy::default()
+        });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("no model satisfies the forced-native capability requirement");
+    assert!(
+        matches!(err, TinyAgentsError::ModelNotFound(_)),
+        "got {err:?}"
+    );
+    assert_eq!(
+        *incapable.attempts.lock().unwrap(),
+        0,
+        "the capability-ineligible model must never be invoked"
+    );
+}
+
+#[tokio::test]
 async fn no_model_registered_errors() {
     let harness: AgentHarness<()> = AgentHarness::new();
     let err = harness
