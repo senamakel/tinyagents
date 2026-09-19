@@ -67,4 +67,7 @@ where
     /// [`crate::CapabilityRegistry::register_capability`]'s doc comment for
     /// why. Keyed by canonical name, same as every other kind here.
     pub(crate) capabilities: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
+    /// Declarative workload-tier → model routing policy, when one is
+    /// installed. See [`CapabilityRegistry::route_workload`].
+    pub(crate) router: crate::router::WorkloadRouter,
 }

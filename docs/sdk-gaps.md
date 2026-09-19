@@ -226,8 +226,12 @@ Acceptance criteria:
 Status: partially present.
 
 TinyAgents has `Usage`, `UsageTotals`, `CostTotals`, and accounting middleware.
-OpenHuman still owns richer budget behavior, global cost trackers, per-session
-rollups, budget stop hooks, and token/cost dashboard data.
+`ModelPricing` now supports context-size-tiered rates (`ModelPricing::tiers` /
+`PriceTier`, selected by `harness::cost::estimate_cost` against a call's
+input-token count) for providers that price differently above a context
+threshold (see `docs/modules/harness/cost.md`). OpenHuman still owns richer
+budget behavior, global cost trackers, per-session rollups, budget stop hooks,
+and token/cost dashboard data.
 
 Implement:
 
@@ -252,9 +256,24 @@ Acceptance criteria:
 Status: partially present.
 
 TinyAgents has `ModelProfile`, including provider, model, modalities, tool
-calling, streaming, structured output, reasoning, and token windows. OpenHuman
-still has provider catalog logic and local model capability inference that drive
-fallback, token budgeting, and routing.
+calling, streaming, structured output, reasoning, and token windows, plus
+behavioral fields (`schema_transform`, `default_structured_mode`,
+`prompted_output_template`, `thinking_tags`, `thinking_level_map`, `compat:
+ProviderCompat`) so an adapter's request/response shaping can be driven by
+data instead of hand-written per-model branches. The registry now owns a
+generator (`cargo run -p tinyagents-registry --bin catalog_gen`) that refreshes
+`crates/tinyagents-registry/model-catalog.snapshot.json` from
+`https://models.dev/api.json` with tiered pricing, and
+`ModelCatalogSnapshot::validate`/`validate_with_providers` reject a malformed
+snapshot (duplicate ids, negative prices, missing source, an output limit
+exceeding the input context, alias collisions, bad dates, and — opt-in — an
+unrecognized provider id) before it is loaded. `ModelRouter` was renamed to
+`WorkloadRouter` (deprecated alias kept) and is now projectable through
+`CapabilityRegistry::route_workload(tier)`. OpenHuman still has provider
+catalog logic and local model capability inference that drive fallback, token
+budgeting, and routing; `ModelCatalog::available_for(auth)` credential-aware
+filtering and the generalized `CredentialStore`/OAuth flow remain OpenHuman's
+to own (credential handling was scoped out of this SDK pass).
 
 Implement:
 
@@ -494,25 +513,22 @@ approval flag on the context; a native file block in the message model.
 
 ### 17. Storage And Graph Conformance
 
-Status: missing as a standardized SDK suite.
+Status: shipped.
 
-Durable graphs and task stores are hard to migrate safely without a shared
-contract test suite.
-
-Implement:
-
-- Checkpointer conformance for memory, file, SQLite, and caller-supplied stores.
-- TaskStore conformance for lifecycle transitions, filters, cancellation,
-  timeout, kill, restart/replay, and concurrent writes.
-- Graph conformance for `Send`, reducers, interrupts, resume, max concurrency,
-  dynamic routing, fanout failure policy, and deterministic result collection.
-
-Acceptance criteria:
-
-- Storage adapters can be swapped without changing graph behavior.
-- Durable interrupt/resume semantics are proven across backends.
-- Parallel-agent helpers have regression tests for order, failure, timeout, and
-  cancellation.
+Every persistence layer has a shared contract-test suite, so a backend swap or
+a caller-supplied implementation can be certified rather than trusted:
+`tinyagents_graph::testkit::conformance` (checkpointer + task-store, run
+against memory/file/SQLite and JSONL in `tests/conformance.rs` and
+`tests/persistence_conformance.rs`); `tinyagents_harness::store::conformance`
+(`run_store_conformance`/`run_namespaced_store_conformance`, run against
+`InMemoryStore`/`FileStore`/`InMemoryNamespacedStore` in
+`tests/store_conformance.rs` — no in-tree SQLite `Store` exists yet); and
+`tinyagents_session::testkit::conformance` (run ledger + transcript history,
+run against SQLite and an in-memory double in `tests/session_conformance.rs`).
+See `docs/modules/harness/store.md` and
+`crates/tinyagents-session/src/README.md` for details. Parallel-agent
+order/failure/timeout/cancellation regression tests remain open (see the
+fuzz/e2e graph-agent orchestration tests instead).
 
 ## Implementation Order
 

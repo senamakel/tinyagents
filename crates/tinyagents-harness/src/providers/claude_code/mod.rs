@@ -393,6 +393,9 @@ fn render_content(content: &[ContentBlock]) -> String {
             }
             ContentBlock::Thinking { text, .. } => Some(text.clone()),
             ContentBlock::RedactedThinking { .. } => None,
+            ContentBlock::Audio(media) => Some(format!("[OH_AUDIO:{media:?}]")),
+            ContentBlock::Video(media) => Some(format!("[OH_VIDEO:{media:?}]")),
+            ContentBlock::Document(media) => Some(format!("[OH_DOCUMENT:{media:?}]")),
         })
         .collect::<Vec<_>>()
         .join("\n")

@@ -45,7 +45,44 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
             meta: std::collections::HashMap::new(),
             aliases: std::collections::HashMap::new(),
             capabilities: std::collections::HashMap::new(),
+            router: crate::router::WorkloadRouter::new(),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Workload routing
+    // -----------------------------------------------------------------------
+
+    /// Installs `router` as this registry's workload-tier routing policy,
+    /// returning `self` for chaining (builder style).
+    #[must_use]
+    pub fn with_router(mut self, router: crate::router::WorkloadRouter) -> Self {
+        self.router = router;
+        self
+    }
+
+    /// Installs `router` as this registry's workload-tier routing policy.
+    pub fn set_router(&mut self, router: crate::router::WorkloadRouter) -> &mut Self {
+        self.router = router;
+        self
+    }
+
+    /// The installed workload-tier routing policy.
+    pub fn router(&self) -> &crate::router::WorkloadRouter {
+        &self.router
+    }
+
+    /// Resolves a workload tier (e.g. `"chat-v1"`) to the registered model it
+    /// routes to.
+    ///
+    /// Projects [`WorkloadRouter::target_model`](crate::router::WorkloadRouter::target_model)
+    /// through this registry's own model table: `tier` must both be a known
+    /// route *and* forward to a model name that is actually registered here.
+    /// Returns `None` when either is not the case, so a route that names a
+    /// model nobody registered fails closed rather than panicking.
+    pub fn route_workload(&self, tier: &str) -> Option<&Arc<dyn ChatModel<State>>> {
+        let target = self.router.target_model(tier)?;
+        self.models.get(target)
     }
 
     // -----------------------------------------------------------------------

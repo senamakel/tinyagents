@@ -293,6 +293,25 @@ Profiles are used to:
 Profiles are not a pricing table. Prices belong to the cost feature and should
 be updateable independently.
 
+### Model behaviour, deferred responses, and request hooks (implemented)
+
+`ModelProfile` gained data-driven behaviour fields (`schema_transform`,
+`default_structured_mode`, `prompted_output_template`, `thinking_tags`,
+`thinking_level_map`, `compat: ProviderCompat`), `ModelStreamItem` gained a
+`Deferred(DeferredHandle)` terminal item plus `ChatModel::fetch_deferred` for
+async/batch providers, and the OpenAI/Anthropic adapters gained
+`ProviderRequestOptions` (`on_payload`/`on_response`/`http`) transport hooks.
+See [model-behaviour.md](model-behaviour.md) for the full shape and what is
+and is not yet wired into the harness.
+
+
+### Multimodal content blocks (implemented)
+
+`ContentBlock` gained `Audio(MediaRef)`, `Video(MediaRef)`, and
+`Document(MediaRef)`, plus matching `Modalities` fields and OpenAI/Anthropic
+adapter support. See [multimodal.md](multimodal.md) for the full shape,
+adapter mapping, and what was scoped out (an SSRF-guarded downloader).
+
 ## Model Lifecycle Gating
 
 `ModelProfile::status` (`ModelStatus::Stable` / `Preview` / `Deprecated` /

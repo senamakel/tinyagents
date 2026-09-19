@@ -398,11 +398,29 @@ fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
             messages: 3,
             text_chars: 13,
             images: 1,
+            media: 0,
             tool_calls: 1,
             tool_results: 1,
             paired_tool_results: 1,
         }
     );
+}
+
+#[test]
+fn context_statistics_counts_audio_video_and_document_blocks_as_media() {
+    use tinyinference_llm::message::{ContentBlock, MediaRef, Message, UserMessage};
+
+    let messages = vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Audio(MediaRef::url("https://example.com/a.wav")),
+            ContentBlock::Video(MediaRef::base64("AAAA", "video/mp4")),
+            ContentBlock::Document(MediaRef::path("/tmp/doc.pdf")),
+        ],
+    })];
+
+    let stats = context_statistics(&messages);
+    assert_eq!(stats.media, 3);
+    assert_eq!(stats.images, 0);
 }
 
 #[test]

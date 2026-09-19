@@ -195,10 +195,15 @@ impl FrameEncoder {
             // block-aware adapter. Adapters that only emit the flat
             // `MessageDelta`/`ToolCallDelta` shape (no block boundaries) have
             // nothing durable to frame here beyond what `Completed`/`Failed`
-            // already capture.
+            // already capture. `Deferred` carries no message content either
+            // (it is a handle to a response that will resolve later via
+            // `ChatModel::fetch_deferred`, folded by
+            // `StreamAccumulator::deferred` instead of this block reducer),
+            // so it is likewise not framed.
             ModelStreamItem::Started
             | ModelStreamItem::MessageDelta(_)
-            | ModelStreamItem::ToolCallDelta(_) => {}
+            | ModelStreamItem::ToolCallDelta(_)
+            | ModelStreamItem::Deferred(_) => {}
         }
     }
 

@@ -558,3 +558,61 @@ async fn capability_registry_implements_definition_registry() {
             .is_empty()
     );
 }
+
+// ---------------------------------------------------------------------------
+// route_workload
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn route_workload_resolves_tier_through_router_to_registered_model() {
+    use crate::router::{WorkloadRoute, WorkloadRouter};
+
+    let mut reg: CapabilityRegistry = CapabilityRegistry::new();
+    reg.register_model("chat-v1", Arc::new(FakeModel("chat")))
+        .unwrap();
+    reg.register_model("burst-v1", Arc::new(FakeModel("burst")))
+        .unwrap();
+    reg.set_router(
+        WorkloadRouter::new()
+            .with_route(WorkloadRoute::new("chat-v1", "chat-v1").with_fallbacks(["burst-v1"]))
+            .with_route(WorkloadRoute::new("burst-v1", "burst-v1")),
+    );
+
+    let resolved = reg.route_workload("chat-v1").unwrap();
+    let response = resolved
+        .invoke(&(), ModelRequest::new(vec![]))
+        .await
+        .unwrap();
+    assert_eq!(response.text(), "chat");
+}
+
+#[test]
+fn route_workload_is_none_for_unknown_tier_or_unregistered_target() {
+    use crate::router::{WorkloadRoute, WorkloadRouter};
+
+    let mut reg: CapabilityRegistry = CapabilityRegistry::new();
+    reg.register_model("chat-v1", Arc::new(FakeModel("chat")))
+        .unwrap();
+    reg.set_router(
+        WorkloadRouter::new()
+            .with_route(WorkloadRoute::new("chat-v1", "chat-v1"))
+            // Routes to a model that was never registered in this registry.
+            .with_route(WorkloadRoute::new("vision-v1", "vision-model")),
+    );
+
+    assert!(reg.route_workload("unknown-tier").is_none());
+    assert!(reg.route_workload("vision-v1").is_none());
+}
+
+#[test]
+fn with_router_builder_installs_the_routing_policy() {
+    use crate::router::{WorkloadRoute, WorkloadRouter};
+
+    let mut reg: CapabilityRegistry = CapabilityRegistry::new()
+        .with_router(WorkloadRouter::new().with_route(WorkloadRoute::new("chat-v1", "chat-v1")));
+    reg.register_model("chat-v1", Arc::new(FakeModel("chat")))
+        .unwrap();
+
+    assert!(reg.router().route("chat-v1").is_some());
+    assert!(reg.route_workload("chat-v1").is_some());
+}

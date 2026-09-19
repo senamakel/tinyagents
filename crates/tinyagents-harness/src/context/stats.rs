@@ -20,6 +20,8 @@ pub struct ContextStatistics {
     pub text_chars: usize,
     /// Image blocks across every role.
     pub images: usize,
+    /// Audio, video, and document blocks across every role.
+    pub media: usize,
     /// Tool calls requested by assistant messages.
     pub tool_calls: usize,
     /// Tool result messages.
@@ -61,6 +63,9 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                     stats.text_chars += value.to_string().chars().count();
                 }
                 ContentBlock::Image(_) => stats.images += 1,
+                ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => {
+                    stats.media += 1;
+                }
                 ContentBlock::RedactedThinking { .. } => {}
             }
         }

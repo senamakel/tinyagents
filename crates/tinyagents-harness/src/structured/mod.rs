@@ -194,6 +194,23 @@ impl StructuredStrategy {
     /// );
     /// ```
     pub fn for_profile(profile: Option<&ModelProfile>) -> StructuredStrategy {
+        // A profile's `default_structured_mode` is an explicit authoring
+        // decision about *this* model — it wins over the generic
+        // capability-based inference below, which only guesses from
+        // `native_structured_output`/`tool_calling`.
+        if let Some(mode) = profile.and_then(|p| p.default_structured_mode) {
+            return match mode {
+                tinyinference_llm::model::StructuredMode::Native => {
+                    StructuredStrategy::ProviderSchema
+                }
+                tinyinference_llm::model::StructuredMode::Tool => StructuredStrategy::ToolCall,
+                tinyinference_llm::model::StructuredMode::Prompted => {
+                    StructuredStrategy::Prompted {
+                        template: profile.and_then(|p| p.prompted_output_template.clone()),
+                    }
+                }
+            };
+        }
         match profile {
             Some(p) if p.native_structured_output && p.json_schema => {
                 StructuredStrategy::ProviderSchema

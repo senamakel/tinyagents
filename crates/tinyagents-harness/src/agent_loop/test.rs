@@ -27,7 +27,7 @@ use crate::tool::ToolTimeoutSettings;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
     CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStreamItem,
-    ResponseFormat, ToolChoice,
+    ReasoningConfig, ReasoningEffort, ResponseFormat, SchemaTransform, StructuredMode, ToolChoice,
 };
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
@@ -5319,4 +5319,388 @@ async fn echo_unwrap_is_skipped_when_the_inner_value_is_still_invalid() {
         0,
         "the tool must not run with arguments that never validated"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up F1: harness-side `ModelProfile` wiring
+// ---------------------------------------------------------------------------
+
+/// A tool whose declared schema carries `$defs`, so a `SchemaTransform` that
+/// strips them (or resolves refs) is observable on the wire.
+struct DefsTool;
+
+#[async_trait]
+impl Tool for DefsTool {
+    fn name(&self) -> &str {
+        "lookup"
+    }
+    fn description(&self) -> &str {
+        "look something up"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "$defs": {"Id": {"type": "string"}},
+            "properties": {"id": {"$ref": "#/$defs/Id"}},
+        })
+    }
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
+    }
+}
+
+#[tokio::test]
+async fn resolved_profile_schema_transform_is_applied_to_tool_schemas() {
+    use crate::testkit::ScriptedModel;
+
+    let model = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            schema_transform: Some(SchemaTransform::StripDefs),
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.register_tool(Arc::new(DefsTool));
+
+    harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let requests = model.requests();
+    let request = requests.first().expect("one model call");
+    let tool = request
+        .tools
+        .iter()
+        .find(|t| t.name == "lookup")
+        .expect("lookup tool advertised");
+    assert!(
+        tool.parameters.get("$defs").is_none(),
+        "the resolved profile's StripDefs transform must strip `$defs` before \
+         the request is sent: {:?}",
+        tool.parameters
+    );
+}
+
+#[tokio::test]
+async fn resolved_profile_schema_transform_is_applied_to_the_structured_output_schema() {
+    use crate::testkit::ScriptedModel;
+
+    let model = Arc::new(
+        ScriptedModel::replies(vec![r#"{"value":"hi"}"#]).with_profile(ModelProfile {
+            native_structured_output: true,
+            json_schema: true,
+            schema_transform: Some(SchemaTransform::StripDefs),
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_policy(RunPolicy {
+        default_response_format: Some(ResponseFormat::auto(
+            "answer",
+            json!({
+                "type": "object",
+                "$defs": {"Id": {"type": "string"}},
+                "properties": {"value": {"$ref": "#/$defs/Id"}},
+            }),
+        )),
+        ..RunPolicy::default()
+    });
+
+    harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let requests = model.requests();
+    let request = requests.first().expect("one model call");
+    let ResponseFormat::JsonSchema { schema, .. } = request
+        .response_format
+        .as_ref()
+        .expect("provider-native structured output was requested")
+    else {
+        panic!("expected JsonSchema, got {:?}", request.response_format);
+    };
+    assert!(
+        schema.get("$defs").is_none(),
+        "the structured-output schema must be transformed too: {schema:?}"
+    );
+}
+
+#[tokio::test]
+async fn default_structured_mode_prompted_injects_schema_into_the_system_segment() {
+    use crate::testkit::ScriptedModel;
+
+    let model = Arc::new(
+        ScriptedModel::replies(vec![r#"{"value":"hi"}"#]).with_profile(ModelProfile {
+            default_structured_mode: Some(StructuredMode::Prompted),
+            prompted_output_template: Some("Reply with JSON matching:".to_string()),
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_policy(RunPolicy {
+        default_response_format: Some(ResponseFormat::auto(
+            "answer",
+            json!({"type": "object", "properties": {"value": {"type": "string"}}}),
+        )),
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let requests = model.requests();
+    let request = requests.first().expect("one model call");
+    assert_eq!(request.response_format, Some(ResponseFormat::Text));
+    let system_text: String = request
+        .messages
+        .iter()
+        .filter(|m| matches!(m, Message::System(_)))
+        .map(|m| m.text())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        system_text.contains("Reply with JSON matching:"),
+        "the profile's prompted template must be injected: {system_text}"
+    );
+    assert!(
+        system_text.contains("JSON Schema for `answer`"),
+        "the schema must be described in the system segment: {system_text}"
+    );
+
+    let structured = run.structured.expect("structured output present");
+    assert_eq!(structured["value"], "hi");
+}
+
+/// A middleware that pins a named reasoning effort onto every model request,
+/// standing in for a caller that only knows the generic level name (not this
+/// specific model's tuned budget).
+struct RequestReasoningEffort(ReasoningEffort);
+
+#[async_trait]
+impl Middleware<()> for RequestReasoningEffort {
+    fn name(&self) -> &str {
+        "request-reasoning-effort"
+    }
+
+    async fn before_model(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        request: &mut ModelRequest,
+    ) -> Result<()> {
+        request.reasoning = Some(ReasoningConfig::effort(self.0));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn thinking_level_map_resolves_a_named_reasoning_effort() {
+    use crate::testkit::ScriptedModel;
+
+    let mut thinking_level_map = std::collections::BTreeMap::new();
+    thinking_level_map.insert(
+        "high".to_string(),
+        ReasoningConfig {
+            effort: Some(ReasoningEffort::High),
+            budget_tokens: Some(32_000),
+            summary: None,
+        },
+    );
+    let model = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            thinking_level_map,
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.push_middleware(Arc::new(RequestReasoningEffort(ReasoningEffort::High)));
+
+    harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let requests = model.requests();
+    let request = requests.first().expect("one model call");
+    assert_eq!(
+        request.reasoning.as_ref().and_then(|r| r.budget_tokens),
+        Some(32_000),
+        "the profile's tuned budget for the `high` level must replace the bare \
+         effort the caller asked for: {:?}",
+        request.reasoning
+    );
+}
+
+#[tokio::test]
+async fn thinking_level_map_does_not_override_an_explicit_budget() {
+    use crate::testkit::ScriptedModel;
+
+    let mut thinking_level_map = std::collections::BTreeMap::new();
+    thinking_level_map.insert(
+        "high".to_string(),
+        ReasoningConfig {
+            effort: Some(ReasoningEffort::High),
+            budget_tokens: Some(32_000),
+            summary: None,
+        },
+    );
+    let model = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            thinking_level_map,
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+
+    struct ExplicitBudget;
+    #[async_trait]
+    impl Middleware<()> for ExplicitBudget {
+        fn name(&self) -> &str {
+            "explicit-budget"
+        }
+        async fn before_model(
+            &self,
+            _ctx: &mut RunContext<()>,
+            _state: &(),
+            request: &mut ModelRequest,
+        ) -> Result<()> {
+            request.reasoning = Some(ReasoningConfig {
+                effort: Some(ReasoningEffort::High),
+                budget_tokens: Some(1_234),
+                summary: None,
+            });
+            Ok(())
+        }
+    }
+    harness.push_middleware(Arc::new(ExplicitBudget));
+
+    harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let requests = model.requests();
+    let request = requests.first().expect("one model call");
+    assert_eq!(
+        request.reasoning.as_ref().and_then(|r| r.budget_tokens),
+        Some(1_234),
+        "an explicit caller budget must win over the profile's mapped default"
+    );
+}
+
+#[tokio::test]
+async fn thinking_tags_are_split_out_of_a_unary_response_into_a_thinking_block() {
+    use crate::testkit::ScriptedModel;
+
+    let model = Arc::new(
+        ScriptedModel::new(vec![ModelResponse::assistant(
+            "<think>reasoning about it</think>the final answer",
+        )])
+        .with_profile(ModelProfile {
+            thinking_tags: Some(("<think>".to_string(), "</think>".to_string())),
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let response = run.final_response.expect("final response");
+    let thinking: Vec<&str> = response
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Thinking { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(thinking, vec!["reasoning about it"]);
+    assert_eq!(response.text(), "the final answer");
+}
+
+#[tokio::test]
+async fn a_model_without_thinking_tags_configured_leaves_text_untouched() {
+    use crate::testkit::ScriptedModel;
+
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant(
+        "<think>not a reasoning tag here</think>plain text",
+    )]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let response = run.final_response.expect("final response");
+    assert!(
+        response
+            .message
+            .content
+            .iter()
+            .all(|block| !matches!(block, ContentBlock::Thinking { .. })),
+        "no profile means no tag pair to split on"
+    );
+}
+
+#[tokio::test]
+async fn streaming_ignores_leading_whitespace_on_the_first_text_delta_only() {
+    use crate::testkit::StreamingMock;
+
+    let model = Arc::new(
+        StreamingMock::from_text_chunks(["   Hello", ", world"]).with_profile(ModelProfile {
+            ignore_streamed_leading_whitespace: true,
+            ..ModelProfile::default()
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("stream", model);
+
+    let run = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("strip-leading-ws"),
+            vec![Message::user("hi")],
+        )
+        .await
+        .expect("streaming run succeeds");
+
+    assert_eq!(run.text(), Some("Hello, world".to_string()));
+}
+
+#[tokio::test]
+async fn streaming_without_the_profile_flag_keeps_leading_whitespace() {
+    use crate::testkit::StreamingMock;
+
+    let model = Arc::new(StreamingMock::from_text_chunks(["   Hello", ", world"]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("stream", model);
+
+    let run = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("keep-leading-ws"),
+            vec![Message::user("hi")],
+        )
+        .await
+        .expect("streaming run succeeds");
+
+    assert_eq!(run.text(), Some("   Hello, world".to_string()));
 }

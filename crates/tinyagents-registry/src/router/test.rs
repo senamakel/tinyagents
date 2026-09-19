@@ -1,13 +1,13 @@
-//! Unit tests for [`ModelRouter`](super::ModelRouter) / [`WorkloadRoute`].
+//! Unit tests for [`WorkloadRouter`](super::WorkloadRouter) / [`WorkloadRoute`].
 
-use super::{ModelRouter, WorkloadRoute};
+use super::{WorkloadRoute, WorkloadRouter};
 use tinyinference_llm::model::CapabilitySet;
 
 /// Mirrors OpenHuman's workload tiers so the tests exercise the exact projection
 /// the host router needs: fast/chat siblings, heavy reasoning siblings, and a
 /// capability-gated vision primary-only tier.
-fn oh_like_router() -> ModelRouter {
-    ModelRouter::new()
+fn oh_like_router() -> WorkloadRouter {
+    WorkloadRouter::new()
         .with_route(WorkloadRoute::new("chat-v1", "chat-v1").with_fallbacks(["burst-v1"]))
         .with_route(WorkloadRoute::new("burst-v1", "burst-v1").with_fallbacks(["chat-v1"]))
         .with_route(
@@ -83,7 +83,7 @@ fn aliases_preserve_registration_order() {
 
 #[test]
 fn register_rejects_duplicate_alias() {
-    let mut r = ModelRouter::new();
+    let mut r = WorkloadRouter::new();
     r.register(WorkloadRoute::new("chat-v1", "chat-v1"))
         .unwrap();
     let err = r
@@ -96,7 +96,7 @@ fn register_rejects_duplicate_alias() {
 
 #[test]
 fn with_route_last_write_wins_and_keeps_position() {
-    let r = ModelRouter::new()
+    let r = WorkloadRouter::new()
         .with_route(WorkloadRoute::new("a", "a-model"))
         .with_route(WorkloadRoute::new("b", "b-model"))
         // Overwrite `a` in place — position preserved, target updated.
@@ -108,7 +108,7 @@ fn with_route_last_write_wins_and_keeps_position() {
 
 #[test]
 fn empty_router_answers_nothing() {
-    let r = ModelRouter::new();
+    let r = WorkloadRouter::new();
     assert!(r.is_empty());
     assert!(r.default_alias().is_none());
     assert!(r.target_model("x").is_none());

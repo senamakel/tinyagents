@@ -646,6 +646,39 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 });
             }
 
+            // Apply the resolved model's schema transform (for example
+            // stripping `$defs` a provider rejects) to every tool schema
+            // already attached to the request. This is the same wire-shape
+            // adjustment `SchemaPreparation::schema_transform` performs, run
+            // here because it depends on the resolved binding's profile,
+            // which is only known once resolution above has run.
+            if let Some(transform) = binding
+                .model
+                .profile()
+                .and_then(|profile| profile.schema_transform.as_ref())
+            {
+                for tool in request.tools.iter_mut() {
+                    tool.parameters = transform.apply(&tool.parameters);
+                }
+            }
+
+            // A caller asking for a *named* reasoning effort (for example
+            // `ReasoningEffort::High`) gets whatever generic token that name
+            // implies unless the resolved model's profile maps that name to
+            // something more specific for this exact model (a provider-tuned
+            // `budget_tokens`, typically). Only fill in a name the profile
+            // actually maps and only when the caller has not already pinned
+            // an explicit `budget_tokens` — an explicit budget is the
+            // caller's own override and must win over the profile default.
+            if let Some(profile) = binding.model.profile()
+                && let Some(reasoning) = request.reasoning.as_ref()
+                && reasoning.budget_tokens.is_none()
+                && let Some(effort) = reasoning.effort
+                && let Some(mapped) = profile.thinking_level_map.get(effort.as_str())
+            {
+                request.reasoning = Some(mapped.clone());
+            }
+
             // Resolve the structured-output plan against the resolved model.
             // `Auto` consults the model profile to choose provider-native schema
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
@@ -665,6 +698,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             }) => template.clone(),
                             _ => unreachable!("guarded by the match arm above"),
                         };
+                        let schema = crate::tool::apply_profile_schema_transform(
+                            &schema,
+                            binding.model.profile(),
+                        );
                         request.response_format = Some(ResponseFormat::Text);
                         let instructions = template.clone().unwrap_or_else(|| {
                             crate::structured::default_prompted_template().to_string()
@@ -692,10 +729,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         };
                         request.response_format = Some(ResponseFormat::Text);
                         for (variant_name, variant_schema) in &variants {
+                            let variant_schema = crate::tool::apply_profile_schema_transform(
+                                variant_schema,
+                                binding.model.profile(),
+                            );
                             let schema_tool = ToolSchema {
                                 name: variant_name.clone(),
                                 description: format!("Return the result as `{variant_name}`."),
-                                parameters: variant_schema.clone(),
+                                parameters: variant_schema,
                                 format: tinyinference_llm::tool::ToolFormat::Json,
                             };
                             request.tools.push(match &self.policy.tool_schemas {
@@ -709,6 +750,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         Some((StructuredStrategy::ToolCallUnion, name, Value::Null))
                     }
                     Some(ResponseFormat::Auto { name, schema }) => {
+                        let schema = crate::tool::apply_profile_schema_transform(
+                            &schema,
+                            binding.model.profile(),
+                        );
                         let strategy = StructuredStrategy::for_profile(binding.model.profile());
                         match strategy {
                             StructuredStrategy::ProviderSchema => {
@@ -759,19 +804,46 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     );
                                 }
                             }
-                            // `for_profile` only ever returns these two; the
-                            // `Prompted`/`ToolCallUnion` strategies are
-                            // reached exclusively through the dedicated
-                            // `structured_strategy_override` arms above.
-                            StructuredStrategy::Prompted { .. }
-                            | StructuredStrategy::ToolCallUnion => unreachable!(
-                                "StructuredStrategy::for_profile never returns Prompted or \
-                                 ToolCallUnion"
+                            // A profile whose `default_structured_mode` is
+                            // `Prompted` reaches this arm too (not only
+                            // through the dedicated
+                            // `structured_strategy_override` arm above): the
+                            // schema goes into the system segment instead of
+                            // a provider API field, mirroring the override
+                            // arm's construction.
+                            StructuredStrategy::Prompted { ref template } => {
+                                request.response_format = Some(ResponseFormat::Text);
+                                let instructions = template.clone().unwrap_or_else(|| {
+                                    crate::structured::default_prompted_template().to_string()
+                                });
+                                let schema_text =
+                                    serde_json::to_string_pretty(&schema).unwrap_or_default();
+                                request.messages.insert(
+                                    0,
+                                    Message::system(format!(
+                                        "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
+                                    )),
+                                );
+                            }
+                            // `for_profile` never returns `ToolCallUnion`;
+                            // that strategy is reached exclusively through
+                            // the dedicated `structured_strategy_override`
+                            // arm above.
+                            StructuredStrategy::ToolCallUnion => unreachable!(
+                                "StructuredStrategy::for_profile never returns ToolCallUnion"
                             ),
                         }
                         Some((strategy, name, schema))
                     }
                     Some(ResponseFormat::JsonSchema { name, schema }) => {
+                        let schema = crate::tool::apply_profile_schema_transform(
+                            &schema,
+                            binding.model.profile(),
+                        );
+                        request.response_format = Some(ResponseFormat::JsonSchema {
+                            name: name.clone(),
+                            schema: schema.clone(),
+                        });
                         Some((StructuredStrategy::ProviderSchema, name, schema))
                     }
                     _ => None,

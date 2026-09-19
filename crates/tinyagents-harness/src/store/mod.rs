@@ -21,12 +21,16 @@
 //! - [`InMemoryStore`] — ephemeral in-process store for tests and examples.
 //! - [`FileStore`] — file-system-backed store for local development.
 //! - [`StoreRegistry`] — named bag of stores injected into `RunContext`.
+//! - [`conformance`] — contract suites (`run_store_conformance`,
+//!   `run_namespaced_store_conformance`) any backend of either trait can be
+//!   certified against.
 //!
 //! # Namespace convention
 //! Use slash-free, lowercase names like `"threads"`, `"events"`, `"cache"`,
 //! `"artifacts"`. The registry does not enforce a naming scheme, but
 //! consistent names make multi-store applications easier to audit.
 
+pub mod conformance;
 pub mod namespaced;
 mod types;
 

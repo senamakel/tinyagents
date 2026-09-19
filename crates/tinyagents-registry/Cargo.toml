@@ -10,6 +10,7 @@ description = "Named capability registry and offline model catalog."
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tinyagents-definition = { path = "../tinyagents-definition", version = "2.1.2" }
