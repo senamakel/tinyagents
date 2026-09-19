@@ -1224,14 +1224,20 @@ async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patc
                     crate::capability::LOAD_CAPABILITY_TOOL_NAME,
                     json!({"capability": "advanced"}),
                 ),
-                tool_call_response("call-2", "advanced-tool", json!({})),
+                // Turn 2 makes no tool call — the point of this test is the
+                // *advertisement* change the loop's existing tool-change diff
+                // (B6) picks up before this turn's request goes out, not
+                // `advanced-tool`'s own dispatch (a deferred capability's
+                // tools are advertised automatically but, like any
+                // `with_toolset` toolset, need an explicit
+                // `ToolSetDispatchBridge` to also be *callable* — see that
+                // type's doc comment; orthogonal to what this test covers).
                 text_response("done", 4, 2),
             ]),
             profile,
         }),
     );
 
-    let advanced_tool: Arc<dyn Tool> = Arc::new(FakeTool::new("advanced-tool", "advanced-output"));
     // A minimal single-tool toolset behind the capability, independent of
     // `defer_loading` gating (that gating is `CapabilityToolSet`'s job, one
     // layer up).
@@ -1263,20 +1269,10 @@ async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patc
     let capability = crate::capability::Capability::new("advanced")
         .with_instructions("Advanced instructions.")
         .with_toolset(Arc::new(SingleToolSet {
-            tool: advanced_tool.clone(),
+            tool: Arc::new(FakeTool::new("advanced-tool", "advanced-output")),
         }))
         .with_defer_loading(true);
     harness.with_capability(capability);
-
-    // `advanced-tool`'s dispatch is bridged explicitly (the same documented
-    // limitation as plain `with_toolset`): advertisement is automatic once
-    // loaded, dispatch is not. `load_capability` needed no such bridge — it
-    // was registered directly into `self.tools` by `with_capability`.
-    let toolset = harness.toolset().expect("toolset installed").clone();
-    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
-        toolset,
-        advanced_tool,
-    )));
 
     let run = harness
         .invoke_default(
