@@ -14,9 +14,9 @@
 
 use super::*;
 use crate::builder::{GraphBuilder, NodeContext};
-use crate::checkpoint::{Checkpointer, FileCheckpointer};
 #[cfg(feature = "sqlite")]
 use crate::checkpoint::SqliteCheckpointer;
+use crate::checkpoint::{Checkpointer, FileCheckpointer};
 use crate::command::{Command, Interrupt, NodeResult};
 use serde_json::json;
 use std::sync::Arc;
