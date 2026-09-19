@@ -561,6 +561,23 @@ async fn screen_user_messages<State: Send + Sync>(
                             return Err(TinyAgentsError::Validation(reason));
                         }
                     }
+                } else if let tinyinference_llm::message::ContentBlock::Json(value) = block {
+                    let rendered = value.to_string();
+                    match host
+                        .security
+                        .screen_input(&rendered, ContentOrigin::User)
+                        .await?
+                    {
+                        ScreenOutcome::Pass => visible.push(rendered),
+                        ScreenOutcome::Redacted(redacted) => {
+                            *value = serde_json::from_str(&redacted)
+                                .unwrap_or(serde_json::Value::String(redacted));
+                            visible.push(value.to_string());
+                        }
+                        ScreenOutcome::Block { reason } => {
+                            return Err(TinyAgentsError::Validation(reason));
+                        }
+                    }
                 }
             }
         }

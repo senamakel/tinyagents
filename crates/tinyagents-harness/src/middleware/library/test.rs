@@ -1135,7 +1135,7 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     policies.insert(
         "reader".to_string(),
         ToolPolicy::classified().with_runtime(ToolRuntime {
-            max_result_bytes: Some(4),
+            max_result_bytes: Some(12),
             ..ToolRuntime::default()
         }),
     );
@@ -1143,7 +1143,7 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw);
 
-    let mut result = ToolResult::error("abcdefgh").with_markdown("abcdefgh");
+    let mut result = ToolResult::error("abcdefghijklmnop").with_markdown("abcdefghijklmnop");
     stack
         .run_after_tool(
             &mut ctx,
@@ -1153,11 +1153,8 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
         )
         .await
         .expect("after_tool runs");
-    assert_eq!(
-        result.output(),
-        "abcd\ntool result exceeded max_result_bytes (4)"
-    );
-    assert_eq!(result.markdown_formatted.as_deref(), Some("abcd"));
+    assert_eq!(result.output(), "a[truncated]");
+    assert_eq!(result.markdown_formatted.as_deref(), Some("a[truncated]"));
     assert!(result.is_error);
 }
 

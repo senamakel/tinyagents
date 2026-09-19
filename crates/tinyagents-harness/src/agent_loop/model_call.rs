@@ -321,21 +321,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 reasoning: delta.reasoning.clone(),
                 tool_call: delta.tool_call.clone(),
             };
+            self.middleware
+                .run_on_model_delta(ctx, state, &mut model_delta)
+                .await?;
             ctx.emit(AgentEvent::ModelDelta {
                 run_id: ctx.config.run_id.clone(),
                 call_id: call_id.clone(),
-                delta,
+                delta: MessageDelta {
+                    text: model_delta.content.clone(),
+                    reasoning: model_delta.reasoning.clone(),
+                    tool_call: model_delta.tool_call.clone(),
+                },
             });
             self.emit_host_progress(
                 ctx.instance_id(),
                 crate::host::ProgressEvent::Token {
                     run: ctx.run_id().clone(),
-                    text: model_delta.content.clone(),
+                    text: model_delta.content,
                 },
             );
-            self.middleware
-                .run_on_model_delta(ctx, state, &mut model_delta)
-                .await?;
         }
         Ok(())
     }

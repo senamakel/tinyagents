@@ -410,7 +410,7 @@ async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
         } => {
             assert_eq!(call_id.as_str(), "c1");
             assert_eq!(tool_name, "fatal");
-            assert!(error.contains("transient 503"), "{error}");
+            assert_eq!(error, "tool error: tool dispatch failed");
         }
         other => panic!("expected ToolFailed, got {other:?}"),
     }

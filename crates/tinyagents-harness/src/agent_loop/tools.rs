@@ -1058,10 +1058,9 @@ fn tool_message_from_result(
 
 /// Maps a canonical-dispatch failure back to the harness error surface.
 ///
-/// Typed harness errors retain their original classification (cancellation,
-/// timeout, middleware refusal, etc.). Foreign errors are intentionally
-/// collapsed: third-party error chains can include credentials or user data,
-/// and a tool failure may be surfaced to the model or an event consumer.
+/// Only cancellation and timeout retain their safe typed classifications.
+/// Every other typed or foreign error is collapsed because message-bearing
+/// errors can include credentials or user data exposed to model/event consumers.
 pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
     match error.downcast::<TinyAgentsError>() {
         Ok(TinyAgentsError::Cancelled) => TinyAgentsError::Cancelled,

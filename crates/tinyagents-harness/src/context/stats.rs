@@ -68,6 +68,23 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
 pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> usize) -> usize {
     messages
         .iter()
-        .map(|message| tokenize(&message.text()))
+        .map(|message| {
+            let visible = match message {
+                Message::User(user) => user
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text(text) => Some(text.clone()),
+                        ContentBlock::Json(value) | ContentBlock::ProviderExtension(value) => {
+                            Some(value.to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                _ => message.text(),
+            };
+            tokenize(&visible)
+        })
         .sum()
 }

@@ -260,17 +260,26 @@ fn truncate_result(result: &mut ToolResult, max_result_bytes: usize) {
     let output = result.output();
     if output.len() > max_result_bytes {
         result.content = vec![ToolContent::Text {
-            text: truncate_utf8(&output, max_result_bytes),
+            text: truncate_with_marker(&output, max_result_bytes),
         }];
-        result.content.push(ToolContent::Text {
-            text: format!("tool result exceeded max_result_bytes ({max_result_bytes})"),
-        });
     }
     if let Some(markdown) = &mut result.markdown_formatted
         && markdown.len() > max_result_bytes
     {
-        *markdown = truncate_utf8(markdown, max_result_bytes);
+        *markdown = truncate_with_marker(markdown, max_result_bytes);
     }
+}
+
+fn truncate_with_marker(value: &str, max_bytes: usize) -> String {
+    const MARKER: &str = "[truncated]";
+    if max_bytes <= MARKER.len() {
+        return truncate_utf8(MARKER, max_bytes);
+    }
+    format!(
+        "{}{}",
+        truncate_utf8(value, max_bytes - MARKER.len()),
+        MARKER
+    )
 }
 
 /// Returns the longest valid UTF-8 prefix fitting within `max_bytes`.
