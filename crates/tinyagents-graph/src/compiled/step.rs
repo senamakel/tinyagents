@@ -366,7 +366,7 @@ where
     /// the pre-split sequential/parallel loops did inline. Kept as one
     /// function (rather than re-inlined at each call site) so a future
     /// change to this policy (see the module doc) has one place to change.
-    pub(super) fn fold_step(
+    fn fold_step(
         &self,
         outcome: StepOutcome<Update>,
         step: usize,
