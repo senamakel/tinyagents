@@ -76,6 +76,8 @@ struct SecretProviderModel;
 
 struct UsageReportingModel;
 
+struct BorrowedStateModel;
+
 struct SecretRecordBudget;
 
 struct SecretAfterModelMiddleware;
@@ -562,6 +564,17 @@ impl ChatModel<()> for UsageReportingModel {
             ..Usage::default()
         });
         Ok(response)
+    }
+}
+
+#[async_trait]
+impl<'state> ChatModel<&'state str> for BorrowedStateModel {
+    async fn invoke(
+        &self,
+        state: &&'state str,
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        Ok(ModelResponse::assistant(*state))
     }
 }
 
@@ -2122,6 +2135,47 @@ async fn retryable_classifier_changes_the_model_visible_result_without_redispatc
             .iter()
             .any(|message| message.text().contains("retryable tool failure"))
     );
+}
+
+#[tokio::test]
+async fn explicit_model_paths_accept_borrowed_state() {
+    async fn exercise<'state>(state: &'state str) {
+        let mut harness: AgentHarness<&'state str> = AgentHarness::new();
+        harness.register_model("borrowed", Arc::new(BorrowedStateModel));
+
+        let unary = harness
+            .invoke(
+                &state,
+                (),
+                RunConfig::new("borrowed-unary"),
+                vec![tinyinference_llm::message::Message::user("hello")],
+            )
+            .await
+            .expect("explicit unary invocation accepts borrowed state");
+        assert_eq!(unary.text().as_deref(), Some(state));
+
+        let streaming = harness
+            .invoke_streaming(
+                &state,
+                (),
+                RunConfig::new("borrowed-streaming"),
+                vec![tinyinference_llm::message::Message::user("hello")],
+            )
+            .await
+            .expect("explicit streaming invocation accepts borrowed state");
+        assert_eq!(streaming.text().as_deref(), Some(state));
+
+        let child_harness = Arc::new(harness);
+        let child = SubAgent::new("borrowed-child", "uses borrowed state", child_harness);
+        let child_run = child
+            .invoke(&state, (), 0, "delegate")
+            .await
+            .expect("explicit subagent invocation accepts borrowed state");
+        assert_eq!(child_run.text().as_deref(), Some(state));
+    }
+
+    let owned = String::from("borrowed state remains valid");
+    exercise(owned.as_str()).await;
 }
 
 #[tokio::test]

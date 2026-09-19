@@ -88,7 +88,7 @@ use crate::runtime::AgentHarness;
 use crate::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// Creates a sub-agent wrapping `harness` with a stable `name` and
     /// `description`.
     pub fn new(
@@ -252,45 +252,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         streaming: bool,
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
-        let messages = self.seed_messages(input);
-        let parent_host = if let Some(authority) = ctx.host_authority.as_ref() {
-            Some(
-                authority
-                    .downcast_ref::<crate::runtime::HostInvocationAuthority<State>>()
-                    .ok_or_else(|| {
-                        TinyAgentsError::Validation(
-                            "hosted parent delegation authority has an incompatible state type"
-                                .into(),
-                        )
-                    })?,
-            )
-        } else {
-            None
-        };
-        if let Some(authority) = parent_host {
-            let parent_agent = ctx.host_agent_id.as_deref().ok_or_else(|| {
-                TinyAgentsError::Validation(
-                    "hosted parent delegation is missing its parent agent identity".into(),
-                )
-            })?;
-            let delegates = authority
-                .binding
-                .host
-                .definitions
-                .delegates_for(parent_agent)
-                .await
-                .map_err(|error| {
-                    TinyAgentsError::Validation(format!(
-                        "delegate authorization lookup failed: {error}"
-                    ))
-                })?;
-            if !delegates.iter().any(|delegate| delegate == &self.name) {
-                return Err(TinyAgentsError::Validation(format!(
-                    "agent `{}` is not authorized to delegate to `{}`",
-                    parent_agent, self.name
-                )));
-            }
-        }
+        let messages = self.seed_messages(input.clone());
         // Clone the sink (it shares listeners and the offset counter with the
         // context) so the completion event can be emitted after `ctx` is moved
         // into the child agent loop.
@@ -301,27 +263,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             depth,
         });
 
-        let run = if let Some(authority) = parent_host {
-            let invocation = crate::runtime::AgentInvocation::from_shared_host(
-                authority.binding.host.clone(),
-                crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
-                ctx,
-            );
-            // A hosted parent always re-enters the child through its own exact
-            // capability bundle. The child harness's durable dependencies are
-            // intentionally irrelevant here: allowing a child-selected host
-            // bundle to decide policy would make delegation authorization
-            // bypassable.
-            if streaming {
-                self.harness
-                    .invoke_agent_streaming_with_capabilities(invocation, state)
-                    .await?
-            } else {
-                self.harness
-                    .invoke_agent_with_capabilities(invocation, state)
-                    .await?
-            }
-        } else if streaming {
+        let run = if streaming {
             self.harness
                 .invoke_streaming_in_context(state, ctx, messages)
                 .await?
@@ -338,6 +280,75 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
     }
 }
 
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
+    /// Hosted recursive driver. Kept separate from the generic explicit-model
+    /// path so a borrowed `State` never has to interact with live host
+    /// authority stored on a `RunContext`.
+    async fn run_hosted_child(
+        &self,
+        state: &State,
+        ctx: RunContext<Ctx>,
+        input: String,
+        streaming: bool,
+    ) -> Result<AgentRun> {
+        let depth = ctx.depth();
+        let messages = self.seed_messages(input.clone());
+        let binding = crate::runtime::host_invocation_binding::<State, Ctx>(&ctx)?;
+        let Some(binding) = binding else {
+            return self.run_child(state, ctx, input, streaming).await;
+        };
+        let parent_agent = ctx.host_agent_id.as_deref().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "hosted parent delegation is missing its parent agent identity".into(),
+            )
+        })?;
+        let delegates = binding
+            .host
+            .definitions
+            .delegates_for(parent_agent)
+            .await
+            .map_err(|error| {
+                TinyAgentsError::Validation(format!(
+                    "delegate authorization lookup failed: {error}"
+                ))
+            })?;
+        if !delegates.iter().any(|delegate| delegate == &self.name) {
+            return Err(TinyAgentsError::Validation(format!(
+                "agent `{parent_agent}` is not authorized to delegate to `{}`",
+                self.name
+            )));
+        }
+
+        let events = ctx.events.clone();
+        events.emit(AgentEvent::SubAgentStarted {
+            name: self.name.clone(),
+            depth,
+        });
+        let invocation = crate::runtime::AgentInvocation::from_shared_host(
+            binding.host.clone(),
+            crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
+            ctx,
+        );
+        // A hosted parent always re-enters through this exact capability
+        // bundle. The child harness supplies durable mechanics only; it cannot
+        // select an alternate host authority.
+        let run = if streaming {
+            self.harness
+                .invoke_agent_streaming_with_capabilities(invocation, state)
+                .await?
+        } else {
+            self.harness
+                .invoke_agent_with_capabilities(invocation, state)
+                .await?
+        };
+        events.emit(AgentEvent::SubAgentCompleted {
+            name: self.name.clone(),
+            depth,
+        });
+        Ok(run)
+    }
+}
+
 /// Derives an isolated child thread id from the parent thread and the child's
 /// run id. The run id already carries a process-unique sequence, so the thread
 /// id inherits its uniqueness.
@@ -345,7 +356,7 @@ fn child_thread_id(parent: &ThreadId, child_run_id: &str) -> ThreadId {
     ThreadId::new(format!("{}-subagent-{child_run_id}", parent.as_str()))
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
     /// Creates a session that reuses `subagent` across turns.
     ///
     /// The child runs at depth `1` by default (caller `parent_depth = 0`); use
@@ -599,7 +610,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
         };
         let run = match self
             .subagent
-            .run_child(state, child, input, parent.streaming)
+            .run_hosted_child(state, child, input, parent.streaming)
             .await
         {
             Ok(run) => run,

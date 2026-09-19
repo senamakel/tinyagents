@@ -319,7 +319,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             binding: prepared.binding.clone(),
         }));
         self.install_host_terminal_observer(&mut context, prepared.clone());
-        Self::emit_host_progress(
+        emit_host_progress::<State, Ctx>(
             &context,
             ProgressEvent::Started {
                 run: context.run_id().clone(),
@@ -417,7 +417,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }));
         let cancellation = context.cancellation.clone();
         let terminal_observer = self.install_host_terminal_observer(&mut context, prepared.clone());
-        Self::emit_host_progress(
+        emit_host_progress::<State, Ctx>(
             &context,
             ProgressEvent::Started {
                 run: context.run_id().clone(),
@@ -583,29 +583,6 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         })
     }
 
-    /// Returns this live context's host authorization, if it is a hosted run.
-    ///
-    /// The binding is carried by the non-serializable context rather than the
-    /// reusable harness, so concurrent roots have no shared mutable authority.
-    pub(crate) fn host_invocation_binding(
-        context: &RunContext<Ctx>,
-    ) -> Result<Option<HostInvocationBinding<State>>>
-    where
-        State: 'static,
-    {
-        let Some(authority) = context.host_authority.as_ref() else {
-            return Ok(None);
-        };
-        authority
-            .downcast_ref::<HostInvocationAuthority<State>>()
-            .map(|authority| Some(authority.binding.clone()))
-            .ok_or_else(|| {
-                TinyAgentsError::Validation(
-                    "hosted invocation authority has an incompatible state type".into(),
-                )
-            })
-    }
-
     fn install_host_terminal_observer(
         &self,
         context: &mut RunContext<Ctx>,
@@ -639,19 +616,50 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }));
         observer
     }
+}
 
-    /// Best-effort progress projection. A host UI must never make the turn
-    /// wait or fail, so delivery is detached and dropped when no Tokio runtime
-    /// is available.
-    pub(crate) fn emit_host_progress(context: &RunContext<Ctx>, event: ProgressEvent) {
-        let Ok(Some(binding)) = Self::host_invocation_binding(context) else {
-            return;
-        };
-        let Some(progress) = binding.progress else {
-            return;
-        };
-        progress.send_nonterminal(event);
-    }
+/// Returns this live context's host authorization, if it is a hosted run.
+///
+/// The binding is carried by the non-serializable context rather than the
+/// reusable harness, so concurrent roots have no shared mutable authority.
+pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx>(
+    context: &RunContext<Ctx>,
+) -> Result<Option<HostInvocationBinding<State>>> {
+    let Some(authority) = context.host_authority.as_ref() else {
+        return Ok(None);
+    };
+    // `host_authority` is crate-private and is installed only by the hosted
+    // entry points, which require `State: 'static` and store exactly
+    // `HostInvocationAuthority<State>`. Explicit-model entry points never
+    // install it, so they return at the `None` branch without requiring
+    // `State: 'static` or consulting `Any` at all. Keeping this cast at the
+    // private hosted-context boundary restores borrowed-state support to the
+    // generic loop without creating a harness registry or any cross-invocation
+    // authority channel.
+    //
+    // SAFETY: no public API can construct or mutate `host_authority`; its only
+    // assignment is the hosted `AgentInvocation` path in this module.
+    // `RunContext::child` clones that same `Arc` only for recursive calls with
+    // the same `State`. Thus a present authority always points at the concrete
+    // type requested here for the active harness invocation.
+    let authority =
+        unsafe { &*(std::sync::Arc::as_ptr(authority) as *const HostInvocationAuthority<State>) };
+    Ok(Some(authority.binding.clone()))
+}
+
+/// Best-effort progress projection. A host UI must never make the turn wait or
+/// fail, so delivery is detached and dropped when no Tokio runtime is available.
+pub(crate) fn emit_host_progress<State: Send + Sync, Ctx>(
+    context: &RunContext<Ctx>,
+    event: ProgressEvent,
+) {
+    let Ok(Some(binding)) = host_invocation_binding::<State, Ctx>(context) else {
+        return;
+    };
+    let Some(progress) = binding.progress else {
+        return;
+    };
+    progress.send_nonterminal(event);
 }
 
 fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError {

@@ -258,6 +258,11 @@ live context and cannot select a bundle from their own harness. The lower-level
 explicit-model `invoke*` APIs remain separate for SDK callers that intentionally
 assemble a run without host capabilities.
 
+Hosted invocations require `State: 'static` because their live capability
+authority must be retained in the recursive context. The explicit-model
+`invoke*`, streaming, and direct `SubAgent` paths do not install or inspect
+that authority and continue to support borrowed state.
+
 ### Tool timeout policy
 
 Hosts enable per-tool deadlines with

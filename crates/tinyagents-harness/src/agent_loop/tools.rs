@@ -134,7 +134,7 @@ struct PreparedToolCall {
     output_origin: crate::host::ContentOrigin,
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Resolves this tool's own timeout policy. The separate run wall-clock
     /// budget remains the outer hard deadline: a per-tool timeout becomes a
     /// recoverable tool-error result, while exhausting the run budget aborts.
@@ -289,8 +289,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // Hosted turns carry an explicit definition allowlist. Do not merely
         // hide disallowed schemas: a model can still fabricate a name, so the
         // dispatch boundary must reject it too.
-        let allowed_tools =
-            Self::host_invocation_binding(ctx)?.map(|binding| binding.allowed_tools);
+        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+            .map(|binding| binding.allowed_tools);
         let is_allowed = allowed_tools
             .as_ref()
             .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
@@ -465,7 +465,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // while execution receives the prepared trusted arguments. A hosted
         // run is identified from its explicit RunContext binding; the
         // lower-level SDK path has no implicit host policy.
-        if let Some(binding) = Self::host_invocation_binding(ctx)? {
+        if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
             let request = crate::host::ToolCallRequest::new(
                 call.name.clone(),
                 model_arguments,
@@ -527,7 +527,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             call_id: call_id.clone(),
             tool_name: tool_name.clone(),
         });
-        Self::emit_host_progress(
+        crate::runtime::emit_host_progress::<State, Ctx>(
             ctx,
             crate::host::ProgressEvent::ToolCall {
                 run: ctx.run_id().clone(),
@@ -630,7 +630,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // request. Screen it after host/result middleware shaping but before a
         // transcript message exists, so neither the original nor a blocked
         // value can reach the provider.
-        if let Some(binding) = Self::host_invocation_binding(ctx)? {
+        if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
             let rendered = result.output_for_llm(prepared.options.prefer_markdown);
             let cancellation = ctx.cancellation.clone();
             let screening = binding
@@ -674,7 +674,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
         }
 
-        if let Some(binding) = Self::host_invocation_binding(ctx)?
+        if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
             && let Some(classifier) = &binding.host.tool_outcomes
         {
             let outcome = classifier.classify(&prepared.tool_name, &result);
@@ -733,7 +733,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             output_bytes: Some(output_bytes),
             error,
         });
-        Self::emit_host_progress(
+        crate::runtime::emit_host_progress::<State, Ctx>(
             ctx,
             crate::host::ProgressEvent::ToolCallFinished {
                 run: ctx.run_id().clone(),

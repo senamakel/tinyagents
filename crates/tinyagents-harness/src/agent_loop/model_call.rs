@@ -20,13 +20,13 @@ use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
 use tinyinference_llm::cache::CachePolicy;
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub(super) async fn resolve_host_model(
         &self,
         ctx: &RunContext<Ctx>,
         request: &ModelRequest,
     ) -> Result<Option<ResolvedModelBinding<State>>> {
-        let Some(host_run) = Self::host_invocation_binding(ctx)? else {
+        let Some(host_run) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
             return Ok(None);
         };
         let mut resolve = crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
@@ -416,7 +416,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool_call: model_delta.tool_call.clone(),
                 },
             });
-            Self::emit_host_progress(
+            crate::runtime::emit_host_progress::<State, Ctx>(
                 ctx,
                 crate::host::ProgressEvent::Token {
                     run: ctx.run_id().clone(),
@@ -629,7 +629,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // A hosted resolver owns routing authority. Its first
                     // decision must not fall through to harness-local
                     // fallback names the host did not approve.
-                    if Self::host_invocation_binding(ctx)?.is_some() {
+                    if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
                         return Err(error);
                     }
                     // Retries exhausted (or non-retryable): walk the fallback
@@ -894,7 +894,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     call_id: call_id.clone(),
                     delta: forwarded_delta,
                 });
-                Self::emit_host_progress(
+                crate::runtime::emit_host_progress::<State, Ctx>(
                     ctx,
                     crate::host::ProgressEvent::Token {
                         run: ctx.run_id().clone(),
@@ -1009,7 +1009,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) streaming: bool,
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
     /// Produces the binding for one invocation, honouring a model override that
     /// a wrap middleware wrote into `request.model`.
     ///
@@ -1087,7 +1087,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> ModelCallBase<'_, State, Ct
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
+impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
     for ModelCallBase<'_, State, Ctx>
 {
     fn call<'a>(

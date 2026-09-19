@@ -117,7 +117,7 @@ enum Phase<'a> {
     Done,
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
     /// Runs the agent loop while streaming every emitted event to the caller.
     ///
     /// Returns a [`Stream`][futures::Stream] of [`AgentStreamItem`]s: live
