@@ -32,6 +32,8 @@ use serde::de::DeserializeOwned;
 /// line in a thread.
 #[derive(serde::Deserialize)]
 struct CheckpointHeader {
+    #[serde(default = "checkpoint_header_version_v1")]
+    version: u32,
     checkpoint_id: String,
     #[serde(default)]
     run_id: Option<String>,
@@ -39,8 +41,16 @@ struct CheckpointHeader {
     parent_checkpoint_id: Option<String>,
     #[serde(default)]
     namespace: Vec<String>,
+    /// v2 pending-task set; empty on a v1 record (see `next_nodes`/
+    /// `pending_activations` below).
+    #[serde(default)]
+    tasks: Vec<PendingActivation>,
+    /// v1: node-id-only projection of pending work.
     #[serde(default)]
     next_nodes: Vec<NodeId>,
+    /// v1: richer pending-activation superset of `next_nodes`.
+    #[serde(default)]
+    pending_activations: Option<Vec<PendingActivation>>,
     /// Only the count matters ([`CheckpointMetadata::has_interrupts`]), so
     /// each element is decoded as an opaque, ignored JSON value rather than
     /// the full `Interrupt` type.
@@ -50,10 +60,17 @@ struct CheckpointHeader {
     metadata: serde_json::Value,
 }
 
+fn checkpoint_header_version_v1() -> u32 {
+    1
+}
+
 impl CheckpointHeader {
     /// Projects this header onto [`CheckpointMetadata`], mirroring
     /// [`Checkpoint::to_metadata`] field-for-field (source/step parsed out of
-    /// the same free-form `metadata` value). `thread_id` is supplied by the
+    /// the same free-form `metadata` value, and the pending-task set resolved
+    /// the same v2-else-v1 way `Checkpoint::effective_tasks` does — a header
+    /// decode never sees `State`, so it cannot just deserialize the full
+    /// record and call `to_metadata` on it). `thread_id` is supplied by the
     /// caller rather than decoded, since every header on a thread's file
     /// carries the same value the caller already knows.
     fn into_metadata(self, thread_id: &str) -> CheckpointMetadata {
@@ -68,13 +85,23 @@ impl CheckpointHeader {
             .get("step")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
+        let next_nodes = if self.version >= super::CHECKPOINT_FORMAT_VERSION {
+            self.tasks.into_iter().map(|t| t.node).collect()
+        } else {
+            match self.pending_activations {
+                Some(pending) if !pending.is_empty() => {
+                    pending.into_iter().map(|t| t.node).collect()
+                }
+                _ => self.next_nodes,
+            }
+        };
         CheckpointMetadata {
             thread_id: thread_id.to_string(),
             checkpoint_id: self.checkpoint_id,
             run_id: self.run_id,
             parent_checkpoint_id: self.parent_checkpoint_id,
             namespace: self.namespace,
-            next_nodes: self.next_nodes,
+            next_nodes,
             has_interrupts: !self.interrupts.is_empty(),
             source,
             step,
