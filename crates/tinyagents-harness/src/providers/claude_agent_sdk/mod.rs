@@ -248,9 +248,7 @@ impl ClaudeAgentSdkProvider {
                         error_message = Some(error.message);
                     }
                     Ok(SdkMessage::Unknown) => {
-                        tracing::trace!(
-                            "[claude_agent_sdk] unknown ndjson message type, skipping"
-                        );
+                        tracing::trace!("[claude_agent_sdk] unknown ndjson message type, skipping");
                     }
                     Err(e) => {
                         tracing::warn!(

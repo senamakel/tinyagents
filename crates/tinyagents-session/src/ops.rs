@@ -580,9 +580,7 @@ pub fn list_children(workspace_dir: &Path, session_id: &str) -> Result<Vec<Sessi
 }
 
 pub fn mark_interrupted(workspace_dir: &Path) -> Result<usize> {
-    tracing::debug!(
-        "[session_db] mark_interrupted — marking all running sessions as interrupted"
-    );
+    tracing::debug!("[session_db] mark_interrupted — marking all running sessions as interrupted");
     with_connection(workspace_dir, |conn| {
         let now = Utc::now();
         let changed = conn.execute(
@@ -591,9 +589,7 @@ pub fn mark_interrupted(workspace_dir: &Path) -> Result<usize> {
             params![now.to_rfc3339()],
         )?;
         if changed > 0 {
-            tracing::info!(
-                "[session_db] marked {changed} running session(s) as interrupted"
-            );
+            tracing::info!("[session_db] marked {changed} running session(s) as interrupted");
         }
         Ok(changed)
     })

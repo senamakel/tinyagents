@@ -126,9 +126,7 @@ impl SingleFlight {
         let Some(claim) = claim else {
             // A poisoned map must never take the run down: fall back to simply
             // making the call, which is the un-collapsed behaviour.
-            tracing::warn!(
-                "[cache] single-flight map poisoned; issuing the model call directly"
-            );
+            tracing::warn!("[cache] single-flight map poisoned; issuing the model call directly");
             return call().await.map(|response| (response, false));
         };
         let mut receiver = claim;

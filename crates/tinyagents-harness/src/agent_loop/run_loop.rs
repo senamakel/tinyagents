@@ -466,10 +466,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     };
                     let hint = budget.compression_hint(&context_state);
                     if hint.is_advised() {
-                        tracing::debug!(
-                            ?hint,
-                            "[host] budget gate advised context compression"
-                        );
+                        tracing::debug!(?hint, "[host] budget gate advised context compression");
                         apply_host_budget_compression(ctx, &mut request.messages, hint)?;
                     }
                     let estimate = crate::host::CallEstimate::new(

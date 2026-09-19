@@ -37,9 +37,7 @@
 /// should skip.
 pub fn require_live(keys: &[&str]) -> bool {
     if !live_flag_set() {
-        eprintln!(
-            "skipping live test: set TINYAGENTS_LIVE=1 and run with --ignored to enable it"
-        );
+        eprintln!("skipping live test: set TINYAGENTS_LIVE=1 and run with --ignored to enable it");
         return false;
     }
 

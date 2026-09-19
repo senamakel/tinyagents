@@ -1515,9 +1515,7 @@ pub fn mark_agent_team_member_idle(
 /// another teammate — the per-task analogue of the bulk release in
 /// `shutdown_agent_team_member`.
 pub fn release_agent_team_task(workspace_dir: &Path, team_id: &str, task_id: &str) -> Result<bool> {
-    tracing::debug!(
-        "{LOG_PREFIX} release_agent_team_task.entry team={team_id} task={task_id}"
-    );
+    tracing::debug!("{LOG_PREFIX} release_agent_team_task.entry team={team_id} task={task_id}");
     crate::store::with_connection(workspace_dir, |conn| {
         init_run_ledger_schema(conn)?;
         let now = Utc::now();

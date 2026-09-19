@@ -584,7 +584,9 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     let status = match timed {
         Ok(inner) => inner?,
         Err(_elapsed) => {
-            tracing::error!("[claude-code][driver] turn timeout ({timeout:?}) exceeded; killing child");
+            tracing::error!(
+                "[claude-code][driver] turn timeout ({timeout:?}) exceeded; killing child"
+            );
             // kill_on_drop handles cleanup, but explicit kill gives us
             // a chance to collect stderr.
             let _ = child.kill().await;

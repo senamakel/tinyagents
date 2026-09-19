@@ -281,9 +281,7 @@ pub(super) fn apply(conn: &Connection) -> Result<()> {
     if current >= latest {
         return Ok(());
     }
-    tracing::debug!(
-        "{LOG_PREFIX} applying migrations from version {current} to {latest}"
-    );
+    tracing::debug!("{LOG_PREFIX} applying migrations from version {current} to {latest}");
 
     for (version, sql) in MIGRATIONS.iter().enumerate() {
         let version = version as i64;
