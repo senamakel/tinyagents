@@ -56,6 +56,7 @@ impl<State: Send + Sync> tinyagents_language::capability_resolver::CapabilitySou
             CapabilityKind::Reducer => ComponentKind::Reducer,
             CapabilityKind::Agent => ComponentKind::Agent,
             CapabilityKind::Script => ComponentKind::Script,
+            CapabilityKind::Capability => ComponentKind::Capability,
         };
         self.names_including_aliases(kind)
     }

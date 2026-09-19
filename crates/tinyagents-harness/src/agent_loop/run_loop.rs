@@ -6,6 +6,7 @@
 //! the full loop lifecycle, limits, and backoff design.
 
 use super::model_call::ModelCallBase;
+use super::tool_changes;
 use super::*;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -210,9 +211,66 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .into_iter()
             .filter(|schema| host_allows(&schema.name))
             .collect::<Vec<_>>();
+        // Composable toolset chain (gap B3, `AgentHarness::with_toolset`):
+        // additive to the registry's own `Direct` schemas above — a name the
+        // registry already advertises keeps the registry's declaration, so a
+        // registered tool always wins a collision. This run's toolset is
+        // consulted once here, matching the registry's own once-per-run
+        // schema build a few lines up (the comment above explains why: the
+        // resulting request tool list feeds the provider prompt cache, so
+        // rebuilding it every turn would defeat that cache). A caller that
+        // genuinely needs true per-turn variance can still call
+        // [`crate::tool::toolset::ToolSet::tools`] directly from a
+        // `before_model` middleware, which *does* run every turn.
+        if let Some(toolset) = &self.toolset {
+            let existing: std::collections::HashSet<&str> = tool_schemas
+                .iter()
+                .map(|schema| schema.name.as_str())
+                .collect();
+            let extra: Vec<_> = toolset
+                .tools(ctx)
+                .await?
+                .into_iter()
+                .filter(|tool| tool.exposure() == tinytools::ToolExposure::Direct)
+                .filter(|tool| host_allows(tool.name()))
+                .filter(|tool| !existing.contains(tool.name()))
+                .map(|tool| crate::tool::provider_schema(tool.as_ref()))
+                .collect();
+            tool_schemas.extend(extra);
+            // Keep the combined set name-sorted: every consumer of
+            // `tool_schemas` below (and the provider request it feeds) relies
+            // on the sort for wire-byte/prompt-cache stability.
+            tool_schemas.sort_by(|left, right| left.name.cmp(&right.name));
+        }
+        // Provider projection applies once, to the full combined set
+        // (registry + toolset), so a toolset-supplied schema reaches the
+        // wire cleaned exactly like a registered one.
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
+        // B6 (`docs/runtime-comparison/plan.md`): `declared_tool_schemas`
+        // tracks what the transcript has actually been told about the
+        // toolset chain's tools so far (folded or patched in, turn by turn,
+        // by the loop below), so a later turn's live toolset resolution can
+        // be diffed against it instead of against the wire list — the wire
+        // list also carries the bridge schemas captured into
+        // `bridge_schemas` next, which never change within a run and so are
+        // deliberately excluded from the diff.
+        //
+        // Starts empty rather than seeded from the merge above: nothing has
+        // been recorded on the transcript yet, so the loop's first-turn diff
+        // (below) always fires when a toolset is installed, declaring the
+        // full initial toolset-supplied set as one patch (turn 1 has no
+        // prior cached prefix to protect, so there is no cost to always
+        // recording it). This is what makes
+        // [`tinyinference_llm::message::replay_system_state`] able to
+        // reconstruct the *complete* effective tool set from the transcript
+        // alone, not just later deltas — the alternative (seeding from the
+        // merge above) would leave the initial toolset-only tools
+        // permanently undeclared on the wire-only `tool_schemas` snapshot
+        // computed here, which a replay can never see.
+        let mut declared_tool_schemas: Vec<ToolSchema> = Vec::new();
+        let mut bridge_schemas: Vec<ToolSchema> = Vec::new();
         let deferred_catalog = self.deferred_catalog(&host_allows);
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
@@ -242,7 +300,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             for schema in bridge {
                 if self.tools.dispatch(&schema.name).is_none() {
-                    tool_schemas.push(schema);
+                    tool_schemas.push(schema.clone());
+                    bridge_schemas.push(schema);
                 }
             }
         }
@@ -424,6 +483,61 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         return Ok(LoopExit::LimitStop(LimitKind::ModelCalls));
                     }
                     return Err(TinyAgentsError::LimitExceeded(err.to_string()));
+                }
+            }
+
+            // B6 (`docs/runtime-comparison/plan.md`, `declare_tool_changes`):
+            // re-consult the toolset chain (documented as "called once per
+            // turn", `ToolSet::tools`) and diff its live set against what
+            // this transcript has declared so far. A caller whose toolset
+            // never varies turn to turn sees no diff and pays nothing here —
+            // this only fires for a genuine mid-run change. Deliberately
+            // runs before the request/`ModelStarted` below, so the patch (if
+            // any) is part of *this* turn's request.
+            if let Some(toolset) = &self.toolset {
+                let mut live_schemas: Vec<ToolSchema> = self
+                    .tools
+                    .schemas()
+                    .into_iter()
+                    .filter(|schema| host_allows(&schema.name))
+                    .collect();
+                let existing: std::collections::HashSet<&str> = live_schemas
+                    .iter()
+                    .map(|schema| schema.name.as_str())
+                    .collect();
+                let extra: Vec<_> = toolset
+                    .tools(ctx)
+                    .await?
+                    .into_iter()
+                    .filter(|tool| tool.exposure() == tinytools::ToolExposure::Direct)
+                    .filter(|tool| host_allows(tool.name()))
+                    .filter(|tool| !existing.contains(tool.name()))
+                    .map(|tool| crate::tool::provider_schema(tool.as_ref()))
+                    .collect();
+                live_schemas.extend(extra);
+                live_schemas.sort_by(|left, right| left.name.cmp(&right.name));
+                if let Some(preparation) = &self.policy.tool_schemas {
+                    live_schemas = crate::tool::prepare_tool_schemas(&live_schemas, preparation);
+                }
+                if let Some(patch) =
+                    tool_changes::diff_tool_set(&declared_tool_schemas, &live_schemas)
+                {
+                    // A cheap, non-mutating preview resolution against the
+                    // transcript as it stands (pre-patch) decides fold vs.
+                    // insert. It is a pure registry lookup (no network call,
+                    // see `ModelRegistry::resolve_request`), so this stays
+                    // proportional to the diff it gates. An unresolved
+                    // preview conservatively folds (`false`): folding is
+                    // always correct, only less cache-friendly.
+                    let mid_conversation = self
+                        .models
+                        .resolve_request(&ModelRequest::new(messages.clone()), None, None)
+                        .and_then(|binding| binding.model.profile().cloned())
+                        .is_some_and(|profile| profile.mid_conversation_system_messages);
+                    tool_changes::apply_tool_change_patch(messages, patch, mid_conversation);
+                    declared_tool_schemas = live_schemas.clone();
+                    tool_schemas = declared_tool_schemas.clone();
+                    tool_schemas.extend(bridge_schemas.clone());
                 }
             }
 

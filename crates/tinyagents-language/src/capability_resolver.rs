@@ -31,6 +31,7 @@ pub(crate) const CODE_UNKNOWN_AGENT: &str = "E-rag-unknown-agent";
 pub(crate) const CODE_UNKNOWN_SCRIPT: &str = "E-rag-unknown-script";
 pub(crate) const CODE_UNKNOWN_REDUCER: &str = "E-rag-unknown-reducer";
 pub(crate) const CODE_INVALID_NODE_KIND: &str = "E-rag-invalid-node-kind";
+pub(crate) const CODE_UNKNOWN_CAPABILITY: &str = "E-rag-unknown-capability";
 
 /// Maps a [`ReferenceClass`] to its stable diagnostic code.
 pub(crate) fn code_for(class: ReferenceClass) -> &'static str {
@@ -90,6 +91,8 @@ pub enum CapabilityKind {
     Agent,
     /// Registered scripts.
     Script,
+    /// Registered capability bundles (gap G3).
+    Capability,
 }
 
 /// Read-only capability names consumed by the language binding gate.
@@ -129,6 +132,12 @@ pub struct CapabilityResolver {
     /// Registered REPL script names (and aliases) a `repl_agent` node may
     /// reference.
     scripts: HashSet<String>,
+    /// Registered capability bundle names (and aliases, gap G3) any node may
+    /// reference via `capability "name"`. Checked unconditionally per node
+    /// (like [`Self::tools`]), not through [`Self::classify_reference`]: a
+    /// capability reference is an attribute any node kind may carry, not a
+    /// node-kind-defining reference like `agent`/`subgraph`/`router`.
+    capabilities: HashSet<String>,
     /// Allowed node kinds. When empty, node-kind validation is skipped (the
     /// legacy, manual behaviour); when non-empty, the strict binding path
     /// rejects any node whose kind is not listed.
@@ -221,6 +230,7 @@ impl CapabilityResolver {
             reducers: collect(CapabilityKind::Reducer),
             agents: collect(CapabilityKind::Agent),
             scripts: collect(CapabilityKind::Script),
+            capabilities: collect(CapabilityKind::Capability),
             node_kinds: DEFAULT_NODE_KINDS.iter().map(|k| (*k).to_owned()).collect(),
         }
     }
@@ -265,6 +275,13 @@ impl CapabilityResolver {
     /// `self`.
     pub fn allow_script(mut self, name: impl Into<String>) -> Self {
         self.scripts.insert(name.into());
+        self
+    }
+
+    /// Allows an additional capability bundle name (gap G3), for any node's
+    /// `capability "name"` reference. Returns `self` for chaining.
+    pub fn allow_capability(mut self, name: impl Into<String>) -> Self {
+        self.capabilities.insert(name.into());
         self
     }
 
@@ -313,6 +330,11 @@ impl CapabilityResolver {
     /// nodes).
     pub fn script_allowed(&self, name: &str) -> bool {
         self.scripts.contains(name)
+    }
+
+    /// Returns true if `name` is an allowed capability bundle (gap G3).
+    pub fn capability_allowed(&self, name: &str) -> bool {
+        self.capabilities.contains(name)
     }
 
     /// The single kind-to-reference policy every binding gate shares.
@@ -552,6 +574,22 @@ impl CapabilityResolver {
                         .with_primary_label("tool not registered or not allowed"),
                     );
                 }
+            }
+
+            if let Some(capability) = &node.capability
+                && !self.capability_allowed(capability)
+            {
+                out.push(
+                    Diagnostic::error(
+                        format!(
+                            "node `{}` references unknown capability `{capability}`",
+                            node.name
+                        ),
+                        span_for(&node.name),
+                    )
+                    .with_code(CODE_UNKNOWN_CAPABILITY)
+                    .with_primary_label("capability not registered or not allowed"),
+                );
             }
         }
 

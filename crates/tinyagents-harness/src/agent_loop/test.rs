@@ -297,6 +297,69 @@ impl Tool for StrictLookupTool {
     }
 }
 
+/// A [`crate::tool::toolset::ToolSet`] whose live tool set changes on its
+/// second call — used to prove `agent_loop::tool_changes`'s wiring actually
+/// fires on a genuine mid-run toolset change (B6).
+struct DynamicToolSet {
+    calls: std::sync::atomic::AtomicUsize,
+    search: Arc<dyn Tool>,
+    browse: Arc<dyn Tool>,
+}
+
+#[async_trait]
+impl crate::tool::toolset::ToolSet<(), ()> for DynamicToolSet {
+    async fn tools(&self, _ctx: &RunContext<()>) -> Result<Vec<Arc<dyn Tool>>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            Ok(vec![self.search.clone()])
+        } else {
+            Ok(vec![self.search.clone(), self.browse.clone()])
+        }
+    }
+
+    async fn call(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        _ctx: &RunContext<()>,
+    ) -> Result<ToolResult> {
+        let tool = if name == self.search.name() {
+            &self.search
+        } else if name == self.browse.name() {
+            &self.browse
+        } else {
+            return Err(TinyAgentsError::ToolNotFound(name.to_string()));
+        };
+        tool.execute(args)
+            .await
+            .map_err(|err| TinyAgentsError::Tool(err.to_string()))
+    }
+}
+
+/// Wraps [`MockModel`] to advertise a caller-supplied [`ModelProfile`]
+/// instead of the fixed permissive one `MockModel::profile` returns — used to
+/// exercise the `mid_conversation_system_messages = true` insert path (B6)
+/// end to end, which no built-in test provider otherwise advertises.
+struct ProfiledModel {
+    inner: MockModel,
+    profile: ModelProfile,
+}
+
+#[async_trait]
+impl ChatModel<()> for ProfiledModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+
+    async fn invoke(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        <MockModel as ChatModel<()>>::invoke(&self.inner, state, request).await
+    }
+}
+
 /// Builds a tool-call assistant response (no text, one tool call).
 fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
     ModelResponse {
@@ -995,6 +1058,293 @@ async fn model_requests_tool_then_finishes() {
     assert_eq!(run.messages.len(), 4);
     assert!(matches!(run.messages[2], Message::Tool(_)));
     assert_eq!(run.messages[2].text(), "tool-output");
+}
+
+/// B6: a toolset chain whose live set changes mid-run, against a model whose
+/// profile does *not* advertise `mid_conversation_system_messages` (the
+/// default `MockModel` profile), gets the delta **folded** into the leading
+/// system message rather than appended as a new one — no new
+/// [`Message::System`] appears anywhere in the transcript, but the delta is
+/// still fully recorded on the leading message.
+#[tokio::test]
+async fn dynamic_toolset_change_folds_into_the_leading_system_message_by_default() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("call-1", "search", json!({"q": "x"})),
+            text_response("done", 4, 2),
+        ])),
+    );
+    let search: Arc<dyn Tool> = Arc::new(FakeTool::new("search", "search-output"));
+    let browse: Arc<dyn Tool> = Arc::new(FakeTool::new("browse", "browse-output"));
+    let toolset = Arc::new(DynamicToolSet {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        search: search.clone(),
+        browse: browse.clone(),
+    });
+    harness.with_toolset(toolset.clone());
+    // Only `search` needs to be dispatchable (the script's only call); a
+    // bridge for `browse` too would register it in `self.tools` statically
+    // from turn one, defeating the point of this test (the toolset chain
+    // alone is what makes `browse` come and go).
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset, search,
+    )));
+    let _ = browse;
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system("baseline persona"), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+
+    let system_messages: Vec<&Message> = run
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::System(_)))
+        .collect();
+    assert_eq!(
+        system_messages.len(),
+        1,
+        "no new system message was appended"
+    );
+    let Message::System(leading) = system_messages[0] else {
+        unreachable!("filtered above");
+    };
+    // Turn 1's diff runs against an as-yet-undeclared transcript, so it
+    // records the whole live set (both `search` and `browse`) in one fold —
+    // not just the later delta — which is what lets a replay reconstruct the
+    // complete effective tool set from the transcript alone.
+    assert_eq!(
+        leading
+            .tools_added
+            .iter()
+            .map(|schema| schema.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["browse", "search"]
+    );
+}
+
+/// B6 (insert path): the same toolset-change scenario against a model whose
+/// profile *does* advertise `mid_conversation_system_messages` gets the delta
+/// appended as exactly one new [`Message::System`] patch instead.
+#[tokio::test]
+async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allows_it() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    let profile = ModelProfile {
+        tool_calling: true,
+        mid_conversation_system_messages: true,
+        ..ModelProfile::default()
+    };
+    harness.register_model(
+        "mock",
+        Arc::new(ProfiledModel {
+            inner: MockModel::with_responses(vec![
+                tool_call_response("call-1", "search", json!({"q": "x"})),
+                text_response("done", 4, 2),
+            ]),
+            profile,
+        }),
+    );
+    let search: Arc<dyn Tool> = Arc::new(FakeTool::new("search", "search-output"));
+    let browse: Arc<dyn Tool> = Arc::new(FakeTool::new("browse", "browse-output"));
+    let toolset = Arc::new(DynamicToolSet {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        search: search.clone(),
+        browse: browse.clone(),
+    });
+    harness.with_toolset(toolset.clone());
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset, search,
+    )));
+    let _ = browse;
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system("baseline persona"), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+
+    let system_messages: Vec<&Message> = run
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::System(_)))
+        .collect();
+    // The original leading system message plus exactly one appended patch.
+    assert_eq!(system_messages.len(), 2, "exactly one patch was appended");
+    let Message::System(patch) = system_messages[1] else {
+        unreachable!("filtered above");
+    };
+    // As in the fold-path test above, turn 1's patch declares the whole live
+    // set, not just a later delta.
+    assert_eq!(
+        patch
+            .tools_added
+            .iter()
+            .map(|schema| schema.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["browse", "search"]
+    );
+
+    // The reconstructed effective tool set matches what was actually offered.
+    let (_, effective_tools) = tinyinference_llm::message::replay_system_state(&run.messages);
+    let mut names: Vec<&str> = effective_tools
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["browse", "search"]);
+}
+
+/// Gap G3: a `defer_loading` capability's tool is not advertised until the
+/// model calls `load_capability`, and once it does, the very next turn's
+/// existing tool-change diff (B6, `agent_loop::tool_changes`) picks up the
+/// change automatically and appends a patch system message — no bespoke
+/// capability-specific patch wiring is needed.
+#[tokio::test]
+async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patches_the_transcript()
+{
+    let profile = ModelProfile {
+        tool_calling: true,
+        mid_conversation_system_messages: true,
+        ..ModelProfile::default()
+    };
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(ProfiledModel {
+            inner: MockModel::with_responses(vec![
+                tool_call_response(
+                    "call-1",
+                    crate::capability::LOAD_CAPABILITY_TOOL_NAME,
+                    json!({"capability": "advanced"}),
+                ),
+                // Turn 2 makes no tool call — the point of this test is the
+                // *advertisement* change the loop's existing tool-change diff
+                // (B6) picks up before this turn's request goes out, not
+                // `advanced-tool`'s own dispatch (a deferred capability's
+                // tools are advertised automatically but, like any
+                // `with_toolset` toolset, need an explicit
+                // `ToolSetDispatchBridge` to also be *callable* — see that
+                // type's doc comment; orthogonal to what this test covers).
+                text_response("done", 4, 2),
+            ]),
+            profile,
+        }),
+    );
+
+    // A minimal single-tool toolset behind the capability, independent of
+    // `defer_loading` gating (that gating is `CapabilityToolSet`'s job, one
+    // layer up).
+    struct SingleToolSet {
+        tool: Arc<dyn Tool>,
+    }
+    #[async_trait]
+    impl crate::tool::toolset::ToolSet<(), ()> for SingleToolSet {
+        async fn tools(&self, _ctx: &RunContext<()>) -> Result<Vec<Arc<dyn Tool>>> {
+            Ok(vec![self.tool.clone()])
+        }
+        async fn call(
+            &self,
+            name: &str,
+            args: serde_json::Value,
+            _ctx: &RunContext<()>,
+        ) -> Result<ToolResult> {
+            if name == self.tool.name() {
+                self.tool
+                    .execute(args)
+                    .await
+                    .map_err(|err| TinyAgentsError::Tool(err.to_string()))
+            } else {
+                Err(TinyAgentsError::ToolNotFound(name.to_string()))
+            }
+        }
+    }
+
+    let capability = crate::capability::Capability::new("advanced")
+        .with_instructions("Advanced instructions.")
+        .with_toolset(Arc::new(SingleToolSet {
+            tool: Arc::new(FakeTool::new("advanced-tool", "advanced-output")),
+        }))
+        .with_defer_loading(true);
+    harness.with_capability(capability);
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system("baseline persona"), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.text(), Some("done".to_string()));
+
+    let system_messages: Vec<&Message> = run
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::System(_)))
+        .collect();
+    // The original leading system message, plus one patch for turn 1 (just
+    // `load_capability` itself — `advanced-tool` is still gated), plus one
+    // patch for turn 2 (once `load_capability` ran, `advanced-tool` joins the
+    // live set).
+    assert_eq!(
+        system_messages.len(),
+        3,
+        "expected the leading message plus two tool-change patches"
+    );
+
+    let Message::System(turn1_patch) = system_messages[1] else {
+        unreachable!("filtered above");
+    };
+    let turn1_added: Vec<&str> = turn1_patch
+        .tools_added
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect();
+    assert_eq!(
+        turn1_added,
+        vec![crate::capability::LOAD_CAPABILITY_TOOL_NAME]
+    );
+    assert!(
+        !turn1_added.contains(&"advanced-tool"),
+        "the deferred capability's tool must not be advertised before load_capability runs"
+    );
+
+    let Message::System(turn2_patch) = system_messages[2] else {
+        unreachable!("filtered above");
+    };
+    assert_eq!(
+        turn2_patch
+            .tools_added
+            .iter()
+            .map(|schema| schema.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["advanced-tool"],
+        "advanced-tool becomes advertised only on the turn after load_capability ran"
+    );
+
+    // The final effective tool set (replayed from the transcript alone)
+    // includes both the always-registered `load_capability` and the now
+    // loaded `advanced-tool`.
+    let (_, effective_tools) = tinyinference_llm::message::replay_system_state(&run.messages);
+    let mut names: Vec<&str> = effective_tools
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "advanced-tool",
+            crate::capability::LOAD_CAPABILITY_TOOL_NAME
+        ]
+    );
 }
 
 #[tokio::test]

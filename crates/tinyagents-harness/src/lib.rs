@@ -64,6 +64,7 @@ pub mod artifacts;
 mod blocking;
 pub mod cache;
 pub mod cancel;
+pub mod capability;
 pub mod config;
 pub mod context;
 pub mod cost;
@@ -112,6 +113,10 @@ pub use tinytools;
 pub use tinytools_agent;
 
 pub use cancel::CancellationToken;
+pub use capability::{
+    Capability, CapabilityToolSet, LOAD_CAPABILITY_TOOL_NAME, LoadCapabilityTool,
+    ModelRequestDefaults,
+};
 pub use cost::CostTotals;
 pub use error::{Result, TinyAgentsError};
 pub use ids::*;

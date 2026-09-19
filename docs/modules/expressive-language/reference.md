@@ -18,6 +18,7 @@ Supported fields:
 - `system`
 - `prompt`
 - `tools`
+- `capability` — see [Capability references](#capability-references)
 - `routes`
 - `retry`
 - `timeout`
@@ -155,6 +156,28 @@ Supported fields:
 - `sources`
 - `next`
 - `timeout`
+
+### Capability references
+
+Any node kind that accepts a `capability` field can name a registered
+[`Capability` bundle](../registry/implementation-status.md#capability-bundle-gap-g3)
+(gap G3) — instructions, toolset, middleware, model defaults, and exposure
+composed as one unit:
+
+```rag
+agent "researcher" {
+  model "fast"
+  capability "web_research"
+}
+```
+
+`capability` is a single string, like `model`; specifying the same node's
+`capability` twice is a compile error (`dup(..., "capability")`). The name is
+resolved the same way `tool`/`model`/`subgraph` references are: unconditional
+membership in the host-registered capability allowlist. A `.rag` source that
+names a capability the host never registered fails to bind, exactly like an
+unregistered tool or model would — see the resolver contract tests in
+`crates/tinyagents-integration-tests/tests/e2e_graph_resolver_contracts.rs`.
 
 ## Binding To Rust
 

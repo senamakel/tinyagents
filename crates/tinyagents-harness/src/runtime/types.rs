@@ -532,6 +532,28 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// [`crate::tool::DeferredToolHandler`] and
     /// [`AgentHarness::with_deferred_tool_handler`].
     pub(crate) deferred_tool_handler: Option<Arc<dyn crate::tool::DeferredToolHandler>>,
+    /// Optional composable [`crate::tool::toolset::ToolSet`] chain
+    /// (gap B3) consulted for the model-visible tool catalogue and, when a
+    /// call is not owned by [`Self::tools`], for dispatch.
+    ///
+    /// `None` (the default) preserves every existing harness's behavior
+    /// unchanged: the loop resolves tools from [`Self::tools`] alone, exactly
+    /// as before this field existed. Set with
+    /// [`AgentHarness::with_toolset`]. See that method's doc comment for
+    /// exactly which turn behavior this changes.
+    pub(crate) toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
+    /// Capability bundles installed via [`AgentHarness::with_capability`]
+    /// (gap G3), in installation order. Kept so each new `with_capability`
+    /// call can rebuild [`Self::toolset`]'s
+    /// [`crate::capability::CapabilityToolSet`] layer from the complete,
+    /// still-accumulating list rather than nesting one per call.
+    pub(crate) capabilities: Vec<crate::capability::Capability<State, Ctx>>,
+    /// The toolset chain that was installed (via [`AgentHarness::with_toolset`],
+    /// or `None`) before the first [`AgentHarness::with_capability`] call.
+    /// Captured once so every later `with_capability` rebuild of
+    /// [`Self::toolset`] keeps composing with it, instead of losing it to
+    /// the first capability's rebuild.
+    pub(crate) capability_base_toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.

@@ -33,8 +33,8 @@
 
 use crate::ast::{ChannelDecl, GraphDecl, NodeDecl, Program};
 use crate::capability_resolver::{
-    CODE_INVALID_NODE_KIND, CODE_UNKNOWN_MODEL, CODE_UNKNOWN_REDUCER, CODE_UNKNOWN_TOOL,
-    CapabilityResolver, CapabilitySource, DEFAULT_NODE_KINDS, code_for,
+    CODE_INVALID_NODE_KIND, CODE_UNKNOWN_CAPABILITY, CODE_UNKNOWN_MODEL, CODE_UNKNOWN_REDUCER,
+    CODE_UNKNOWN_TOOL, CapabilityResolver, CapabilitySource, DEFAULT_NODE_KINDS, code_for,
 };
 use crate::compiler::compile;
 use crate::diagnostic::Diagnostic;
@@ -196,6 +196,21 @@ impl Resolver {
                 tool,
                 node.span,
                 CODE_UNKNOWN_TOOL,
+                out,
+            );
+        }
+
+        // 5. A referenced capability bundle (gap G3) must be registered.
+        // Unconditional, like tools above, since a capability reference is
+        // not tied to a particular node `kind`.
+        if let Some(capability) = &node.capability {
+            self.check_ref(
+                self.caps.capability_allowed(capability),
+                &node.name,
+                "capability",
+                capability,
+                node.span,
+                CODE_UNKNOWN_CAPABILITY,
                 out,
             );
         }

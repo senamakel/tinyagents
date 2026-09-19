@@ -307,6 +307,17 @@ pub struct BudgetMiddleware {
 ///
 /// Rejections at `before_tool` surface as
 /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
+///
+/// # Relationship to `crate::tool::toolset`
+///
+/// This middleware's policy classification (side-effect/background-safe/
+/// approval enforcement from the vendor `tinytools` declaration) is a
+/// different axis from [`crate::tool::toolset::FilteredToolSet`] (an
+/// arbitrary per-tool predicate) and
+/// [`crate::tool::toolset::ApprovalRequiredToolSet`] (which only *sets* the
+/// approval flag this middleware enforces) — kept as its own implementation
+/// rather than rebased onto either, since neither adaptor reads
+/// [`ToolPolicy`] as a whole.
 pub struct ToolPolicyMiddleware {
     pub(crate) label: &'static str,
     pub(crate) policies: std::collections::HashMap<String, ToolPolicy>,
@@ -383,6 +394,17 @@ pub type ContextualToolPredicate =
 /// or from explicit allow/deny lists with
 /// [`from_lists`](Self::from_lists) (deny wins; when an allow-list is present a
 /// tool must appear in it — fail-closed for unknown tools).
+///
+/// # Relationship to `crate::tool::toolset`
+///
+/// [`DynamicToolSelectionMiddleware`] and
+/// [`crate::tool::toolset::PreparedToolSet`] both operate on a bare
+/// [`ToolSchema`] predicate; this middleware additionally reads
+/// [`ToolSelectionContext`] (depth, tags, the requested model), which a
+/// `ToolSet::tools`'s own `ctx: &RunContext<Ctx>` argument can already carry
+/// through `Ctx` — kept as its own predicate type rather than folded into
+/// [`crate::tool::toolset::PreparedToolSet::filtering`] to avoid coupling
+/// every `Ctx` to this specific context shape.
 pub struct ContextualToolSelectionMiddleware {
     pub(crate) label: &'static str,
     pub(crate) predicate: ContextualToolPredicate,

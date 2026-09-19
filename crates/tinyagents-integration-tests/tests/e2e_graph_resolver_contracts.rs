@@ -224,6 +224,7 @@ fn blueprint_export_helpers_preserve_channels_routing_and_validation() {
                 model: Some("planner".into()),
                 prompt: Some("plan".into()),
                 tools: vec!["search".into()],
+                capability: None,
                 routing: Routing::Conditional(vec![
                     ("ok".into(), "answer".into()),
                     ("retry".into(), "plan".into()),
@@ -247,6 +248,7 @@ fn blueprint_export_helpers_preserve_channels_routing_and_validation() {
                 model: None,
                 prompt: None,
                 tools: Vec::new(),
+                capability: None,
                 routing: Routing::Terminal,
                 agent: None,
                 subgraph: Some("child".into()),
@@ -439,6 +441,7 @@ graph ok {
             model: Some("missing".into()),
             prompt: None,
             tools: Vec::new(),
+            capability: None,
             routing: Routing::Terminal,
             agent: None,
             subgraph: None,

@@ -61,4 +61,10 @@ where
     pub(crate) meta: HashMap<(ComponentKind, String), ComponentMetadata>,
     /// Alias map, keyed by `(kind, alias)` -> canonical name.
     pub(crate) aliases: HashMap<(ComponentKind, String), String>,
+    /// Capability bundles (gap G3), type-erased since
+    /// `tinyagents_harness::capability::Capability<State, Ctx>` is generic
+    /// over `Ctx`, a dimension this registry does not otherwise carry — see
+    /// [`crate::CapabilityRegistry::register_capability`]'s doc comment for
+    /// why. Keyed by canonical name, same as every other kind here.
+    pub(crate) capabilities: HashMap<String, Box<dyn std::any::Any + Send + Sync>>,
 }

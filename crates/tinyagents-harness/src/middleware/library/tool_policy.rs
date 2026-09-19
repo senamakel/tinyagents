@@ -20,8 +20,13 @@ impl ToolAllowlistMiddleware {
     }
 
     /// Returns `true` if `name` is on the allowlist.
+    ///
+    /// Delegates to [`crate::tool::toolset::tool_name_allowed`] — the exact
+    /// membership test [`crate::tool::toolset::FilteredToolSet::allowing`]
+    /// uses — so this middleware and its `ToolSet` counterpart cannot drift
+    /// (`docs/runtime-comparison/pydantic-ai.md` §4).
     pub fn allows(&self, name: &str) -> bool {
-        self.allowed.contains(name)
+        crate::tool::toolset::tool_name_allowed(&self.allowed, name)
     }
 }
 
@@ -37,7 +42,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolAllowl
         _state: &State,
         call: &mut ToolCall,
     ) -> Result<()> {
-        if !self.allowed.contains(&call.name) {
+        if !self.allows(&call.name) {
             return Err(TinyAgentsError::Validation(format!(
                 "tool `{}` is not on the allowlist",
                 call.name
@@ -349,7 +354,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         _state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        request.tools.retain(|schema| (self.predicate)(schema));
+        // Delegates to `PreparedToolSet`'s retain helper — see
+        // `crate::tool::toolset::retain_matching_schemas`'s doc comment for
+        // why this is shared rather than a second `retain` implementation.
+        crate::tool::toolset::retain_matching_schemas(&mut request.tools, self.predicate.as_ref());
         Ok(())
     }
 }
@@ -461,6 +469,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         if !excluded.is_empty() {
             ctx.emit(AgentEvent::ToolsFiltered {
                 by: self.label.to_string(),
+                explanations: excluded
+                    .iter()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            crate::tool::ToolExposureExplanation::FilteredOut,
+                        )
+                    })
+                    .collect(),
                 excluded,
                 remaining: request.tools.len(),
             });

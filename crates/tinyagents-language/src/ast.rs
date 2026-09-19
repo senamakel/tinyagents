@@ -135,6 +135,10 @@ pub struct NodeDecl {
     pub prompt: Option<String>,
     /// Tool capability names referenced by this node.
     pub tools: Vec<String>,
+    /// A registered capability bundle name (`capability "name"`, gap G3).
+    /// Unlike `agent`/`graph`/`script`/`router`, this is not tied to a
+    /// particular node `kind`; any node may declare one.
+    pub capability: Option<String>,
     /// A static `next` successor, if declared.
     pub next: Option<String>,
     /// Conditional `routes { label -> target … }`.
@@ -217,6 +221,7 @@ impl NodeDecl {
             model: None,
             prompt: None,
             tools: Vec::new(),
+            capability: None,
             next: None,
             routes: Vec::new(),
             agent: None,

@@ -176,8 +176,17 @@ pub enum TinyAgentsError {
     /// the loop lists it under [`crate::tool::DeferredToolRequests::calls`]
     /// and expects a [`crate::tool::DeferredCallResult`] on resume. Raised
     /// automatically for a tool registered through
-    /// [`crate::tool::ToolRegistry::register_external`]. Mirrors Pydantic
-    /// AI's `CallDeferred`. Never retried by [`crate::retry::is_retryable`].
+    /// [`crate::tool::ToolRegistry::register_external`], and equally by
+    /// [`crate::tool::toolset::ExternalToolSet`]'s
+    /// [`crate::tool::toolset::ToolSet::call`] (gap B3, mirroring Pydantic
+    /// AI's `defer_loading`/deferred-tools model) — both call sites raise
+    /// this same variant so a host sees one deferred-call signal regardless
+    /// of which registration path advertised the tool. `metadata` is
+    /// host-only context describing how to execute the call; the call's own
+    /// name and arguments are already carried on the
+    /// [`crate::tool::DeferredToolRequests`] entry, so most callers leave it
+    /// `Value::Null`. Mirrors Pydantic AI's `CallDeferred`. Never retried by
+    /// [`crate::retry::is_retryable`].
     #[error("tool call deferred to the host")]
     CallDeferred {
         /// Host-only context describing how to execute the call.
