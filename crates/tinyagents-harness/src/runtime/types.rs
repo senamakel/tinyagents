@@ -305,6 +305,38 @@ pub struct RunPolicy {
     /// synthetic tool) and one or more genuine function-tool calls (A6).
     /// Defaults to [`EndStrategy::Graceful`].
     pub end_strategy: EndStrategy,
+    /// Forces the [`crate::structured::StructuredStrategy::Prompted`] or
+    /// [`crate::structured::StructuredStrategy::ToolCallUnion`] mode for a
+    /// `ResponseFormat::Auto` structured-output request, bypassing
+    /// [`crate::structured::StructuredStrategy::for_profile`]'s
+    /// provider-capability heuristic (A6).
+    ///
+    /// `None` (the default) preserves the existing `Auto` resolution
+    /// (`ProviderSchema` or `ToolCall`, chosen from the resolved model's
+    /// profile). Only consulted for `ResponseFormat::Auto`; an explicit
+    /// `ResponseFormat::JsonSchema` always uses provider-native mode
+    /// regardless of this field.
+    pub structured_strategy_override: Option<StructuredStrategyOverride>,
+}
+
+/// See [`RunPolicy::structured_strategy_override`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum StructuredStrategyOverride {
+    /// Force [`crate::structured::StructuredStrategy::Prompted`]: inject the
+    /// schema into the system prompt instead of using a provider schema API
+    /// or a forced tool call.
+    Prompted {
+        /// Custom instructions template; `None` uses
+        /// [`crate::structured::default_prompted_template`].
+        template: Option<String>,
+    },
+    /// Force [`crate::structured::StructuredStrategy::ToolCallUnion`]: offer
+    /// one synthetic tool per `(name, schema)` variant instead of the single
+    /// schema from the `ResponseFormat`.
+    ToolCallUnion {
+        /// The union's variants, in the order their tools are advertised.
+        variants: Vec<(String, serde_json::Value)>,
+    },
 }
 
 /// Resolves the "output tool + function tools in one turn" ambiguity (A6),
