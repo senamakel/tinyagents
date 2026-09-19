@@ -753,40 +753,51 @@ where
         if ids.is_empty() {
             return Ok(0);
         }
-        let drop: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
-        let mut records = self.read_records(thread_id)?;
-        let before = records.len();
-        records.retain(|c| !drop.contains(c.checkpoint_id.as_str()));
-        let removed = before - records.len();
-        if removed > 0 {
-            self.write_records(thread_id, &records)?;
-            // Drop the deleted checkpoints' write ledgers with them.
-            let writes_path = self.writes_path(thread_id);
-            let write_records = Self::read_write_records(&writes_path, thread_id)?;
-            let kept: Vec<&WriteRecord> = write_records
-                .iter()
-                .filter(|r| !drop.contains(r.checkpoint_id.as_str()))
-                .collect();
-            if kept.len() != write_records.len() {
-                let mut buf = String::new();
-                for record in kept {
-                    let line =
-                        serde_json::to_string(record).map_err(|e| io_err("encode write", e))?;
-                    buf.push_str(&line);
-                    buf.push('\n');
-                }
-                if buf.is_empty() {
-                    match fs::remove_file(&writes_path) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(io_err("remove empty writes file", e)),
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        let ids = ids.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<usize> {
+            let drop: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+            let mut records = this.read_records(&thread_id)?;
+            let before = records.len();
+            records.retain(|c| !drop.contains(c.checkpoint_id.as_str()));
+            let removed = before - records.len();
+            if removed > 0 {
+                this.write_records(&thread_id, &records)?;
+                // Drop the deleted checkpoints' write ledgers with them. This
+                // compaction path still fully rewrites the sidecar (unlike
+                // `put_writes`'s append-only steady state): it runs only on an
+                // explicit prune/delete, not once per superstep, so the
+                // rewrite cost is paid where it is actually incurred.
+                let writes_path = this.writes_path(&thread_id);
+                let write_records = Self::read_write_records(&writes_path, &thread_id)?;
+                let kept: Vec<&WriteRecord> = write_records
+                    .iter()
+                    .filter(|r| !drop.contains(r.checkpoint_id.as_str()))
+                    .collect();
+                if kept.len() != write_records.len() {
+                    let mut buf = String::new();
+                    for record in kept {
+                        let line = serde_json::to_string(record)
+                            .map_err(|e| io_err("encode write", e))?;
+                        buf.push_str(&line);
+                        buf.push('\n');
                     }
-                } else {
-                    write_atomic(&writes_path, buf.as_bytes())?;
+                    if buf.is_empty() {
+                        match fs::remove_file(&writes_path) {
+                            Ok(()) => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(e) => return Err(io_err("remove empty writes file", e)),
+                        }
+                    } else {
+                        write_atomic(&writes_path, buf.as_bytes())?;
+                    }
                 }
             }
-        }
-        Ok(removed)
+            Ok(removed)
+        })
+        .await
+        .map_err(|e| io_err("join blocking delete_checkpoints task", e))?
     }
 
     async fn put_writes(&self, config: &CheckpointConfig, writes: &[PendingWrite]) -> Result<()> {
@@ -794,52 +805,93 @@ where
         if writes.is_empty() {
             return Ok(());
         }
-        let path = self.writes_path(&config.thread_id);
-        let mut records = Self::read_write_records(&path, &config.thread_id)?;
+        let this = self.clone();
+        let config = config.clone();
+        let writes = writes.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let path = this.writes_path(&config.thread_id);
+            let existing_records = Self::read_write_records(&path, &config.thread_id)?;
+            let mut existing =
+                fold_write_records(existing_records, &checkpoint_id, &config.namespace);
 
-        // Split out this checkpoint's ledger, merge, then rebuild the file.
-        let (mut mine, others): (Vec<WriteRecord>, Vec<WriteRecord>) = records
-            .drain(..)
-            .partition(|r| r.checkpoint_id == checkpoint_id && r.namespace == config.namespace);
-        let mut existing: Vec<PendingWrite> = mine.drain(..).map(|r| r.write).collect();
-        let changed = merge_writes(&mut existing, writes);
+            // Decide, per incoming write, whether it needs to be appended —
+            // mirroring `merge_writes`'s replace-vs-ignore rule by hand
+            // rather than calling it, because this call site (unlike every
+            // other `merge_writes` caller) also needs to know *which*
+            // entries changed, so only those get appended instead of
+            // rewriting the whole ledger. A duplicate data write
+            // (`idx >= 0`, already-seen `(task_id, idx)`) is a no-op and
+            // appends nothing; a control-plane write (`idx < 0`) always
+            // appends its latest value, and a later line for the same
+            // identity is what `fold_write_records` uses to pick the winner
+            // on read.
+            let mut to_append: Vec<PendingWrite> = Vec::new();
+            let mut changed = 0usize;
+            for write in &writes {
+                match existing.iter().position(|w| w.identity() == write.identity()) {
+                    Some(idx) => {
+                        if write.is_control_plane() {
+                            existing[idx] = write.clone();
+                            to_append.push(write.clone());
+                            changed += 1;
+                        }
+                        // A repeated data write is ignored, not appended.
+                    }
+                    None => {
+                        existing.push(write.clone());
+                        to_append.push(write.clone());
+                        changed += 1;
+                    }
+                }
+            }
 
-        let mut buf = String::new();
-        for record in others.iter() {
-            let line = serde_json::to_string(record).map_err(|e| io_err("encode write", e))?;
-            buf.push_str(&line);
-            buf.push('\n');
-        }
-        for write in existing {
-            let record = WriteRecord {
-                namespace: config.namespace.clone(),
-                checkpoint_id: checkpoint_id.clone(),
-                write,
-            };
-            let line = serde_json::to_string(&record).map_err(|e| io_err("encode write", e))?;
-            buf.push_str(&line);
-            buf.push('\n');
-        }
-        fs::create_dir_all(&self.base_dir).map_err(|e| io_err("create base dir", e))?;
-        write_atomic(&path, buf.as_bytes())?;
-        tracing::debug!(
-            "[checkpoint:file] put_writes thread={} checkpoint={checkpoint_id} offered={} stored={changed}",
-            config.thread_id,
-            writes.len()
-        );
-        Ok(())
+            if to_append.is_empty() {
+                tracing::debug!(
+                    "[checkpoint:file] put_writes thread={} checkpoint={checkpoint_id} \
+                     offered={} stored=0 (no new lines appended)",
+                    config.thread_id,
+                    writes.len()
+                );
+                return Ok(());
+            }
+
+            let mut buf = String::new();
+            for write in to_append {
+                let record = WriteRecord {
+                    namespace: config.namespace.clone(),
+                    checkpoint_id: checkpoint_id.clone(),
+                    write,
+                };
+                let line =
+                    serde_json::to_string(&record).map_err(|e| io_err("encode write", e))?;
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+            append_atomic(&path, buf.as_bytes())?;
+            tracing::debug!(
+                "[checkpoint:file] put_writes thread={} checkpoint={checkpoint_id} offered={} stored={changed}",
+                config.thread_id,
+                writes.len()
+            );
+            Ok(())
+        })
+        .await
+        .map_err(|e| io_err("join blocking put_writes task", e))?
     }
 
     async fn get_writes(&self, config: &CheckpointConfig) -> Result<Vec<PendingWrite>> {
         let Some(checkpoint_id) = self.resolve_write_target(config).await? else {
             return Ok(Vec::new());
         };
-        let path = self.writes_path(&config.thread_id);
-        Ok(Self::read_write_records(&path, &config.thread_id)?
-            .into_iter()
-            .filter(|r| r.checkpoint_id == checkpoint_id && r.namespace == config.namespace)
-            .map(|r| r.write)
-            .collect())
+        let this = self.clone();
+        let config = config.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<PendingWrite>> {
+            let path = this.writes_path(&config.thread_id);
+            let records = Self::read_write_records(&path, &config.thread_id)?;
+            Ok(fold_write_records(records, &checkpoint_id, &config.namespace))
+        })
+        .await
+        .map_err(|e| io_err("join blocking get_writes task", e))?
     }
 
     async fn try_claim(&self, thread: &str, owner: &str, ttl: std::time::Duration) -> Result<bool> {
