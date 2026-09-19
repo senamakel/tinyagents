@@ -23,7 +23,7 @@
 //! | `Strict` | nothing — the input was already valid | — |
 //! | `CodeFence` | ```` ```json … ``` ```` wrappers | ubiquitous |
 //! | `Slice` | prose around the value (`Here is the JSON: {…}`) | — |
-//! | `Relaxed` | unquoted keys, doubled braces, leaked chat-template quote tokens | [`relaxed_json`][rj] |
+//! | `Relaxed` | unquoted keys, doubled braces, leaked chat-template quote tokens | [`recover_object`][rj] |
 //! | `Closed` | truncated output: unterminated strings and unclosed brackets | LangChain `parse_partial_json` |
 //!
 //! # What it deliberately does not do
