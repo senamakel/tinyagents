@@ -63,10 +63,20 @@ tinyagents-harness = { git = "https://github.com/tinyhumansai/tinyagents", packa
 tinyagents-graph = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-graph" }
 tinyagents-language = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-language" }
 tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-registry" }
-# The code samples below build `Message` and provider types directly from
-# TinyInference, the message/model crate TinyAgents is built on. It is a
-# separate git dependency, not re-exported by the crates above.
-tinyinference-llm = { git = "https://github.com/tinyhumansai/tinyinference", package = "tinyinference-llm" }
+```
+
+The code samples below build `Message` and provider types from TinyInference,
+the message/model crate TinyAgents is built on. Do not add `tinyinference-llm`
+(or `tinytools` / `tinytools-agent`) as a separate git dependency: `harness`
+pins an exact vendor commit and re-exports those crates as
+`tinyagents_harness::tinyinference_llm`, `tinyagents_harness::tinytools`, and
+`tinyagents_harness::tinytools_agent`. Adding your own dependency on the
+vendor crate would resolve to a second, independent copy of the same types
+(e.g. two distinct `Message` types that the compiler treats as unrelated), so
+always reach them through the re-export instead:
+
+```rust
+use tinyagents_harness::tinyinference_llm::message::Message;
 ```
 
 A minimal typed graph — a whole-state agent/tool loop (trimmed from
