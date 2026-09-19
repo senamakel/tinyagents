@@ -1165,6 +1165,7 @@ async fn assert_rebound_host_resolution_stops(
                 .await
                 .expect("rebound resolver must not hang")
                 .expect_err("the rebinding resolver remains pending")
+                .into()
         }
         result = &mut invocation => panic!("rebind resolver unexpectedly finished: {result:?}"),
     }
