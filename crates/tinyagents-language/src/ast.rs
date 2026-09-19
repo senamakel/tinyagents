@@ -26,6 +26,13 @@ pub enum Literal {
     Str(String),
     /// A numeric literal (`50`, `1.5`).
     Num(f64),
+    /// A boolean literal (`true`, `false`).
+    ///
+    /// Parsed in preference to [`Literal::Ident`] for exactly the bare
+    /// identifiers `true`/`false` (see [`crate::parser::Parser::parse_literal`]),
+    /// so a value like `defaults { streaming true }` lowers to a real boolean
+    /// instead of the identifier string `"true"`.
+    Bool(bool),
     /// A bare identifier literal (`inherit`, `exponential`).
     Ident(String),
 }
@@ -36,6 +43,7 @@ impl Literal {
     pub fn as_display(&self) -> String {
         match self {
             Literal::Str(s) | Literal::Ident(s) => s.clone(),
+            Literal::Bool(b) => b.to_string(),
             Literal::Num(n) => {
                 if n.fract() == 0.0
                     && n.is_finite()
