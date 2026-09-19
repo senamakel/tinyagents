@@ -686,4 +686,83 @@ where
             .map(|r| r.write)
             .collect())
     }
+
+    async fn try_claim(&self, thread: &str, owner: &str, ttl: std::time::Duration) -> Result<bool> {
+        let base_dir = self.base_dir.clone();
+        let path = self.lease_path(thread);
+        let owner = owner.to_string();
+        let ttl_ms = ttl.as_millis() as u64;
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            fs::create_dir_all(&base_dir).map_err(|e| io_err("create base dir", e))?;
+            let now = tinyagents_harness::ids::now_ms();
+            if let Some(existing) = read_lease(&path)?
+                && existing.owner != owner
+                && existing.expires_at_ms > now
+            {
+                return Ok(false);
+            }
+            let record = LeaseRecord {
+                owner,
+                expires_at_ms: now.saturating_add(ttl_ms),
+            };
+            let bytes = serde_json::to_vec(&record).map_err(|e| io_err("encode lease", e))?;
+            write_atomic(&path, &bytes)?;
+            Ok(true)
+        })
+        .await
+        .map_err(|e| io_err("join blocking try_claim task", e))?
+    }
+
+    async fn renew(&self, thread: &str, owner: &str, ttl: std::time::Duration) -> Result<bool> {
+        let path = self.lease_path(thread);
+        let owner = owner.to_string();
+        let ttl_ms = ttl.as_millis() as u64;
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let now = tinyagents_harness::ids::now_ms();
+            match read_lease(&path)? {
+                Some(existing) if existing.owner == owner => {
+                    let record = LeaseRecord {
+                        owner,
+                        expires_at_ms: now.saturating_add(ttl_ms),
+                    };
+                    let bytes =
+                        serde_json::to_vec(&record).map_err(|e| io_err("encode lease", e))?;
+                    write_atomic(&path, &bytes)?;
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        })
+        .await
+        .map_err(|e| io_err("join blocking renew task", e))?
+    }
+
+    async fn release(&self, thread: &str, owner: &str) -> Result<()> {
+        let path = self.lease_path(thread);
+        let owner = owner.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            if let Some(existing) = read_lease(&path)?
+                && existing.owner == owner
+            {
+                let _ = fs::remove_file(&path);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| io_err("join blocking release task", e))?
+    }
+}
+
+/// Reads a thread's execution-lease sidecar, if it exists and decodes.
+///
+/// A missing file is `Ok(None)`; a corrupt/malformed file is treated the same
+/// way (`Ok(None)`) rather than failing the claim — the lease is best-effort
+/// advisory state layered on top of the in-process lock, not the sole source
+/// of durability, so a torn write here should not strand a thread.
+fn read_lease(path: &Path) -> Result<Option<LeaseRecord>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_err("read lease", e)),
+    }
 }
