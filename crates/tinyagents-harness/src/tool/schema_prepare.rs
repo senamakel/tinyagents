@@ -360,3 +360,7 @@ pub fn prepare_tool_schemas(
         .map(|schema| prepare_tool_schema(schema, preparation))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "schema_prepare_test.rs"]
+mod test;
