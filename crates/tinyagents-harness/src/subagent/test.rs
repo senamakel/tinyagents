@@ -364,7 +364,8 @@ fn tool_declaration_is_cached_across_calls() {
         "works",
         Arc::new(child_harness::<()>("unused")),
     );
-    let dispatch: SubAgentTool<(), ()> = SubAgentTool::new(Arc::new(child), ChildDataPolicy::default());
+    let dispatch: SubAgentTool<(), ()> =
+        SubAgentTool::new(Arc::new(child), ChildDataPolicy::new(|_: &()| ()));
 
     let first = dispatch.tool();
     let second = dispatch.tool();
