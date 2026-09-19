@@ -20,6 +20,8 @@ pub struct ContextStatistics {
     pub text_chars: usize,
     /// Image blocks across every role.
     pub images: usize,
+    /// Audio, video, and document blocks across every role.
+    pub media: usize,
     /// Tool calls requested by assistant messages.
     pub tool_calls: usize,
     /// Tool result messages.
