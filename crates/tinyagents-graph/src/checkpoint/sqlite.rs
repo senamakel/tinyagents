@@ -37,7 +37,7 @@ use super::{
     Checkpointer, PendingWrite, decode_json_err, merge_writes,
 };
 use crate::{Result, TinyAgentsError};
-use tinyagents_harness::ids::{CheckpointId, NodeId};
+use tinyagents_harness::ids::{CheckpointId, NodeId, TaskId};
 
 /// A [`Checkpointer`] that persists checkpoints in a SQLite database.
 ///
@@ -802,7 +802,7 @@ fn read_writes_by_checkpoint(
             .map_err(|e| decode_json_err("sqlite checkpointer", "write payload", e))?;
         let write = PendingWrite {
             node: NodeId::from(node),
-            task_id,
+            task_id: TaskId::from(task_id),
             idx,
             channel,
             payload,
