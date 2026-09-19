@@ -336,6 +336,27 @@ where
         self
     }
 
+    /// Runs one blocking `WorkflowStore` call on the blocking-task pool
+    /// instead of on the calling tokio worker thread.
+    ///
+    /// `drive`'s loop and the phase heartbeat (M10 in the runtime-comparison
+    /// review) call into `tinyagents-session`'s synchronous SQLite store
+    /// directly from `async fn`s. Every such call in this file is routed
+    /// through here so the DB round-trip never occupies a worker thread that
+    /// other, unrelated async tasks on this runtime need to make progress.
+    async fn store_op<T, F>(&self, f: F) -> Result<T, OrchestrationError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&S) -> Result<T, OrchestrationError> + Send + 'static,
+    {
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || f(&store))
+            .await
+            .map_err(|join_error| {
+                OrchestrationError(format!("workflow store task panicked: {join_error}"))
+            })?
+    }
+
     /// Initialise a durable run before the host schedules [`Self::drive`].
     pub fn initialise(
         &self,
