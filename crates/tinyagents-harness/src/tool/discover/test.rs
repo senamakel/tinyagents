@@ -87,9 +87,16 @@ fn manifest_degrades_full_to_names_to_count() {
     assert!(names.contains("- calendar_invite\n"));
     assert!(!names.contains("Send a calendar"));
 
-    // Too small for anything but the count.
-    let count = render_manifest(&catalog, 2);
+    // Too small for names, big enough for the bare count.
+    let count = render_manifest(&catalog, 10);
     assert_eq!(count, "3 deferred tool(s) are searchable.\n");
+
+    // Too small even for the count form: regression for the fallback that
+    // used to return the count unconditionally, silently exceeding the
+    // budget it was supposed to respect. The empty manifest itself always
+    // respects any budget, including zero.
+    assert_eq!(render_manifest(&catalog, 2), "");
+    assert_eq!(render_manifest(&catalog, 0), "");
 }
 
 #[test]
