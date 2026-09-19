@@ -261,6 +261,7 @@ fn check_image_size(source: &str, size_bytes: usize, max_bytes: usize) -> Result
     Ok(())
 }
 
+/// Rejects `mime` not on the image allowlist as [`MultimodalError::UnsupportedMime`].
 fn check_image_mime(source: &str, mime: &str) -> Result<()> {
     if is_allowed_image_mime(mime) {
         return Ok(());
