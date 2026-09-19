@@ -1447,13 +1447,12 @@ async fn carried_completed_sibling_goto_survives_resume() {
                 None => Ok(NodeResult::Interrupt(Interrupt::new("lo", json!({})))),
             }
         })
-        // `hi` (the higher-index, already-completed sibling) explicitly
-        // routes to `x` via `Command::goto`, overriding its static edge to
-        // `y` — the routing this test asserts is not lost.
+        // `hi` (the higher-index, already-completed sibling) has no static
+        // edge at all: it only reaches `x` via its explicit `Command::goto`.
+        // If that goto is lost across the interrupt boundary (the R1 bug),
+        // `hi` routes to nothing on resume and `x`/`y` never run.
         .add_node("hi", |_s: Counter, _c: NodeContext| async move {
-            Ok(NodeResult::Command(
-                Command::update(20).with_goto(["x"]),
-            ))
+            Ok(NodeResult::Command(Command::update(20).with_goto(["x"])))
         })
         .add_node("x", move |_s: Counter, _c: NodeContext| {
             let calls = x_calls_for_node.clone();
