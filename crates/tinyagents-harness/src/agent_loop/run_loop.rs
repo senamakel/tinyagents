@@ -497,6 +497,32 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
             let model_name = binding.resolved.name.clone();
 
+            // Resolved per turn (not once for the whole run) because `Auto`
+            // needs the *resolved* model's capability, known only now:
+            // `ToolDispatcher::Auto` is documented as "provider-native tool
+            // calls when the provider supports them, otherwise Xml", but
+            // mapping it to the same host-side-no-op behavior as `Native`
+            // (as an earlier version of this dialect resolution did) left
+            // that fallback unenforced — a model with `tool_calling: false`
+            // selected under `Auto` would receive a request that still
+            // depended on provider-native tools, with no host-rendered text
+            // protocol and no adapter guaranteed to supply one. `Native`
+            // stays forced regardless of capability (it fails closed at
+            // resolution instead, via the capability requirement above);
+            // `Xml`/`Pformat` stay forced as explicit opt-ins.
+            let effective_dispatcher = match self.policy.tool_dialect {
+                crate::config::ToolDispatcher::Auto => {
+                    if binding.model.profile().is_some_and(|profile| profile.tool_calling) {
+                        crate::config::ToolDispatcher::Native
+                    } else {
+                        crate::config::ToolDispatcher::Xml
+                    }
+                }
+                other => other,
+            };
+            let run_dialect =
+                super::dialect::RunDialect::resolve(effective_dispatcher, &tool_schemas);
+
             // An explicit request override that resolution skipped (unknown
             // name, missing capability, or provider-retired) falls through to
             // a lower-priority candidate by documented fail-closed semantics;
