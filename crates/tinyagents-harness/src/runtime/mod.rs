@@ -56,6 +56,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             tool_timeouts: None,
             response_cache: None,
             output_validator: None,
+            deferred_tool_handler: None,
         }
     }
 
@@ -184,6 +185,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         validator: Arc<dyn crate::structured::OutputValidator<State, Ctx>>,
     ) -> &mut Self {
         self.output_validator = Some(validator);
+        self
+    }
+
+    /// Installs an inline [`crate::tool::DeferredToolHandler`] (A2).
+    ///
+    /// With a handler present, a tool batch that defers one or more calls
+    /// (approval-required policy, `ApprovalRequired`/`CallDeferred`, or an
+    /// external tool) is resolved by calling the handler right there and the
+    /// loop continues; the caller never sees `AgentRun::deferred`. Without
+    /// one, the loop exits with the pending requests for the host to resolve
+    /// and resume later. Only one handler may be installed; calling this
+    /// again replaces it. Returns `&mut Self` for chaining.
+    pub fn with_deferred_tool_handler(
+        &mut self,
+        handler: Arc<dyn crate::tool::DeferredToolHandler>,
+    ) -> &mut Self {
+        self.deferred_tool_handler = Some(handler);
         self
     }
 

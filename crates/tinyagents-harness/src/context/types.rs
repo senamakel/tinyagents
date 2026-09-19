@@ -436,6 +436,13 @@ pub struct RunContext<Ctx = ()> {
     /// `None` outside that window, and always `None` for a caller that never
     /// goes through the agent loop.
     pub active_model_call: Option<CallId>,
+    /// Resolutions for the deferred tool calls left pending on the transcript
+    /// this run is resuming (A2). Taken by the agent loop before its first
+    /// model call and applied to the unanswered tool calls on the last
+    /// assistant row; see
+    /// [`crate::runtime::AgentHarness::resume_deferred`]. Never inherited by
+    /// a child context.
+    pub(crate) deferred_results: Option<crate::tool::DeferredToolResults>,
     /// Monotonic, per-context (not process-global) counter handed out by
     /// [`RunContext::next_child_ordinal`], used to derive deterministic child
     /// run ids (e.g. [`crate::subagent::SubAgent`]'s `{name}-d{depth}-{parent

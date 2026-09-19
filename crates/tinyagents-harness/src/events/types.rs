@@ -143,6 +143,36 @@ pub enum AgentEvent {
         tool_name: String,
     },
 
+    /// A tool call was deferred out of the loop (A2): it needs a human
+    /// approval or host-side execution before it can be answered. The loop
+    /// finishes the batch's other calls and exits with
+    /// `AgentRun::deferred`, or resolves it inline through a registered
+    /// `DeferredToolHandler`. Terminal partner of a `ToolStarted` when the
+    /// tool itself raised the deferral mid-execution.
+    ToolDeferred {
+        /// Identifier of the deferred call.
+        call_id: CallId,
+        /// Why it was deferred (`approval_required`, `call_deferred`,
+        /// `external`, or a middleware-supplied reason).
+        reason: String,
+    },
+
+    /// A previously deferred call was approved on resume and is about to
+    /// execute (with the model's or the approver's edited arguments).
+    ToolApproved {
+        /// Identifier of the approved call.
+        call_id: CallId,
+    },
+
+    /// A previously deferred call was denied on resume; no tool runs and the
+    /// model sees `message` as a tool-error result.
+    ToolDenied {
+        /// Identifier of the denied call.
+        call_id: CallId,
+        /// The denial message handed to the model.
+        message: String,
+    },
+
     /// A tool-selection middleware filtered the model-visible tool set before a
     /// model call. Makes exposure decisions auditable: a UI or log can see
     /// which tools were withheld from the model and by which policy.
@@ -706,6 +736,9 @@ impl AgentEvent {
             AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
             AgentEvent::ToolSearched { .. } => "tool.searched",
             AgentEvent::DeferredToolCall { .. } => "tool.deferred_call",
+            AgentEvent::ToolDeferred { .. } => "tool.deferred",
+            AgentEvent::ToolApproved { .. } => "tool.approved",
+            AgentEvent::ToolDenied { .. } => "tool.denied",
             AgentEvent::ToolsFiltered { .. } => "tool.filtered",
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",

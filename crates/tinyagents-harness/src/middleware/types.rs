@@ -122,6 +122,15 @@ pub struct AgentRun {
     /// lifts it and a fresh invocation continues from
     /// [`AgentRun::messages`].
     pub paused: Option<crate::steering::PauseState>,
+    /// Set when the run stopped because one or more tool calls were
+    /// **deferred** (A2): they need a human approval or host-side execution
+    /// before the loop can continue. Like [`Self::paused`], this is not a
+    /// completion — there is no `final_response`, and
+    /// [`HarnessRunStatus`][crate::events::HarnessRunStatus] reports the run
+    /// `Interrupted`. Persist [`Self::messages`] together with this value,
+    /// resolve it into a [`crate::tool::DeferredToolResults`], and resume
+    /// with [`crate::runtime::AgentHarness::resume_deferred`].
+    pub deferred: Option<crate::tool::DeferredToolRequests>,
 }
 
 // ── Middleware trait ──────────────────────────────────────────────────────────

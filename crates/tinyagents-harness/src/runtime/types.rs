@@ -517,6 +517,12 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// See [`crate::structured::OutputValidator`] and
     /// [`AgentHarness::with_output_validator`].
     pub(crate) output_validator: Option<Arc<dyn crate::structured::OutputValidator<State, Ctx>>>,
+    /// Optional inline resolver for deferred tool calls (A2). When set, a
+    /// batch that defers calls is resolved through it and the loop keeps
+    /// going instead of exiting with `AgentRun::deferred`. See
+    /// [`crate::tool::DeferredToolHandler`] and
+    /// [`AgentHarness::with_deferred_tool_handler`].
+    pub(crate) deferred_tool_handler: Option<Arc<dyn crate::tool::DeferredToolHandler>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.

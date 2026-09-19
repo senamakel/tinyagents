@@ -50,6 +50,12 @@ pub(crate) enum LoopExit {
     LimitStop(LimitKind),
     /// Steering latched a pause; the run is resumable, not finished.
     Paused(PauseState),
+    /// One or more tool calls in the last batch need a human decision or
+    /// host-side execution before the run can continue (A2). The transcript
+    /// keeps the assistant's tool-call row and every non-deferred sibling's
+    /// result; resume with
+    /// [`crate::runtime::AgentHarness::resume_deferred`].
+    Deferred(crate::tool::DeferredToolRequests),
 }
 
 /// The effect of draining a pending [`crate::context::MiddlewareControl`] at

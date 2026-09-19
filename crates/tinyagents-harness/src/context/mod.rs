@@ -309,8 +309,25 @@ impl<Ctx> RunContext<Ctx> {
             host_authority: None,
             terminal_observer: None,
             active_model_call: None,
+            deferred_results: None,
             child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// Attaches the resolutions for the deferred tool calls this run resumes
+    /// (A2). The agent loop applies them to the unanswered tool calls on the
+    /// transcript's last assistant row before making its next model call.
+    /// Prefer [`crate::runtime::AgentHarness::resume_deferred`], which does
+    /// this for you.
+    #[must_use]
+    pub fn with_deferred_results(mut self, results: crate::tool::DeferredToolResults) -> Self {
+        self.deferred_results = Some(results);
+        self
+    }
+
+    /// Takes the pending deferred-call resolutions, if any (A2).
+    pub(crate) fn take_deferred_results(&mut self) -> Option<crate::tool::DeferredToolResults> {
+        self.deferred_results.take()
     }
 
     /// Returns the next value from this context's own child-ordinal counter

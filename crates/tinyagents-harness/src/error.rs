@@ -156,6 +156,34 @@ pub enum TinyAgentsError {
     #[error("permanent tool failure: {0}")]
     ToolFailed(String),
 
+    /// A tool (from [`tinytools::Tool::execute`]) or a `before_tool`
+    /// middleware asked for **human approval** before this call runs (A2).
+    ///
+    /// The agent loop does not treat this as a failure: it finishes the rest
+    /// of the batch, lists the call under
+    /// [`crate::tool::DeferredToolRequests::approvals`] with `metadata`
+    /// attached, and exits with `AgentRun::deferred` set (or resolves it
+    /// inline through a registered
+    /// [`crate::tool::DeferredToolHandler`]). Mirrors Pydantic AI's
+    /// `ApprovalRequired`. Never retried by [`crate::retry::is_retryable`].
+    #[error("tool call requires approval")]
+    ApprovalRequired {
+        /// Host-only context for the approver (never shown to the model).
+        metadata: serde_json::Value,
+    },
+
+    /// A tool asked the **host** to execute this call out of band (A2):
+    /// the loop lists it under [`crate::tool::DeferredToolRequests::calls`]
+    /// and expects a [`crate::tool::DeferredCallResult`] on resume. Raised
+    /// automatically for a tool registered through
+    /// [`crate::tool::ToolRegistry::register_external`]. Mirrors Pydantic
+    /// AI's `CallDeferred`. Never retried by [`crate::retry::is_retryable`].
+    #[error("tool call deferred to the host")]
+    CallDeferred {
+        /// Host-only context describing how to execute the call.
+        metadata: serde_json::Value,
+    },
+
     /// A run referenced a tool name that is not present in the
     /// [`crate::tool::ToolRegistry`]. The payload is the tool name.
     #[error("tool `{0}` is not registered")]
