@@ -186,6 +186,30 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         }
     }
 
+    /// Registers a model under `name` with explicit [`ComponentMetadata`]
+    /// instead of the bare default [`record_meta`](Self::record_meta) would
+    /// attach, so a description/tags are attached atomically with
+    /// registration rather than needing a follow-up
+    /// [`set_metadata`](Self::set_metadata) call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::DuplicateComponent`] if a model is already
+    /// registered under `name`.
+    pub fn register_model_with(
+        &mut self,
+        name: impl Into<String>,
+        model: Arc<dyn ChatModel<State>>,
+        metadata: ComponentMetadata,
+    ) -> Result<&mut Self> {
+        let name = name.into();
+        self.ensure_absent(ComponentKind::Model, &name)?;
+        self.meta.insert((ComponentKind::Model, name.clone()), metadata);
+        self.remember_model_order(&name);
+        self.models.insert(name, model);
+        Ok(self)
+    }
+
     // -----------------------------------------------------------------------
     // Registration: tools
     // -----------------------------------------------------------------------
