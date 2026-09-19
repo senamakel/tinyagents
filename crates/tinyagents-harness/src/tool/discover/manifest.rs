@@ -48,7 +48,19 @@ pub fn render_manifest(catalog: &DeferredCatalog, token_budget: usize) -> String
         return format!("{header}{names}");
     }
 
-    format!("{} deferred tool(s) are searchable.\n", catalog.len())
+    // Last resort: a bare count. This must itself respect `byte_budget` — a
+    // sufficiently large catalogue's count string (or a small/zero budget)
+    // can still overflow a tiny budget, which would break the documented
+    // "the manifest is bounded by `token_budget`" guarantee. When even this
+    // does not fit, there is nothing left to shed: return an empty manifest
+    // rather than silently exceeding the ceiling the budget exists to
+    // enforce.
+    let count = format!("{} deferred tool(s) are searchable.\n", catalog.len());
+    if count.len() <= byte_budget {
+        count
+    } else {
+        String::new()
+    }
 }
 
 /// The first sentence of `text`, clipped to `max_chars`, whitespace collapsed.
