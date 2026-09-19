@@ -420,6 +420,8 @@ where
             let child_runs_meta = ctx.take_step_child_runs();
             let sb = StepBoundary {
                 active: &active,
+                completed: &step_run.completed,
+                stalled: &step_run.stalled,
                 goto_map: &step_run.goto_map,
                 child_runs_meta: &child_runs_meta,
                 step,
