@@ -170,3 +170,37 @@ pub trait LoopDriver<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
         streaming: bool,
     ) -> Result<()>;
 }
+
+/// Executes one turn's batch of tool calls and reports what changed.
+///
+/// This is a thin, behavior-preserving wrapper over the same
+/// [`AgentHarness::execute_tools`][super::AgentHarness::execute_tools]
+/// serial-admission / serial-or-concurrent-execution / ordered-fold pipeline
+/// the direct loop uses (see `agent_loop::tools`) — unlike [`TurnPlan`] and
+/// friends, this phase's *implementation*, not just its data contract, is
+/// reused as-is, so a graph-driven tool batch preserves the exact ordering,
+/// concurrency-eligibility, budget/limit, and middleware semantics the direct
+/// loop guarantees. `messages` and `run` are mutated in place, exactly as
+/// `execute_tools` does; the returned [`ToolBatchOutcome`] additionally
+/// reports just the slice each produced, for a caller (a graph node) that
+/// wants the batch's own delta rather than diffing the whole transcript
+/// itself.
+pub async fn execute_tool_batch<State: Send + Sync, Ctx: Send + Sync>(
+    harness: &AgentHarness<State, Ctx>,
+    state: &State,
+    ctx: &mut RunContext<Ctx>,
+    run: &mut AgentRun,
+    status: &mut HarnessRunStatus,
+    messages: &mut Vec<Message>,
+    tool_calls: Vec<ToolCall>,
+) -> Result<ToolBatchOutcome> {
+    let messages_before = messages.len();
+    let executed_before = run.executed_tools.len();
+    harness
+        .execute_tools(state, ctx, run, status, messages, tool_calls)
+        .await?;
+    Ok(ToolBatchOutcome {
+        results: messages[messages_before..].to_vec(),
+        executed_tools: run.executed_tools[executed_before..].to_vec(),
+    })
+}
