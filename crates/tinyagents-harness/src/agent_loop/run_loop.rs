@@ -528,11 +528,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            // What was offered is fixed here, before a text dialect strips
+            // the schemas off the wire: recovery and the stream scrubber need
+            // the names, and the structured-output schema tool counts. The
+            // registry is extended (not just the run-level one) so a
+            // per-turn synthetic tool — the structured-output fallback
+            // schema just pushed above — has a positional layout to decode
+            // a recovered call against; the catalogue already advertises it
+            // because it is rendered fresh from `tools` on every call.
+            let offered_tool_count = request.tools.len();
+            let recovery = super::dialect::TextRecovery {
+                offered: Arc::new(request.tools.clone()),
+                registry: run_dialect.registry_for(&request.tools),
+            };
+            // Applied before budget preflight below: for a text dialect this
+            // rewrite folds the protocol block and full tool catalogue into
+            // `request.messages` and clears `request.tools`, and that is the
+            // request whose size the budget estimate has to reflect. Doing
+            // this after preflight (as before) let a prompt near
+            // `max_input_tokens` pass admission on the small structured
+            // request and then send a materially larger rendered-text one,
+            // defeating the pre-call budget limit.
+            run_dialect.apply_to_request(&mut request);
+
             // A host budget is acquired only for an explicit host-driven run.
-            // Do it after structured-output planning: a synthetic schema tool
-            // is part of the provider request and must be included in its
-            // estimate. The permit remains alive through response accounting,
-            // so cancellation or a provider error still releases it through
+            // Do it after structured-output planning and the dialect
+            // rewrite: a synthetic schema tool and, for a text dialect, the
+            // rendered protocol/catalogue text are both part of the actual
+            // provider request and must be included in its estimate. The
+            // permit remains alive through response accounting, so
+            // cancellation or a provider error still releases it through
             // Drop.
             let host_budget = if let Some(host_run) =
                 crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
