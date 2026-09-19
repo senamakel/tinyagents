@@ -274,6 +274,14 @@ where
                     .collect::<Vec<_>>()
             );
         }
+        // I5/R3: the same `channel_bookkeeping` dispatch point the executor
+        // boundary uses (`compiled::boundary::channel_checkpoint_fields`),
+        // so a manual write can never disagree with a normal superstep
+        // boundary about what it persists here (the "one write path"
+        // contract). `versions_seen` (per-node) carries over from the base
+        // checkpoint unchanged — a manual write does not run any node.
+        let (channel_versions, channel_deltas) =
+            crate::channel::channel_bookkeeping(&new_state, parent_step as u64 + 1);
         let checkpoint = Checkpoint::new(new_state, tasks)
             .with_thread_id(thread_id.to_string())
             .with_checkpoint_id(checkpoint_id)
@@ -282,6 +290,9 @@ where
             .with_completed(completed)
             .with_interrupts(interrupts)
             .with_barrier_arrivals(barrier_arrivals)
+            .with_channel_versions(channel_versions)
+            .with_channel_deltas(channel_deltas)
+            .with_versions_seen(base.versions_seen.clone())
             .with_metadata(metadata);
         let id = checkpointer.put(checkpoint).await?;
         self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
