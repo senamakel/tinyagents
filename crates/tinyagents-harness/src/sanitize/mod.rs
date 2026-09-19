@@ -88,10 +88,10 @@ fn strip_non_http_file_urls(messages: &mut [Message]) {
 /// (not a single trim boundary), so it repairs history assembled out of order
 /// or from multiple sources, not just a single cut point.
 fn strip_dangling_tool_calls(messages: &mut Vec<Message>) {
-    let answered: HashSet<&str> = messages
+    let answered: HashSet<String> = messages
         .iter()
         .filter_map(|message| match message {
-            Message::Tool(tool) => Some(tool.tool_call_id.as_str()),
+            Message::Tool(tool) => Some(tool.tool_call_id.clone()),
             _ => None,
         })
         .collect();
