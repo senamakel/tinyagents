@@ -307,6 +307,17 @@ pub struct BudgetMiddleware {
 ///
 /// Rejections at `before_tool` surface as
 /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
+///
+/// # Relationship to `crate::tool::toolset`
+///
+/// This middleware's policy classification (side-effect/background-safe/
+/// approval enforcement from the vendor `tinytools` declaration) is a
+/// different axis from [`crate::tool::toolset::FilteredToolSet`] (an
+/// arbitrary per-tool predicate) and
+/// [`crate::tool::toolset::ApprovalRequiredToolSet`] (which only *sets* the
+/// approval flag this middleware enforces) — kept as its own implementation
+/// rather than rebased onto either, since neither adaptor reads
+/// [`ToolPolicy`] as a whole.
 pub struct ToolPolicyMiddleware {
     pub(crate) label: &'static str,
     pub(crate) policies: std::collections::HashMap<String, ToolPolicy>,
