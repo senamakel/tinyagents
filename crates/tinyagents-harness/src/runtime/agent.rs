@@ -420,7 +420,6 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             .await
     }
 
-    #[allow(unsafe_code)]
     async fn invoke_agent_stream_with_capabilities<'a>(
         &'a self,
         invocation: AgentInvocation<State, Ctx>,
@@ -460,17 +459,24 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 agent: agent_id,
             },
         );
-        let stream = runner
-            .invoke_stream_in_context(state, context, prepared.messages.clone())
-            .map(|item| item);
+        // Build the stream from a `StreamRunner` that either borrows `self`
+        // (unhosted-runtime case) or owns `runtime` outright (hosted-runtime
+        // case). `invoke_stream_with_runner` moves whichever one it gets into
+        // the driving future's own state, so the returned stream needs no
+        // extra field or lifetime extension to keep an owned runtime alive:
+        // the future already owns it for exactly as long as it is needed.
+        let stream_runner = match runtime {
+            Some(runtime) => crate::agent_loop::StreamRunner::Owned(runtime),
+            None => crate::agent_loop::StreamRunner::Borrowed(self),
+        };
+        let stream = crate::agent_loop::invoke_stream_with_runner(
+            stream_runner,
+            state,
+            context,
+            prepared.messages.clone(),
+        );
         Ok(AgentStream {
-            // `runtime` is retained by this stream and is declared after
-            // `inner`, so it outlives the stream's borrow of its harness. The
-            // explicit helper records that otherwise non-obvious lifetime
-            // relationship at the one boundary where the owned hosted
-            // invocation meets the borrowed stream API.
-            inner: Some(unsafe { extend_overlay_stream_lifetime(Box::pin(stream)) }),
-            runtime,
+            inner: Some(Box::pin(stream)),
             cancellation,
             terminal_observer,
             terminal_observed: false,
