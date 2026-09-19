@@ -667,6 +667,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
 /// the overlay alongside `inner`, and field order drops `inner` first. The
 /// other borrowed inputs (`&self` and `&State`) already have the public `'a`
 /// lifetime. No reference can escape the private `AgentStream` wrapper.
+#[allow(unsafe_code)]
 unsafe fn extend_overlay_stream_lifetime<'a>(
     stream: Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + '_>>,
 ) -> Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>> {
