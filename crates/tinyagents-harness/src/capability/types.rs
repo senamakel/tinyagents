@@ -264,6 +264,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> CapabilityToolSet<State, Ctx> {
     fn is_loaded(&self, capability: &Capability<State, Ctx>, loaded: &HashSet<String>) -> bool {
         !capability.defer_loading || loaded.contains(&capability.name)
     }
+
+    /// The synthetic [`LoadCapabilityTool`] this toolset auto-registered, if
+    /// any capability declared `defer_loading: true`. `None` when every
+    /// capability loads eagerly.
+    pub fn load_tool(&self) -> Option<Arc<dyn Tool>> {
+        self.load_tool
+            .as_ref()
+            .map(|tool| tool.clone() as Arc<dyn Tool>)
+    }
 }
 
 #[async_trait]
