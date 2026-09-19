@@ -393,3 +393,10 @@ Tools should declare safety metadata:
 
 Middleware can use this metadata to enforce confirmation, sandboxing, allowlist,
 or human-in-the-loop policies.
+
+## Tool-Effect Ledger And Replay (B5)
+
+Crash-safe bookkeeping of tool-call side effects — a durable `started` row
+written before a tool executes, settled once it completes — plus the resume
+logic that decides whether an interrupted call is safe to re-run. See
+[tool-effects.md](tool-effects.md).
