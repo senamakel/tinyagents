@@ -471,9 +471,12 @@ where
                 )
                 .await?;
         }
-        self.emit(tinyagents_graph::GraphEvent::RunStarted {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunStarted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+            },
+        );
         let mut total_spawned = run.child_run_ids.len() as u32;
 
         loop {
