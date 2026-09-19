@@ -160,15 +160,21 @@ impl ResultHandoffCache {
 /// the path in tests — and because the alternative this replaced was an
 /// environment-variable backdoor named after one particular host. Pass
 /// [`HANDOFF_OVERSIZE_THRESHOLD_TOKENS`] for the default.
+///
+/// `config` supplies the host's extractor tool name and error-prefix
+/// heuristics (M-9); pass [`HandoffConfig::default`] to reproduce the
+/// historical hardcoded behaviour.
 pub fn apply_handoff(
     cache: &ResultHandoffCache,
+    config: &HandoffConfig,
     tool_name: &str,
     task_id: &str,
     agent_id: &str,
     result_text: String,
     threshold_tokens: usize,
 ) -> String {
-    let skip_cleaning = tool_name == "extract_from_result" || result_text.starts_with("Error");
+    let skip_cleaning =
+        tool_name == config.extractor_tool_name || config.is_error_result(&result_text);
     let cleaned = if skip_cleaning {
         result_text
     } else {
