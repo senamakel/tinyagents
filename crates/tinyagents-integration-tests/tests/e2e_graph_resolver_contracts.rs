@@ -145,10 +145,9 @@ async fn graph_builder_validates_topology_and_exports_metadata() {
     // `mark_interrupt("start")` is a real `interrupt_before` pause (not just
     // an export marker), so the checkpointed run pauses ahead of `start`
     // and completes on resume.
-    let graph = builder
-        .compile()
-        .unwrap()
-        .with_checkpointer(Arc::new(tinyagents_graph::InMemoryCheckpointer::<i32>::new()));
+    let graph = builder.compile().unwrap().with_checkpointer(Arc::new(
+        tinyagents_graph::InMemoryCheckpointer::<i32>::new(),
+    ));
     let paused = graph.run_with_thread("contract", 0).await.unwrap();
     assert!(paused.is_interrupted());
     assert_eq!(paused.interrupts[0].node.as_str(), "start");

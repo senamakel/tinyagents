@@ -280,9 +280,11 @@ where
         // `interrupt_before` node — `mark_interrupt` is that selector now,
         // and would pause a second time ahead of the handler with a bare
         // `{"phase": "before"}` payload. Annotate it for the export instead.
-        builder = builder
-            .mark_command_routing("approval")
-            .with_node_metadata("approval", "interrupt", "node-emitted");
+        builder = builder.mark_command_routing("approval").with_node_metadata(
+            "approval",
+            "interrupt",
+            "node-emitted",
+        );
     }
 
     let graph = builder
