@@ -22,6 +22,7 @@
 //! Each concern lives in its own submodule with `types.rs` (definitions),
 //! `mod.rs` (implementations), and `test.rs` (unit tests).
 
+pub mod agent_loop;
 pub mod builder;
 pub mod channel;
 pub mod checkpoint;
