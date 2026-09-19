@@ -90,7 +90,7 @@ impl CompactionSink for SessionCompactionSink<'_> {
             summary: record.summary.clone(),
             first_kept_entry_id,
             tokens_before: record.tokens_before,
-            usage: record.usage.clone(),
+            usage: record.usage,
             details: record.details.clone(),
         });
         let new_tip = self.tree.append(Some(&tip), entry)?;
