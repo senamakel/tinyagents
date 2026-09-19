@@ -288,7 +288,11 @@ impl Parser<'_> {
             }
             Token::Ident(s) => {
                 self.advance();
-                Ok(Literal::Ident(s))
+                match s.as_str() {
+                    "true" => Ok(Literal::Bool(true)),
+                    "false" => Ok(Literal::Bool(false)),
+                    _ => Ok(Literal::Ident(s)),
+                }
             }
             other => Err(self.error(
                 format!("expected a literal value, found {}", other.describe()),
