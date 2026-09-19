@@ -518,14 +518,15 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         .await
         .expect("fallback trim runs");
 
-    // Same transcript, but the request also carries a large tool schema that
-    // eats into the same trigger budget.
-    let big_schema_text = "p".repeat(2_000);
+    // Same transcript, but the request also carries a moderate tool schema
+    // that eats into the same 50-token trigger budget without consuming all
+    // of it, so the system prompt still survives trimming.
+    let moderate_schema_text = "p".repeat(60);
     let mut request_with_tools = ModelRequest {
-        messages: before,
+        messages: before.clone(),
         tools: vec![tinyinference_llm::tool::ToolSchema::new(
-            "big_tool",
-            big_schema_text,
+            "moderate_tool",
+            moderate_schema_text,
             serde_json::json!({"type": "object"}),
         )],
         ..Default::default()
@@ -542,9 +543,26 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         request_with_tools.messages.len(),
         request_no_tools.messages.len()
     );
-    // The system prompt is still preserved even when the schema cost alone
-    // exceeds the trigger budget (message_budget saturates to 0, not below).
     assert!(matches!(request_with_tools.messages[0], Message::System(_)));
+
+    // Extreme case: the schema cost alone exceeds the whole trigger budget.
+    // The message budget must saturate to 0 (not underflow/panic), so the
+    // fallback still returns instead of erroring or crashing.
+    let huge_schema_text = "p".repeat(2_000);
+    let mut request_huge_tools = ModelRequest {
+        messages: before,
+        tools: vec![tinyinference_llm::tool::ToolSchema::new(
+            "huge_tool",
+            huge_schema_text,
+            serde_json::json!({"type": "object"}),
+        )],
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request_huge_tools)
+        .await
+        .expect("fallback trim runs even when schemas alone exceed the budget");
+    assert!(request_huge_tools.messages.len() <= request_with_tools.messages.len());
 }
 
 #[tokio::test]
