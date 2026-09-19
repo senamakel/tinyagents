@@ -33,7 +33,8 @@
 
 use crate::ast::{ChannelDecl, GraphDecl, NodeDecl, Program};
 use crate::capability_resolver::{
-    CapabilityResolver, CapabilitySource, DEFAULT_NODE_KINDS, ReferenceClass,
+    CODE_INVALID_NODE_KIND, CODE_UNKNOWN_MODEL, CODE_UNKNOWN_REDUCER, CODE_UNKNOWN_TOOL,
+    CapabilityResolver, CapabilitySource, DEFAULT_NODE_KINDS, ReferenceClass, code_for,
 };
 use crate::compiler::compile;
 use crate::diagnostic::Diagnostic;
@@ -42,16 +43,6 @@ use crate::source::SourceFile;
 use crate::span::Span;
 use crate::types::Blueprint;
 use tinyagents_harness::error::{Result, TinyAgentsError};
-
-// Stable diagnostic codes for resolution failures.
-const CODE_UNKNOWN_MODEL: &str = "E-rag-unknown-model";
-const CODE_UNKNOWN_TOOL: &str = "E-rag-unknown-tool";
-const CODE_UNKNOWN_SUBGRAPH: &str = "E-rag-unknown-subgraph";
-const CODE_UNKNOWN_ROUTER: &str = "E-rag-unknown-router";
-const CODE_UNKNOWN_AGENT: &str = "E-rag-unknown-agent";
-const CODE_UNKNOWN_SCRIPT: &str = "E-rag-unknown-script";
-const CODE_UNKNOWN_REDUCER: &str = "E-rag-unknown-reducer";
-const CODE_INVALID_NODE_KIND: &str = "E-rag-invalid-node-kind";
 
 /// The single registry-backed binding gate for `.rag` source.
 ///
