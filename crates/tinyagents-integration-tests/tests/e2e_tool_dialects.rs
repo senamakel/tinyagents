@@ -830,6 +830,38 @@ async fn dropped_tool_call_nudges_are_bounded() {
     assert_eq!(run.tool_calls, 0);
 }
 
+#[tokio::test]
+async fn no_dropped_call_nudge_is_issued_when_the_turn_could_not_accept_a_tool_call() {
+    // A provider/router can report `finish_reason == "tool_calls"` with no
+    // actual call even when this turn's effective `tool_choice` is `None`
+    // (set by a `before_model` middleware) — nudging the model to "issue the
+    // call" in that situation asks for something that could never have been
+    // accepted, wasting `dropped_tool_call_nudges` model calls before
+    // falling through to the same terminal outcome a single call would have
+    // reached immediately.
+    let mut promised = ModelResponse::assistant("");
+    promised.finish_reason = Some("tool_calls".into());
+    let model = Arc::new(ScriptedModel::new(vec![promised]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model, &listener);
+    harness.push_middleware(Arc::new(ForceToolChoice(ToolChoice::None)));
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run ends on the first call instead of nudging");
+    assert_eq!(
+        run.model_calls, 1,
+        "no nudge should be spent on a turn that could not accept a tool call"
+    );
+    let nudges = listener
+        .events()
+        .into_iter()
+        .filter(|record| matches!(record.event, AgentEvent::RetryScheduled { .. }))
+        .count();
+    assert_eq!(nudges, 0, "{:?}", listener.events());
+}
+
 /// A queued model with a fixed, caller-chosen profile, so a test can force
 /// `StructuredStrategy::ToolCall` (a profile with `tool_calling` but not
 /// `native_structured_output && json_schema`) while still scripting a
