@@ -28,6 +28,28 @@
 //! `claude-code` and `langfuse` are part of `default` so existing consumers
 //! see no change; disable default features to opt out of either.
 //!
+//! # Host utilities not on the agent loop path (M-10)
+//!
+//! [`run_queue`], [`handoff`], and the [`memory`] module's
+//! [`memory::ChatHistory`]/[`memory::ShortTermMemory`] are exported for a
+//! host to build on, but [`agent_loop`] does not call into any of them on its
+//! own — they are opt-in plumbing, not implicit loop behavior:
+//!
+//! - [`run_queue::RunQueue`] is a generic multi-lane FIFO for messages
+//!   arriving during a run; a host polls it and feeds what it dequeues into
+//!   [`steering`] or a follow-up `invoke`.
+//! - [`handoff`] is a progressive-disclosure cache for oversized tool
+//!   results; a host calls [`handoff::apply_handoff`] itself before
+//!   appending a tool result to history, and registers an extraction tool
+//!   that reads the same [`handoff::ResultHandoffCache`].
+//! - [`memory::ChatHistory`]/[`memory::ShortTermMemory`] persist a thread's
+//!   transcript across runs; a host reads history into a run's `input` and
+//!   appends the run's messages back afterward.
+//!
+//! Wiring any of these directly into the loop is deliberately future work
+//! rather than default behavior, so a host that does not need one pays
+//! nothing for it.
+//!
 //! # Vendor re-exports
 //!
 //! The harness pins exact versions of the `tinyinference-llm`, `tinytools`,
