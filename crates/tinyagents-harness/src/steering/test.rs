@@ -585,14 +585,18 @@ fn pause_with_is_gated_by_the_same_policy_kind_as_pause() {
         SteeringCommandKind::Pause
     );
 
-    // A policy that forbids Pause forbids PauseWith too.
+    // A policy that forbids Pause forbids PauseWith too: rejected
+    // individually, and the checkpoint continues rather than the run dying.
     let handle = SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::Resume));
     handle.send(SteeringCommand::PauseWith {
         reason: "why".into(),
     });
     let mut ctx: RunContext = RunContext::new(RunConfig::new("r"), ()).with_steering(handle);
     let mut messages = Vec::new();
-    assert!(apply_pending_steering(&mut ctx, &mut messages).is_err());
+    assert_eq!(
+        apply_pending_steering(&mut ctx, &mut messages).unwrap(),
+        SteeringOutcome::Continue
+    );
 }
 
 #[test]
