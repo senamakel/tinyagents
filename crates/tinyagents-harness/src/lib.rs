@@ -30,14 +30,13 @@
 //!
 //! # Host utilities not on the agent loop path (M-10)
 //!
-//! [`run_queue`], [`handoff`], and the [`memory`] module's
+//! [`handoff`] and the [`memory`] module's
 //! [`memory::ChatHistory`]/[`memory::ShortTermMemory`] are exported for a
 //! host to build on, but [`agent_loop`] does not call into any of them on its
-//! own — they are opt-in plumbing, not implicit loop behavior:
+//! own — they are opt-in plumbing, not implicit loop behavior. (A
+//! [`run_queue::RunQueue`] *is* drained by the loop once attached via
+//! [`context::RunContext::with_run_queue`]; see that module's docs.)
 //!
-//! - [`run_queue::RunQueue`] is a generic multi-lane FIFO for messages
-//!   arriving during a run; a host polls it and feeds what it dequeues into
-//!   [`steering`] or a follow-up `invoke`.
 //! - [`handoff`] is a progressive-disclosure cache for oversized tool
 //!   results; a host calls [`handoff::apply_handoff`] itself before
 //!   appending a tool result to history, and registers an extraction tool

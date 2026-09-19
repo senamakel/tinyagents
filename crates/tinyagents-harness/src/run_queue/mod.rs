@@ -5,16 +5,32 @@
 //! three lanes an agent runtime can consume at safe iteration boundaries:
 //! immediate steering, deferred follow-up work, and collected context.
 //!
-//! # Not on the agent loop path (M-10)
+//! # On the agent loop path (A4)
 //!
-//! [`RunQueue`] is exported for hosts to use, but the built-in
-//! [`crate::agent_loop`] does not drain it at any checkpoint today — a host
-//! that wants queued input to actually reach a running agent must poll
-//! `RunQueue` itself (typically between turns) and feed what it dequeues into
-//! [`crate::steering::SteeringHandle::send`] or the next `invoke` call. Wiring
-//! `RunQueue` directly into the loop (a `QueueMode` the loop drains after tool
-//! results and before returning) is tracked as future work in the runtime
-//! comparison plan's Phase 2.
+//! Attach a [`RunQueueHandle`] (an `Arc<RunQueue<Message>>`) to a run with
+//! [`crate::context::RunContext::with_run_queue`] and the built-in
+//! [`crate::agent_loop`] drains it at its safe turn boundaries, taking
+//! [`QueueMode::All`] or [`QueueMode::OneAtATime`] items per boundary as
+//! [`crate::runtime::RunPolicy::queue_mode`] says:
+//!
+//! - [`QueueLane::Steer`] — appended to the transcript right after a tool
+//!   batch's results (never mid-batch), and at a natural finish before any
+//!   follow-up. A steer that arrives after the model's final answer still
+//!   gets one more turn.
+//! - [`QueueLane::Followup`] — appended only when the model has finished and
+//!   no steer is pending; the loop runs another turn instead of returning.
+//! - [`QueueLane::Collect`] — never enters the transcript; drained once at
+//!   run end onto [`crate::middleware::AgentRun::collected`].
+//!
+//! A middleware stop, limit stop, pause, or deferral is terminal: whatever is
+//! still queued stays queued for the host. Every application emits
+//! [`crate::events::AgentEvent::QueuedMessageApplied`]. The existing
+//! [`crate::steering::SteeringHandle`] control channel (pause/resume/cancel/
+//! inject) is unchanged and independent — `RunQueue` is content injection,
+//! not run control.
+//!
+//! `RunQueue<T>` itself stays generic: hosts may keep using it with any `T`
+//! for their own bookkeeping; only a `RunQueue<Message>` is loop-consumable.
 
 mod types;
 
