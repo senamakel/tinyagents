@@ -641,6 +641,10 @@ fn langfuse_usage(usage: Usage) -> Value {
     })
 }
 
+/// Drops every `null`-valued key from a top-level JSON object, in place at
+/// one level (not recursive). Used before every ingestion body so Langfuse
+/// never sees an explicit `null` for a field this exporter chose not to
+/// populate, distinct from one it deliberately set to null.
 pub fn clean_nulls(mut value: Value) -> Value {
     if let Value::Object(map) = &mut value {
         map.retain(|_, v| !v.is_null());
