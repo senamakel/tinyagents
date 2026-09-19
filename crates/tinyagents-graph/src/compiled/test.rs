@@ -3945,3 +3945,113 @@ async fn concurrent_run_with_thread_calls_on_one_thread_serialize() {
     let run_ids: std::collections::HashSet<_> = listed.iter().map(|m| m.run_id.clone()).collect();
     assert_eq!(run_ids.len(), 2, "the two runs must not share a run id");
 }
+
+// ---- R5: typed task identity ---------------------------------------------
+
+#[tokio::test]
+async fn node_context_task_id_is_stable_across_retry_attempts() {
+    // `run_node_with_retry` re-clones the *context* for each attempt rather
+    // than rebuilding it, so `NodeContext::task_id()` — built once per
+    // activation before the retry loop starts — must read the same value on
+    // every attempt of one activation.
+    let seen_ids = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen_for_node = seen_ids.clone();
+    let attempts_for_node = attempts.clone();
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("flaky", move |s, c: NodeContext| {
+            let seen_ids = seen_for_node.clone();
+            let attempts = attempts_for_node.clone();
+            async move {
+                seen_ids
+                    .lock()
+                    .unwrap()
+                    .push(c.task_id().as_str().to_string());
+                let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                if n < 2 {
+                    Err(TinyAgentsError::Model(format!("transient blip {n}")))
+                } else {
+                    Ok(NodeResult::Update(s + 1))
+                }
+            }
+        })
+        .set_entry("flaky")
+        .set_finish("flaky")
+        .compile()
+        .unwrap()
+        .with_node_retry(RetryPolicy::default().with_max_attempts(4));
+
+    let run = graph.run(0).await.unwrap();
+    assert_eq!(run.state, 1);
+
+    let recorded = seen_ids.lock().unwrap();
+    assert_eq!(recorded.len(), 3, "one attempt-observation per try");
+    assert!(
+        !recorded[0].is_empty(),
+        "a real task id was assigned before the retry loop started"
+    );
+    assert!(
+        recorded.iter().all(|id| id == &recorded[0]),
+        "every retry attempt of the same activation sees the same task id: {recorded:?}"
+    );
+}
+
+#[tokio::test]
+async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
+    // `task_id` was added to `PendingActivation`/`Interrupt` as typed fields
+    // (R5). A checkpoint written before either field existed carries neither
+    // key at all (not even as an empty string) — `#[serde(default)]` must
+    // still decode it, and resume must still work, falling back to
+    // node-id-keyed resume exactly as it did before R5.
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("gate", |s: i32, c: NodeContext| async move {
+            match c.resume {
+                Some(_) => Ok(NodeResult::Update(s + 1)),
+                None => Ok(NodeResult::Interrupt(Interrupt::new("gate", json!({})))),
+            }
+        })
+        .set_entry("gate")
+        .set_finish("gate")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let paused = graph.run_with_thread("t-legacy-task-id", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+
+    // Round-trip the checkpoint through JSON, stripping every `task_id` key
+    // to simulate a pre-R5 record.
+    let mut raw =
+        serde_json::to_value(cp.get("t-legacy-task-id", None).await.unwrap().unwrap()).unwrap();
+    if let Some(activations) = raw
+        .get_mut("pending_activations")
+        .and_then(|v| v.as_array_mut())
+    {
+        for activation in activations {
+            activation.as_object_mut().unwrap().remove("task_id");
+        }
+    }
+    if let Some(interrupts) = raw.get_mut("interrupts").and_then(|v| v.as_array_mut()) {
+        for interrupt in interrupts {
+            interrupt.as_object_mut().unwrap().remove("task_id");
+        }
+    }
+    let legacy: Checkpoint<i32> = serde_json::from_value(raw)
+        .expect("a pre-R5 checkpoint with no task_id keys at all must still decode");
+    assert!(
+        legacy.pending_activations.as_ref().unwrap()[0]
+            .task_id
+            .as_str()
+            .is_empty()
+    );
+    assert!(legacy.interrupts[0].task_id.is_none());
+    cp.put(legacy).await.unwrap();
+
+    let done = graph
+        .resume("t-legacy-task-id", Command::resume(json!("go")))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+    assert_eq!(done.state, 1);
+}
