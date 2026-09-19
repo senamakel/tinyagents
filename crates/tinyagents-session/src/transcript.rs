@@ -97,7 +97,6 @@
 //! | File            | Role                                                        |
 //! |-----------------|-------------------------------------------------------------|
 //! | `types`         | Public domain types (`TranscriptMeta`, projections, usage). |
-//! | `metadata`      | `extra_metadata` side-channel keys (turn usage, failures).  |
 //! | `jsonl`         | Line shapes and line ⇄ message conversions.                  |
 //! | `writer`        | Full rewrite, append-only turn delta, interrupted partials.  |
 //! | `reader`        | Model-context replay, display projection, meta-only scans.   |
@@ -110,7 +109,6 @@ mod history;
 mod jsonl;
 mod legacy_md;
 mod markdown;
-mod metadata;
 mod paths;
 mod reader;
 mod thread_lookup;
@@ -122,10 +120,6 @@ pub use history::{
     TranscriptRead, TranscriptTurn,
 };
 pub use legacy_md::read_transcript_legacy_md;
-pub use metadata::attach_tool_failure_metadata;
-#[cfg(test)]
-pub(crate) use metadata::attach_turn_usage_metadata;
-pub use metadata::{mark_replayed_if_unmarked, turn_usage_extra_metadata};
 pub use paths::{find_latest_transcript, resolve_keyed_transcript_path};
 pub use reader::{read_transcript, read_transcript_display};
 pub use thread_lookup::{
@@ -134,7 +128,8 @@ pub use thread_lookup::{
 };
 pub use types::{
     CompactionMarker, DisplayMessage, DisplayRecord, DisplaySessionTranscript, MessageUsage,
-    SessionTranscript, TranscriptMessage, TranscriptMeta, TranscriptToolCall, TurnUsage,
+    SessionTranscript, ToolFailure, TranscriptMessage, TranscriptMeta, TranscriptToolCall,
+    TurnUsage,
 };
 pub use writer::{append_interrupted_partial, append_transcript_turn, write_transcript};
 

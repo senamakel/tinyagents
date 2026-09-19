@@ -2,15 +2,10 @@
 //! conversions between them and the public [`TranscriptMessage`] /
 //! [`TranscriptMeta`] / [`DisplayMessage`] types.
 
-use super::metadata::turn_usage_from_metadata;
-use super::metadata::{
-    attach_replayed_metadata, attach_tool_failure_metadata, attach_turn_usage_metadata,
-    take_replayed_request_id, take_tool_failure,
-};
 use super::types::{
     DisplayMessage, MessageUsage, TRANSCRIPT_SCHEMA_VERSION, TranscriptMeta, TurnUsage,
 };
-use super::types::{TranscriptMessage, TranscriptToolCall};
+use super::types::{ToolFailure, TranscriptMessage, TranscriptToolCall};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -73,6 +68,8 @@ pub(super) struct MessageLine {
     pub(super) content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) extra_metadata: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) cache_breakpoints: Vec<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,20 +176,21 @@ pub(super) fn build_message_line(
     } else {
         None
     };
-    // Lift any tool-failure marker off a cloned `extra_metadata` onto the
-    // additive top-level `failure` / `failure_detail` line fields, stripping it
-    // so it is not persisted twice.
-    let mut extra_metadata = msg.extra_metadata.clone();
-    let (failure, failure_detail) = match take_tool_failure(&mut extra_metadata) {
-        Some((failed, detail)) => (failed, detail),
-        None => (false, None),
-    };
-    // A row replayed from an earlier turn keeps the request it was first
-    // written under; only this turn's own rows take `request_id` (#6282).
-    let request_id = match take_replayed_request_id(&mut extra_metadata) {
-        Some(original) => original,
-        None => request_id.map(str::to_string),
-    };
+    let extra_metadata = msg.extra_metadata.clone();
+    let failure = msg
+        .tool_failure
+        .as_ref()
+        .is_some_and(|failure| failure.failed);
+    let failure_detail = msg
+        .tool_failure
+        .as_ref()
+        .and_then(|failure| failure.detail.clone());
+    // A row read from a transcript owns its recorded correlation id; only a
+    // newly-created row takes the opaque id supplied for this append.
+    let request_id = msg
+        .request_id
+        .clone()
+        .or_else(|| request_id.map(str::to_string));
     let message_reasoning = (msg.role == "assistant")
         .then(|| {
             extra_metadata
@@ -220,6 +218,7 @@ pub(super) fn build_message_line(
         role: msg.role.clone(),
         content: msg.content.clone(),
         extra_metadata,
+        cache_breakpoints: msg.cache_breakpoints.clone(),
         provider: assistant_usage.map(|tu| tu.provider.clone()),
         model: assistant_usage.map(|tu| tu.model.clone()),
         usage: assistant_usage.map(|tu| tu.usage.clone()),
@@ -259,9 +258,9 @@ pub(super) fn serialise_message_lines(
         let turn_usage = if Some(i) == last_assistant_idx {
             last_assistant_turn_usage
                 .cloned()
-                .or_else(|| turn_usage_from_metadata(msg))
+                .or_else(|| msg.turn_usage.clone())
         } else {
-            turn_usage_from_metadata(msg)
+            msg.turn_usage.clone()
         };
         let line = build_message_line(msg, turn_usage.as_ref(), request_id, false);
         let line_json =
@@ -321,29 +320,20 @@ fn turn_usage_from_line(ml: &MessageLine) -> Option<TurnUsage> {
 pub(super) fn message_from_line(ml: MessageLine) -> TranscriptMessage {
     let turn_usage = turn_usage_from_line(&ml);
     let failure_detail = ml.failure.then(|| ml.failure_detail.clone());
-    let request_id = ml.request_id.clone();
-    let mut message = TranscriptMessage {
+    TranscriptMessage {
         id: ml.id,
         role: ml.role,
         content: ml.content,
         extra_metadata: ml.extra_metadata,
-        cache_breakpoints: Vec::new(),
-    };
-    if let Some(turn_usage) = turn_usage.as_ref() {
-        attach_turn_usage_metadata(&mut message, turn_usage);
+        cache_breakpoints: ml.cache_breakpoints,
+        turn_usage: turn_usage.clone(),
+        request_id: ml.request_id,
+        interrupted: ml.interrupted,
+        tool_failure: failure_detail.map(|detail| ToolFailure {
+            failed: true,
+            detail,
+        }),
     }
-    // Carry what the line recorded about the turn that wrote it back onto the
-    // message, so re-persisting it (a resume into a fresh transcript) writes the
-    // same `failure` flag and `request_id` instead of losing the flag and
-    // restamping the row with the resuming request (#6282). A line with neither
-    // reads back exactly as it was written.
-    if let Some(detail) = failure_detail {
-        attach_tool_failure_metadata(&mut message, detail.as_deref());
-    }
-    if let Some(request_id) = request_id.as_deref() {
-        attach_replayed_metadata(&mut message, Some(request_id));
-    }
-    message
 }
 
 /// Classification of one non-empty JSONL line.
@@ -386,7 +376,7 @@ pub(super) fn display_message_from_line(ml: MessageLine) -> DisplayMessage {
         request_id: ml.request_id.clone(),
         iteration: ml.iteration,
         ts: ml.ts.clone(),
-        turn_usage,
+        turn_usage: turn_usage.clone(),
         reasoning_content,
         failure: ml.failure,
         failure_detail: ml.failure_detail.clone(),
@@ -395,7 +385,14 @@ pub(super) fn display_message_from_line(ml: MessageLine) -> DisplayMessage {
             role: ml.role,
             content: ml.content,
             extra_metadata: ml.extra_metadata,
-            cache_breakpoints: Vec::new(),
+            cache_breakpoints: ml.cache_breakpoints,
+            turn_usage,
+            request_id: ml.request_id,
+            interrupted: ml.interrupted,
+            tool_failure: ml.failure.then(|| ToolFailure {
+                failed: true,
+                detail: ml.failure_detail.clone(),
+            }),
         },
     }
 }

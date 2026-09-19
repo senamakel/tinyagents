@@ -118,6 +118,10 @@ fn parse_legacy_messages(raw: &str) -> Result<Vec<TranscriptMessage>> {
                 content: content.replace(LEGACY_MSG_CLOSE_ESCAPED, LEGACY_MSG_CLOSE),
                 extra_metadata: None,
                 cache_breakpoints: Vec::new(),
+                turn_usage: None,
+                request_id: None,
+                interrupted: false,
+                tool_failure: None,
             });
             search_from = content_start + content_end_rel + LEGACY_MSG_CLOSE.len();
             continue;
@@ -130,6 +134,10 @@ fn parse_legacy_messages(raw: &str) -> Result<Vec<TranscriptMessage>> {
             content: content.replace(LEGACY_MSG_CLOSE_ESCAPED, LEGACY_MSG_CLOSE),
             extra_metadata: None,
             cache_breakpoints: Vec::new(),
+            turn_usage: None,
+            request_id: None,
+            interrupted: false,
+            tool_failure: None,
         });
 
         search_from = content_start + content_end_rel + close_tag.len();

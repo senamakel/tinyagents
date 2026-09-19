@@ -32,6 +32,23 @@ pub struct TranscriptMessage {
     pub extra_metadata: Option<serde_json::Value>,
     #[serde(default)]
     pub cache_breakpoints: Vec<usize>,
+    /// Usage and provider provenance already associated with this durable row.
+    /// The JSONL codec writes this as first-class line fields; keeping it on
+    /// the neutral record makes read → append replay lossless without using a
+    /// host metadata namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_usage: Option<TurnUsage>,
+    /// Stable request/turn correlation recorded with this row, if the host has
+    /// one. This is deliberately opaque to the session crate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Whether this row is display-only because a streamed answer stopped
+    /// before completion.
+    #[serde(default)]
+    pub interrupted: bool,
+    /// Tool-execution failure display data associated with this row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_failure: Option<ToolFailure>,
 }
 
 impl TranscriptMessage {
@@ -42,6 +59,10 @@ impl TranscriptMessage {
             content: content.into(),
             extra_metadata: None,
             cache_breakpoints: Vec::new(),
+            turn_usage: None,
+            request_id: None,
+            interrupted: false,
+            tool_failure: None,
         }
     }
 
@@ -50,8 +71,17 @@ impl TranscriptMessage {
     }
 }
 
+/// Provider-neutral failure status for a durable tool-result row.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolFailure {
+    #[serde(default)]
+    pub failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 /// Per-message usage figures attributed to the last assistant turn.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageUsage {
     pub input: u64,
     pub output: u64,
@@ -63,7 +93,7 @@ pub struct MessageUsage {
 
 /// Usage + provenance for one provider response, attached to the last
 /// assistant message in a turn.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TurnUsage {
     #[serde(default)]
     pub provider: String,

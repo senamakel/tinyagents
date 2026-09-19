@@ -53,7 +53,7 @@ fn jsonl_round_trip_keeps_raw_tool_arguments_and_provider_extension() {
     write_transcript(&path, &messages, &meta(), Some(&usage)).unwrap();
     let loaded = read_transcript(&path).unwrap();
     assert_eq!(loaded.messages[0], messages[0]);
-    let restored_usage = super::metadata::turn_usage_from_metadata(&loaded.messages[1]).unwrap();
+    let restored_usage = loaded.messages[1].turn_usage.as_ref().unwrap();
     assert_eq!(restored_usage.tool_calls[0].arguments, "{not-json}");
     assert_eq!(
         restored_usage.tool_calls[0].extra_content,
@@ -171,6 +171,10 @@ fn file_history_never_converts_or_drops_durable_fields() {
             "provider_extension": {"opaque": [1, 2]}
         })),
         cache_breakpoints: vec![4],
+        turn_usage: None,
+        request_id: None,
+        interrupted: false,
+        tool_failure: None,
     };
     TranscriptHistory::append(&history, assistant.clone()).unwrap();
     let replayed = TranscriptHistory::messages(&history).unwrap();
@@ -179,6 +183,7 @@ fn file_history_never_converts_or_drops_durable_fields() {
     assert_eq!(replayed[0].role, assistant.role);
     assert_eq!(replayed[0].content, assistant.content);
     assert_eq!(replayed[0].extra_metadata, assistant.extra_metadata);
+    assert_eq!(replayed[0].cache_breakpoints, vec![4]);
     TranscriptHistory::replace(&history, &[assistant.clone()]).unwrap();
     TranscriptHistory::clear(&history).unwrap();
     assert!(TranscriptHistory::messages(&history).unwrap().is_empty());
@@ -192,6 +197,7 @@ fn file_history_never_converts_or_drops_durable_fields() {
     let raw = std::fs::read_to_string(history.path()).unwrap();
     assert!(raw.contains("trusted_verbatim"));
     assert!(raw.contains("artifact-1"));
+    assert!(raw.contains("\"cache_breakpoints\":[4]"));
 }
 
 #[test]

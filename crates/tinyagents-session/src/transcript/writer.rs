@@ -7,7 +7,6 @@ use super::jsonl::{
     serialise_message_lines,
 };
 use super::markdown::render_markdown;
-use super::metadata::turn_usage_from_metadata;
 use super::paths::md_companion_path;
 use super::types::TranscriptMessage;
 use super::types::{TranscriptMeta, TurnUsage};
@@ -137,11 +136,9 @@ pub fn append_transcript_turn(
             .enumerate()
             .map(|(i, msg)| {
                 let tu = if Some(i) == last_assistant_idx {
-                    turn_usage
-                        .cloned()
-                        .or_else(|| turn_usage_from_metadata(msg))
+                    turn_usage.cloned().or_else(|| msg.turn_usage.clone())
                 } else {
-                    turn_usage_from_metadata(msg)
+                    msg.turn_usage.clone()
                 };
                 build_message_line(msg, tu.as_ref(), request_id, false)
             })
@@ -254,9 +251,9 @@ fn render_md_companion(
         let usage = if Some(idx) == last_assistant_idx {
             last_assistant_turn_usage
                 .cloned()
-                .or_else(|| turn_usage_from_metadata(msg))
+                .or_else(|| msg.turn_usage.clone())
         } else {
-            turn_usage_from_metadata(msg)
+            msg.turn_usage.clone()
         };
         if let Some(usage) = usage {
             owned_usage.push((idx, usage));
