@@ -1418,9 +1418,10 @@ async fn hosted_turn_blocks_provider_extension_user_blocks_before_model_submissi
         )
         .await
         .expect_err("blocked extensions must not reach the provider");
+    assert_eq!(error.kind, crate::runtime::HostedErrorKind::Policy);
     assert_eq!(
         error.to_string(),
-        "model error: hosted agent invocation failed"
+        "hosted agent invocation was rejected by policy"
     );
     assert!(!error.to_string().contains("secret"));
     assert!(model.requests().is_empty());
