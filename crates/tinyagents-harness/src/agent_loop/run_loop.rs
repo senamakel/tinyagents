@@ -37,6 +37,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .run_loop_body(state, ctx, run, status, &mut messages, streaming)
             .await;
         run.messages = std::mem::take(&mut messages);
+        // A4: the `Collect` lane is delivered on the run, never on the
+        // transcript, and on every exit path — a host that pushed
+        // observations during a run that then failed still gets them back.
+        if let Some(queue) = ctx.run_queue.clone() {
+            run.collected
+                .extend(queue.drain(crate::run_queue::QueueLane::Collect).await);
+        }
 
         let exit = match outcome {
             Ok(exit) => exit,
@@ -973,6 +980,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         ));
                     }
                     run.final_response = Some(response);
+                    if self.continue_from_queue_at_finish(ctx, status, messages).await {
+                        continue;
+                    }
                     return Ok(LoopExit::Finished);
                 }
 
@@ -1019,6 +1029,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         return Ok(exit);
                     }
                     run.final_response = Some(response);
+                    if self.continue_from_queue_at_finish(ctx, status, messages).await {
+                        continue;
+                    }
                     return Ok(LoopExit::Finished);
                 }
 
@@ -1052,6 +1065,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 {
                     return Ok(exit);
                 }
+
+                // Turn boundary (A4): same steer drain as the plain tool path.
+                self.apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Steer)
+                    .await;
 
                 // Safe checkpoint: a control requested from `after_tool` /
                 // `wrap_tool` is honored here, at the edge it was raised on.
@@ -1200,6 +1217,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     return Err(TinyAgentsError::EmptyResponse);
                 }
                 run.final_response = Some(response);
+                // Natural finish (A4): queued steering or a follow-up turns
+                // "done" into "one more turn" instead of returning.
+                if self.continue_from_queue_at_finish(ctx, status, messages).await {
+                    continue;
+                }
                 return Ok(LoopExit::Finished);
             }
 
@@ -1232,6 +1254,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 return Ok(exit);
             }
 
+            // Turn boundary (A4): every tool result of this batch is on the
+            // transcript, so queued steering can be applied now — never
+            // mid-batch — before the next model call sees it.
+            self.apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Steer)
+                .await;
+
             // Turn boundary: give every middleware a chance to end the run
             // based on the whole turn's tool results rather than any single
             // call (see `Middleware::should_stop_after_turn`). A `Middleware`
@@ -1251,6 +1279,62 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ControlEffect::Exit(exit) => return Ok(exit),
             }
         }
+    }
+
+    /// Takes the pending items of `lane` from the run's queue (per
+    /// [`RunPolicy::queue_mode`][crate::runtime::RunPolicy::queue_mode]),
+    /// appends them to the working transcript, and emits
+    /// [`AgentEvent::QueuedMessageApplied`] (A4). Returns whether anything
+    /// was applied. A run without a queue never applies anything.
+    async fn apply_queued_lane(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        messages: &mut Vec<Message>,
+        lane: crate::run_queue::QueueLane,
+    ) -> bool {
+        let Some(queue) = ctx.run_queue.clone() else {
+            return false;
+        };
+        let items = queue.take(lane, self.policy.queue_mode).await;
+        if items.is_empty() {
+            return false;
+        }
+        let count = items.len();
+        messages.extend(items);
+        let record = ctx.emit(AgentEvent::QueuedMessageApplied { lane, count });
+        status.set_last_event(record.id);
+        tracing::debug!(
+            target: "tinyagents::agent_loop",
+            run_id = %ctx.run_id(),
+            lane = lane.as_str(),
+            count,
+            "[agent_loop] applied queued messages to the transcript"
+        );
+        true
+    }
+
+    /// The natural-finish queue boundary (A4): the model produced a final
+    /// answer, so pending `Steer` items (first) or, when there are none,
+    /// `Followup` items are appended and the loop runs another turn instead
+    /// of returning. Returns whether the loop should continue. Only reached
+    /// from the paths where the *model* finished — a middleware stop, a
+    /// limit stop, a pause, or a deferral is terminal and leaves the queue
+    /// untouched for the host.
+    async fn continue_from_queue_at_finish(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        messages: &mut Vec<Message>,
+    ) -> bool {
+        if ctx.run_queue.is_none() {
+            return false;
+        }
+        self.apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Steer)
+            .await
+            || self
+                .apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Followup)
+                .await
     }
 
     /// Settles the calls a batch deferred (A2).
