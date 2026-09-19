@@ -869,19 +869,25 @@ where
 
     /// A lifecycle hand-off or lease takeover has fenced this driver. It must
     /// not manufacture a terminal graph event for the replacement owner.
-    fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
-        self.store
-            .load(run_id)
+    async fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
+        let run_id = run_id.to_owned();
+        let owner = owner.to_owned();
+        self.store_op(move |store| store.load(&run_id))
+            .await
             .ok()
             .flatten()
-            .is_some_and(|current| current.lease_owner.as_deref() != Some(owner))
+            .is_some_and(|current| current.lease_owner.as_deref() != Some(owner.as_str()))
     }
 
     /// Returns true after emitting the terminal event already committed by a
     /// newer lifecycle owner. This is the stale-driver escape hatch: it never
     /// writes, so a stop/resume hand-off cannot be overwritten by its loser.
-    fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
-        let Ok(Some(current)) = self.store.load(run_id) else {
+    async fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
+        let owned_run_id = run_id.to_owned();
+        let Ok(Some(current)) = self
+            .store_op(move |store| Ok(store.load(&owned_run_id)?))
+            .await
+        else {
             return false;
         };
         if !current.status.is_terminal() {
