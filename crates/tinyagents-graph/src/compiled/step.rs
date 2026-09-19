@@ -448,7 +448,7 @@ where
         };
         let mut completed: Vec<(usize, Activation)> = Vec::new();
         let mut stalled: Vec<(usize, Activation)> = Vec::new();
-        let mut interrupt: Option<(usize, Interrupt)> = None;
+        let mut interrupted: Vec<(usize, Interrupt)> = Vec::new();
         let mut failure: Option<StepFailure> = None;
 
         for (index, (activation, result)) in outcome.results.into_iter().enumerate() {
