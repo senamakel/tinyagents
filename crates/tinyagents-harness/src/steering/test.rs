@@ -17,7 +17,7 @@ use crate::events::AgentEvent;
 use crate::runtime::AgentHarness;
 use crate::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringOutcome, SteeringPolicy,
-    apply_pending_steering,
+    SteeringTarget, apply_pending_steering,
 };
 use crate::testkit::{EventRecorder, Trajectory};
 use tinyinference_llm::message::Message;
