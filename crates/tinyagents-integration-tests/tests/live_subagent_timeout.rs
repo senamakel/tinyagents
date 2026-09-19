@@ -24,11 +24,7 @@ async fn live_openai_subagent_times_out_on_tiny_budget() {
     use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
     use tinyinference_llm::providers::openai::OpenAiModel;
 
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!(
-            "skipping live_openai_subagent_times_out_on_tiny_budget: OPENAI_API_KEY is not set"
-        );
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 
