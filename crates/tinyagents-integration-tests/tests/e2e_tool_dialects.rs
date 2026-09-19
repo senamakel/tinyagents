@@ -380,6 +380,80 @@ impl Middleware<(), ()> for DeltaRecorder {
     }
 }
 
+/// Middleware that redacts every occurrence of `"too"` from a visible delta,
+/// standing in for any redaction/policy/transformation middleware a host
+/// might install on [`Middleware::on_model_delta`].
+struct RedactMiddleware;
+
+#[async_trait]
+impl Middleware<(), ()> for RedactMiddleware {
+    fn name(&self) -> &str {
+        "redact"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut ModelDelta,
+    ) -> tinyagents_harness::Result<()> {
+        delta.content = delta.content.replace("too", "REDACTED");
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_flushed_stream_tail_that_was_only_a_marker_false_alarm_still_hits_delta_middleware() {
+    // A fragment such as `<too` looks like it could be opening a tool-call
+    // marker, so the scrubber holds it back rather than forwarding it live.
+    // The stream ends without ever completing a marker, so the held-back
+    // remainder turns out to have been ordinary text all along and is
+    // released from `StreamScrubber::flush` at `Completed`. That release
+    // must go through the same `on_model_delta` middleware pipeline as every
+    // other delta — a redaction/policy/transformation middleware installed
+    // by the host has to see it too, or this one piece of visible text
+    // silently bypasses every such middleware while everything around it
+    // does not.
+    let chunks = ["Hi there ", "<too"];
+    let full: String = chunks.concat();
+    let mut items = vec![ModelStreamItem::Started];
+    items.extend(
+        chunks
+            .iter()
+            .map(|chunk| ModelStreamItem::MessageDelta(MessageDelta::text(*chunk))),
+    );
+    items.push(ModelStreamItem::Completed(ModelResponse::assistant(full)));
+    let model = Arc::new(StreamingMock::new(items));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model, &listener);
+    harness
+        .push_middleware(Arc::new(DeltaRecorder { seen: seen.clone() }))
+        .push_middleware(Arc::new(RedactMiddleware))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let _ = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await;
+
+    let deltas = seen.lock().unwrap().clone();
+    let joined = deltas.concat();
+    assert!(
+        joined.contains("REDACTED"),
+        "the flushed tail never reached on_model_delta: {deltas:?}"
+    );
+    assert!(
+        !joined.contains("too"),
+        "the flushed tail bypassed redaction: {deltas:?}"
+    );
+}
+
 #[tokio::test]
 async fn streamed_tool_call_markup_never_reaches_consumers() {
     let chunks = [
