@@ -692,13 +692,25 @@ where
             Ok(handle) => {
                 let checkpointer = Arc::clone(checkpointer);
                 let sink = self.event_sink.clone();
+                // Build the envelope (and so claim its `seq` value) on the
+                // calling thread, before spawning: the background task's
+                // completion order relative to other work is not
+                // deterministic, but the sequence number it carries still
+                // reflects when this write was *requested*.
+                let envelope = sink.as_ref().map(|_| {
+                    self.envelope(
+                        &ctx.run_id,
+                        GraphEvent::CheckpointSaved {
+                            checkpoint_id: id.clone(),
+                            step: Some(step),
+                        },
+                    )
+                });
                 ctx.async_writes.spawn_ordered(&handle, async move {
                     let id = checkpointer.put(checkpoint).await?;
                     checkpointer.put_writes(&write_config, &writes).await?;
-                    if let Some(sink) = sink {
-                        sink.emit(GraphEvent::CheckpointSaved {
-                            checkpoint_id: id.clone(),
-                        });
+                    if let (Some(sink), Some(envelope)) = (sink, envelope) {
+                        sink.emit(envelope);
                     }
                     Ok(id)
                 });
@@ -707,9 +719,13 @@ where
             Err(_) => {
                 let id = checkpointer.put(checkpoint).await?;
                 checkpointer.put_writes(&write_config, &writes).await?;
-                self.emit(GraphEvent::CheckpointSaved {
-                    checkpoint_id: id.clone(),
-                });
+                self.emit(
+                    &ctx.run_id,
+                    GraphEvent::CheckpointSaved {
+                        checkpoint_id: id.clone(),
+                        step: Some(step),
+                    },
+                );
                 Ok(Some(id))
             }
         }
