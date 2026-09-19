@@ -173,7 +173,7 @@ where
     S: Clone + Send + Sync + 'static,
     U: Send + 'static,
 {
-    let Some(checkpointer) = child.checkpointer() else {
+    let Some(checkpointer) = child.checkpointer.as_ref() else {
         return Ok(None);
     };
     let Some(checkpoint) = checkpointer
