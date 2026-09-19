@@ -359,6 +359,108 @@ where
         })
     }
 
+    /// The cancellation boundary (I4 part 2): the run's cooperative
+    /// cancellation token was observed cancelled, either between supersteps
+    /// or while this step's node handlers were still in flight and had to be
+    /// abandoned (raced against the token via
+    /// [`super::executor::CompiledGraph::run_step_with_cancel`]).
+    ///
+    /// Unlike the failure/interrupt boundaries, nothing from this step is
+    /// trusted to have completed — a mid-step cancellation abandons the
+    /// step's future rather than awaiting it to a folded result — so `active`
+    /// (exactly what the next superstep would have run) is persisted whole
+    /// as the resumable checkpoint's pending set, mirroring how the failure
+    /// boundary reuses the checkpoint machinery. Persists a resumable
+    /// checkpoint (on a checkpointed thread), records a `Cancelled` status,
+    /// and returns `Ok` (cancellation is a normal, requested outcome, not an
+    /// error) carrying no interrupts.
+    pub(super) async fn handle_cancel_boundary(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        active: &[Activation],
+        state: &State,
+    ) -> Result<GraphExecution<State>> {
+        ctx.disarm_drop_guard();
+        // Settle in-flight Async background writes before persisting the
+        // cancellation checkpoint, same as the failure boundary — best
+        // effort, since a lost background write here must not turn a
+        // successfully-requested cancellation into a hard error.
+        let _ = ctx.async_writes.drain().await;
+        let checkpoint_id = self
+            .persist_cancel_checkpoint(ctx, state, active)
+            .await
+            .unwrap_or(None);
+
+        let mut status = ctx.base_status();
+        status.status = ExecutionStatus::Cancelled;
+        status.current_step = ctx.steps;
+        status.active_nodes = activation_nodes(active);
+        status.checkpoint_id = checkpoint_id.clone();
+        status.ended_at = Some(SystemTime::now());
+        ctx.save_status(status.clone()).await;
+        ctx.emit(GraphEvent::RunCancelled {
+            run_id: ctx.run_id.clone(),
+        });
+
+        Ok(GraphExecution {
+            state: state.clone(),
+            run_id: ctx.run_id.clone(),
+            graph_id: self.graph_id.clone(),
+            root_run_id: ctx.root_run_id.clone(),
+            parent_run_id: ctx.parent_run_id.clone(),
+            child_runs: std::mem::take(&mut ctx.all_child_runs),
+            visited: std::mem::take(&mut ctx.visited),
+            steps: ctx.steps,
+            interrupts: Vec::new(),
+            status,
+            checkpoint_id,
+        })
+    }
+
+    /// Persists a resumable cancellation-boundary checkpoint, mirroring
+    /// [`Self::persist_failure_checkpoint`]: `next_nodes` schedules exactly
+    /// the activations that were still pending when the cancellation was
+    /// observed, so `resume`/`retry` re-runs exactly what did not complete.
+    /// A no-op returning `None` without a checkpointer/thread, exactly like
+    /// the failure boundary.
+    async fn persist_cancel_checkpoint(
+        &self,
+        ctx: &RunCtx<'_, State, Update>,
+        state: &State,
+        pending: &[Activation],
+    ) -> Result<Option<CheckpointId>> {
+        let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &ctx.thread_id) else {
+            return Ok(None);
+        };
+        let checkpoint = Checkpoint {
+            thread_id: thread.to_string(),
+            checkpoint_id: next_checkpoint_id(),
+            run_id: Some(ctx.run_id.to_string()),
+            parent_checkpoint_id: ctx.parent_checkpoint.clone(),
+            namespace: self.namespace.clone(),
+            state: state.clone(),
+            next_nodes: activation_nodes(pending),
+            completed_tasks: Vec::new(),
+            completed_routes: Vec::new(),
+            pending_writes: Vec::new(),
+            interrupts: Vec::new(),
+            pending_activations: Some(pending.iter().map(PendingActivation::from).collect()),
+            barrier_arrivals: barriers_to_persisted(&ctx.barrier_arrivals),
+            metadata: serde_json::json!({
+                "source": "loop",
+                "step": ctx.steps,
+                "recursion": ctx.recursion_meta,
+                "cancelled": true,
+                "node_visits": node_visits_to_json(&ctx.node_visits),
+            }),
+        };
+        let id = checkpointer.put(checkpoint).await?;
+        self.emit(GraphEvent::CheckpointSaved {
+            checkpoint_id: id.clone(),
+        });
+        Ok(Some(id))
+    }
+
     /// Emits a [`GraphEvent::RunFailed`] and records a terminal `Failed`
     /// status for a run that aborted with `err`.
     ///
