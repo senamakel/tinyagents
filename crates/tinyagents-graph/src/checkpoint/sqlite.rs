@@ -207,7 +207,9 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     source               TEXT    NOT NULL,
     step                 INTEGER NOT NULL,
     has_interrupts       INTEGER NOT NULL,
-    record               TEXT    NOT NULL
+    record               TEXT    NOT NULL,
+    format_version       INTEGER NOT NULL DEFAULT 1,
+    created_at           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_thread ON checkpoints (thread_id, seq);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_lookup ON checkpoints (thread_id, checkpoint_id);
