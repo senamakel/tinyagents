@@ -707,10 +707,16 @@ where
     }
 
     /// Best-effort status write; never aborts the run on a status-store
-    /// error.
+    /// error, but logs it (M4) so a dead status backend is at least visible
+    /// rather than silently discarded.
     pub(super) async fn save_status(&self, status: GraphRunStatus) {
         if let Some(store) = &self.status_store {
-            let _ = store.put_status(status).await;
+            let run_id = status.run_id.clone();
+            if let Err(err) = store.put_status(status).await {
+                tracing::warn!(
+                    "[graph:status] failed to persist run status for run `{run_id}`: {err}"
+                );
+            }
         }
     }
 }
