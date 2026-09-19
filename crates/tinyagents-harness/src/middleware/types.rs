@@ -137,6 +137,27 @@ pub struct AgentRun {
     /// **never** appended to the transcript or sent to the model. Empty when
     /// the run had no queue.
     pub collected: Vec<tinyinference_llm::message::Message>,
+    /// Host-only metadata tools attached to their results
+    /// (`tinytools::ToolResult::metadata`, B2), one entry per answered call
+    /// that carried any, in fold order. Kept beside [`Self::executed_tools`]
+    /// rather than inside it so the name list stays a plain `Vec<String>`.
+    /// The same value rides the call's
+    /// [`AgentEvent::ToolCompleted`][crate::events::AgentEvent::ToolCompleted];
+    /// neither copy is ever rendered into [`Self::messages`].
+    pub tool_metadata: Vec<ToolResultMetadata>,
+}
+
+/// Host-only metadata one tool call returned, as recorded on
+/// [`AgentRun::tool_metadata`] (B2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolResultMetadata {
+    /// The call that produced it — matches the transcript row and the
+    /// `ToolCompleted` event.
+    pub call_id: CallId,
+    /// The tool the call named (after any unknown-tool rewrite).
+    pub tool_name: String,
+    /// The metadata verbatim; never shown to the model.
+    pub metadata: serde_json::Value,
 }
 
 // ── Middleware trait ──────────────────────────────────────────────────────────
