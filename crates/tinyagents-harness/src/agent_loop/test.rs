@@ -2586,7 +2586,13 @@ async fn streaming_turn_keeps_a_signed_thinking_signature_ahead_of_a_tool_call()
         .run
         .messages
         .iter()
-        .flat_map(|message| message.content_blocks())
+        .filter_map(|message| match message {
+            tinyinference_llm::message::Message::Assistant(assistant) => {
+                Some(assistant.content.iter())
+            }
+            _ => None,
+        })
+        .flatten()
         .filter(|block| {
             matches!(
                 block,
