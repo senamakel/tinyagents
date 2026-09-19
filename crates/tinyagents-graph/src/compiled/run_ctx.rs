@@ -140,6 +140,7 @@ where
         initial_parent: Option<String>,
         binding: Option<crate::subagent_node::AgentInvocationBinding>,
         resume_seed: ResumeSeed,
+        cancellation: Option<tinyagents_harness::CancellationToken>,
     ) -> Result<Self> {
         let ResumeSeed {
             initial_steps,
