@@ -289,4 +289,14 @@ pub struct RunContext<Ctx = ()> {
     /// `None` outside that window, and always `None` for a caller that never
     /// goes through the agent loop.
     pub active_model_call: Option<CallId>,
+    /// Monotonic, per-context (not process-global) counter handed out by
+    /// [`RunContext::next_child_ordinal`], used to derive deterministic child
+    /// run ids (e.g. [`crate::subagent::SubAgent`]'s `{name}-d{depth}-{parent
+    /// run id}-{ordinal}`) instead of a process-global sequence (M-2). Starts
+    /// at `0` for every freshly constructed context — including a child
+    /// context, which gets its own fresh counter rather than inheriting the
+    /// parent's — so two processes that call the same parent context's child
+    /// spawner in the same order derive identical ordinals, and therefore
+    /// identical child run ids.
+    pub(crate) child_ordinal: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
