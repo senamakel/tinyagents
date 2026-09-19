@@ -284,9 +284,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if self.capabilities.is_empty() {
             self.capability_base_toolset = self.toolset.take();
         }
-        if let Some(middleware) = capability.middleware.clone().into_iter().next() {
-            let _ = middleware; // documented below; pushed in the loop
-        }
         for middleware in capability.middleware.clone() {
             self.push_middleware(middleware);
         }
