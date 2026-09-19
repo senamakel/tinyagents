@@ -56,9 +56,10 @@ fn harness_for(execution: LoopExecution, model: Arc<MockModel>) -> AgentHarness<
     if matches!(execution, LoopExecution::Graph) {
         harness.with_loop_driver(Arc::new(GraphLoopDriver::new()));
     }
-    let mut policy = RunPolicy::default();
-    policy.execution = execution;
-    harness.with_policy(policy);
+    harness.with_policy(RunPolicy {
+        execution,
+        ..RunPolicy::default()
+    });
     harness
 }
 
