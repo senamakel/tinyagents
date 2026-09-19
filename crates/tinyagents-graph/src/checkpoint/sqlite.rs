@@ -560,9 +560,10 @@ where
             };
             match record {
                 Some(json) => {
-                    Ok(Some(serde_json::from_str(&json).map_err(|e| {
-                        decode_json_err("sqlite checkpointer", "record", e)
-                    })?))
+                    let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                    checkpoint.normalize();
+                    Ok(Some(checkpoint))
                 }
                 None => Ok(None),
             }
@@ -611,9 +612,10 @@ where
             };
             match record {
                 Some(json) => {
-                    Ok(Some(serde_json::from_str(&json).map_err(|e| {
-                        decode_json_err("sqlite checkpointer", "record", e)
-                    })?))
+                    let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                    checkpoint.normalize();
+                    Ok(Some(checkpoint))
                 }
                 None => Ok(None),
             }
@@ -676,10 +678,10 @@ where
             let mut records: Vec<Checkpoint<State>> = Vec::new();
             for row in rows {
                 let json = row.map_err(|e| sqlite_err("read record row", e))?;
-                records.push(
-                    serde_json::from_str(&json)
-                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?,
-                );
+                let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                    .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                checkpoint.normalize();
+                records.push(checkpoint);
             }
             if records.is_empty() {
                 return Ok(Vec::new());
@@ -778,10 +780,10 @@ where
             let mut out = Vec::new();
             for row in rows {
                 let json = row.map_err(|e| sqlite_err("read record row", e))?;
-                out.push(
-                    serde_json::from_str(&json)
-                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?,
-                );
+                let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                    .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                checkpoint.normalize();
+                out.push(checkpoint);
             }
             Ok(out)
         })
