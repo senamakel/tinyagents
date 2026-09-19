@@ -23,7 +23,7 @@
 //!   [`TinyAgentsError`].
 //! - [`Resolver::resolve_blueprint`] resolves a compiled [`Blueprint`] that no
 //!   longer carries spans, returning the same [`TinyAgentsError`] variants and
-//!   messages as the legacy [`crate::compiler::CapabilityResolver`]
+//!   messages as the legacy [`CapabilityResolver`]
 //!   blueprint gate.
 //!
 //! [`resolve_source`] is the recommended façade: it parses, resolves against the
