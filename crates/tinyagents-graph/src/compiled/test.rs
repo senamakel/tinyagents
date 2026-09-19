@@ -1784,7 +1784,11 @@ async fn higher_index_completed_sibling_not_rerun_after_failure_then_retry() {
         .unwrap()
         .expect("a resumable failure-boundary checkpoint must be persisted");
     assert_eq!(
-        checkpoint.completed_tasks,
+        checkpoint
+            .completed
+            .iter()
+            .map(|c| c.node.clone())
+            .collect::<Vec<_>>(),
         vec![NodeId::from("hi")],
         "hi's completion must be recorded so retry does not re-run it"
     );
