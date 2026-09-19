@@ -65,6 +65,7 @@ pub mod artifacts;
 mod blocking;
 pub mod cache;
 pub mod cancel;
+pub mod capability;
 pub mod config;
 pub mod context;
 pub mod cost;
