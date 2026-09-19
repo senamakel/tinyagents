@@ -1236,11 +1236,19 @@ async fn human_approval_interrupts_without_callback() {
     stack.push(Arc::new(HumanApprovalMiddleware::new(["wire_transfer"])));
 
     let mut call = tool_call("wire_transfer");
-    let err = stack
+    // A1: the flagged call now requests `MiddlewareControl::Interrupt`
+    // through the control-outcome hook the stack actually drives
+    // (`before_tool_control`), rather than erroring `run_before_tool` out
+    // directly — the agent loop honors the queued control at its next safe
+    // checkpoint with the same `TinyAgentsError::Interrupted`.
+    stack
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
-        .expect_err("flagged tool requires approval");
-    assert!(matches!(err, TinyAgentsError::Interrupted { .. }));
+        .expect("the hook itself succeeds; the interrupt is queued as control");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::Interrupt { .. })
+    ));
 }
 
 #[tokio::test]
