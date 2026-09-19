@@ -19,16 +19,37 @@ use tinyinference_llm::model::ModelResponse;
 ///   from the raw response text.
 /// * [`ToolCall`] – an artificial tool was exposed to the model; the structured
 ///   value is read from the matching tool-call's `arguments` field.
+/// * [`Prompted`] – for a model with no native schema or tool-calling support:
+///   the schema is injected into the system prompt as instructions instead of
+///   a provider API field, and extraction falls back to the same repair
+///   ladder as [`ProviderSchema`]. Mirrors Pydantic AI's `PromptedOutput`.
+/// * [`ToolCallUnion`] – one synthetic tool per schema variant; extraction
+///   matches whichever variant's tool the model actually called and records
+///   which one (see [`StructuredOutput::variant`]).
 ///
 /// [`ProviderSchema`]: StructuredStrategy::ProviderSchema
 /// [`ToolCall`]: StructuredStrategy::ToolCall
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// [`Prompted`]: StructuredStrategy::Prompted
+/// [`ToolCallUnion`]: StructuredStrategy::ToolCallUnion
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StructuredStrategy {
     /// Parse the JSON from the model's text response (provider-native mode).
     ProviderSchema,
     /// Read the arguments of a matching tool call.
     ToolCall,
+    /// Provider-native/tool-calling structured output is unavailable: the
+    /// schema is described in the system prompt instead, and extraction
+    /// parses the response text through the same repair ladder as
+    /// [`Self::ProviderSchema`].
+    Prompted {
+        /// Custom instructions template injected ahead of the schema; `None`
+        /// uses [`super::default_prompted_template`].
+        template: Option<String>,
+    },
+    /// A union output type: the model may satisfy the request by calling any
+    /// one of several synthetic tools, one per schema variant.
+    ToolCallUnion,
 }
 
 // ---------------------------------------------------------------------------
