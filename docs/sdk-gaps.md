@@ -32,11 +32,8 @@ for the lifecycle controls OpenHuman currently implements around the SDK.
 OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows these
 features:
 
-- Rich tool metadata for safety, permissions, timeouts, retries, idempotency,
-  side effects, workspace access, and approval requirements.
-- A recoverable unknown-tool policy so invalid model tool calls do not always
-  abort the run.
-- First-class reasoning and tool-call argument streaming events.
+- First-class reasoning and tool-call argument streaming events (tool
+  metadata, unknown-tool recovery, and deferred approvals have since shipped).
 - Durable `TaskStore` and event/status stores with replay, lineage, cursors,
   redaction, and cancellation semantics.
 - Storage compatibility options for SQLite users that already depend on a
