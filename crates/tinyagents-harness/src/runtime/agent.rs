@@ -996,7 +996,7 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
             });
         }
     }
-    let output = run.text().unwrap_or_default();
+    let output = run.text.clone().unwrap_or_default();
     let mut summary = TurnSummary::new(prepared.thread_id.clone(), &prepared.binding.agent_id)
         .with_text(&prepared.input_text, &output)
         .with_usage(run.usage.usage);
