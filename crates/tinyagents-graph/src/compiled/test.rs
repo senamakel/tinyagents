@@ -3267,24 +3267,15 @@ async fn attributed_update_does_not_fire_an_unsatisfied_barrier() {
         .await
         .unwrap();
     let written = cp.get("t-barrier-update", None).await.unwrap().unwrap();
+    let written_next_nodes: Vec<NodeId> = written.tasks.iter().map(|t| t.node.clone()).collect();
     assert!(
-        !written.next_nodes.iter().any(|n| n.as_str() == "merge"),
+        !written_next_nodes.iter().any(|n| n.as_str() == "merge"),
         "an unsatisfied barrier must not be scheduled by an attributed write"
     );
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "c"),
+        written_next_nodes.iter().any(|n| n.as_str() == "c"),
         "the still-pending barrier predecessor must stay scheduled"
     );
-    // Resume prefers `pending_activations` over `next_nodes`, so the two must
-    // never disagree: a node named by only one of them would be silently
-    // dropped (or scheduled without its `Send` arg).
-    if let Some(pending) = &written.pending_activations {
-        assert_eq!(
-            pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
-            written.next_nodes,
-            "pending activations and next nodes must describe the same schedule"
-        );
-    }
 
     let done = graph.retry("t-barrier-update").await.unwrap();
     assert!(
