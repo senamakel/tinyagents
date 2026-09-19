@@ -202,6 +202,7 @@ impl GraphEvent {
             GraphEvent::NodeCompleted { .. } => "node.completed",
             GraphEvent::NodeFailed { .. } => "node.failed",
             GraphEvent::NodeRetryScheduled { .. } => "node.retry_scheduled",
+            GraphEvent::TaskCompleted { .. } => "task.completed",
             GraphEvent::StateUpdated { .. } => "state.updated",
             GraphEvent::RouteSelected { .. } => "route.selected",
             GraphEvent::CheckpointSaved { .. } => "checkpoint.saved",
