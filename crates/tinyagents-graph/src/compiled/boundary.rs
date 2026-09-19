@@ -118,6 +118,7 @@ where
                     }
                 }
                 let next = self.route_completed(
+                    &ctx.run_id,
                     &pairs,
                     &merged_goto_map,
                     state,
@@ -128,7 +129,13 @@ where
             }
             None => {
                 completed_tasks = sb.completed.iter().map(|(_, a)| a.clone()).collect();
-                self.route_completed(sb.completed, sb.goto_map, state, &mut ctx.barrier_arrivals)?
+                self.route_completed(
+                    &ctx.run_id,
+                    sb.completed,
+                    sb.goto_map,
+                    state,
+                    &mut ctx.barrier_arrivals,
+                )?
             }
         };
 
