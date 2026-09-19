@@ -321,8 +321,7 @@ where
                 BoundaryCheckpoint {
                     state: &state,
                     pending: &pending,
-                    completed_tasks: &completed_tasks,
-                    completed_routes: &completed_routes,
+                    completed,
                     child_runs: sb.child_runs_meta,
                 },
                 sb.step,
