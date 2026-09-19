@@ -242,8 +242,8 @@ impl ResponseCache for SqliteResponseCache {
         );
         match row {
             Ok((entries, bytes)) => CacheStats {
-                entries: entries.max(0) as u64,
-                bytes: bytes.max(0) as u64,
+                entries: u64::try_from(entries).unwrap_or(0),
+                bytes: u64::try_from(bytes).unwrap_or(0),
                 ..CacheStats::default()
             },
             Err(_) => CacheStats::default(),
