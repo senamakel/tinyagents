@@ -76,6 +76,26 @@ impl<State: Send + Sync> ModelRegistry<State> {
     }
 
     /// Resolves a model using override, previous state, hints, and defaults.
+    ///
+    /// Tries each source in strict precedence order and returns the first
+    /// candidate that is both registered and [`model_eligible`] (capability
+    /// match, and usable unless `selection.allow_retired`):
+    ///
+    /// 1. [`ModelSelection::requested`] — an explicit per-request override.
+    /// 2. [`ModelSelection::previous`], only when
+    ///    [`ModelSelection::reuse_previous`] is set — a durable prior
+    ///    selection the caller wants to keep using.
+    /// 3. [`ModelSelection::hints`], sorted by descending
+    ///    [`ModelHint::priority`][tinyinference_llm::model::ModelHint::priority]
+    ///    with ties broken by original order (stable) — runtime routing hints.
+    /// 4. [`ModelSelection::agent_default`] — the agent definition's own
+    ///    default.
+    /// 5. The registry-wide default ([`ModelRegistry::default_name`]).
+    ///
+    /// A source that names a model this registry does not have, or that fails
+    /// the eligibility check, is skipped rather than treated as a hard
+    /// failure — resolution keeps falling through to the next source.
+    /// Returns `None` only when every source is exhausted.
     pub fn resolve(&self, selection: ModelSelection) -> Option<ResolvedModelBinding<State>> {
         let required = selection.required_capabilities.as_ref();
         let allow_retired = selection.allow_retired;
@@ -102,6 +122,8 @@ impl<State: Send + Sync> ModelRegistry<State> {
                 ModelResolutionSource::StateReuse,
             ));
         }
+        // Higher priority first; equal priorities keep their original
+        // (caller-supplied) order rather than an arbitrary sort order.
         let mut hints: Vec<(usize, _)> = selection.hints.into_iter().enumerate().collect();
         hints.sort_by(|(left_index, left), (right_index, right)| {
             right
