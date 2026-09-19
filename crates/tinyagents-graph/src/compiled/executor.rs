@@ -61,15 +61,11 @@ where
     /// Without a thread id no checkpoints are persisted even if a checkpointer
     /// is configured, since checkpoints are keyed by thread.
     pub async fn run(&self, state: State) -> Result<GraphExecution<State>> {
-        self.execute(
+        self.execute(RunSeed::fresh(
             state,
             vec![Activation::node(self.entry.clone())],
             None,
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            None,
-        )
+        ))
         .await
     }
 
