@@ -74,6 +74,16 @@ pub fn require_live(keys: &[&str]) -> bool {
 /// must come from the shell or CI environment rather than a file that could
 /// silently be sitting on a dev box.
 fn live_flag_set() -> bool {
-    let is_on = |name: &str| std::env::var(name).map(|v| v == "1").unwrap_or(false);
-    is_on("TINYAGENTS_LIVE") || is_on("PROMPT_CACHE_LIVE")
+    is_flag_on("TINYAGENTS_LIVE") || is_flag_on("PROMPT_CACHE_LIVE")
+}
+
+/// `true` when the named environment variable is set to exactly `"1"`.
+///
+/// Exposed for the handful of `live_*.rs` files (`live_provider_matrix.rs`,
+/// `live_local_models.rs`, `live_local_embeddings.rs`) that layer their own,
+/// more specific opt-in switch (`PROVIDER_MATRIX=1`, `LOCAL_MODEL_TESTS=1`) on
+/// top of the shared `TINYAGENTS_LIVE` convention rather than calling
+/// [`require_live`] directly.
+pub fn is_flag_on(name: &str) -> bool {
+    std::env::var(name).map(|v| v == "1").unwrap_or(false)
 }
