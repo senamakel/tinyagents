@@ -120,8 +120,8 @@ impl LimitTracker {
     /// across a retry of the *surrounding* host operation, would otherwise
     /// have its wall-clock deadline silently burn down before the agent loop
     /// issues its first model call (M-8). The agent loop calls this at the
-    /// top of [`run_loop`][crate::agent_loop] so the deadline is always
-    /// measured from when the run actually began.
+    /// top of the run so the deadline is always measured from when the run
+    /// actually began.
     pub fn restart(&mut self) {
         self.started_at = Instant::now();
     }
