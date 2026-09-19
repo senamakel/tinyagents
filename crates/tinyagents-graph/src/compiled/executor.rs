@@ -99,16 +99,7 @@ where
         inputs: impl IntoIterator<Item = GraphInput>,
     ) -> Result<GraphExecution<State>> {
         let active = self.initial_inputs(inputs)?;
-        self.execute(
-            state,
-            active,
-            None,
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            None,
-        )
-        .await
+        self.execute(RunSeed::fresh(state, active, None)).await
     }
 
     /// Runs the graph under a thread id, persisting checkpoints at every
@@ -118,15 +109,11 @@ where
         thread_id: impl Into<ThreadId>,
         state: State,
     ) -> Result<GraphExecution<State>> {
-        self.execute(
+        self.execute(RunSeed::fresh(
             state,
             vec![Activation::node(self.entry.clone())],
             Some(thread_id.into()),
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            None,
-        )
+        ))
         .await
     }
 
@@ -138,13 +125,12 @@ where
         binding: crate::subagent_node::AgentInvocationBinding,
     ) -> Result<GraphExecution<State>> {
         self.execute(
-            state,
-            vec![Activation::node(self.entry.clone())],
-            Some(thread_id.into()),
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            Some(binding),
+            RunSeed::fresh(
+                state,
+                vec![Activation::node(self.entry.clone())],
+                Some(thread_id.into()),
+            )
+            .with_binding(binding),
         )
         .await
     }
@@ -159,16 +145,8 @@ where
         inputs: impl IntoIterator<Item = GraphInput>,
     ) -> Result<GraphExecution<State>> {
         let active = self.initial_inputs(inputs)?;
-        self.execute(
-            state,
-            active,
-            Some(thread_id.into()),
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            None,
-        )
-        .await
+        self.execute(RunSeed::fresh(state, active, Some(thread_id.into())))
+            .await
     }
 
     /// Resumes an interrupted run from its latest checkpoint, re-running the

@@ -11,11 +11,37 @@
 
 use std::collections::HashSet;
 
+use crate::diagnostic::{Diagnostic, into_diagnostics_error};
+use crate::span::Span;
 use crate::types::Blueprint;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 // ===========================================================================
 // Capability binding
 // ===========================================================================
+
+// Stable diagnostic codes for capability-binding failures. Canonical home for
+// these codes: `crate::resolver::Resolver` re-exports/reuses them so the
+// spanned (AST-level) and spanless (blueprint-level) binding gates report the
+// same codes for the same mistake.
+pub(crate) const CODE_UNKNOWN_MODEL: &str = "E-rag-unknown-model";
+pub(crate) const CODE_UNKNOWN_TOOL: &str = "E-rag-unknown-tool";
+pub(crate) const CODE_UNKNOWN_SUBGRAPH: &str = "E-rag-unknown-subgraph";
+pub(crate) const CODE_UNKNOWN_ROUTER: &str = "E-rag-unknown-router";
+pub(crate) const CODE_UNKNOWN_AGENT: &str = "E-rag-unknown-agent";
+pub(crate) const CODE_UNKNOWN_SCRIPT: &str = "E-rag-unknown-script";
+pub(crate) const CODE_UNKNOWN_REDUCER: &str = "E-rag-unknown-reducer";
+pub(crate) const CODE_INVALID_NODE_KIND: &str = "E-rag-invalid-node-kind";
+
+/// Maps a [`ReferenceClass`] to its stable diagnostic code.
+pub(crate) fn code_for(class: ReferenceClass) -> &'static str {
+    match class {
+        ReferenceClass::Model => CODE_UNKNOWN_MODEL,
+        ReferenceClass::Subgraph => CODE_UNKNOWN_SUBGRAPH,
+        ReferenceClass::Router => CODE_UNKNOWN_ROUTER,
+        ReferenceClass::Agent => CODE_UNKNOWN_AGENT,
+        ReferenceClass::Script => CODE_UNKNOWN_SCRIPT,
+    }
+}
 
 /// The node `kind` values the registry-backed binding path recognises.
 ///
