@@ -93,16 +93,8 @@ the old abort behavior, and `Rewrite { tool_name }` retargets the call to a
 fixed compatibility tool. OpenHuman's `UNKNOWN_TOOL_SENTINEL` workaround can
 be retired in favor of this policy.
 
-Implement:
-
-- Add `UnknownToolPolicy`.
-- Suggested variants:
-  - `Fail`: current behavior.
-  - `ReturnToolError`: inject a tool result with the original requested name.
-  - `Rewrite { tool_name }`: adapter-controlled compatibility mode.
-  - `RepairWithMiddleware`: allow a tool middleware to transform the call.
-- Preserve the original requested tool name, original arguments, and model call
-  id in events and observations.
+Still open: a `RepairWithMiddleware` variant letting a tool middleware
+transform the call. Events preserve the requested name, arguments, and call id.
 
 Acceptance criteria:
 
