@@ -1049,10 +1049,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages
             .iter()
             .rev()
-            .find_map(|message| match message {
-                Message::Assistant(assistant) => Some(assistant.text()),
-                _ => None,
-            })
+            .find(|message| matches!(message, Message::Assistant(_)))
+            .map(Message::text)
             .unwrap_or_default()
     }
 
