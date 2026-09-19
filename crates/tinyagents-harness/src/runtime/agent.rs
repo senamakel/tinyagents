@@ -66,6 +66,127 @@ impl<State: Send + Sync, Ctx: Send + Sync> ErasedHostAuthority for HostInvocatio
     }
 }
 
+/// Closed, non-leaking classification of a hosted invocation failure.
+///
+/// A host reading [`HostedError::kind`] can distinguish "the caller cancelled
+/// this" from "a configured limit was exhausted" from "the provider failed"
+/// without inspecting [`HostedError::message`] (which stays a fixed,
+/// sanitized string per kind — see that field's doc) or attaching a private
+/// event listener to reconstruct the same information from the event stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HostedErrorKind {
+    /// The run was cancelled before completion.
+    Cancelled,
+    /// The run exceeded a wall-clock deadline (the run's own, or a per-call
+    /// ceiling — see [`TinyAgentsError::Timeout`] and
+    /// [`TinyAgentsError::CallTimeout`]).
+    Timeout,
+    /// A configured run limit (model calls, tool calls, recursion depth, a
+    /// host budget) was exhausted.
+    LimitExceeded,
+    /// The host's own policy rejected the invocation (an unresolvable
+    /// definition, a failed security screen, an unauthorized delegate).
+    Policy,
+    /// The model provider failed the call.
+    Provider,
+    /// Any other internal failure not covered by a more specific kind.
+    Internal,
+}
+
+/// The typed failure returned by the hosted entry points
+/// ([`AgentHarness::invoke_agent`] and its streaming counterpart) in place of
+/// a generic `TinyAgentsError::Model("hosted agent invocation failed")`.
+///
+/// This intentionally does not implement `TinyAgentsError`'s "one error type"
+/// convention: it is the harness's product-host boundary type, not another
+/// case folded into the crate-wide error, and it is deliberately smaller —
+/// `message` is a fixed, sanitized string selected by `kind` (never the
+/// underlying provider/middleware/budget error text; that stays available to
+/// the host only through its own capability bundle's own logging and through
+/// the internal (non-hosted) event stream if it chose to attach a listener).
+#[derive(Debug)]
+pub struct HostedError {
+    /// Closed classification of the failure. See [`HostedErrorKind`].
+    pub kind: HostedErrorKind,
+    /// Fixed, sanitized message selected by `kind` — never raw provider,
+    /// middleware, or budget error text.
+    pub message: String,
+    /// The accumulated transcript, usage, and executed-tool summary as far as
+    /// the run got before failing, when available.
+    pub run: Option<Box<AgentRun>>,
+}
+
+impl std::fmt::Display for HostedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for HostedError {}
+
+/// Classifies a raw loop error into the closed [`HostedErrorKind`] vocabulary
+/// a host is allowed to see.
+fn classify_hosted_error(error: &TinyAgentsError) -> HostedErrorKind {
+    match error {
+        TinyAgentsError::Cancelled => HostedErrorKind::Cancelled,
+        TinyAgentsError::Timeout(_) | TinyAgentsError::CallTimeout(_) => HostedErrorKind::Timeout,
+        TinyAgentsError::LimitExceeded(_) | TinyAgentsError::SubAgentDepth(_) => {
+            HostedErrorKind::LimitExceeded
+        }
+        TinyAgentsError::Validation(_) | TinyAgentsError::Steering(_) => HostedErrorKind::Policy,
+        TinyAgentsError::Provider(_) | TinyAgentsError::Model(_) => HostedErrorKind::Provider,
+        _ => HostedErrorKind::Internal,
+    }
+}
+
+/// The fixed, sanitized message for each [`HostedErrorKind`]. Never derived
+/// from the underlying error's own text.
+fn hosted_error_message(kind: HostedErrorKind) -> &'static str {
+    match kind {
+        HostedErrorKind::Cancelled => "hosted agent invocation was cancelled",
+        HostedErrorKind::Timeout => "hosted agent invocation timed out",
+        HostedErrorKind::LimitExceeded => "hosted agent invocation exceeded a configured limit",
+        HostedErrorKind::Policy => "hosted agent invocation was rejected by policy",
+        HostedErrorKind::Provider => "hosted agent invocation failed at the model provider",
+        HostedErrorKind::Internal => "hosted agent invocation failed",
+    }
+}
+
+/// Builds a [`HostedError`] from the raw loop error and whatever partial
+/// [`AgentRun`] the loop accumulated before failing.
+fn hosted_error(error: &TinyAgentsError, run: AgentRun) -> HostedError {
+    let kind = classify_hosted_error(error);
+    HostedError {
+        kind,
+        message: hosted_error_message(kind).to_string(),
+        run: Some(Box::new(run)),
+    }
+}
+
+/// Reconstructs a crate-wide [`TinyAgentsError`] from a [`HostedError`] for
+/// internal callers (recursive hosted delegation) that must keep propagating
+/// through the ordinary `Result<T>` = `Result<T, TinyAgentsError>` surface.
+/// This is a lossless-enough round trip for control flow: `Cancelled` and
+/// `Timeout` map back to their own variants (so cancellation/deadline
+/// semantics upstream keep working, e.g. the fallback gate in
+/// `invoke_model_resolving`), and the rest become typed but message-generic
+/// variants — never worse than what this boundary already returned before
+/// `HostedError` existed.
+impl From<HostedError> for TinyAgentsError {
+    fn from(error: HostedError) -> Self {
+        match error.kind {
+            HostedErrorKind::Cancelled => TinyAgentsError::Cancelled,
+            HostedErrorKind::Timeout => TinyAgentsError::Timeout(error.message),
+            HostedErrorKind::LimitExceeded => TinyAgentsError::LimitExceeded(error.message),
+            HostedErrorKind::Policy => TinyAgentsError::Validation(error.message),
+            HostedErrorKind::Provider | HostedErrorKind::Internal => {
+                TinyAgentsError::Model(error.message)
+            }
+        }
+    }
+}
+
 /// A host-owned turn request.
 ///
 /// `agent_id` is opaque to the harness. It is resolved only through the host
