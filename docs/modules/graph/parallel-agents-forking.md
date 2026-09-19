@@ -159,11 +159,22 @@ Forked child tasks participate in normal checkpointing:
 
 - task start appears in checkpoint task metadata
 - completed child writes can be persisted as pending writes
-- failed sibling tasks do not force successful child agents to rerun once
-  pending writes are saved
 - child checkpoints include namespace and parent checkpoint config
-- resuming from interrupt restarts the interrupted child task, not unrelated
-  completed siblings
+
+**Known gap, not the current behavior (see `docs/runtime-comparison/plan.md`,
+`code-review-graph.md` Critical C1/C2):** "failed sibling tasks do not force
+successful child agents to rerun once pending writes are saved" and "resuming
+from interrupt restarts the interrupted child task, not unrelated completed
+siblings" are the *target* contract, not what happens today. As of this
+writing, when a parallel step interrupts or fails at branch index `i`,
+`executor.rs` (~1600-1633, ~790, ~869) discards every completed sibling with
+index `> i` — even though `join_all` already ran them to completion (LLM
+calls, tool side effects, sub-agent runs) — and re-schedules them on resume
+alongside the interrupted/failed branch (`pending.extend(active[index..]...)`).
+Only the lower-index prefix's writes are preserved. The regression test
+`parallel_interrupt_pauses_at_lowest_index_branch`
+(`crates/tinyagents-graph/src/compiled/test.rs:1002`) currently pins this
+lossy behavior; fixing C1/C2 will require updating that test's assertions.
 
 If a forked sub-agent interrupts, the parent run should surface the interrupt
 with enough namespace information to resume the correct child.
