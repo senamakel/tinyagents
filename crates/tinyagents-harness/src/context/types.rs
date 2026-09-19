@@ -14,8 +14,6 @@
 //! `crate::context` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
-use std::any::Any;
-
 use serde::{Deserialize, Serialize};
 
 use crate::cancel::CancellationToken;
