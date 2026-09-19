@@ -159,13 +159,21 @@ where
         status.mark_running(HarnessPhase::Middleware);
         harness.middleware().run_after_agent(ctx, state, run).await?;
 
+        // `status.mark_completed`/`mark_interrupted`/`mark_failed` and (on
+        // error) `AgentEvent::RunFailed` are applied centrally by
+        // `agent_loop::entry::drive_collecting` after this call returns,
+        // identically for the direct loop and this driver — see that
+        // function's doc comment. This driver only emits the terminal event
+        // that (like the direct loop's `run_loop_body`) is its own
+        // responsibility to raise: `RunCompleted` on a clean finish, or
+        // latching `run.paused` (mirroring a steering pause) on an
+        // interrupt.
         match outcome {
             Ok(None) => {
                 let record = ctx.emit(AgentEvent::RunCompleted {
                     run_id: ctx.run_id().clone(),
                 });
                 status.set_last_event(record.id);
-                status.mark_completed();
                 Ok(())
             }
             Ok(Some(interrupt)) => {
@@ -182,17 +190,13 @@ where
                         .unwrap_or_else(|| format!("paused at node `{}`", interrupt.node)),
                 });
                 status.set_last_event(record.id);
-                status.mark_interrupted();
                 run.paused = Some(PauseState {
                     reason,
                     paused_at_checkpoint: 0,
                 });
                 Ok(())
             }
-            Err(error) => {
-                status.mark_failed(error.to_string());
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 }
