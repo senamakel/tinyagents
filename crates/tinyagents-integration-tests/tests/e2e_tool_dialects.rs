@@ -162,6 +162,44 @@ async fn an_unknown_narrated_tool_is_not_invented_into_a_known_one() {
 }
 
 #[tokio::test]
+async fn a_narrated_call_is_not_dispatched_when_tool_choice_is_forced_to_none() {
+    // `apply_to_request` already skips its own dialect rewrite for
+    // `ToolChoice::None`, but that alone did not stop recovery: the offered
+    // tool names were still recorded for the scrubber/`recover_text_calls`
+    // regardless of the effective choice, so a model that narrated
+    // `<tool_call>` markup as plain text anyway still had it parsed and
+    // dispatched as a real, side-effecting call despite the caller's
+    // explicit "no tool calls this turn".
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(
+        Arc::new(narrating_model(
+            "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
+        )),
+        &listener,
+    );
+    harness.push_middleware(Arc::new(ForceToolChoice(ToolChoice::None)));
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run completes");
+
+    assert_eq!(
+        run.tool_calls, 0,
+        "a narrated call must not be dispatched when the effective tool_choice is None"
+    );
+    let started: Vec<String> = listener
+        .events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+            AgentEvent::ToolStarted { tool_name, .. } => Some(tool_name),
+            _ => None,
+        })
+        .collect();
+    assert!(started.is_empty(), "{started:?}");
+}
+
+#[tokio::test]
 async fn a_forced_xml_dialect_renders_the_protocol_and_sends_no_schemas() {
     let model = Arc::new(ScriptedModel::replies(vec![
         "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
