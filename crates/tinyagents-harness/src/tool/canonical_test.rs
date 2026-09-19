@@ -1,6 +1,6 @@
 //! Tests for [`ToolRegistry`]'s canonical (non-recursive) dispatch path:
 //! registration, lookup, name listing, schema/spec/policy projection, and
-//! execution through [`CanonicalDispatch`](super::CanonicalDispatch).
+//! execution through the internal `CanonicalDispatch` adapter.
 
 use std::sync::Arc;
 
