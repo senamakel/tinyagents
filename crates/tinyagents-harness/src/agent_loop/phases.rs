@@ -53,6 +53,7 @@ use crate::middleware::AgentRun;
 use crate::runtime::AgentHarness;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse};
+use tinyinference_llm::tool::ToolCall;
 
 /// The structured-output plan resolved for one turn.
 ///
