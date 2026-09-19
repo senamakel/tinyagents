@@ -2519,7 +2519,6 @@ impl Middleware<(), ()> for SuppressToolDelta {
         delta.tool_call = None;
         Ok(())
     }
-    ..Default::default()
 }
 
 /// Rewrites a streamed tool call and stops after dispatch so the regression can
