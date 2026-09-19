@@ -129,12 +129,51 @@ registry-validated. That is stale — `CapabilityResolver::agent_allowed`
 references against the registered agents, matching the "Validation" section
 above.
 
-`build_graph` (`crates/tinyagents-graph/src/language.rs`) currently lowers
-only `blueprint.start`, node names, and each node's `Routing`
-(`Next`/`Conditional`/`Terminal`) into the executable graph. Every other
-populated blueprint field — channels, checkpoint/interrupt policy, joins,
-sends, input/output shape, node metadata/timeout/retry — is parsed and
-validated by the compiler but inert once `build_graph` runs: it neither
-applies nor rejects them. (Phase 1c of `docs/runtime-comparison/plan.md`
-plans to make `build_graph` fail closed — `Compile` error — on any populated
-field it still ignores.)
+## `build_graph`: lowered vs rejected fields (Phase 1c)
+
+`build_graph` (`crates/tinyagents-graph/src/language.rs`) still lowers only
+`blueprint.start`, node names, each node's Rust-side handler (via
+`NodeFactory`), and each node's `Routing` (`Next` → a static edge,
+`Conditional` → `mark_command_routing` plus `with_command_destinations` for
+the declared route table, `Terminal` → `set_finish`). As of Phase 1c it now
+**fails loudly** instead of silently ignoring every other populated field: it
+inspects the blueprint before touching the factory or the builder and returns
+`TinyAgentsError::Compile` naming every populated field it does not honour.
+
+**Rejected until full lowering lands (Phase 5):**
+
+- graph-level: `input`, `output`, `checkpoint`, `interrupt`, `joins`
+- per node: `sends`, `join_sources`, `command.update`, `options`, `timeout`,
+  `retry`, `metadata`
+
+**Deliberately still accepted (not rejected), with a documented gap:**
+
+- `channels` (state-channel reducers) and `defaults` (the `defaults { … }`
+  block, e.g. `recursion_limit`/`backoff`/`checkpoint`). `build_graph` always
+  builds the executable graph with `GraphBuilder::overwrite()` regardless of
+  what a `channel … <reducer>` declares, so a non-`overwrite` reducer is still
+  silently not applied to the runtime state merge. These two are excluded
+  from the reject list because they are already read by
+  `crate::export::blueprint_to_topology` for introspection (so they are not
+  *entirely* inert) and, more importantly, because rejecting them would break
+  existing fixtures (`crates/tinyagents-integration-tests/tests/language_pipeline.rs`,
+  `e2e_rag_pipeline.rs`, and their `.rag` source) that this change's file
+  boundary did not permit editing. A future pass that either lowers channel
+  reducers into real per-channel state merge or extends the reject list to
+  `channels`/`defaults` will need to touch those fixtures too.
+
+**Conditional route tables are not enforced against a handler's `Command::goto`
+at compile time.** `GraphBuilder::with_command_destinations` — which
+`build_graph` now calls for every `Routing::Conditional` node — is advisory
+only (used by `crate::export` to draw/validate the declared destinations in a
+topology view); the runtime always resolves the real successor from the
+`Command` a node handler emits, so a handler that `goto`s a label the source
+never declared is not rejected at graph-build time. Making that a real
+compile-time check would require `GraphBuilder`/`CompiledGraph` to validate
+emitted commands against the declared table at run time (or a stricter
+builder API), which is out of scope for Phase 1c.
+
+See `crates/tinyagents-graph/src/language.rs` for the exact field list
+(`ignored_populated_fields`) and its tests
+(`build_graph_rejects_a_populated_ignored_field`,
+`build_graph_accepts_a_blueprint_with_no_ignored_fields`).
