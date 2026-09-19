@@ -315,9 +315,3 @@ impl Tool for OverrideTool {
         self.inner.return_direct()
     }
 }
-
-/// Silences an otherwise-unused import when a target only needs a subset of
-/// [`ToolContent`]'s re-export (kept for adaptor modules that construct error
-/// content directly).
-#[allow(unused_imports)]
-pub(crate) use tinytools::ToolContent as _ToolContentReexport;
