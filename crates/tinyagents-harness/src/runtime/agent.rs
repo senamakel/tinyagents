@@ -719,20 +719,40 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
 /// installed one) and returns `Ok(None)` without touching `Any` at all, so
 /// this function itself still only needs `State: 'static, Ctx: 'static` on
 /// the (rare) hosted path — its callers already carry that bound.
-pub(crate) fn host_invocation_binding<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
+pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx: Send + Sync>(
     context: &RunContext<Ctx>,
 ) -> Result<Option<std::sync::Arc<HostInvocationBinding<State, Ctx>>>> {
     let Some(authority) = context.host_authority.as_ref() else {
         return Ok(None);
     };
-    match authority.downcast_ref::<HostInvocationAuthority<State, Ctx>>() {
-        Some(authority) => Ok(Some(authority.binding.clone())),
-        None => Err(TinyAgentsError::Validation(
+    // `RunContext::child` (the only authority-propagating path) requires the
+    // same `Ctx` as its parent, and `RunContext::child_with_data` (the only
+    // path that changes `Ctx`) always clears `host_authority` first — so a
+    // present authority's `Ctx` already matches this call's `Ctx` by
+    // construction. `State` has no such structural guarantee (nothing
+    // prevents handing a hosted context to a *different* harness), so it is
+    // checked here at read time via `ErasedHostAuthority::type_name` (see
+    // that trait's doc comment for why this, and not `Any`, is used).
+    let expected = std::any::type_name::<HostInvocationAuthority<State, Ctx>>();
+    if authority.type_name() != expected {
+        return Err(TinyAgentsError::Validation(
             "host authority type mismatch: this run context was hosted by a different \
              State/Ctx harness than the one reading it"
                 .to_string(),
-        )),
+        ));
     }
+    #[allow(unsafe_code)]
+    // SAFETY: `context.host_authority` is crate-private and is installed
+    // only by the hosted entry points in this module, which always store
+    // exactly `HostInvocationAuthority<State, Ctx>` for the harness they are
+    // called on. The `type_name` check above additionally rejects any value
+    // whose concrete type does not match this call's own `State`/`Ctx`
+    // before this cast runs, so a mismatched authority never reaches it.
+    let authority = unsafe {
+        &*(std::sync::Arc::as_ptr(authority) as *const dyn ErasedHostAuthority
+            as *const HostInvocationAuthority<State, Ctx>)
+    };
+    Ok(Some(authority.binding.clone()))
 }
 
 /// Best-effort progress projection. A host UI must never make the turn wait or
