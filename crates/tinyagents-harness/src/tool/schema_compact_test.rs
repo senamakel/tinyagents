@@ -169,7 +169,10 @@ fn compact_tool_schema_enforces_the_byte_cap_with_an_open_object_fallback() {
         max_description_bytes: None,
     };
     let compacted = compact_tool_schema(&schema, &compaction);
-    assert_eq!(compacted.parameters, json!({"type": "object", "properties": {}}));
+    assert_eq!(
+        compacted.parameters,
+        json!({"type": "object", "properties": {}})
+    );
     assert!(serde_json::to_vec(&compacted.parameters).unwrap().len() <= 60);
 }
 

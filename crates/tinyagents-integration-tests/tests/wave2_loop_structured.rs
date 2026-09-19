@@ -269,7 +269,10 @@ impl tinytools::Tool for DeferredStockQuote {
         tinytools::ToolExposure::Deferred
     }
 
-    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+    async fn execute(
+        &self,
+        _arguments: serde_json::Value,
+    ) -> anyhow::Result<tinytools::ToolResult> {
         Ok(tinytools::ToolResult::success("quote"))
     }
 }
@@ -299,7 +302,9 @@ async fn a_schema_name_colliding_with_the_discovery_bridge_fails_closed() {
     let err = harness
         .invoke_default(&(), vec![Message::user("go")])
         .await
-        .expect_err("a structured-output name colliding with the discovery bridge must be rejected");
+        .expect_err(
+            "a structured-output name colliding with the discovery bridge must be rejected",
+        );
 
     assert!(matches!(err, TinyAgentsError::Validation(_)), "got {err:?}");
     assert!(

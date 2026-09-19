@@ -227,7 +227,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 _ => None,
             })
-            && (self.tools.names().iter().any(|registered| registered == name)
+            && (self
+                .tools
+                .names()
+                .iter()
+                .any(|registered| registered == name)
                 || tool_schemas.iter().any(|schema| &schema.name == name))
         {
             return Err(TinyAgentsError::Validation(format!(
