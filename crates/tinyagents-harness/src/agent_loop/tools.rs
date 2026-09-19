@@ -1193,6 +1193,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let (result, wrap_control) = match outcome {
                 Ok(pair) => pair,
                 Err(err) => {
+                    self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Failed)
+                        .await;
                     self.fail_tool_call(
                         ctx,
                         status,
@@ -1204,6 +1206,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     return Err(err);
                 }
             };
+            self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Completed)
+                .await;
             // A `ToolMiddleware::wrap_tool` that short-circuited with
             // `MiddlewareToolOutcome::Command` carries no real result; queue
             // its control the same way `run_wrapped_model`'s call site does
