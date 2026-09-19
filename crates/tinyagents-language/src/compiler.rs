@@ -407,6 +407,7 @@ declarative steering lowering lands.",
         .collect();
 
     Ok(Blueprint {
+        schema_version: 1,
         graph_id: graph.name.clone(),
         start,
         channels,
