@@ -338,6 +338,7 @@ impl<State, Update> CompiledGraph<State, Update> {
             run_deadline: None,
             durability: crate::checkpoint::DurabilityMode::default(),
             node_retry: None,
+            sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
