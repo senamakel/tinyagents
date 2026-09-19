@@ -49,18 +49,11 @@ where
             checkpoint_id: CheckpointId::new(checkpoint.checkpoint_id.clone()),
         });
 
-        // Prefer the persisted pending activations (which preserve each pending
-        // node's `Send` arg); fall back to the node-id projection for
-        // checkpoints written before that field existed.
-        let active: Vec<Activation> = match &checkpoint.pending_activations {
-            Some(pending) if !pending.is_empty() => pending.iter().map(Activation::from).collect(),
-            _ => checkpoint
-                .next_nodes
-                .iter()
-                .cloned()
-                .map(Activation::node)
-                .collect(),
-        };
+        // `checkpoint` was already normalized on read (every backend's decode
+        // path calls `Checkpoint::normalize`), so `tasks` is always the
+        // single source of truth here, regardless of the stored record's
+        // original format version.
+        let active: Vec<Activation> = checkpoint.tasks.iter().map(Activation::from).collect();
         if active.is_empty() {
             return Err(TinyAgentsError::Resume(
                 "checkpoint has no pending nodes to resume".to_string(),
