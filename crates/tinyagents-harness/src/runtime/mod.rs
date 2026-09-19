@@ -21,7 +21,7 @@
 //!
 //! # Layout
 //!
-//! - [`types`] holds the public type definitions ([`RunPolicy`] and
+//! - `types` holds the public type definitions ([`RunPolicy`] and
 //!   [`AgentHarness`]).
 //! - This file holds the builder, registration, and accessor methods.
 //! - `test.rs` holds focused tests for construction and registration.

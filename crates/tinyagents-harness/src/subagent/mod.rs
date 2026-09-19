@@ -65,7 +65,7 @@
 //!
 //! # Layout
 //!
-//! - [`types`] holds the public type definitions.
+//! - `types` holds the public type definitions.
 //! - This file holds the impls (constructors, the invoke methods, and the
 //!   typed-parent dispatcher).
 //! - `test.rs` holds focused tests.

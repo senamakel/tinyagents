@@ -16,7 +16,7 @@
 //! harness [`Store`][crate::store::Store] itself; the [`MemoryScope`]
 //! enum labels which layer a record belongs to.
 //!
-//! See [`types`] for the definitions.
+//! See `types` for the definitions.
 //!
 //! # Example
 //!
