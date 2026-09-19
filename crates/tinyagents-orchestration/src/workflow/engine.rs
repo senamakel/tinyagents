@@ -757,17 +757,19 @@ where
                 &mut phase_states,
                 "workflow interrupted; phase will retry on resume",
             );
-            let updated = self.persist(
-                &registration.current(),
-                PersistRequest {
-                    phase_states,
-                    child_run_ids: children,
-                    status: WorkflowRunStatus::Interrupted,
-                    summary: None,
-                    terminal: false,
-                },
-                owner,
-            )?;
+            let updated = self
+                .persist(
+                    &registration.current(),
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: children,
+                        status: WorkflowRunStatus::Interrupted,
+                        summary: None,
+                        terminal: false,
+                    },
+                    owner,
+                )
+                .await?;
             return Ok((updated, 0));
         }
         if let Some(reason) = failure.or_else(|| {
@@ -778,14 +780,16 @@ where
                 )
             })
         }) {
-            return self.fail_phase(
-                &registration.current(),
-                &mut phase_states,
-                child_ids,
-                phase,
-                reason,
-                owner,
-            );
+            return self
+                .fail_phase(
+                    &registration.current(),
+                    &mut phase_states,
+                    child_ids,
+                    phase,
+                    reason,
+                    owner,
+                )
+                .await;
         }
         set_phase_status(
             &mut phase_states,
