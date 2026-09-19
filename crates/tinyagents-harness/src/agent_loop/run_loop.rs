@@ -162,6 +162,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&schema.name))
             })
             .collect::<Vec<_>>();
+        // The dialect is a run-level policy decision; the text protocols need
+        // a registry built from these same schemas.
+        let run_dialect = super::dialect::RunDialect::resolve(self.policy.tool_dialect, &tool_schemas);
 
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool. Under the tool-call strategy the schema is sent as an
@@ -517,6 +520,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // already ran above; the wrap onion runs here; lifecycle
             // `after_model` runs below — so ordering is:
             // before_model -> wrap onion (outer..inner..base) -> after_model.
+            // What was offered is fixed here, before a text dialect strips
+            // the schemas off the wire: recovery and the stream scrubber need
+            // the names, and the structured-output schema tool counts.
+            let recovery = super::dialect::TextRecovery {
+                offered: Arc::new(request.tools.clone()),
+                registry: run_dialect.registry(),
+            };
+            run_dialect.apply_to_request(&mut request);
             let base = ModelCallBase {
                 harness: self,
                 call_id: call_id.clone(),
@@ -524,6 +535,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 model: binding.model,
                 required_capabilities: request.required_capabilities.clone(),
                 streaming,
+                recovery: recovery.clone(),
             };
             // Snapshot the request messages for observability before `request`
             // is moved into the model-wrap onion, gated by the capture policy so
@@ -544,11 +556,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .into_response();
 
             // Providers occasionally put a text-dialect call in visible
-            // content even when a native tool channel was offered. Use the
-            // canonical TinyTools-Agent parser rather than the retired
-            // harness prompt parser, and only recover when the provider did
-            // not already supply structured calls.
-            recover_text_dialect_calls(&mut response, &call_id, request_has_tools);
+            // content even when a native tool channel was offered, and a
+            // forced text dialect always does. Read the response through
+            // every grammar the protocol crate knows, but only when the
+            // provider did not already supply structured calls.
+            super::dialect::recover_text_calls(
+                &mut response,
+                &call_id,
+                &recovery.offered,
+                recovery.registry.as_deref(),
+            );
 
             // Account for the completed provider response before fallible
             // response middleware. A middleware rejection must not erase
@@ -988,64 +1005,6 @@ fn apply_host_budget_compression<Ctx>(
     Ok(())
 }
 
-/// Recovers XML/text-dialect calls through `tinytools-agent` while preserving
-/// every non-text provider content block (notably reasoning blocks).
-fn recover_text_dialect_calls(
-    response: &mut tinyinference_llm::model::ModelResponse,
-    model_call_id: &CallId,
-    has_tools: bool,
-) {
-    if !has_tools || !response.message.tool_calls.is_empty() {
-        return;
-    }
-
-    use tinytools_agent::dialect::{DialectResponse, ToolDialect, XmlDialect};
-
-    let dialect_response = DialectResponse {
-        text: Some(response.text()),
-        tool_calls: Vec::new(),
-    };
-    let (cleaned, parsed) = XmlDialect.parse_response(&dialect_response);
-    if parsed.is_empty() {
-        return;
-    }
-
-    response.message.tool_calls = parsed
-        .into_iter()
-        .enumerate()
-        .map(|(position, call)| {
-            ToolCall::new(
-                call.id
-                    .unwrap_or_else(|| format!("{model_call_id}-tool-{}", position + 1)),
-                call.name,
-                call.arguments,
-            )
-        })
-        .collect();
-
-    let mut inserted = false;
-    response.message.content = response
-        .message
-        .content
-        .drain(..)
-        .filter_map(|block| match block {
-            tinyinference_llm::message::ContentBlock::Text(_) if !inserted => {
-                inserted = true;
-                (!cleaned.is_empty())
-                    .then(|| tinyinference_llm::message::ContentBlock::Text(cleaned.clone()))
-            }
-            tinyinference_llm::message::ContentBlock::Text(_) => None,
-            other => Some(other),
-        })
-        .collect();
-    if !inserted && !cleaned.is_empty() {
-        response
-            .message
-            .content
-            .push(tinyinference_llm::message::ContentBlock::Text(cleaned));
-    }
-}
-
 /// Resolves one run-scoped call cap from the per-run [`RunConfig`] value and
 /// the harness-wide [`crate::runtime::RunPolicy`] value.
 ///
@@ -1073,23 +1032,4 @@ fn reset_truncated_empty_recovery(
     *retries_used = 0;
     *boosted_max_tokens = None;
     *truncation_base = None;
-}
-
-#[cfg(test)]
-mod recovery_tests {
-    use super::recover_text_dialect_calls;
-    use crate::ids::CallId;
-    use tinyinference_llm::model::ModelResponse;
-
-    #[test]
-    fn text_dialect_markup_is_not_recovered_when_the_request_offered_no_tools() {
-        let mut response = ModelResponse::assistant(
-            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
-        );
-
-        recover_text_dialect_calls(&mut response, &CallId::new("model-1"), false);
-
-        assert!(response.message.tool_calls.is_empty());
-        assert!(response.text().contains("<tool_call>"));
-    }
 }

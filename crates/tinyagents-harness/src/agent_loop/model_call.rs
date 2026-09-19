@@ -127,6 +127,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
         streaming: bool,
+        recovery: &super::dialect::TextRecovery,
     ) -> Result<ModelResponse> {
         let policy = self.effective_cache_policy(request);
         // The identity of the model that is actually about to be called — known
@@ -253,7 +254,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         };
 
         let response = self
-            .invoke_model_resolving(state, ctx, effective_request, call_id, binding, streaming)
+            .invoke_model_resolving(
+                state,
+                ctx,
+                effective_request,
+                call_id,
+                binding,
+                streaming,
+                recovery,
+            )
             .await?;
 
         if let Some((cache, key)) = decision.as_ref() {
@@ -469,6 +478,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
         streaming: bool,
+        recovery: &super::dialect::TextRecovery,
     ) -> Result<ModelResponse> {
         let mut current_name = binding.resolved.name.clone();
         let mut model = binding.model;
@@ -518,6 +528,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         request,
                         call_id,
                         &mut deltas_emitted,
+                        recovery,
                     );
                     Self::with_call_budget(remaining, run_id.as_str(), "model call", bound, fut)
                         .await
@@ -816,9 +827,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         deltas_emitted: &mut usize,
+        recovery: &super::dialect::TextRecovery,
     ) -> Result<ModelResponse> {
         let mut stream = model.stream(state, request.clone()).await?;
         let mut accumulator = StreamAccumulator::new();
+        // Tool-call markup a model narrates as text is held back from live
+        // consumers and turned into calls on the terminal response instead.
+        // Runs for every provider: native models narrate calls often enough.
+        let mut text_scrubber = recovery.scrubber(call_id);
         // A terminal `Completed` response usually has richer provider metadata
         // than deltas (message id, usage, tool calls, and route information),
         // but its text is still the raw provider payload.  Keep the text and
@@ -850,6 +866,34 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     None => break,
                 },
             };
+
+            // Scrub tool-call markup from visible text before anything else
+            // sees it; a delta the scrubber empties carries nothing to emit.
+            if let (Some(scrubber), ModelStreamItem::MessageDelta(delta)) =
+                (text_scrubber.as_mut(), &mut item)
+                && !delta.text.is_empty()
+            {
+                delta.text = scrubber.feed(&delta.text);
+                if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none() {
+                    continue;
+                }
+            }
+            if let (Some(scrubber), ModelStreamItem::Completed(_)) =
+                (text_scrubber.as_mut(), &item)
+            {
+                let tail = scrubber.flush();
+                if !tail.is_empty() {
+                    // The held-back remainder is ordinary text after all.
+                    streamed_text.push_str(&tail);
+                    saw_streamed_content = true;
+                    ctx.emit(AgentEvent::ModelDelta {
+                        run_id: ctx.config.run_id.clone(),
+                        call_id: call_id.clone(),
+                        delta: MessageDelta::text(tail),
+                    });
+                    *deltas_emitted += 1;
+                }
+            }
 
             // Surface incremental message/tool-call fragments through events and
             // the `on_model_delta` middleware hook before merging them.
@@ -963,6 +1007,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 response.message.content = content;
             }
             if let ModelStreamItem::Completed(response) = &mut item
+                && response.message.tool_calls.is_empty()
+                && text_scrubber.as_ref().is_some_and(super::dialect::DeltaScrubber::has_calls)
+                && let Some(scrubber) = text_scrubber.take()
+            {
+                // The provider returned no structured calls, but the text it
+                // streamed held complete tool-call blocks. Those blocks were
+                // scrubbed from the reconciled text above, so this is the
+                // only place they can be dispatched from.
+                response.message.tool_calls = scrubber.into_calls();
+            }
+            if let ModelStreamItem::Completed(response) = &mut item
                 && saw_tool_delta
             {
                 // The terminal response carries richer metadata, but its raw
@@ -1007,6 +1062,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) model: Arc<dyn ChatModel<State>>,
     pub(super) required_capabilities: Option<tinyinference_llm::model::CapabilitySet>,
     pub(super) streaming: bool,
+    pub(super) recovery: super::dialect::TextRecovery,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
@@ -1106,6 +1162,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
                     &self.call_id,
                     binding,
                     self.streaming,
+                    &self.recovery,
                 )
                 .await
         })

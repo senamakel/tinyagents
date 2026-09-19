@@ -95,6 +95,27 @@ impl RunDialect {
     }
 }
 
+/// What a model call needs in order to recover text-dialect calls: the
+/// tools that were offered (which a text-dialect request no longer carries
+/// on the wire) and the P-Format registry, when there is one.
+#[derive(Debug, Clone, Default)]
+pub(super) struct TextRecovery {
+    /// The tools offered this turn, before any dialect rewrite.
+    pub(super) offered: Arc<Vec<ToolSchema>>,
+    /// The P-Format layouts, for [`RunDialect::PFormat`].
+    pub(super) registry: Option<Arc<PFormatRegistry>>,
+}
+
+impl TextRecovery {
+    /// A scrubber for one streamed model call, or `None` when no tools were
+    /// offered and there is nothing to recover.
+    pub(super) fn scrubber(&self, model_call_id: &CallId) -> Option<DeltaScrubber> {
+        (!self.offered.is_empty()).then(|| {
+            DeltaScrubber::new(model_call_id.clone(), &self.offered, self.registry.clone())
+        })
+    }
+}
+
 /// Converts a recovered call into the harness's [`ToolCall`], minting an id
 /// scoped to the model call it came from.
 ///
