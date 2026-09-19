@@ -947,10 +947,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 /// tool schemas, but the provider prompt-cache key is derived only after every
 /// middleware layer has delegated to the innermost call. Rebuilding that
 /// annotation there keeps cache routing tied to the bytes sent to the provider.
-pub(super) fn refresh_prompt_cache_fingerprint(
-    request: &mut ModelRequest,
-    protect_prompt_prefix: bool,
-) {
+pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
     let system_end = request
         .messages
         .iter()
@@ -964,9 +961,6 @@ pub(super) fn refresh_prompt_cache_fingerprint(
 
     if harness_layout {
         request.cache_segments.clear();
-        if !protect_prompt_prefix {
-            return;
-        }
         if system_end > 0 {
             request.cache_segments.push(PromptSegment {
                 id: "system".to_string(),
