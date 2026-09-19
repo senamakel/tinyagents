@@ -395,33 +395,43 @@ Acceptance criteria:
 
 ### 13. Middleware Control Outcomes
 
-Status: partially present.
+Status: shipped (harness loop control), partial (graph/sub-agent defer).
 
-TinyAgents middleware is rich enough for wrapping model and tool calls, and the
-graph layer has `Command` and `Interrupt`. Some OpenHuman behaviors still need
-direct control outcomes: pause after early-exit tools, stop on budget, reroute
-on fallback, and defer work to sub-agents.
+Landed as part of `docs/runtime-comparison/plan.md` Phase 2 item A1. Every
+lifecycle `Middleware` hook has a `_control`-suffixed counterpart
+(`before_model_control`, `after_model_control`, `before_tool_control`,
+`after_tool_control`, `before_agent_control`, `after_agent_control`) that the
+`MiddlewareStack` actually drives, returning `MiddlewareControl::{Continue,
+JumpTo(LoopTarget::{Model,Tools,End}), UpdateState(StateUpdate),
+StopWithFinal, Interrupt}`; a default shim forwards to the pre-existing plain
+hook and returns `Continue`, so no existing `Middleware` impl needed to
+change. `MiddlewareModelOutcome`/`MiddlewareToolOutcome` gained a `Command`
+variant for a `wrap_model`/`wrap_tool` short-circuit. A canonical tool's own
+`ToolResult.control` (vendored `tinytools::ToolControl`:
+`return_direct`/`terminate`/`goto`/`state_update`) is translated into the
+same vocabulary. `Middleware::should_stop_after_turn` covers a turn-boundary
+aggregate stop. Precedence is `Interrupt > StopWithFinal > JumpTo/UpdateState
+> Continue`; within one phase the first non-`Continue` outcome wins and later
+non-observer hooks are skipped (`Middleware::is_observer`).
+`BudgetMiddleware`/`HumanApprovalMiddleware` are rebased on `JumpTo(End)` and
+`Interrupt` respectively. See
+`crates/tinyagents-harness/src/{context,middleware,agent_loop}/*` and
+[`docs/modules/harness/middleware.md`](modules/harness/middleware.md#middleware-control-a1).
 
-Implement:
+Still open: routing a harness-level control outcome onto a graph `Command`
+node when the loop runs as a graph node, and "defer to task/sub-agent" as a
+control outcome — both remain graph/A5 (loop-as-`CompiledGraph`) territory,
+not yet implemented.
 
-- Standard control outcomes from middleware:
-  - continue
-  - replace request/response
-  - retry
-  - fallback
-  - pause/interrupt
-  - stop with final response
-  - route/goto graph node
-  - defer to task/sub-agent
-- Consistent event emission for each control outcome.
-- Clear precedence when multiple middleware layers request control changes.
+Acceptance criteria (harness scope):
 
-Acceptance criteria:
-
-- Early-exit tools and budget stop hooks do not require adapter-local steering
-  side channels.
-- Graph and harness middleware use compatible control vocabulary.
-- Control decisions are visible in journals for audit/replay.
+- [x] Early-exit tools and budget stop hooks do not require adapter-local
+      steering side channels (`ToolResult::return_direct`/`terminate`,
+      `BudgetMiddleware`).
+- [ ] Graph and harness middleware use compatible control vocabulary (harness
+      side only; graph `Command`/`Interrupt` remain a separate vocabulary).
+- [x] Control decisions are visible in journals for audit/replay
+      (`AgentEvent::ControlApplied`).
 
 ### 15. Registry Diagnostics And Introspection
 
