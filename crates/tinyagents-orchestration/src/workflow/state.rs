@@ -108,6 +108,11 @@ pub fn reset_running_phases(phase_states: &mut Value, reason: &str) {
     }
 }
 
+/// Finds the next phase that should run: a phase that is not already
+/// completed or running, and all of whose dependencies are completed.
+///
+/// Returns the first such phase in definition order, or `None` if no phase is
+/// ready (either all are done, or some have unmet dependencies).
 pub fn next_runnable_phase<'a>(
     definition: &'a WorkflowDefinition,
     phase_states: &Value,
@@ -123,6 +128,7 @@ pub fn next_runnable_phase<'a>(
     })
 }
 
+/// Checks whether all phases in the workflow have completed.
 pub fn all_phases_completed(definition: &WorkflowDefinition, phase_states: &Value) -> bool {
     definition
         .phases
@@ -130,6 +136,8 @@ pub fn all_phases_completed(definition: &WorkflowDefinition, phase_states: &Valu
         .all(|phase| phase_status(phase_states, &phase.name) == Some("completed"))
 }
 
+/// Collects outputs from all upstream (dependency) phases for a given phase.
+/// Filters out empty and null outputs to yield only meaningful results.
 pub fn upstream_outputs(phase: &WorkflowPhase, phase_states: &Value) -> Vec<Value> {
     phase
         .depends_on
@@ -154,6 +162,10 @@ pub fn upstream_outputs(phase: &WorkflowPhase, phase_states: &Value) -> Vec<Valu
         .collect()
 }
 
+/// Composes the prompt for a worker in a phase.
+///
+/// Includes the phase name and description, the input question, the worker's
+/// index (if multiple workers), and relevant upstream outputs from dependencies.
 pub fn phase_prompt(
     input: &Value,
     phase: &WorkflowPhase,
@@ -190,6 +202,10 @@ pub fn phase_prompt(
     prompt
 }
 
+/// Composes a workflow summary from all final phase outputs.
+///
+/// Returns `None` if all phases are complete and there are no outputs;
+/// otherwise returns a formatted summary of all non-empty outputs in phase order.
 pub fn synthesize_summary(definition: &WorkflowDefinition, phase_states: &Value) -> Option<String> {
     let outputs_for = |name: &str| {
         phase_states

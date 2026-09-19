@@ -1602,6 +1602,8 @@ pub fn release_agent_team_task(workspace_dir: &Path, team_id: &str, task_id: &st
     })
 }
 
+/// Connection-scoped team lookup, so an upsert can read its own write back
+/// inside the same transaction.
 fn get_agent_team_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeam>> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_thread_id, lead_agent_id, status, summary,
@@ -1613,6 +1615,8 @@ fn get_agent_team_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeam>
         .map_err(Into::into)
 }
 
+/// Connection-scoped member lookup, so an upsert can read its own write back
+/// inside the same transaction.
 fn get_agent_team_member_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeamMember>> {
     let mut stmt = conn.prepare(
         "SELECT id, team_id, name, agent_id, member_status,
@@ -1624,6 +1628,8 @@ fn get_agent_team_member_inner(conn: &Connection, id: &str) -> Result<Option<Age
         .map_err(Into::into)
 }
 
+/// Connection-scoped task lookup, so a claim/completion transaction can read
+/// its own write back inside the same transaction.
 fn get_agent_team_task_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeamTask>> {
     let mut stmt = conn.prepare(
         "SELECT id, team_id, title, objective, status, owner_member_id,
@@ -1686,6 +1692,8 @@ fn map_agent_team_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentTea
     })
 }
 
+/// Connection-scoped agent-run lookup, so an upsert can read its own write
+/// back inside the same transaction.
 fn get_agent_run_inner(conn: &Connection, id: &str) -> Result<Option<AgentRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, parent_run_id, parent_thread_id, agent_id, status,
@@ -1699,6 +1707,9 @@ fn get_agent_run_inner(conn: &Connection, id: &str) -> Result<Option<AgentRun>> 
         .map_err(Into::into)
 }
 
+/// Connection-scoped telemetry lookup that errors when the row is absent —
+/// used right after [`upsert_run_telemetry`] writes it, where a miss means
+/// the write silently failed.
 fn get_run_telemetry_inner(conn: &Connection, run_id: &str) -> Result<RunTelemetry> {
     let mut stmt = conn.prepare(
         "SELECT run_id, input_tokens, output_tokens, cached_input_tokens, cost_usd,
