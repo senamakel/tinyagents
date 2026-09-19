@@ -1203,6 +1203,7 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
         hi_completions: Arc<AtomicUsize>,
         lo_completions: Arc<AtomicUsize>,
         y_completions: Arc<AtomicUsize>,
+        y_observed_value: Arc<std::sync::atomic::AtomicI32>,
     ) -> CompiledGraph<Counter, i32> {
         GraphBuilder::<Counter, i32>::new()
             .with_parallel(true)
