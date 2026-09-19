@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::builder::START;
-use crate::builder::{BarrierRelief, Branch, BuilderNode, NodeMeta};
+use crate::builder::{BarrierRelief, Branch, BuilderNode, NodeMeta, NodePolicy};
 use crate::checkpoint::{CheckpointConfig, CheckpointMetadata, Checkpointer, DurabilityMode};
 use crate::command::Interrupt;
 use crate::observability::{GraphEventJournal, GraphStatusStore};
@@ -88,6 +88,12 @@ pub struct CompiledGraph<State, Update> {
     /// abort-on-first-error behavior. Configured via
     /// [`CompiledGraph::with_node_retry`](crate::CompiledGraph::with_node_retry).
     pub(crate) node_retry: Option<tinyagents_harness::retry::RetryPolicy>,
+    /// Per-node execution policies; see [`NodePolicy`]. Resolved per
+    /// activation against `node_defaults` and the legacy graph-wide
+    /// `node_retry`/`node_timeout` fields by [`NodePolicy::resolve`].
+    pub(crate) node_policies: Arc<HashMap<NodeId, NodePolicy<State, Update>>>,
+    /// Graph-wide default execution policy (`GraphBuilder::set_node_defaults`).
+    pub(crate) node_defaults: Option<Arc<NodePolicy<State, Update>>>,
 }
 
 impl<State, Update> std::fmt::Debug for CompiledGraph<State, Update> {
@@ -132,6 +138,8 @@ impl<State, Update> Clone for CompiledGraph<State, Update> {
             run_deadline: self.run_deadline,
             durability: self.durability,
             node_retry: self.node_retry.clone(),
+            node_policies: self.node_policies.clone(),
+            node_defaults: self.node_defaults.clone(),
         }
     }
 }

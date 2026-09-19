@@ -342,4 +342,10 @@ pub struct GraphBuilder<State, Update> {
     pub(crate) node_timeout: Option<Duration>,
     /// Behavior-free per-node markers/metadata surfaced by the topology export.
     pub(crate) node_meta: HashMap<NodeId, NodeMeta>,
+    /// Per-node execution policies (retry/timeout/cache/on_error/defer); see
+    /// [`super::NodePolicy`].
+    pub(crate) node_policies: HashMap<NodeId, super::NodePolicy<State, Update>>,
+    /// Graph-wide default execution policy every node falls back to, field
+    /// by field, when it has no per-node override.
+    pub(crate) node_defaults: Option<super::NodePolicy<State, Update>>,
 }

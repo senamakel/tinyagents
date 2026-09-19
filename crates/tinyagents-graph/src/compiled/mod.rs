@@ -102,7 +102,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::builder::{
     BarrierRelief, Branch, BuilderNode, END, ForkId, NodeContext, NodeFuture, NodeHandler,
-    NodeMeta, START,
+    NodeMeta, NodePolicy, START,
 };
 use crate::checkpoint::{
     BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointTuple, Checkpointer, DurabilityMode,
@@ -341,7 +341,33 @@ impl<State, Update> CompiledGraph<State, Update> {
             run_deadline: None,
             durability: crate::checkpoint::DurabilityMode::default(),
             node_retry: None,
+            node_policies: Arc::new(HashMap::new()),
+            node_defaults: None,
         }
+    }
+
+    /// Installs the per-node policies and graph-wide default policy the
+    /// builder accumulated (called from `GraphBuilder::compile`).
+    pub(crate) fn with_node_policies(
+        mut self,
+        node_policies: HashMap<NodeId, NodePolicy<State, Update>>,
+        node_defaults: Option<NodePolicy<State, Update>>,
+    ) -> Self {
+        self.node_policies = Arc::new(node_policies);
+        self.node_defaults = node_defaults.map(Arc::new);
+        self
+    }
+
+    /// Resolves the effective [`NodePolicy`] for `node`: per-node field →
+    /// `set_node_defaults` field → legacy graph-wide `node_retry` /
+    /// `node_timeout`.
+    pub(crate) fn effective_policy(&self, node: &NodeId) -> NodePolicy<State, Update> {
+        NodePolicy::resolve(
+            self.node_policies.get(node),
+            self.node_defaults.as_deref(),
+            self.node_retry.as_ref(),
+            self.node_timeout,
+        )
     }
 
     /// The graph id.

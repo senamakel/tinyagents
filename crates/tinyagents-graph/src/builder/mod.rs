@@ -11,8 +11,10 @@
 //! See `types` for the builder data types. `compile` validates the topology
 //! and freezes it into an immutable [`crate::CompiledGraph`].
 
+mod policy;
 mod types;
 
+pub use policy::{CacheKeyFn, NodeCachePolicy, NodePolicy, OnErrorFn};
 pub(crate) use types::{Branch, BuilderNode, NodeMeta};
 pub use types::{
     END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
@@ -89,7 +91,36 @@ where
             max_concurrency: None,
             node_timeout: None,
             node_meta: HashMap::new(),
+            node_policies: HashMap::new(),
+            node_defaults: None,
         }
+    }
+
+    /// Attaches a per-node execution [`NodePolicy`] (retry, timeouts, cache,
+    /// `on_error`, `defer`) to `node`, replacing any policy previously set
+    /// for it. At run time each field falls back to the
+    /// [`Self::set_node_defaults`] policy, then to the legacy graph-wide
+    /// `with_node_timeout`/`with_node_retry` settings — see
+    /// [`NodePolicy`]'s module docs for the exact precedence.
+    pub fn with_node_policy(
+        mut self,
+        node: impl Into<NodeId>,
+        policy: NodePolicy<State, Update>,
+    ) -> Self {
+        let node = node.into();
+        // Keep the export-only marker in sync with the runtime flag.
+        if policy.defer {
+            self.node_meta.entry(node.clone()).or_default().deferred = true;
+        }
+        self.node_policies.insert(node, policy);
+        self
+    }
+
+    /// Sets the graph-wide default [`NodePolicy`] every node falls back to,
+    /// field by field, when it has no per-node override.
+    pub fn set_node_defaults(mut self, policy: NodePolicy<State, Update>) -> Self {
+        self.node_defaults = Some(policy);
+        self
     }
 
     /// Applies a bundle of [`GraphDefaults`] in one call. Only the `Some` fields
@@ -468,9 +499,15 @@ where
         self
     }
 
-    /// Marks `node` as a deferred join for the export.
+    /// Marks `node` as a deferred join: it is surfaced as deferred in the
+    /// export *and* scheduled with [`NodePolicy::defer`] semantics — it
+    /// only runs once nothing else is left in the frontier. Equivalent to
+    /// `with_node_policy(node, NodePolicy { defer: true, ..existing })`,
+    /// merging with any policy already set for the node.
     pub fn mark_deferred(mut self, node: impl Into<NodeId>) -> Self {
-        self.node_meta.entry(node.into()).or_default().deferred = true;
+        let node = node.into();
+        self.node_meta.entry(node.clone()).or_default().deferred = true;
+        self.node_policies.entry(node).or_default().defer = true;
         self
     }
 
@@ -584,6 +621,8 @@ where
             node_timeout,
             node_meta,
             barrier_reliefs,
+            node_policies,
+            node_defaults,
         } = self;
 
         Ok(CompiledGraph::from_parts(
@@ -602,7 +641,8 @@ where
             node_timeout,
             node_meta,
             barrier_reliefs,
-        ))
+        )
+        .with_node_policies(node_policies, node_defaults))
     }
 
     fn require_node(&self, id: &NodeId) -> Result<()> {
