@@ -2826,6 +2826,7 @@ async fn host_delegate_registry_authorizes_recursive_children() {
     ]));
     let mut parent = AgentDefinition::new("parent", "Parent", "delegates");
     parent.subagents.push("worker".into());
+    parent.tools.push("worker".into());
     let definitions = Arc::new(InMemoryDefinitionRegistry::new(vec![
         parent,
         AgentDefinition::new("worker", "Worker", "child"),
@@ -2887,6 +2888,7 @@ async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
     ]));
     let mut parent = AgentDefinition::new("parent", "Parent", "delegates");
     parent.subagents.push("worker".into());
+    parent.tools.push("worker".into());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![
@@ -3197,6 +3199,7 @@ async fn hosted_streaming_child_inherits_its_parents_bundle_and_cancellation() {
     });
     let mut parent = AgentDefinition::new("parent", "Parent", "delegates");
     parent.subagents.push("worker".into());
+    parent.tools.push("worker".into());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![
