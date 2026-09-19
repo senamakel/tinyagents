@@ -22,8 +22,8 @@
 //! # In-memory transcript double
 //!
 //! [`InMemoryTranscriptHistory`] implements
-//! [`TranscriptHistory`](crate::transcript::history::TranscriptHistory) purely
-//! in memory, so the transcript-history conformance suite (and any test that
+//! [`TranscriptHistory`](crate::transcript::TranscriptHistory) purely in
+//! memory, so the transcript-history conformance suite (and any test that
 //! needs a cheap stand-in for a real `session_raw/*.jsonl` file) does not have
 //! to touch a filesystem.
 
