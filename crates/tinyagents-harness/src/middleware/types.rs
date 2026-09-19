@@ -306,7 +306,7 @@ pub trait ToolBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
 ///
 /// Retry and replacement are therefore expressed by *how* a middleware uses
 /// `next` rather than by distinct enum variants; the enum only needs to carry
-/// the resolved response. It is [`non_exhaustive`] so future control variants
+/// the resolved response. It is `#[non_exhaustive]` so future control variants
 /// can be added without breaking callers.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -333,7 +333,7 @@ impl From<ModelResponse> for MiddlewareModelOutcome {
 /// The outcome of a wrapped tool call.
 ///
 /// The tool-wrap counterpart of [`MiddlewareModelOutcome`]; see its docs for the
-/// proceed / replace / retry / fallback patterns. [`non_exhaustive`] for the
+/// proceed / replace / retry / fallback patterns. `#[non_exhaustive]` for the
 /// same forward-compatibility reason.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
