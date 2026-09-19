@@ -178,7 +178,8 @@ fn tool_call_idempotency_key(tool_name: &str, arguments: &Value) -> String {
     hasher.update(tool_name.as_bytes());
     hasher.update([0u8]);
     hasher.update(serde_json::to_vec(arguments).unwrap_or_default());
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
