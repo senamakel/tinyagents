@@ -175,6 +175,15 @@ fn model_satisfies<State: Send + Sync>(
     }
 }
 
+/// Whether `model` may be selected for a call requiring `required` capabilities.
+///
+/// Composes two independent checks: capability satisfaction (via
+/// [`ModelProfile::satisfies`]) and, unless `allow_retired` is set,
+/// usability (a model with no declared profile is always usable; one with a
+/// profile must pass [`ModelProfile::is_usable`]). `allow_retired` exists so
+/// callers can explicitly resolve a retired model (e.g. to finish an
+/// in-flight conversation pinned to it) without opening retired models to
+/// fresh selection generally.
 pub(crate) fn model_eligible<State: Send + Sync>(
     model: &dyn ChatModel<State>,
     required: Option<&CapabilitySet>,

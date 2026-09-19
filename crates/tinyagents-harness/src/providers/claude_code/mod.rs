@@ -436,6 +436,10 @@ fn model_response_with_tools(response: ChatResponse, has_tools: bool) -> ModelRe
     }
 }
 
+/// Classifies a driver failure into `Model` (retryable) or `Validation`
+/// (not) by running its message through the shared provider-failure
+/// classifier, so a CLI spawn/timeout/exit failure gets the same retry
+/// treatment as other providers' errors.
 fn map_error(error: anyhow::Error) -> tinyinference_llm::Error {
     let message = format!("claude-code model call failed: {error}");
     if !matches!(
