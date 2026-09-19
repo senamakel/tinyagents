@@ -1087,7 +1087,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ModelCallBase<'_,
     }
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ModelBaseCall<State, Ctx>
     for ModelCallBase<'_, State, Ctx>
 {
     fn call<'a>(

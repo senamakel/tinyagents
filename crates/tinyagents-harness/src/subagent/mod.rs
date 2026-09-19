@@ -88,7 +88,7 @@ use crate::runtime::AgentHarness;
 use crate::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
-impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// Creates a sub-agent wrapping `harness` with a stable `name` and
     /// `description`.
     pub fn new(
@@ -401,7 +401,7 @@ fn child_thread_id(parent: &ThreadId, child_run_id: &str) -> ThreadId {
     ThreadId::new(format!("{}-subagent-{child_run_id}", parent.as_str()))
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentSession<State, Ctx> {
     /// Creates a session that reuses `subagent` across turns.
     ///
     /// The child runs at depth `1` by default (caller `parent_depth = 0`); use

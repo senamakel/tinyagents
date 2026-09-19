@@ -190,7 +190,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     }
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> Default for AgentHarness<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> Default for AgentHarness<State, Ctx> {
     fn default() -> Self {
         Self::new()
     }
