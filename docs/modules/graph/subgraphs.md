@@ -30,10 +30,21 @@ Subgraph requirements (implemented unless marked target; verified against
 - stream child values, updates, messages, tasks, and checkpoints when requested
 - **Target (not implemented):** allow `Command::Parent` handoff from child
   graph to parent graph — no `Parent` variant exists on `Command`
-- **Target (not implemented):** expose child state in parent checkpoint task
-  metadata — today the parent tracks only lineage (`ChildRun` entries: child
-  run id, node, and a `child_runs` array in boundary-checkpoint metadata),
-  not the child's state
+- each `ChildRun` entry (the `child_runs` array embedded in the parent's
+  boundary-checkpoint metadata) carries the child's latest checkpoint id
+  alongside its run id and node, so the association between a parent
+  activation and the exact child checkpoint it drove is explicit
+- a `Send` fan-out of the same subgraph node — several concurrent
+  activations of one node within a step (map-reduce over a subgraph) —
+  namespaces each activation's child under `[node_id, task_id]` instead of
+  every activation sharing one `[node_id]` namespace; a node activated only
+  once keeps the plain `[node_id]` namespace, so existing checkpoints stay
+  readable
+- a subgraph child that failed (or is interrupted with a resume value
+  already in hand) is continued through the parent rather than restarted:
+  `retry()`/`resume()` on the parent detects the child's own resumable
+  checkpoint and retries/resumes it in place, instead of re-running the
+  child's already-completed nodes from scratch
 
 Subgraph persistence must be explicit. Inherited checkpointing is convenient for
 shared-state subgraphs; isolated checkpointing is safer for reusable child
