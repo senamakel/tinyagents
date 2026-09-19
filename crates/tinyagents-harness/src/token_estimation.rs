@@ -250,6 +250,26 @@ pub fn count_tool_schema_tokens(schemas: &[ToolSchema], options: &TokenCountOpti
     tokens
 }
 
+/// Serialised size, in bytes, of the tool declarations as they go on the
+/// wire: `{name, description, parameters}` per tool, compact JSON.
+///
+/// This is the number a prompt-budget ratchet wants — exact bytes, not a
+/// tokenizer guess — and the one [`crate::events::AgentEvent::ToolsAdvertised`]
+/// reports at the start of every run.
+pub fn tool_schema_bytes(schemas: &[ToolSchema]) -> usize {
+    schemas
+        .iter()
+        .map(|schema| {
+            let rendered = serde_json::json!({
+                "name": schema.name,
+                "description": schema.description,
+                "parameters": schema.parameters,
+            });
+            serde_json::to_vec(&rendered).map_or(0, |bytes| bytes.len())
+        })
+        .sum()
+}
+
 /// The crate's legacy `floor(chars / 4)` heuristic for a single message,
 /// computed over the *corrected* character weight (content blocks **plus** tool
 /// calls and tool-call ids).

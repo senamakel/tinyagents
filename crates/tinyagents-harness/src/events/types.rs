@@ -95,6 +95,20 @@ pub enum AgentEvent {
         output: Option<serde_json::Value>,
     },
 
+    /// The agent loop fixed the run's tool surface: how many schemas go on
+    /// the wire, how many are deferred behind `tool_search`, and what the wire
+    /// set costs in bytes. Emitted once per run, before the first model call,
+    /// so a prompt-budget ratchet can read the number the model actually pays.
+    ToolsAdvertised {
+        /// Schemas in every request's `tools` array (direct tools plus the
+        /// bridge tools when any tool is deferred).
+        direct: usize,
+        /// Tools reachable only through `tool_search` / `tool_call`.
+        deferred: usize,
+        /// Compact-JSON size of the advertised schemas.
+        schema_bytes: usize,
+    },
+
     /// A tool-selection middleware filtered the model-visible tool set before a
     /// model call. Makes exposure decisions auditable: a UI or log can see
     /// which tools were withheld from the model and by which policy.
@@ -635,6 +649,7 @@ impl AgentEvent {
             AgentEvent::ModelDelta { .. } => "model.delta",
             AgentEvent::ModelCompleted { .. } => "model.completed",
             AgentEvent::ControlApplied { .. } => "control.applied",
+            AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
             AgentEvent::ToolsFiltered { .. } => "tool.filtered",
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",
