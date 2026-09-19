@@ -372,6 +372,12 @@ pub struct NodeSpec {
     /// Tool capability names referenced by this node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
+    /// A registered capability bundle name (`capability "name"`, gap G3) this
+    /// node references. Unlike `agent`/`subgraph`/`script`/`router`, a
+    /// capability reference is not tied to a particular node `kind` — any
+    /// node may declare one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
     /// How control leaves this node.
     #[serde(default)]
     pub routing: Routing,
