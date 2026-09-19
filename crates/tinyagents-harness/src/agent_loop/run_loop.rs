@@ -572,7 +572,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 if !response.served_from_cache
                     && let Some((budget, _permit)) = &host_budget
-                    && let Err(error) = budget.record(&usage).await
+                    && let Err(error) = self.record_host_usage(ctx, budget, &usage).await
                 {
                     let record = ctx.emit(AgentEvent::ModelFailed {
                         call_id: call_id.clone(),
@@ -886,6 +886,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return None;
         }
         Some((Arc::clone(cache), cache_key(request)))
+    }
+
+    /// Records realised provider usage without allowing host accounting I/O to
+    /// outlive a cancelled or deadline-expired run. The local run totals are
+    /// updated before this call, so a host-recording failure never erases spend
+    /// that the provider has already incurred.
+    async fn record_host_usage(
+        &self,
+        ctx: &RunContext<Ctx>,
+        budget: &Arc<dyn crate::host::BudgetGate>,
+        usage: &tinyinference_llm::usage::Usage,
+    ) -> Result<()> {
+        let cancellation = ctx.cancellation.clone();
+        let recording = budget.record(usage);
+        match ctx.remaining_wall_clock() {
+            Some(remaining) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
+                result = tokio::time::timeout(remaining, recording) => result.map_err(|_| TinyAgentsError::Timeout(format!(
+                    "budget usage recording for run `{}` exceeded its remaining wall-clock deadline",
+                    ctx.run_id()
+                )))?,
+            },
+            None => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
+                result = recording => result,
+            },
+        }
     }
 }
 

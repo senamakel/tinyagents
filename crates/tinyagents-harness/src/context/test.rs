@@ -457,3 +457,32 @@ fn token_estimation_includes_structured_blocks_for_every_role() {
         8
     );
 }
+
+#[test]
+fn token_estimation_includes_assistant_tool_names_and_arguments() {
+    use tinyinference_llm::message::{AssistantMessage, Message};
+    use tinyinference_llm::tool::ToolCall;
+
+    let messages = vec![Message::Assistant(AssistantMessage {
+        id: None,
+        content: vec![],
+        tool_calls: vec![ToolCall::new(
+            "call-1",
+            "search_docs",
+            serde_json::json!({"query": "one two three"}),
+        )],
+        usage: None,
+    })];
+
+    let rendered = std::cell::RefCell::new(String::new());
+    assert_eq!(
+        estimate_context_tokens(&messages, |text| {
+            rendered.replace(text.to_string());
+            1
+        }),
+        1
+    );
+    let rendered = rendered.into_inner();
+    assert!(rendered.contains("search_docs"));
+    assert!(rendered.contains("one two three"));
+}

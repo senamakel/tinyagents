@@ -75,7 +75,7 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
                 Message::Assistant(message) => &message.content,
                 Message::Tool(message) => &message.content,
             };
-            let visible = content
+            let mut visible = content
                 .iter()
                 .filter_map(|block| match block {
                     ContentBlock::Text(text) | ContentBlock::Thinking { text, .. } => {
@@ -86,8 +86,16 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
                     }
                     _ => None,
                 })
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect::<Vec<_>>();
+            if let Message::Assistant(message) = message {
+                visible.extend(
+                    message
+                        .tool_calls
+                        .iter()
+                        .filter_map(|call| serde_json::to_string(call).ok()),
+                );
+            }
+            let visible = visible.join("\n");
             tokenize(&visible)
         })
         .sum()

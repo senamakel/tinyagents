@@ -197,7 +197,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     cached.resolved_model = Some(binding.resolved.clone());
                 }
                 if streaming {
-                    self.replay_cached_response_as_deltas(state, ctx, call_id, &cached)
+                    cached = self
+                        .replay_cached_response_as_deltas(state, ctx, call_id, cached)
                         .await?;
                 }
                 return Ok(cached);
@@ -337,9 +338,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         state: &State,
         ctx: &mut RunContext<Ctx>,
         call_id: &CallId,
-        cached: &ModelResponse,
-    ) -> Result<()> {
-        let text = cached.text();
+        mut cached: ModelResponse,
+    ) -> Result<ModelResponse> {
+        let content = cached.message.content.clone();
         let tool_calls = cached.tool_calls().to_vec();
         tinyagents_tracing::debug!(
             call_id = %call_id.as_str(),
@@ -349,12 +350,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         );
 
         let mut deltas: Vec<MessageDelta> = Vec::new();
-        if !text.is_empty() {
-            deltas.push(MessageDelta {
-                text,
-                reasoning: String::new(),
-                tool_call: None,
-            });
+        for block in &content {
+            match block {
+                tinyinference_llm::message::ContentBlock::Text(text) => {
+                    deltas.push(MessageDelta {
+                        text: text.clone(),
+                        reasoning: String::new(),
+                        tool_call: None,
+                    });
+                }
+                tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                    deltas.push(MessageDelta {
+                        text: String::new(),
+                        reasoning: text.clone(),
+                        tool_call: None,
+                    });
+                }
+                _ => {}
+            }
         }
         for call in &tool_calls {
             deltas.push(MessageDelta {
@@ -368,6 +381,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
         }
 
+        let mut streamed_text = String::new();
+        let mut streamed_reasoning = String::new();
+        let mut saw_streamed_content = false;
+        let mut suppressed_tool_call_ids = Vec::new();
         for delta in deltas {
             let mut model_delta = ModelDelta {
                 call_id: call_id.as_str().to_string(),
@@ -378,6 +395,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             self.middleware
                 .run_on_model_delta(ctx, state, &mut model_delta)
                 .await?;
+            if model_delta.tool_call.is_none()
+                && let Some(tool_call) = &delta.tool_call
+            {
+                suppressed_tool_call_ids.push(tool_call.call_id.clone());
+            }
+            saw_streamed_content |= !delta.text.is_empty()
+                || !delta.reasoning.is_empty()
+                || !model_delta.content.is_empty()
+                || !model_delta.reasoning.is_empty();
+            streamed_text.push_str(&model_delta.content);
+            streamed_reasoning.push_str(&model_delta.reasoning);
             ctx.emit(AgentEvent::ModelDelta {
                 run_id: ctx.config.run_id.clone(),
                 call_id: call_id.clone(),
@@ -395,7 +423,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 },
             );
         }
-        Ok(())
+        if saw_streamed_content {
+            let mut transformed_content = Vec::new();
+            if !streamed_reasoning.is_empty() {
+                transformed_content.push(tinyinference_llm::message::ContentBlock::Thinking {
+                    text: streamed_reasoning,
+                    signature: None,
+                });
+            }
+            if !streamed_text.is_empty() {
+                transformed_content.push(tinyinference_llm::message::ContentBlock::Text(
+                    streamed_text,
+                ));
+            }
+            transformed_content.extend(cached.message.content.drain(..).filter(|block| {
+                !matches!(
+                    block,
+                    tinyinference_llm::message::ContentBlock::Text(_)
+                        | tinyinference_llm::message::ContentBlock::Thinking { .. }
+                )
+            }));
+            cached.message.content = transformed_content;
+        }
+        if !suppressed_tool_call_ids.is_empty() {
+            cached
+                .message
+                .tool_calls
+                .retain(|call| !suppressed_tool_call_ids.contains(&call.id));
+        }
+        Ok(cached)
     }
 
     /// Invokes a model with retry and fallback (no caching).

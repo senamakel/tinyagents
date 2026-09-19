@@ -68,6 +68,14 @@ struct HostFallbackResolver {
 
 struct RetryableFailingModel;
 
+struct SecretProviderModel;
+
+struct UsageReportingModel;
+
+struct SecretRecordBudget;
+
+struct SecretAfterModelMiddleware;
+
 struct RecordingArgumentGate {
     seen: Mutex<Vec<serde_json::Value>>,
 }
@@ -127,6 +135,23 @@ impl BudgetGate for RecordingBudget {
 
     fn compression_hint(&self, _state: &ContextState) -> CompressionHint {
         self.hint
+    }
+}
+
+#[async_trait]
+impl BudgetGate for SecretRecordBudget {
+    async fn acquire(&self, _estimate: &CallEstimate) -> crate::error::Result<Permit> {
+        Ok(Permit::unlimited())
+    }
+
+    async fn record(&self, _usage: &Usage) -> crate::error::Result<()> {
+        Err(crate::TinyAgentsError::Model(
+            "budget-stream-secret".to_string(),
+        ))
+    }
+
+    fn compression_hint(&self, _state: &ContextState) -> CompressionHint {
+        CompressionHint::None
     }
 }
 
@@ -243,6 +268,37 @@ impl ChatModel<()> for RetryableFailingModel {
         Err(tinyinference_llm::Error::Model(
             "transient failure".to_string(),
         ))
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for SecretProviderModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        Err(tinyinference_llm::Error::Model(
+            "provider-stream-secret".to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for UsageReportingModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let mut response = ModelResponse::assistant("ok");
+        response.usage = Some(Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            total_tokens: 2,
+            ..Usage::default()
+        });
+        Ok(response)
     }
 }
 
@@ -442,6 +498,24 @@ impl crate::middleware::Middleware<(), ()> for RedactDeltaMiddleware {
     ) -> crate::error::Result<()> {
         delta.content = "[redacted]".to_string();
         Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::middleware::Middleware<(), ()> for SecretAfterModelMiddleware {
+    fn name(&self) -> &str {
+        "secret-after-model"
+    }
+
+    async fn after_model(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        _response: &mut ModelResponse,
+    ) -> crate::error::Result<()> {
+        Err(crate::TinyAgentsError::Middleware(
+            "middleware-stream-secret".to_string(),
+        ))
     }
 }
 
@@ -1869,6 +1943,82 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
 }
 
 #[tokio::test]
+async fn public_hosted_stream_sanitizes_provider_middleware_and_budget_failures() {
+    fn host(model: Arc<dyn ChatModel<()>>) -> crate::host::HostCapabilities<()> {
+        crate::host::HostCapabilities::new(
+            Arc::new(StaticContextComposer::empty()),
+            Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+                "helper",
+                "Helper",
+                "test helper",
+            )])),
+            Arc::new(AllowAllSecurityGate),
+            Arc::new(FixedModelResolver::new(model)),
+        )
+    }
+
+    async fn collect(harness: &AgentHarness<()>) -> Vec<crate::agent_loop::AgentStreamItem> {
+        let mut stream = harness
+            .invoke_agent_stream(
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("public-hosted-stream"), ()),
+                &(),
+            )
+            .await
+            .expect("hosted stream starts");
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        items
+    }
+
+    fn assert_sanitized(items: &[crate::agent_loop::AgentStreamItem], secret: &str) {
+        assert!(
+            !format!("{items:#?}").contains(secret),
+            "public hosted stream leaked its raw failure detail"
+        );
+        assert!(items.iter().any(|item| matches!(
+            item,
+            crate::agent_loop::AgentStreamItem::Failed { error, .. }
+                if error == "hosted agent invocation failed"
+        )));
+        assert!(items.iter().any(|item| matches!(
+            item,
+            crate::agent_loop::AgentStreamItem::Event(record)
+                if matches!(&record.event, crate::events::AgentEvent::RunFailed { error, .. }
+                    if error == "hosted agent invocation failed")
+        )));
+    }
+
+    let mut provider = AgentHarness::new();
+    provider.with_host_capabilities(host(Arc::new(SecretProviderModel)));
+    let provider_items = collect(&provider).await;
+    assert_sanitized(&provider_items, "provider-stream-secret");
+
+    let mut middleware = AgentHarness::new();
+    middleware.with_host_capabilities(host(Arc::new(UsageReportingModel)));
+    middleware.push_middleware(Arc::new(SecretAfterModelMiddleware));
+    assert_sanitized(&collect(&middleware).await, "middleware-stream-secret");
+
+    let mut budget = AgentHarness::new();
+    budget.with_host_capabilities(
+        host(Arc::new(UsageReportingModel)).with_budget(Arc::new(SecretRecordBudget)),
+    );
+    let budget_items = collect(&budget).await;
+    assert_sanitized(&budget_items, "budget-stream-secret");
+    assert!(budget_items.iter().any(|item| matches!(
+        item,
+        crate::agent_loop::AgentStreamItem::Event(record)
+            if matches!(&record.event, crate::events::AgentEvent::ModelFailed { error, .. }
+                if error == "hosted model invocation failed")
+    )));
+}
+
+#[tokio::test]
 async fn hard_budget_compression_fails_closed_when_only_system_instructions_remain() {
     let model = Arc::new(ScriptedModel::replies(vec!["must not run"]));
     let host = crate::host::HostCapabilities::new(
@@ -1950,24 +2100,24 @@ async fn soft_budget_compression_hint_reduces_multiturn_context_without_blocking
 #[tokio::test]
 async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
     let model = Arc::new(ScriptedModel::replies(vec!["secret"]));
-    let progress = Arc::new(RecordingProgressSink::new());
-    let host = crate::host::HostCapabilities::new(
-        Arc::new(StaticContextComposer::empty()),
+    let cache = Arc::new(crate::cache::InMemoryResponseCache::new());
+    let definition = || {
         Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
             "helper",
             "Helper",
             "test helper",
-        )])),
+        )]))
+    };
+    let seed_host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        definition(),
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model.clone())),
-    )
-    .with_progress(progress.clone());
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_response_cache(Arc::new(crate::cache::InMemoryResponseCache::new()));
-    harness.with_host_capabilities(host);
-    harness.push_middleware(Arc::new(RedactDeltaMiddleware));
-
-    let mut seeded = harness
+    );
+    let mut seed: AgentHarness<()> = AgentHarness::new();
+    seed.with_response_cache(cache.clone());
+    seed.with_host_capabilities(seed_host);
+    let mut seeded = seed
         .invoke_agent_stream(
             AgentTurnRequest::new(
                 "helper",
@@ -1980,7 +2130,19 @@ async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
         .expect("cache seed starts");
     while seeded.next().await.is_some() {}
 
-    let mut replay = harness
+    let progress = Arc::new(RecordingProgressSink::new());
+    let replay_host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        definition(),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_progress(progress.clone());
+    let mut replay_harness: AgentHarness<()> = AgentHarness::new();
+    replay_harness.with_response_cache(cache);
+    replay_harness.with_host_capabilities(replay_host);
+    replay_harness.push_middleware(Arc::new(RedactDeltaMiddleware));
+    let mut replay = replay_harness
         .invoke_agent_stream(
             AgentTurnRequest::new(
                 "helper",
@@ -1992,9 +2154,14 @@ async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
         .await
         .expect("cache replay starts");
     let mut replayed_events = Vec::new();
+    let mut replayed_run = None;
     while let Some(item) = replay.next().await {
-        if let crate::agent_loop::AgentStreamItem::Event(event) = item {
-            replayed_events.push(event);
+        match item {
+            crate::agent_loop::AgentStreamItem::Event(event) => replayed_events.push(event),
+            crate::agent_loop::AgentStreamItem::Completed(run) => replayed_run = Some(run),
+            crate::agent_loop::AgentStreamItem::Failed { error, .. } => {
+                panic!("cache replay failed unexpectedly: {error}")
+            }
         }
     }
 
@@ -2009,6 +2176,11 @@ async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
     assert!(!replayed_events.iter().any(
         |record| matches!(&record.event, crate::events::AgentEvent::ModelDelta { delta, .. } if delta.text == "secret")
     ));
+    assert_eq!(
+        replayed_run.as_ref().and_then(|run| run.text()).as_deref(),
+        Some("[redacted]"),
+        "the replayed terminal response follows transformed deltas"
+    );
     yield_until(|| {
         progress.events().iter().any(
             |event| matches!(event, crate::host::ProgressEvent::Token { text, .. } if text == "[redacted]")

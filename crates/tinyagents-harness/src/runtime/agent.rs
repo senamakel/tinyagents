@@ -16,6 +16,7 @@ use futures::{Stream, StreamExt};
 use crate::agent_loop::AgentStreamItem;
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
+use crate::events::{AgentEvent, EventRecord};
 use crate::host::{
     ContentOrigin, Experience, ProgressEvent, RecallRequest, ScreenOutcome, TurnContextRequest,
     TurnSummary,
@@ -84,6 +85,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, 
         match stream.inner.as_mut() {
             Some(inner) => match inner.as_mut().poll_next(context) {
                 Poll::Ready(Some(item)) => {
+                    // The ordinary SDK stream intentionally carries rich
+                    // provider diagnostics.  A hosted stream crosses into a
+                    // product boundary, however, so it must not expose raw
+                    // provider, middleware, or budget error text to its
+                    // caller.  This projects the item after the internal
+                    // event sink has recorded the typed diagnostic; host
+                    // observability therefore remains useful without making
+                    // the public stream a disclosure channel.
+                    let item = sanitize_hosted_stream_item(item);
                     stream.terminal_observed = matches!(
                         item,
                         AgentStreamItem::Completed(_) | AgentStreamItem::Failed { .. }
@@ -98,6 +108,54 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, 
             },
             None => Poll::Ready(None),
         }
+    }
+}
+
+/// Removes internal failure details from the caller-consumable hosted stream.
+///
+/// This deliberately transforms only the clone forwarded by `AgentStream`.
+/// The run loop's event sink, status, and error values retain their precise
+/// typed details for host-owned diagnostics and policy decisions.
+fn sanitize_hosted_stream_item(mut item: AgentStreamItem) -> AgentStreamItem {
+    match &mut item {
+        AgentStreamItem::Failed { error, .. } => {
+            *error = "hosted agent invocation failed".to_string();
+        }
+        AgentStreamItem::Event(record) => sanitize_hosted_event(record),
+        AgentStreamItem::Completed(_) => {}
+    }
+    item
+}
+
+fn sanitize_hosted_event(record: &mut EventRecord) {
+    match &mut record.event {
+        AgentEvent::ToolCompleted {
+            error: Some(error), ..
+        }
+        | AgentEvent::ToolFailed { error, .. } => {
+            *error = "hosted tool invocation failed".to_string();
+        }
+        AgentEvent::ModelFailed { error, .. } => {
+            *error = "hosted model invocation failed".to_string();
+        }
+        AgentEvent::SubAgentFailed { error, .. } => {
+            *error = "hosted sub-agent invocation failed".to_string();
+        }
+        AgentEvent::InvalidToolArgs { error, .. } => {
+            *error = "hosted tool arguments are invalid".to_string();
+        }
+        AgentEvent::WorkspaceCleanup {
+            error: Some(error), ..
+        } => {
+            *error = "hosted workspace cleanup failed".to_string();
+        }
+        AgentEvent::MiddlewareFailed { error, .. } => {
+            *error = "hosted middleware failed".to_string();
+        }
+        AgentEvent::RunFailed { error, .. } => {
+            *error = "hosted agent invocation failed".to_string();
+        }
+        _ => {}
     }
 }
 
