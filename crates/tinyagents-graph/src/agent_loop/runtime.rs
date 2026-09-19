@@ -78,6 +78,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> LoopRuntime<State, Ctx> {
             streaming,
         }
     }
+
+    /// [`Self::new`] with a fresh, default [`AgentRun`]/[`HarnessRunStatus`]
+    /// — the common case for starting a brand-new run (as opposed to
+    /// resuming one, which would seed `run`/`status` from prior state).
+    pub fn for_run(
+        harness: Arc<AgentHarness<State, Ctx>>,
+        app_state: Arc<State>,
+        ctx: RunContext<Ctx>,
+    ) -> Self {
+        let run_id = ctx.run_id().clone();
+        let status =
+            HarnessRunStatus::new(run_id, tinyagents_harness::ids::ComponentId::new("agent_loop"));
+        Self::new(harness, app_state, ctx, AgentRun::default(), status, false)
+    }
 }
 
 /// The innermost model call: a direct, single-attempt dispatch to the
