@@ -165,6 +165,35 @@ first attempt. Step 12's tool-call handling additionally honors
 [structured-output.md](structured-output.md#endstrategy-output-tool--function-tools-in-one-turn-a6))
 when a turn returns both a structured-output tool call and real tool calls.
 
+### Loop exits: finished, limit stop, paused, deferred
+
+The loop distinguishes four deliberate stops. A normal finish and a
+`LimitBehavior::StopWithPartial` limit stop complete the run
+(`HarnessRunStatus` `Completed`, `AgentEvent::RunCompleted`). A steering
+**pause** sets `AgentRun::paused` and a **deferred** tool batch (A2) sets
+`AgentRun::deferred`; both report the run `Interrupted`, emit
+`ControlApplied { control: "paused" | "deferred" }`, leave `final_response`
+unset, and are resumed from `run.messages`. The working transcript is written
+onto the `AgentRun` on every exit path, including errors.
+
+Resuming a deferred run is `AgentHarness::resume_deferred(state, ctx,
+run.messages, DeferredToolResults)` (sugar over
+`RunContext::with_deferred_results`), or on the hosted path
+`AgentTurnRequest::new(agent, run.messages).with_deferred_results(results)`.
+The loop applies the decisions to the unanswered tool calls on the last
+assistant row *before* its first model call, then proceeds normally. See
+[tool.md](tool.md#deferred-tool-calls-approval-and-external-execution-a2)
+for the triggers, decision vocabulary, and the inline `DeferredToolHandler`.
+
+**Durability is the host's responsibility.** The harness does not write to
+the session run ledger (`tinyagents-session` depends on the harness, not the
+other way round), and the only state a resume needs is `run.messages` plus
+`run.deferred` — both `serde` types. Persist them wherever the run's other
+state lives; `tinyagents_session::run_ledger::AgentRun::checkpoint` (a JSON
+column keyed by run id, alongside a `Paused`/`Interrupted` status) is the
+natural slot, and a host that also wants per-call approval rows keeps those
+in its own tables keyed by `DeferredToolRequests` call ids.
+
 ### `RunPolicy` fields added by Phase 2 (A1/A3/A6)
 
 | Field | Type | Default | Purpose |
@@ -176,6 +205,8 @@ when a turn returns both a structured-output tool call and real tool calls.
 `AgentHarness::with_output_validator(Arc<dyn OutputValidator<State, Ctx>>)`
 registers the validator the output-retry loop consults; only one may be
 installed (calling it again replaces the previous one).
+`AgentHarness::with_deferred_tool_handler(Arc<dyn DeferredToolHandler>)`
+(A2) likewise installs the single inline resolver for deferred tool calls.
 
 ## Middleware
 

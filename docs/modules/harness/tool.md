@@ -358,6 +358,62 @@ for the exposure/execution hooks and the enforcement builders
 [`WorkspaceDescriptor`](workspace.md) to decide whether a `SandboxMode::Required`
 tool may run.
 
+## Deferred tool calls: approval and external execution (A2)
+
+A call can leave the loop **without** a result, in three ways:
+
+| Trigger | Where | Lands in |
+|---|---|---|
+| `ToolPolicy.access.approval_required` on the tool's declared policy | admission, after schema validation | `DeferredToolRequests::approvals` |
+| `Err(TinyAgentsError::ApprovalRequired { metadata })` / `Err(TinyAgentsError::CallDeferred { metadata })` from `Tool::execute` **or** from a `before_tool` middleware | execution / admission | `approvals` / `calls`, with `metadata` keyed by call id |
+| `ToolRegistry::register_external(ToolSchema)` (or `AgentHarness::register_external_tool`) — a schema-only tool the harness never runs | admission | `DeferredToolRequests::calls` |
+
+The loop finishes every *other* call in the batch, appends their results,
+emits `AgentEvent::ToolDeferred { call_id, reason }` per deferred call, and
+exits with `AgentRun::deferred = Some(DeferredToolRequests { calls,
+approvals, metadata })`. The assistant's tool-call row stays on the
+transcript; only the deferred ids lack a tool-result row. A deferred call is
+not counted against `max_tool_calls` until it actually runs.
+
+Resolve it with a `DeferredToolResults` and resume:
+
+```rust
+let pending = run.deferred.clone().unwrap();
+let results = DeferredToolResults::new()
+    .approve("call-1")                                 // run with the model's args
+    .approve_with_args("call-2", json!({"path": "x"})) // run with edited args
+    .deny("call-3", "operator refused")                // tool-error result, no run
+    .respond("call-4", ToolResult::success("done"));   // host ran an external tool
+assert!(pending.remaining(&results).is_empty());
+let run = harness.resume_deferred(&state, ctx, run.messages, results).await?;
+```
+
+`ApprovalDecision::{Approve, ApproveWithArgs(Value), Deny { message }}` and
+`DeferredCallResult::{Result(ToolResult), Retry(String), Failed(String)}`
+are the per-call vocabularies; `DeferredToolRequests::remaining(&results)`
+lists what is still unresolved and `approve_all()` builds a blanket
+approval. On resume an approved call is re-admitted through the normal
+pipeline (`before_tool`, validation, host authorization, the wrap onion) with
+`RunContext::is_call_approved(call_id)` set so neither the policy check nor an
+approval middleware defers it again; a denial and a host-supplied result are
+answered through the same fold as a recovery (they emit
+`ToolApproved`/`ToolDenied` plus the usual `ToolStarted`/`ToolCompleted`
+pair, run `after_tool`, and never appear in `executed_tools`).
+
+Two ways to avoid surfacing the pause at all: register a
+`DeferredToolHandler` on the harness (`with_deferred_tool_handler`) and the
+loop resolves the batch inline and keeps going; or give
+`HumanApprovalMiddleware::with_approval_outcome` a callback returning
+`ApprovalOutcome::{Allow, Deny(msg), Defer}` — `Defer` is exactly the
+deferral above, `Deny` answers the model without an interrupt.
+
+A tool that raises `ApprovalRequired` from inside `execute` cannot currently
+see that it was approved (the canonical `ToolRunContext` carries no call id or
+approval flag), so an approved re-execution of such a tool defers again and
+the loop surfaces it rather than spinning. Prefer the policy flag or the
+middleware for approval gates until `ToolExecutionContext` gains `call_id`
+(plan item B1).
+
 ## Results And Artifacts
 
 ```rust
