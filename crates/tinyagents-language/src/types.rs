@@ -338,6 +338,12 @@ pub struct NodeSpec {
     /// never inline code).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+    /// A registered router-function name for a `router` node, parallel to
+    /// `agent`/`subgraph`/`script`. `model` is read as a deprecated fallback
+    /// when this is absent (M4 in
+    /// `docs/runtime-comparison/code-review-workspace.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router: Option<String>,
     /// An input-mapping name for sub-agent / subgraph nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
