@@ -635,9 +635,13 @@ where
         };
         let id = checkpointer.put(checkpoint).await?;
         checkpointer.put_writes(&config, &writes).await?;
-        self.emit(GraphEvent::CheckpointSaved {
-            checkpoint_id: id.clone(),
-        });
+        self.emit(
+            &ctx.run_id,
+            GraphEvent::CheckpointSaved {
+                checkpoint_id: id.clone(),
+                step: Some(step),
+            },
+        );
         Ok(Some(id))
     }
 
