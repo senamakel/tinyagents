@@ -99,6 +99,10 @@ pub struct ScriptedModel {
     pub(crate) queue: Mutex<VecDeque<ModelResponse>>,
     /// Every `ModelRequest` received by `invoke`, in call order.
     pub(crate) received: Mutex<Vec<ModelRequest>>,
+    /// The capability profile returned by [`tinyinference_llm::model::ChatModel::profile`],
+    /// when set via [`ScriptedModel::with_profile`]. `None` reproduces the
+    /// trait's conservative default.
+    pub(crate) profile: Option<tinyinference_llm::model::ModelProfile>,
 }
 
 // ---------------------------------------------------------------------------
