@@ -500,6 +500,7 @@ mod tests {
             max_input_tokens: Some(100_000),
             max_output_tokens: Some(4_096),
             deprecation_date: None,
+            release_date: Some("2026-01-01".to_string()),
             pricing: ModelPricing::default(),
             capabilities: ModelCapabilities::default(),
             source: "manual".to_string(),
