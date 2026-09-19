@@ -20,7 +20,7 @@ use crate::error::{Result, TinyAgentsError};
 
 use super::pairing::find_safe_cutoff_point;
 use super::trim::partition_system;
-use super::types::{CompactionReason, SummaryRecord, SummaryRequest, Summarizer};
+use super::types::{CompactionReason, Summarizer, SummaryRecord, SummaryRequest};
 
 // ---------------------------------------------------------------------------
 // Cut points
@@ -386,7 +386,9 @@ impl OverflowClassifier {
     }
 
     fn match_probe(&self, probe: &OverflowProbe<'_>) -> Option<OverflowInfo> {
-        self.patterns.iter().find_map(|pattern| (pattern.matches)(probe))
+        self.patterns
+            .iter()
+            .find_map(|pattern| (pattern.matches)(probe))
     }
 }
 

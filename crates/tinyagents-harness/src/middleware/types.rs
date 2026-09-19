@@ -782,7 +782,9 @@ pub struct ContextCompressionMiddleware {
     /// [`crate::summarization::CompactionDecision`].
     pub(crate) before_compaction: Option<
         std::sync::Arc<
-            dyn Fn(&crate::summarization::CompactionContext) -> crate::summarization::CompactionDecision
+            dyn Fn(
+                    &crate::summarization::CompactionContext,
+                ) -> crate::summarization::CompactionDecision
                 + Send
                 + Sync,
         >,

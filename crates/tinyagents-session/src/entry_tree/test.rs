@@ -483,9 +483,7 @@ fn compaction_sink_persists_a_record_anchored_at_the_tip() {
     tree.append(None, message_kind("user", "one")).unwrap();
     tree.append_to_head(message_kind("assistant", "two"))
         .unwrap();
-    let tip = tree
-        .append_to_head(message_kind("user", "three"))
-        .unwrap();
+    let tip = tree.append_to_head(message_kind("user", "three")).unwrap();
 
     let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
     assert_eq!(sink.tip(), Some(tip.clone()));
@@ -520,8 +518,7 @@ fn compaction_sink_advances_its_tip_across_repeated_compactions() {
     let ws = workspace();
     let tree = EntryTree::new(ws.path(), "sess-1");
     tree.append(None, message_kind("user", "a")).unwrap();
-    tree.append_to_head(message_kind("assistant", "b"))
-        .unwrap();
+    tree.append_to_head(message_kind("assistant", "b")).unwrap();
     tree.append_to_head(message_kind("user", "c")).unwrap();
 
     let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");

@@ -192,7 +192,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         // its length — see `compaction::CompactionRecord::first_kept_index`.
         let first_kept_index = to_summarize.len();
 
-        match self.hook_decision(CompactionReason::Threshold, from_tokens, &to_summarize, &to_keep) {
+        match self.hook_decision(
+            CompactionReason::Threshold,
+            from_tokens,
+            &to_summarize,
+            &to_keep,
+        ) {
             CompactionDecision::Decline => return Ok(()),
             CompactionDecision::UseSummary(text) => {
                 let record = SummaryRecord {
@@ -529,9 +534,7 @@ impl ContextCompressionMiddleware {
         if let Some(sink) = &ctx.compaction_sink
             && let Err(err) = sink.persist(&compaction_record)
         {
-            tracing::debug!(
-                "[context_compression] compaction sink persist failed: {err}"
-            );
+            tracing::debug!("[context_compression] compaction sink persist failed: {err}");
         }
 
         {

@@ -13,8 +13,8 @@ use std::sync::Mutex;
 use tinyagents_harness::error::Result;
 use tinyagents_harness::summarization::{CompactionRecord, CompactionSink};
 
-use super::types::{CompactionEntry, EntryId, EntryKind};
 use super::EntryTree;
+use super::types::{CompactionEntry, EntryId, EntryKind};
 
 /// A [`CompactionSink`] that persists every [`CompactionRecord`] a run
 /// produces into a session's entry tree as a durable

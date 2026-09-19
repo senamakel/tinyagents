@@ -49,7 +49,10 @@ fn find_cut_point_never_splits_a_tool_pair() {
     // The naive (unrepaired) boundary would be index 2 (`tool(c1)` itself);
     // confirm the repair actually moved it, not that it happened to already
     // be safe.
-    assert_ne!(cut.index, 2, "test setup did not land the naive cut on the tool result");
+    assert_ne!(
+        cut.index, 2,
+        "test setup did not land the naive cut on the tool result"
+    );
     assert!(!matches!(non_system[cut.index], Message::Tool(_)));
 
     let kept = &non_system[cut.index..];
@@ -135,9 +138,15 @@ async fn split_turn_summarizes_whole_slice_when_under_budget() {
     let messages = vec![Message::user("a"), Message::user("b")];
     let total: u64 = messages.iter().map(estimate_message_tokens).sum();
 
-    summarize_with_split(&summarizer, &messages, total + 100, None, estimate_message_tokens)
-        .await
-        .unwrap();
+    summarize_with_split(
+        &summarizer,
+        &messages,
+        total + 100,
+        None,
+        estimate_message_tokens,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(summarizer.requests.lock().unwrap().len(), 1);
     assert_eq!(*summarizer.merges.lock().unwrap(), 0);
@@ -267,9 +276,8 @@ fn classifies_openai_context_length_exceeded_by_code() {
 #[test]
 fn classifies_anthropic_prompt_is_too_long() {
     let classifier = OverflowClassifier::default();
-    let err = TinyAgentsError::Model(
-        "prompt is too long: 210000 tokens > 200000 maximum".to_string(),
-    );
+    let err =
+        TinyAgentsError::Model("prompt is too long: 210000 tokens > 200000 maximum".to_string());
     let info = classifier.classify(&err).expect("classified as overflow");
     assert_eq!(info.requested, Some(210_000));
     assert_eq!(info.limit, Some(200_000));
@@ -289,9 +297,8 @@ fn classifies_generic_maximum_context_length_phrasing() {
 #[test]
 fn classifies_local_llama_cpp_n_ctx_messages() {
     let classifier = OverflowClassifier::default();
-    let err = TinyAgentsError::Model(
-        "context size exceeded (n_ctx = 4096, tokens = 4300)".to_string(),
-    );
+    let err =
+        TinyAgentsError::Model("context size exceeded (n_ctx = 4096, tokens = 4300)".to_string());
     let info = classifier.classify(&err).expect("classified as overflow");
     assert_eq!(info.limit, Some(4096));
     assert_eq!(info.requested, Some(4300));
@@ -339,7 +346,11 @@ fn does_not_classify_unrelated_provider_errors() {
         raw: None,
     }));
     assert!(classifier.classify(&err).is_none());
-    assert!(classifier.classify(&TinyAgentsError::Tool("boom".into())).is_none());
+    assert!(
+        classifier
+            .classify(&TinyAgentsError::Tool("boom".into()))
+            .is_none()
+    );
 }
 
 #[test]
