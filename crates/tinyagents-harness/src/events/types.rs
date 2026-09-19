@@ -153,6 +153,17 @@ pub enum AgentEvent {
         excluded: Vec<String>,
         /// Number of tools left exposed to the model.
         remaining: usize,
+        /// Per-tool reason a [`crate::tool::toolset::ToolSet`] adaptor
+        /// changed or withheld a tool this turn, keyed by the tool's
+        /// original name.
+        ///
+        /// Additive (`docs/sdk-gaps.md` §9's "explainable exposure
+        /// decisions"): `#[serde(default)]` keeps events recorded before
+        /// this field existed deserializable, and a middleware that only
+        /// reports `excluded` (no explanations) leaves this empty rather
+        /// than failing to construct the event.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        explanations: Vec<(String, crate::tool::ToolExposureExplanation)>,
     },
 
     /// A tool invocation has been dispatched.
