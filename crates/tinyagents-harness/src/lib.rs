@@ -64,8 +64,11 @@ pub use no_progress::{
 pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
-    LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
     RedactingSink, StoreEventJournal,
+};
+#[cfg(feature = "langfuse")]
+pub use observability::{
+    LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
 pub use run_queue::{QueueLane, QueueStatus, RunQueue};
 pub use steering::{

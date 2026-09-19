@@ -38,6 +38,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     pub fn new() -> Self {
         Self {
             models: std::collections::HashMap::new(),
+            model_order: Vec::new(),
             tools: std::collections::HashMap::new(),
             graphs: std::collections::HashMap::new(),
             agents: std::collections::HashMap::new(),
@@ -87,6 +88,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         let name = name.into();
         self.ensure_absent(ComponentKind::Model, &name)?;
         self.record_meta(ComponentKind::Model, &name);
+        self.remember_model_order(&name);
         self.models.insert(name, model);
         Ok(self)
     }
@@ -100,8 +102,18 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     ) -> &mut Self {
         let name = name.into();
         self.record_meta(ComponentKind::Model, &name);
+        self.remember_model_order(&name);
         self.models.insert(name, model);
         self
+    }
+
+    /// Appends `name` to [`Self::model_order`] the first time it is
+    /// registered. Re-registering an existing name (via
+    /// [`replace_model`](Self::replace_model)) keeps its original position.
+    fn remember_model_order(&mut self, name: &str) {
+        if !self.models.contains_key(name) {
+            self.model_order.push(name.to_owned());
+        }
     }
 
     // -----------------------------------------------------------------------
