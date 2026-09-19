@@ -977,7 +977,7 @@ fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static
 
 async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
     prepared: PreparedAgentTurn<State, Ctx>,
-    run: AgentRun,
+    run: crate::context::TerminalRunSummary,
     succeeded: bool,
     error: Option<String>,
 ) {
