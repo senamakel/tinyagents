@@ -160,26 +160,16 @@ where
         // carried-forward completions' successors, merged into the base
         // checkpoint's still-pending work.
         //
-        // `next_nodes` and `pending_activations` are derived from one merged
-        // activation list so they can never disagree — resume prefers the
-        // activations, so a node named by only one of them would be silently
-        // dropped (or re-scheduled without its `Send` arg).
-        let mut merged: Vec<Activation> = match &base.pending_activations {
-            Some(pending) if !pending.is_empty() => pending
-                .iter()
-                .map(Activation::from)
-                .filter(|activation| Some(&activation.node) != as_node.as_ref())
-                .collect(),
-            // Checkpoints written before `pending_activations` existed only
-            // carry the node-id projection.
-            _ => base
-                .next_nodes
-                .iter()
-                .filter(|pending| Some(*pending) != as_node.as_ref())
-                .cloned()
-                .map(Activation::node)
-                .collect(),
-        };
+        // `base` was already normalized on read (every backend's decode path
+        // calls `Checkpoint::normalize`), so `base.tasks` is always the
+        // single source of truth here regardless of which format version the
+        // stored record was written in.
+        let mut merged: Vec<Activation> = base
+            .tasks
+            .iter()
+            .map(Activation::from)
+            .filter(|activation| Some(&activation.node) != as_node.as_ref())
+            .collect();
         let mut seen: HashSet<NodeId> = merged
             .iter()
             .filter(|activation| activation.send_arg.is_none())
