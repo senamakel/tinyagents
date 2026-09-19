@@ -480,4 +480,134 @@ mod tests {
         let via_catalog = catalog.profile("openai", "gpt-4.1").unwrap();
         assert_eq!(via_catalog, profile);
     }
+
+    // -----------------------------------------------------------------------
+    // Validation
+    // -----------------------------------------------------------------------
+
+    fn base_entry() -> ModelCatalogEntry {
+        ModelCatalogEntry {
+            provider: "openai".to_string(),
+            model_id: "gpt-test".to_string(),
+            aliases: Vec::new(),
+            mode: "chat".to_string(),
+            max_input_tokens: Some(100_000),
+            max_output_tokens: Some(4_096),
+            deprecation_date: None,
+            pricing: ModelPricing::default(),
+            capabilities: ModelCapabilities::default(),
+            source: "manual".to_string(),
+            source_url: None,
+            raw: Value::Null,
+        }
+    }
+
+    fn base_snapshot(models: Vec<ModelCatalogEntry>) -> ModelCatalogSnapshot {
+        ModelCatalogSnapshot {
+            schema_version: 1,
+            snapshot_id: "test".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            currency: "USD".to_string(),
+            unit: "token".to_string(),
+            description: None,
+            sources: Vec::new(),
+            models,
+        }
+    }
+
+    #[test]
+    fn valid_snapshot_passes() {
+        base_snapshot(vec![base_entry()]).validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_provider_model_id_pairs() {
+        let snapshot = base_snapshot(vec![base_entry(), base_entry()]);
+        let error = snapshot.validate().unwrap_err().to_string();
+        assert!(error.contains("duplicate"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_negative_flat_price() {
+        let mut entry = base_entry();
+        entry.pricing.input_per_token = Some(-0.01);
+        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        assert!(error.contains("negative"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_negative_tiered_price() {
+        let mut entry = base_entry();
+        entry.pricing.tiers.push(tinyagents_harness::cost::PriceTier {
+            up_to_tokens: None,
+            input: Some(-1.0),
+            output: None,
+            cache_read: None,
+            cache_write: None,
+        });
+        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        assert!(error.contains("negative"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_missing_source() {
+        let mut entry = base_entry();
+        entry.source = String::new();
+        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        assert!(error.contains("missing a source"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_output_limit_exceeding_input_context() {
+        let mut entry = base_entry();
+        entry.max_input_tokens = Some(1_000);
+        entry.max_output_tokens = Some(2_000);
+        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        assert!(error.contains("max_output_tokens"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_alias_collision() {
+        let mut aliased = base_entry();
+        aliased.model_id = "gpt-other".to_string();
+        aliased.aliases = vec!["gpt-test".to_string()]; // collides with base_entry's id
+        let error = base_snapshot(vec![base_entry(), aliased])
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("collides"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_invalid_date() {
+        let mut entry = base_entry();
+        entry.deprecation_date = Some("not-a-date".to_string());
+        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        assert!(error.contains("not a valid date"), "got: {error}");
+    }
+
+    #[test]
+    fn accepts_plain_and_rfc3339_dates() {
+        let mut entry = base_entry();
+        entry.deprecation_date = Some("2026-01-01".to_string());
+        base_snapshot(vec![entry.clone()]).validate().unwrap();
+        entry.deprecation_date = Some("2026-01-01T00:00:00Z".to_string());
+        base_snapshot(vec![entry]).validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_provider() {
+        let mut entry = base_entry();
+        entry.provider = "totally-unknown-vendor".to_string();
+        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        assert!(error.contains("unrecognized provider"), "got: {error}");
+    }
+
+    #[test]
+    fn from_json_rejects_an_invalid_snapshot() {
+        let mut snapshot = base_snapshot(vec![base_entry()]);
+        snapshot.models[0].pricing.input_per_token = Some(-1.0);
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(ModelCatalog::from_json(&json).is_err());
+    }
 }
