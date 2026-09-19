@@ -369,6 +369,40 @@ pub struct StateSnapshot<State> {
     pub pending_interrupts: Vec<Interrupt>,
 }
 
+/// Per-run options threaded through [`CompiledGraph::run_with_options`] and
+/// [`CompiledGraph::resume_with_options`] (I4 part 2).
+///
+/// Kept to a single field for now — a [`tinyagents_harness::CancellationToken`]
+/// requesting cooperative cancellation of the run — rather than growing a
+/// combinatorial `run_with_cancel`/`run_with_cancel_and_thread`/... family of
+/// entry points. The executor checks the token at every superstep boundary
+/// (before starting a new step) and races it against that step's in-flight
+/// node-handler futures, so a long-running node cannot indefinitely block a
+/// cancellation request. On cancellation the run's status becomes
+/// [`tinyagents_harness::ids::ExecutionStatus::Cancelled`] and, on a
+/// checkpointed thread, a resumable checkpoint is persisted naming the
+/// still-pending activations, so the run can be continued later with
+/// [`CompiledGraph::resume`]/[`CompiledGraph::retry`].
+#[derive(Clone, Debug, Default)]
+pub struct RunOptions {
+    /// Optional cooperative-cancellation token for this run.
+    pub cancellation: Option<tinyagents_harness::CancellationToken>,
+}
+
+impl RunOptions {
+    /// Builds empty run options (no cancellation token, no other tuning).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builds run options carrying `token` for cooperative cancellation.
+    pub fn with_cancellation(token: tinyagents_harness::CancellationToken) -> Self {
+        Self {
+            cancellation: Some(token),
+        }
+    }
+}
+
 /// Selects which checkpoint a time-travel resume starts from.
 ///
 /// [`CompiledGraph::resume`](crate::CompiledGraph::resume) is shorthand
