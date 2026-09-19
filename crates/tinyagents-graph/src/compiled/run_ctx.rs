@@ -81,10 +81,10 @@ pub(super) struct ResumeSeed {
     /// [`super::boundary`]'s checkpoint builders), so per-node visit counts
     /// accumulate across a resume instead of resetting.
     pub(super) initial_node_visits: HashMap<NodeId, usize>,
-    /// Node ids carried forward from a mid-step (interrupt/failure)
-    /// checkpoint whose completed siblings were never routed — see
-    /// [`RunCtx::carried_completed`].
-    pub(super) carried_completed: Option<Vec<NodeId>>,
+    /// Nodes (with their persisted goto, R1) carried forward from a
+    /// mid-step (interrupt/failure) checkpoint whose completed siblings
+    /// were never routed — see [`RunCtx::carried_completed`].
+    pub(super) carried_completed: Option<Vec<(NodeId, Vec<RouteTarget>)>>,
 }
 
 impl<'a, State, Update> RunCtx<'a, State, Update>
