@@ -84,6 +84,7 @@ fn stream_projection_folds_tool_lifecycle_as_two_entries() {
         duration_ms: None,
         output_bytes: None,
         error: None,
+        metadata: None,
     });
 
     assert_eq!(projection.tool_calls.len(), 2);
