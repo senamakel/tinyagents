@@ -479,18 +479,21 @@ where
             }
             let Some(phase) = next_runnable_phase(definition, &run.phase_states).cloned() else {
                 if all_phases_completed(definition, &run.phase_states) {
-                    if let Err(error) = self.persist(
-                        &run,
-                        PersistRequest {
-                            phase_states: run.phase_states.clone(),
-                            child_run_ids: run.child_run_ids.clone(),
-                            status: WorkflowRunStatus::Completed,
-                            summary: synthesize_summary(definition, &run.phase_states),
-                            terminal: true,
-                        },
-                        &owner,
-                    ) {
-                        if self.owner_lost(run_id, &owner) {
+                    if let Err(error) = self
+                        .persist(
+                            &run,
+                            PersistRequest {
+                                phase_states: run.phase_states.clone(),
+                                child_run_ids: run.child_run_ids.clone(),
+                                status: WorkflowRunStatus::Completed,
+                                summary: synthesize_summary(definition, &run.phase_states),
+                                terminal: true,
+                            },
+                            &owner,
+                        )
+                        .await
+                    {
+                        if self.owner_lost(run_id, &owner).await {
                             return Ok(());
                         }
                         self.finish_failed(run_id, error.to_string());
@@ -499,18 +502,21 @@ where
                     self.finish_completed(run_id, total_spawned as usize);
                 } else {
                     let reason = "no runnable phase (dependency deadlock)".to_owned();
-                    if let Err(error) = self.persist(
-                        &run,
-                        PersistRequest {
-                            phase_states: run.phase_states.clone(),
-                            child_run_ids: run.child_run_ids.clone(),
-                            status: WorkflowRunStatus::Failed,
-                            summary: Some(reason.clone()),
-                            terminal: true,
-                        },
-                        &owner,
-                    ) {
-                        if self.owner_lost(run_id, &owner) {
+                    if let Err(error) = self
+                        .persist(
+                            &run,
+                            PersistRequest {
+                                phase_states: run.phase_states.clone(),
+                                child_run_ids: run.child_run_ids.clone(),
+                                status: WorkflowRunStatus::Failed,
+                                summary: Some(reason.clone()),
+                                terminal: true,
+                            },
+                            &owner,
+                        )
+                        .await
+                    {
+                        if self.owner_lost(run_id, &owner).await {
                             return Ok(());
                         }
                         self.finish_failed(run_id, error.to_string());
