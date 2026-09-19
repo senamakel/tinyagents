@@ -379,3 +379,90 @@ async fn no_deferred_tools_means_no_bridge() {
         .expect("run succeeds");
     assert_eq!(tool_names(&model.tools_seen()[0]), vec!["read_file"]);
 }
+
+#[tokio::test]
+async fn host_registered_tool_search_wins_over_the_intrinsic_bridge() {
+    let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
+    let host_search = ExposedTool::new(
+        TOOL_SEARCH_NAME,
+        "The host's own search tool.",
+        ToolExposure::Direct,
+    );
+    let model = RecordingModel::new(vec![
+        tool_call("c1", TOOL_SEARCH_NAME, json!({"symbol": "anything"})),
+        text("done"),
+    ]);
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(deferred.clone())
+        .register_tool(host_search.clone());
+
+    harness
+        .invoke_default(&(), vec![Message::user("hi")])
+        .await
+        .expect("run succeeds");
+
+    // The host's `tool_search` keeps its slot and its description; only the
+    // intrinsic `tool_call` half of the bridge is added.
+    let tools = model.tools_seen()[0].clone();
+    assert_eq!(tool_names(&tools), vec![TOOL_SEARCH_NAME, TOOL_CALL_NAME]);
+    assert!(tools.contains("The host's own search tool."));
+    assert!(!tools.contains("deferred tool(s) are searchable"));
+    // …and the call went to the host's tool, not the intrinsic answer.
+    assert_eq!(host_search.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn tool_schemas_projection_applies_to_wire_and_catalog() {
+    use tinyagents_harness::tool::{SchemaCompaction, SchemaPreparation};
+
+    let long = "d".repeat(400);
+    let direct = Arc::new(FakeTool::returning("read_file", "contents"));
+    let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
+    let model = RecordingModel::new(vec![
+        tool_call("c1", TOOL_SEARCH_NAME, json!({"query": "quote"})),
+        text("done"),
+    ]);
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(direct)
+        .register_tool(deferred)
+        .register_tool(ExposedTool::new(
+            "verbose_direct",
+            Box::leak(long.clone().into_boxed_str()),
+            ToolExposure::Direct,
+        ))
+        .with_policy(RunPolicy {
+            tool_schemas: Some(SchemaPreparation::openai().with_compaction(SchemaCompaction {
+                max_description_bytes: Some(40),
+                max_schema_bytes: None,
+            })),
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("hi")])
+        .await
+        .expect("run succeeds");
+
+    // The verbose direct description was clipped on the wire…
+    let tools: Vec<Value> = serde_json::from_str(&model.tools_seen()[0]).unwrap();
+    let verbose = tools.iter().find(|t| t["name"] == "verbose_direct").unwrap();
+    assert!(verbose["description"].as_str().unwrap().len() <= 40);
+    assert!(!model.tools_seen()[0].contains(&long));
+    // …and the search answer for the deferred tool went through the same
+    // projection (its short description is untouched but present).
+    let answer = run
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::Tool(_)))
+        .map(Message::text)
+        .unwrap();
+    assert!(answer.contains("\"name\": \"stock_quote\""));
+}
