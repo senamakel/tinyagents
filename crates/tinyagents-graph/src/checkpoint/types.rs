@@ -243,9 +243,11 @@ pub struct PendingActivation {
     ///
     /// Unlike `node`, this distinguishes repeated `Send` fan-out activations
     /// targeting the same node. Empty on checkpoints written before task
-    /// identities were persisted.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub task_id: String,
+    /// identities were persisted. Serializes transparently as the underlying
+    /// string, so on-disk records are unaffected by the `String` -> `TaskId`
+    /// type change (R5).
+    #[serde(default = "empty_task_id", skip_serializing_if = "task_id_is_empty")]
+    pub task_id: TaskId,
 }
 
 /// The persisted arrivals recorded against one barrier (waiting-edge) join node:
@@ -353,8 +355,8 @@ pub struct PendingWrite {
     /// A plain node id is not enough on its own: a fan-out step runs the same
     /// node several times with different [`Send`](crate::Send) args, and
     /// each of those is a separately resumable task.
-    #[serde(default)]
-    pub task_id: String,
+    #[serde(default = "empty_task_id")]
+    pub task_id: TaskId,
     /// Position of this write within its task's emission order, or one of the
     /// `WRITES_IDX_*` constants for a control-plane write.
     #[serde(default)]
