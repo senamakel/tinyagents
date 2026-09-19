@@ -215,7 +215,7 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
     assert_eq!(grandchild.thread_id().unwrap().as_str(), "thread");
     assert_eq!(grandchild.config.max_turn_output_tokens, Some(123));
     assert!(matches!(
-        grandchild.child(RunConfig::new("too-deep"), ()),
+        grandchild.child_with_data(RunConfig::new("too-deep"), ()),
         Err(crate::TinyAgentsError::SubAgentDepth(2))
     ));
 }
