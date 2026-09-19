@@ -57,7 +57,10 @@ pub(super) struct RunSeed<State, Update> {
     pub(super) state: State,
     pub(super) active: Vec<Activation>,
     pub(super) thread_id: Option<ThreadId>,
-    pub(super) resume_map: HashMap<NodeId, serde_json::Value>,
+    /// Keyed by task id, falling back to node id (I1/R5), so a `Send`
+    /// fan-out of the same node can deliver each interrupted activation its
+    /// own resume value.
+    pub(super) resume_map: HashMap<String, serde_json::Value>,
     pub(super) barriers: HashMap<NodeId, HashSet<NodeId>>,
     pub(super) parent: Option<String>,
     pub(super) binding: Option<crate::subagent_node::AgentInvocationBinding>,
