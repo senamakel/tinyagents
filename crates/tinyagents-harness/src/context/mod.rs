@@ -310,6 +310,8 @@ impl<Ctx> RunContext<Ctx> {
             terminal_observer: None,
             active_model_call: None,
             child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            tool_effect_ledger: None,
+            tool_effect_ledger_failure: crate::tool::LedgerFailure::default(),
         }
     }
 
