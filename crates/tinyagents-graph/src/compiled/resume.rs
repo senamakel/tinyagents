@@ -228,6 +228,9 @@ where
         // lifetime rather than resetting every resume.
         let initial_steps = checkpoint.to_metadata().step;
         let initial_node_visits = node_visits_from_persisted(&checkpoint.metadata);
+        // I5/R3: carry the per-node channel-versions bookkeeping forward
+        // across the resume, same reasoning as `initial_node_visits`.
+        let initial_versions_seen = checkpoint.versions_seen.clone().into_iter().collect();
 
         self.execute(RunSeed {
             state: checkpoint.state,
@@ -240,6 +243,7 @@ where
             resume_seed: crate::compiled::run_ctx::ResumeSeed {
                 initial_steps,
                 initial_node_visits,
+                initial_versions_seen,
                 carried_completed,
             },
             options,
