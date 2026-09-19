@@ -278,6 +278,12 @@ where
         if let Err(err) = self.require_interrupt_durability(&ctx.thread_id) {
             return self.fail_and_return(ctx, err).await;
         }
+        // R5/I1: stamp the pausing branch's task id onto the interrupt
+        // before it is persisted/returned, so a `Send` fan-out of the same
+        // node (each activation with its own task id) is resumable per
+        // activation rather than sharing one node-keyed resume slot — see
+        // `resume_from_inner`'s `resume_map`.
+        let emitted = emitted.with_task_id(sb.active[index].task_id.clone());
         // Deferred routing, same as the failure boundary above: the
         // completed siblings (whichever side of `index` they fall on) are
         // not routed here. `pending` is exactly `sb.stalled` (the
