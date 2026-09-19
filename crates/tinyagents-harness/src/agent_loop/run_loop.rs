@@ -701,27 +701,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             .unwrap_or_else(|| ctx.run_id().as_str().into()),
                     )
                     .with_tool_count(request.tools.len());
-                    let permit = match self.call_budget(ctx) {
-                        Some(remaining) => tokio::select! {
-                            biased;
-                            _ = ctx.cancellation.cancelled() => {
-                                return Err(TinyAgentsError::Cancelled);
-                            }
-                            acquired = tokio::time::timeout(remaining, budget.acquire(&estimate)) => {
-                                acquired.map_err(|_| TinyAgentsError::Timeout(format!(
-                                    "budget admission for run `{}` exceeded its remaining wall-clock deadline",
-                                    ctx.run_id()
-                                )))??
-                            }
-                        },
-                        None => tokio::select! {
-                            biased;
-                            _ = ctx.cancellation.cancelled() => {
-                                return Err(TinyAgentsError::Cancelled);
-                            }
-                            acquired = budget.acquire(&estimate) => acquired?,
-                        },
-                    };
+                    let permit = ctx
+                        .bounded(self.call_budget(ctx), budget.acquire(&estimate), || {
+                            format!(
+                                "budget admission for run `{}` exceeded its remaining wall-clock deadline",
+                                ctx.run_id()
+                            )
+                        })
+                        .await?;
                     Some((budget.clone(), permit))
                 } else {
                     None
