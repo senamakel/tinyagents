@@ -797,17 +797,19 @@ where
             PhaseStatus::Completed,
             Some(Value::Array(outputs)),
         );
-        let updated = self.persist(
-            &registration.current(),
-            PersistRequest {
-                phase_states,
-                child_run_ids: child_ids,
-                status: WorkflowRunStatus::Running,
-                summary: None,
-                terminal: false,
-            },
-            owner,
-        )?;
+        let updated = self
+            .persist(
+                &registration.current(),
+                PersistRequest {
+                    phase_states,
+                    child_run_ids: child_ids,
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    terminal: false,
+                },
+                owner,
+            )
+            .await?;
         Ok((updated, spawned))
     }
 
