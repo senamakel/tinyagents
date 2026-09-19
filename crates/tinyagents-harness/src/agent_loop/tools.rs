@@ -1033,9 +1033,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
         }
 
-        // Phase 3 — run all admitted calls concurrently. `join_all` preserves
-        // input order, so results pair 1:1 with `prepared`.
-        let results = futures::future::join_all(futures).await;
+        // Phase 3 — run all admitted calls concurrently, bounded by
+        // `RunLimits::max_tool_concurrency` when set (I-8). `buffered(n)`
+        // polls up to `n` futures at once and yields them **in input order**
+        // (unlike `buffer_unordered`), so results still pair 1:1 with
+        // `prepared` exactly as `join_all` (the unbounded case) did.
+        let concurrency = self
+            .policy
+            .limits
+            .max_tool_concurrency
+            .unwrap_or(futures.len().max(1));
+        let results: Vec<_> = futures::stream::iter(futures)
+            .buffered(concurrency)
+            .collect()
+            .await;
 
         // Phase 4 — fold in original call order: the first call whose policy
         // kept its failure fatal (in that order) fails the turn; siblings
