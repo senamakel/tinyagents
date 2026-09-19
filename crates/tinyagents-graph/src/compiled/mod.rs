@@ -442,6 +442,55 @@ impl<State, Update> CompiledGraph<State, Update> {
         self
     }
 
+    /// Attaches the [`TaskCache`](crate::cache::TaskCache) backend used by
+    /// any node configured through [`Self::with_cached_node`].
+    ///
+    /// Without a task cache, [`NodeCachePolicy`](crate::NodeCachePolicy)
+    /// entries installed by `with_cached_node` are inert: the executor never
+    /// looks anything up or stores anything, and every node runs exactly as
+    /// it would with no cache configured at all.
+    pub fn with_task_cache(mut self, cache: Arc<dyn crate::cache::TaskCache>) -> Self {
+        self.task_cache = Some(cache);
+        self
+    }
+
+    /// Opts `node` into result caching under `policy`.
+    ///
+    /// A cache hit (an unexpired entry under `policy.key`'s computed hash)
+    /// skips the node's handler entirely and replays the stored `Update`,
+    /// emitting [`GraphEvent::TaskCompleted`](crate::stream::GraphEvent::TaskCompleted)
+    /// with `cached: true` in place of the handler's normal
+    /// `NodeStarted`/`NodeCompleted` pair. A miss runs the handler as usual
+    /// and, on success, stores the resulting `Update` and emits
+    /// `TaskCompleted { cached: false, .. }`.
+    ///
+    /// Actually persisting a cached value needs `Update: Serialize +
+    /// DeserializeOwned`; that bound lives on this method rather than on
+    /// [`CompiledGraph`] itself, so a graph with no cached nodes at all never
+    /// has to satisfy it. This method has no effect until a backend is also
+    /// installed via [`Self::with_task_cache`].
+    pub fn with_cached_node(
+        mut self,
+        node: impl Into<NodeId>,
+        policy: crate::builder::NodeCachePolicy<State>,
+    ) -> Self
+    where
+        Update: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    {
+        let mut cached_nodes = (*self.cached_nodes).clone();
+        cached_nodes.insert(
+            node.into(),
+            crate::cache::CachedNode {
+                key: policy.key,
+                ttl: policy.ttl,
+                encode: Arc::new(|update: &Update| serde_json::to_value(update)),
+                decode: Arc::new(|value: serde_json::Value| serde_json::from_value(value)),
+            },
+        );
+        self.cached_nodes = Arc::new(cached_nodes);
+        self
+    }
+
     /// Bounds the whole run by a wall-clock `deadline`, checked at every
     /// super-step boundary.
     ///
