@@ -672,21 +672,6 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     }
 }
 
-/// Extends a stream borrow from an invocation overlay to the caller's stream
-/// lifetime.
-///
-/// Safety is established by `AgentStream`: it stores the exact `Arc` that owns
-/// the overlay alongside `inner`, and field order drops `inner` first. The
-/// other borrowed inputs (`&self` and `&State`) already have the public `'a`
-/// lifetime. No reference can escape the private `AgentStream` wrapper.
-#[allow(unsafe_code)]
-unsafe fn extend_overlay_stream_lifetime<'a>(
-    stream: Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + '_>>,
-) -> Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>> {
-    // SAFETY: documented above; the owning Arc is retained by AgentStream.
-    unsafe { std::mem::transmute(stream) }
-}
-
 /// Returns this live context's host authorization, if it is a hosted run.
 ///
 /// The binding is carried by the non-serializable context rather than the
