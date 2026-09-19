@@ -202,11 +202,14 @@ where
                         return Err(error);
                     };
                     attempt += 1;
-                    self.graph.emit(GraphEvent::NodeRetryScheduled {
-                        node: node_id.clone(),
-                        step,
-                        attempt,
-                    });
+                    self.graph.emit(
+                        &ctx.run_id,
+                        GraphEvent::NodeRetryScheduled {
+                            node: node_id.clone(),
+                            step,
+                            attempt,
+                        },
+                    );
                     policy.sleep_backoff(attempt).await;
                 }
             }
