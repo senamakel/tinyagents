@@ -1259,7 +1259,6 @@ async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patc
             }
         }
     }
-    let _ = capability_toolset; // placeholder removed below
 
     let capability = crate::capability::Capability::new("advanced")
         .with_instructions("Advanced instructions.")
