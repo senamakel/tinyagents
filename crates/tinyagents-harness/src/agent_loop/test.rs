@@ -297,6 +297,60 @@ impl Tool for StrictLookupTool {
     }
 }
 
+/// A [`crate::tool::toolset::ToolSet`] whose live tool set changes on its
+/// second call — used to prove `agent_loop::tool_changes`'s wiring actually
+/// fires on a genuine mid-run toolset change (B6).
+struct DynamicToolSet {
+    calls: std::sync::atomic::AtomicUsize,
+    search: Arc<dyn Tool>,
+    browse: Arc<dyn Tool>,
+}
+
+#[async_trait]
+impl crate::tool::toolset::ToolSet<(), ()> for DynamicToolSet {
+    async fn tools(&self, _ctx: &RunContext<()>) -> Result<Vec<Arc<dyn Tool>>> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            Ok(vec![self.search.clone()])
+        } else {
+            Ok(vec![self.search.clone(), self.browse.clone()])
+        }
+    }
+
+    async fn call(&self, name: &str, args: serde_json::Value, _ctx: &RunContext<()>) -> Result<ToolResult> {
+        let tool = if name == self.search.name() {
+            &self.search
+        } else if name == self.browse.name() {
+            &self.browse
+        } else {
+            return Err(TinyAgentsError::ToolNotFound(name.to_string()));
+        };
+        tool.execute(args)
+            .await
+            .map_err(|err| TinyAgentsError::Tool(err.to_string()))
+    }
+}
+
+/// Wraps [`MockModel`] to advertise a caller-supplied [`ModelProfile`]
+/// instead of the fixed permissive one `MockModel::profile` returns — used to
+/// exercise the `mid_conversation_system_messages = true` insert path (B6)
+/// end to end, which no built-in test provider otherwise advertises.
+struct ProfiledModel {
+    inner: MockModel,
+    profile: ModelProfile,
+}
+
+#[async_trait]
+impl ChatModel<()> for ProfiledModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+
+    async fn invoke(&self, state: &(), request: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        <MockModel as ChatModel<()>>::invoke(&self.inner, state, request).await
+    }
+}
+
 /// Builds a tool-call assistant response (no text, one tool call).
 fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
     ModelResponse {
