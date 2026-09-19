@@ -248,6 +248,7 @@ fn blueprint_export_helpers_preserve_channels_routing_and_validation() {
                 model: None,
                 prompt: None,
                 tools: Vec::new(),
+                capability: None,
                 routing: Routing::Terminal,
                 agent: None,
                 subgraph: Some("child".into()),
