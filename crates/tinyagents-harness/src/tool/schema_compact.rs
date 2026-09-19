@@ -209,8 +209,17 @@ pub fn drop_definitions(schema: Value) -> Value {
         Value::Object(mut object) => {
             object.remove("$defs");
             object.remove("definitions");
-            if object.contains_key("$ref") {
-                return json!({"type": "object"});
+            if object.remove("$ref").is_some() {
+                // A `$ref` can resolve to any JSON type, not only an object
+                // (a string enum, a number, a union). Replacing it with
+                // `{"type": "object"}` would advertise a type the referenced
+                // schema never promised: the model could then produce an
+                // object while admission still validates the call against
+                // the original (unreachable) definition, and a
+                // schema-conformant call fails. Drop the reference and leave
+                // the schema unconstrained instead — no `type` means "any
+                // JSON value", which is safe advertised widened.
+                return json!({});
             }
             let rebuilt: Map<String, Value> = object
                 .into_iter()
