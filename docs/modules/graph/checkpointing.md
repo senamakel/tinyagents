@@ -76,7 +76,13 @@ Implemented today:
 - pending writes
 - interrupts
 - parent checkpoint id
-- free-form `metadata: serde_json::Value`
+- free-form `metadata: serde_json::Value`, including well-known keys the
+  executor itself reads back on resume: `source`, `step` (kept monotonic
+  across a resume — see `resume::resume_from_inner`'s `initial_steps`
+  seeding), `node_visits` (per-node visit counts, seeded from here on resume
+  so `RecursionPolicy::max_visits_per_node` bounds a thread's whole
+  lifetime, not just one run), `interrupted_nodes`, and (on a failure
+  boundary) `failed_node`/`error`
 - metadata source: `input`, `loop`, `update`, or `fork` (`CheckpointMetadata::source`)
 
 **Target (not implemented):** the following LangGraph-derived fields do not
