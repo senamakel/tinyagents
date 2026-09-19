@@ -176,6 +176,8 @@ pub fn probe() -> CliStatus {
     }
 }
 
+/// Extracts the leading semver-looking token from `claude --version` output
+/// (e.g. `"2.0.4 (Claude Code)"` → `"2.0.4"`).
 fn parse_version(stdout: &str) -> Option<String> {
     stdout
         .split_whitespace()
