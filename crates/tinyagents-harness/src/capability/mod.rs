@@ -48,7 +48,7 @@ pub use types::{
     Capability, CapabilityToolSet, LOAD_CAPABILITY_TOOL_NAME, LoadCapabilityTool,
     ModelRequestDefaults,
 };
-pub(crate) use types::{CapabilitySpec, ExposureSpec, ModelDefaultsSpec};
+pub(crate) use types::{CapabilitySpec, ModelDefaultsSpec};
 
 impl<State: Send + Sync, Ctx: Send + Sync> Capability<State, Ctx> {
     /// Creates a capability with `name` and every optional field unset:
