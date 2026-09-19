@@ -289,6 +289,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         });
         status.set_last_event(record.id);
 
+        // Resume (A2): the caller supplied decisions for the tool calls a
+        // previous run left pending on this transcript. Apply them — answer
+        // denials and host-supplied results, run approved calls — before
+        // spending a model call, so the model's next turn sees every call
+        // answered. An approved call that defers *again* is settled exactly
+        // like a fresh deferral below.
+        if let Some(results) = ctx.take_deferred_results() {
+            let pending = pending_tool_calls(messages)?;
+            status.mark_running(HarnessPhase::Tools);
+            let deferred = self
+                .apply_deferred_results(state, ctx, run, status, messages, pending, results)
+                .await?;
+            if let Some(exit) = self
+                .settle_deferred(state, ctx, run, status, messages, deferred)
+                .await?
+            {
+                return Ok(exit);
+            }
+        }
+
         // Truncated-empty recovery state (see `RunPolicy::truncated_empty_retries`).
         // These persist across the retry `continue` within a single logical turn:
         // `boosted_max_tokens` overrides the next request's cap, `truncation_base`
@@ -984,8 +1004,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         ));
                     }
                     status.mark_running(HarnessPhase::Tools);
-                    self.execute_tools(state, ctx, run, status, messages, real_tool_calls)
+                    let deferred = self
+                        .execute_tools(state, ctx, run, status, messages, real_tool_calls)
                         .await?;
+                    if let Some(exit) = self
+                        .settle_deferred(state, ctx, run, status, messages, deferred)
+                        .await?
+                    {
+                        return Ok(exit);
+                    }
                     if let ControlEffect::Exit(exit) =
                         self.apply_pending_control(ctx, run, status, messages)?
                     {
@@ -1016,8 +1043,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 );
 
                 status.mark_running(HarnessPhase::Tools);
-                self.execute_tools(state, ctx, run, status, messages, real_tool_calls)
+                let deferred = self
+                    .execute_tools(state, ctx, run, status, messages, real_tool_calls)
                     .await?;
+                if let Some(exit) = self
+                    .settle_deferred(state, ctx, run, status, messages, deferred)
+                    .await?
+                {
+                    return Ok(exit);
+                }
 
                 // Safe checkpoint: a control requested from `after_tool` /
                 // `wrap_tool` is honored here, at the edge it was raised on.
@@ -1184,8 +1218,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `agent_loop/tools.rs` for the dispatch rules and the semantics
             // preserved in each mode.
             status.mark_running(HarnessPhase::Tools);
-            self.execute_tools(state, ctx, run, status, messages, real_tool_calls)
+            let deferred = self
+                .execute_tools(state, ctx, run, status, messages, real_tool_calls)
                 .await?;
+            // A2: a batch that deferred calls either resolves them inline
+            // (handler registered) or ends the run here with the pending
+            // requests; the non-deferred siblings' results are already on
+            // the transcript.
+            if let Some(exit) = self
+                .settle_deferred(state, ctx, run, status, messages, deferred)
+                .await?
+            {
+                return Ok(exit);
+            }
 
             // Turn boundary: give every middleware a chance to end the run
             // based on the whole turn's tool results rather than any single
@@ -1206,6 +1251,134 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ControlEffect::Exit(exit) => return Ok(exit),
             }
         }
+    }
+
+    /// Settles the calls a batch deferred (A2).
+    ///
+    /// Returns `Ok(None)` when nothing was deferred, or when a registered
+    /// [`crate::tool::DeferredToolHandler`] resolved every pending call and
+    /// the loop can continue. Returns `Ok(Some(LoopExit::Deferred))` when
+    /// the caller must resolve the requests — no handler, or an approved
+    /// call deferred a second time (surfaced rather than re-asked, so a
+    /// handler and a tool that never agree cannot spin).
+    async fn settle_deferred(
+        &self,
+        state: &State,
+        ctx: &mut RunContext<Ctx>,
+        run: &mut AgentRun,
+        status: &mut HarnessRunStatus,
+        messages: &mut Vec<Message>,
+        deferred: crate::tool::DeferredToolRequests,
+    ) -> Result<Option<LoopExit>> {
+        if deferred.is_empty() {
+            return Ok(None);
+        }
+        let Some(handler) = &self.deferred_tool_handler else {
+            return Ok(Some(LoopExit::Deferred(deferred)));
+        };
+        let results = handler.handle(&deferred).await?;
+        let pending: Vec<ToolCall> = deferred
+            .approvals
+            .iter()
+            .chain(deferred.calls.iter())
+            .cloned()
+            .collect();
+        let again = self
+            .apply_deferred_results(state, ctx, run, status, messages, pending, results)
+            .await?;
+        if again.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(LoopExit::Deferred(again)))
+    }
+
+    /// Applies host decisions to `pending` deferred calls (A2): every call
+    /// must be resolved (`Validation` error naming the missing ids
+    /// otherwise). Host-supplied results and denials are answered without
+    /// running a tool; approvals run the tool now through the ordinary
+    /// serial pipeline, with the model's or the approver's edited
+    /// arguments. Returns whatever the approved calls deferred *again*.
+    #[allow(clippy::too_many_arguments)]
+    async fn apply_deferred_results(
+        &self,
+        state: &State,
+        ctx: &mut RunContext<Ctx>,
+        run: &mut AgentRun,
+        status: &mut HarnessRunStatus,
+        messages: &mut Vec<Message>,
+        pending: Vec<ToolCall>,
+        mut results: crate::tool::DeferredToolResults,
+    ) -> Result<crate::tool::DeferredToolRequests> {
+        let missing: Vec<&str> = pending
+            .iter()
+            .filter(|call| !results.resolves(&CallId::new(call.id.clone())))
+            .map(|call| call.id.as_str())
+            .collect();
+        if !missing.is_empty() {
+            return Err(TinyAgentsError::Validation(format!(
+                "cannot resume: deferred tool calls still unresolved: [{}]",
+                missing.join(", ")
+            )));
+        }
+        let mut deferred = crate::tool::DeferredToolRequests::default();
+        for mut call in pending {
+            let call_id = CallId::new(call.id.clone());
+            if let Some(outcome) = results.calls.remove(&call_id) {
+                self.recover_tool_call(
+                    state,
+                    ctx,
+                    run,
+                    status,
+                    messages,
+                    &call,
+                    outcome.into_tool_result(),
+                )
+                .await?;
+                continue;
+            }
+            let decision = results
+                .approvals
+                .remove(&call_id)
+                .expect("every pending call was validated as resolved above");
+            match decision {
+                crate::tool::ApprovalDecision::Deny { message } => {
+                    let record = ctx.emit(AgentEvent::ToolDenied {
+                        call_id,
+                        message: message.clone(),
+                    });
+                    status.set_last_event(record.id);
+                    self.recover_tool_call(
+                        state,
+                        ctx,
+                        run,
+                        status,
+                        messages,
+                        &call,
+                        tinytools::ToolResult::error(message),
+                    )
+                    .await?;
+                }
+                decision => {
+                    if let crate::tool::ApprovalDecision::ApproveWithArgs(arguments) = decision {
+                        call.arguments = arguments;
+                    }
+                    let record = ctx.emit(AgentEvent::ToolApproved { call_id });
+                    status.set_last_event(record.id);
+                    ctx.mark_call_approved(call.id.clone());
+                    self.execute_tool_serially(
+                        state,
+                        ctx,
+                        run,
+                        status,
+                        messages,
+                        call,
+                        &mut deferred,
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(deferred)
     }
 
     /// Drains any pending [`MiddlewareControl`] and turns it into a loop
