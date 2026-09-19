@@ -80,8 +80,13 @@ allow-list.
 ## Events
 
 - `ToolsAdvertised { direct, deferred, schema_bytes }` — once per run after
-  `before_agent`: what went on the wire and what it costs in compact-JSON
-  bytes. This is the number a prompt-budget ratchet should track.
+  `before_agent`: the run's pre-middleware tool surface (the registry-derived
+  set before any `before_model` middleware narrows it and before a
+  structured-output tool-call fallback, if any, is appended) and what that
+  baseline costs in compact-JSON bytes. Track it as the ceiling a run started
+  with, not as a live per-request wire metric — exposure-narrowing middleware
+  (`ToolPolicyMiddleware::before_model`, dynamic/contextual selection) can
+  still shrink an individual request below it.
 - `ToolSearched { call_id, query, matched }` and
   `DeferredToolCall { call_id, tool_name }` — every discovery, auditable.
 
