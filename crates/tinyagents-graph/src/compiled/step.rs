@@ -439,6 +439,7 @@ where
     /// though it is not an `Err`.
     fn fold_result(
         &self,
+        run_id: &RunId,
         index: usize,
         node_id: &NodeId,
         step: usize,
@@ -450,34 +451,54 @@ where
         match result {
             NodeResult::Update(update) => {
                 accum.updates.push(update);
-                self.graph.emit(GraphEvent::StateUpdated {
-                    node: node_id.clone(),
-                    step,
-                });
+                self.graph.emit(
+                    run_id,
+                    GraphEvent::StateUpdated {
+                        node: node_id.clone(),
+                        step,
+                    },
+                );
             }
             NodeResult::Command(command) => {
                 if let Some(update) = command.update {
                     accum.updates.push(update);
-                    self.graph.emit(GraphEvent::StateUpdated {
-                        node: node_id.clone(),
-                        step,
-                    });
+                    self.graph.emit(
+                        run_id,
+                        GraphEvent::StateUpdated {
+                            node: node_id.clone(),
+                            step,
+                        },
+                    );
                 }
                 if !command.goto.is_empty() {
                     accum.goto_map.insert(index, command.goto);
                 }
             }
             NodeResult::Interrupt(emitted) => {
-                self.graph.emit(GraphEvent::InterruptEmitted {
-                    interrupt: emitted.clone(),
-                });
+                self.graph.emit(
+                    run_id,
+                    GraphEvent::InterruptEmitted {
+                        interrupt: emitted.clone(),
+                    },
+                );
                 return Some((index, emitted));
             }
         }
-        self.graph.emit(GraphEvent::NodeCompleted {
-            node: node_id.clone(),
-            step,
-        });
+        self.graph.emit(
+            run_id,
+            GraphEvent::NodeCompleted {
+                node: node_id.clone(),
+                step,
+            },
+        );
+        self.graph.emit(
+            run_id,
+            GraphEvent::TaskCompleted {
+                node: node_id.clone(),
+                step,
+                cached: false,
+            },
+        );
         None
     }
 
