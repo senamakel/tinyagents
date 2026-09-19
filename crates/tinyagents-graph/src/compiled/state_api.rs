@@ -374,7 +374,10 @@ where
             metadata: serde_json::json!({ "source": "fork", "step": step }),
         };
         let id = checkpointer.put(forked).await?;
-        self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
+        self.emit_unscoped(GraphEvent::CheckpointSaved {
+            checkpoint_id: id,
+            step,
+        });
         Ok(config)
     }
 }
