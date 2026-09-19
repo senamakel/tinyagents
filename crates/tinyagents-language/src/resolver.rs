@@ -295,25 +295,6 @@ fn fold_diagnostic(diagnostic: Diagnostic, source: Option<&SourceFile>) -> TinyA
     }
 }
 
-/// Builds the span-less "unknown {what}" [`TinyAgentsError::Capability`] used by
-/// [`Resolver::resolve_blueprint`].
-/// Maps a shared [`ReferenceClass`] to its stable spanned-diagnostic code.
-fn code_for(class: ReferenceClass) -> &'static str {
-    match class {
-        ReferenceClass::Model => CODE_UNKNOWN_MODEL,
-        ReferenceClass::Subgraph => CODE_UNKNOWN_SUBGRAPH,
-        ReferenceClass::Router => CODE_UNKNOWN_ROUTER,
-        ReferenceClass::Agent => CODE_UNKNOWN_AGENT,
-        ReferenceClass::Script => CODE_UNKNOWN_SCRIPT,
-    }
-}
-
-fn unregistered(what: &str, node: &str, target: &str) -> TinyAgentsError {
-    TinyAgentsError::Capability(format!(
-        "node `{node}` references unknown {what} `{target}`"
-    ))
-}
-
 /// Parses, registry-resolves (with full source spans), and lowers `.rag`
 /// `source` into validated blueprints in one call.
 ///
