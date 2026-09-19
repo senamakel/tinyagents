@@ -13,7 +13,7 @@
 use super::*;
 
 use crate::compiled::boundary::StepBoundary;
-use crate::compiled::run_ctx::RunCtx;
+use crate::compiled::run_ctx::{ResumeSeed, RunCtx};
 use crate::compiled::step::StepRunner;
 
 /// Everything a fresh or resumed run is seeded with, bundled so
