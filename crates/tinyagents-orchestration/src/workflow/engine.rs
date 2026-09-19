@@ -215,37 +215,76 @@ impl<S: WorkflowStore> PhaseRegistration<S> {
 }
 
 impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration<S> {
+    /// Durably records `child_id` against this phase's run.
+    ///
+    /// `WorkflowChildRegistration` is a synchronous trait (host executors call
+    /// it from inside an `async fn execute`, not `.await` it), so the blocking
+    /// DB compare-and-swap this needs cannot be pushed onto a `spawn_blocking`
+    /// task without changing that public signature. Instead the
+    /// `parking_lot::Mutex` guarding the in-memory `run` is held only for the
+    /// brief bookkeeping around the CAS — the duplicate check and the
+    /// snapshot read before it, and the write-back after — never across the
+    /// blocking call itself (see M11 in the runtime-comparison review). That
+    /// means two concurrent `register` calls can now race the same CAS
+    /// (previously the lock alone serialized them), so a revision conflict is
+    /// treated as "retry against the latest state" rather than an immediate
+    /// failure; only a lease actually held by a different owner ends the
+    /// retry loop.
     fn register(&self, child_id: String) -> Result<(), OrchestrationError> {
-        let mut run = self.run.lock();
-        if run.child_run_ids.iter().any(|known| known == &child_id) {
-            return Ok(());
+        loop {
+            let (snapshot, children) = {
+                let run = self.run.lock();
+                if run.child_run_ids.iter().any(|known| known == &child_id) {
+                    return Ok(());
+                }
+                let mut children = run.child_run_ids.clone();
+                children.push(child_id.clone());
+                (run.clone(), children)
+            };
+
+            let cas_result = self.store.compare_and_swap(
+                WorkflowRunUpsert {
+                    id: snapshot.id.clone(),
+                    definition_id: snapshot.definition_id.clone(),
+                    parent_thread_id: snapshot.parent_thread_id.clone(),
+                    input: snapshot.input.clone(),
+                    phase_states: self.phase_states.clone(),
+                    child_run_ids: children,
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    started_at: Some(snapshot.started_at),
+                    completed_at: None,
+                },
+                snapshot.revision,
+                &self.owner,
+                self.lease_for,
+            )?;
+
+            match cas_result {
+                Some(updated) => {
+                    let mut run = self.run.lock();
+                    // A concurrent registration may already have installed a
+                    // newer snapshot while the lock was released for this
+                    // call's own CAS; never regress it with a stale result.
+                    if run.revision < updated.revision {
+                        *run = updated;
+                    }
+                    return Ok(());
+                }
+                None => {
+                    // The CAS lost either to a concurrent registration (the
+                    // revision moved under us; retry against the fresh
+                    // state) or to a genuine lease takeover by another
+                    // owner. Only the latter is a real failure.
+                    let still_owned = self.run.lock().lease_owner.as_deref() == Some(self.owner.as_str());
+                    if !still_owned {
+                        return Err(OrchestrationError(
+                            "workflow lease lost while registering child".into(),
+                        ));
+                    }
+                }
+            }
         }
-        let mut children = run.child_run_ids.clone();
-        children.push(child_id);
-        let Some(updated) = self.store.compare_and_swap(
-            WorkflowRunUpsert {
-                id: run.id.clone(),
-                definition_id: run.definition_id.clone(),
-                parent_thread_id: run.parent_thread_id.clone(),
-                input: run.input.clone(),
-                phase_states: self.phase_states.clone(),
-                child_run_ids: children,
-                status: WorkflowRunStatus::Running,
-                summary: None,
-                started_at: Some(run.started_at),
-                completed_at: None,
-            },
-            run.revision,
-            &self.owner,
-            self.lease_for,
-        )?
-        else {
-            return Err(OrchestrationError(
-                "workflow lease lost while registering child".into(),
-            ));
-        };
-        *run = updated;
-        Ok(())
     }
 }
 
