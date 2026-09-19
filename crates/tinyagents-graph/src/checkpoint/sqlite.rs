@@ -802,7 +802,7 @@ where
     }
 
     async fn put_writes(&self, config: &CheckpointConfig, writes: &[PendingWrite]) -> Result<()> {
-        let checkpoint_id = super::require_checkpoint_id(config)?.to_string();
+        let checkpoint_id = super::require_checkpoint_id(config)?;
         if writes.is_empty() {
             return Ok(());
         }
