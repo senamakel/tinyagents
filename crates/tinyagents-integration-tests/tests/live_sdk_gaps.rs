@@ -179,6 +179,7 @@ async fn live_tool_policy_exposes_classified_tool() {
 /// merged text is non-empty, and the `reasoning()` accessor returns a valid
 /// `&str` (empty for a non-reasoning model — we only assert it does not panic).
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn live_streaming_reasoning_channel_smoke() {
     use futures::StreamExt;
 
@@ -186,9 +187,7 @@ async fn live_streaming_reasoning_channel_smoke() {
     use tinyinference_llm::model::{ChatModel, ModelRequest, ModelStreamItem, StreamAccumulator};
     use tinyinference_llm::providers::openai::OpenAiModel;
 
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("skipping live_streaming_reasoning_channel_smoke: OPENAI_API_KEY is not set");
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 
