@@ -508,6 +508,22 @@ pub enum AgentEvent {
         to_tokens: u64,
     },
 
+    /// The final turn's structured-output extraction failed schema
+    /// validation, or a registered
+    /// [`crate::structured::OutputValidator`] rejected the value with
+    /// [`crate::error::TinyAgentsError::ModelRetry`], and the loop is
+    /// re-asking the model instead of failing the run (A3's
+    /// output-validation retry loop; see
+    /// [`crate::runtime::RunPolicy::output_retry`]).
+    OutputRetry {
+        /// The 1-based retry attempt this event reports (1 is the first
+        /// re-ask after the original extraction failed).
+        attempt: u8,
+        /// The extraction/validation error handed back to the model as the
+        /// repair prompt.
+        error: String,
+    },
+
     /// A graph routing decision produced a named route.
     RouteSelected {
         /// The route name chosen by the router.
