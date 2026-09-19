@@ -15,6 +15,16 @@ use super::*;
 
 use crate::compiled::run_ctx::RunCtx;
 
+/// The channel-bookkeeping trio a checkpoint persists (I5/R3): current
+/// per-channel versions, this boundary's delta-channel writes, and the
+/// per-node `versions_seen` snapshot. See
+/// [`CompiledGraph::channel_checkpoint_fields`].
+type ChannelCheckpointFields = (
+    BTreeMap<String, u64>,
+    BTreeMap<String, Vec<serde_json::Value>>,
+    BTreeMap<String, BTreeMap<String, u64>>,
+);
+
 /// The step data a boundary persist needs beyond the (possibly narrowed)
 /// pending/completed activation slices: the committed state snapshot and
 /// this step's child-run metadata. Bundled so the persist helpers below stay
