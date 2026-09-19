@@ -573,7 +573,8 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         &request_with_tools.tools,
         &crate::token_estimation::TokenCountOptions::default(),
     );
-    let message_tokens = crate::token_estimation::estimate_slice_tokens(&request_with_tools.messages);
+    let message_tokens =
+        crate::token_estimation::estimate_slice_tokens(&request_with_tools.messages);
     assert!(
         message_tokens + schema_tokens <= trigger_budget,
         "message_tokens ({message_tokens}) + schema_tokens ({schema_tokens}) must fit within \

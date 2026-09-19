@@ -253,4 +253,3 @@ fn preparation_applies_compaction_after_cleaning() {
     assert!(wire[0].parameters.get("$defs").is_none());
     assert!(wire[0].description.len() <= 10);
 }
-

@@ -1127,8 +1127,10 @@ async fn tool_policy_strict_without_the_opt_in_still_rejects_the_reserved_names(
     let err = stack
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
-        .expect_err("a real tool registered under a reserved name, with no policy entry, \
-                     must still be rejected by strict() without the opt-in");
+        .expect_err(
+            "a real tool registered under a reserved name, with no policy entry, \
+                     must still be rejected by strict() without the opt-in",
+        );
     assert!(matches!(err, TinyAgentsError::Validation(_)));
 }
 
