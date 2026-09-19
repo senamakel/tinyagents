@@ -304,6 +304,7 @@ where
                     state: &state,
                     pending: &pending,
                     completed_tasks: &completed_tasks,
+                    completed_routes: &completed_routes,
                     child_runs: sb.child_runs_meta,
                 },
                 sb.step,
