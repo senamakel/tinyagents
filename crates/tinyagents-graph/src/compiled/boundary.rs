@@ -426,6 +426,7 @@ where
                 "child_runs": boundary.child_runs,
                 "failed_node": failed_node.as_str(),
                 "error": error.to_string(),
+                "node_visits": node_visits_to_json(&ctx.node_visits),
             }),
         };
         let writes = checkpoint.pending_writes.clone();
