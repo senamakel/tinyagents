@@ -144,6 +144,11 @@ pub enum GraphEvent {
     CheckpointSaved {
         /// Persisted checkpoint id.
         checkpoint_id: CheckpointId,
+        /// The superstep this checkpoint was saved at, when the save site
+        /// knows it (`None` for saves outside the ordinary superstep boundary,
+        /// such as a resume-time bootstrap checkpoint).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<usize>,
     },
     /// A checkpoint was loaded to resume/replay a run (a read, not a write).
     CheckpointRestored {
