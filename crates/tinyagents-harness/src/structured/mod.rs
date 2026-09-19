@@ -548,14 +548,33 @@ impl StructuredExtractor {
 /// response format is plain text because the structure arrives via tool
 /// arguments.
 pub fn response_format_for_strategy(
-    strategy: StructuredStrategy,
+    strategy: &StructuredStrategy,
     name: impl Into<String>,
     schema: Value,
 ) -> ResponseFormat {
     match strategy {
         StructuredStrategy::ProviderSchema => ResponseFormat::json_schema(name, schema),
-        StructuredStrategy::ToolCall => ResponseFormat::Text,
+        // Both send the structure through a channel other than the
+        // provider's native schema field: `ToolCall` through a forced tool
+        // call, `Prompted` through instructions plus free text the repair
+        // ladder parses. Neither wants the provider attempting its own
+        // (possibly conflicting) schema enforcement on top.
+        StructuredStrategy::ToolCall
+        | StructuredStrategy::Prompted { .. }
+        | StructuredStrategy::ToolCallUnion => ResponseFormat::Text,
     }
+}
+
+/// The default instructions [`StructuredStrategy::Prompted`] injects ahead of
+/// the schema when no custom `template` is configured.
+///
+/// Mirrors Pydantic AI's `PromptedOutput` default wording: state the
+/// requirement, then let the schema (appended separately by the caller) speak
+/// for itself.
+pub fn default_prompted_template() -> &'static str {
+    "Respond with a single JSON object that conforms exactly to this JSON Schema. \
+     Do not include any text before or after the JSON object, and do not wrap it in \
+     a code fence."
 }
 
 #[cfg(test)]
