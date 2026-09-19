@@ -166,6 +166,35 @@ pub enum TinyAgentsError {
     #[error("model `{0}` is not registered")]
     ModelNotFound(String),
 
+    /// A tool's execution belongs to the **host**, not this process, and this
+    /// call could not run locally.
+    ///
+    /// This is the `ExternalToolSet` contract (`docs/runtime-comparison`
+    /// gap B3, mirroring Pydantic AI's `defer_loading`/deferred-tools model):
+    /// a schema-only [`crate::tool::toolset::ExternalToolSet`] advertises
+    /// tool declarations to the model but has no local executor for them —
+    /// the *host* embedding the harness is expected to run the call (an
+    /// out-of-process worker, a UI approval flow, an MCP server the host
+    /// owns directly) and feed the result back in on the next turn.
+    ///
+    /// The payload is the deferred tool's name plus the call arguments the
+    /// host needs to execute it. A caller that reaches this from
+    /// [`crate::tool::toolset::ToolSet::call`] should stop the turn, hand
+    /// `(name, arguments)` to its host-side executor out of band, and resume
+    /// the run with the result appended to the transcript as an ordinary
+    /// tool result — the same shape the agent loop already produces for a
+    /// locally executed call. There is no built-in resume plumbing for this
+    /// yet (see the doc comment on `ExternalToolSet` for the exact gap); this
+    /// variant only names the failure so a host can detect and route it
+    /// instead of the run failing opaquely.
+    #[error("tool `{name}` call is deferred to the host and cannot execute locally")]
+    CallDeferred {
+        /// The deferred tool's name.
+        name: String,
+        /// The call arguments the host needs to execute the call.
+        arguments serde_json::Value,
+    },
+
     /// Input failed validation before a call was made (for example a missing
     /// API key or an empty required field). The payload describes the problem.
     #[error("validation error: {0}")]
