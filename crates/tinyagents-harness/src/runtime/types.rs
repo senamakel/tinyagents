@@ -464,6 +464,7 @@ impl Default for RunPolicy {
             tool_schemas: None,
             output_retry: OutputRetryPolicy::default(),
             end_strategy: EndStrategy::default(),
+            structured_strategy_override: None,
         }
     }
 }
