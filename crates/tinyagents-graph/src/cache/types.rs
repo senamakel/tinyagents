@@ -52,6 +52,12 @@ pub trait TaskCache: Send + Sync {
     async fn clear(&self, graph_id: &GraphId) -> Result<()>;
 }
 
+/// Encodes an `Update` for cache storage.
+type EncodeFn<Update> =
+    dyn Fn(&Update) -> serde_json::Result<serde_json::Value> + Send + Sync;
+/// Decodes a stored value back into an `Update`.
+type DecodeFn<Update> = dyn Fn(serde_json::Value) -> serde_json::Result<Update> + Send + Sync;
+
 /// One node's resolved cache policy plus the type-erased `Update` codec,
 /// installed by [`crate::CompiledGraph::with_cached_node`].
 ///
@@ -65,16 +71,13 @@ pub trait TaskCache: Send + Sync {
 /// [`CompiledGraph`]: crate::CompiledGraph
 pub(crate) struct CachedNode<State, Update> {
     /// Derives the cache key for one activation (state + optional send arg).
-    pub(crate) key:
-        std::sync::Arc<dyn Fn(&State, Option<&serde_json::Value>) -> String + Send + Sync>,
+    pub(crate) key: std::sync::Arc<crate::builder::CacheKeyFn<State>>,
     /// Optional time-to-live for a cached entry.
     pub(crate) ttl: Option<Duration>,
     /// Encodes an `Update` for storage.
-    pub(crate) encode:
-        std::sync::Arc<dyn Fn(&Update) -> serde_json::Result<serde_json::Value> + Send + Sync>,
+    pub(crate) encode: std::sync::Arc<EncodeFn<Update>>,
     /// Decodes a stored value back into an `Update`.
-    pub(crate) decode:
-        std::sync::Arc<dyn Fn(serde_json::Value) -> serde_json::Result<Update> + Send + Sync>,
+    pub(crate) decode: std::sync::Arc<DecodeFn<Update>>,
 }
 
 impl<State, Update> Clone for CachedNode<State, Update> {
