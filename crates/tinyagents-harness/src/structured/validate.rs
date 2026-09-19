@@ -41,6 +41,10 @@ pub fn validate_value(schema: &Value, value: &Value, root: &str) -> Result<()> {
     validate_at(schema, value, root)
 }
 
+/// Recursive validation worker behind [`validate_value`]: checks `enum`,
+/// `type`, `required`, `properties` (+ `additionalProperties: false`), and
+/// `items` at one schema node, then recurses into matched properties/items
+/// with `path` extended to name them.
 fn validate_at(schema: &Value, value: &Value, path: &str) -> Result<()> {
     if schema.is_null() || schema.as_object().is_some_and(|map| map.is_empty()) {
         return Ok(());
@@ -109,6 +113,8 @@ fn validate_at(schema: &Value, value: &Value, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Checks `value` against a `type` keyword, which may be a single type name
+/// or an array of alternatives (a union), matching any one.
 fn validate_type(type_spec: &Value, value: &Value, path: &str) -> Result<()> {
     if let Some(kind) = type_spec.as_str() {
         if matches_type(value, kind) {
