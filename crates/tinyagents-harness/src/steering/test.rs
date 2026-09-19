@@ -237,7 +237,7 @@ fn cancel_wins_over_later_commands() {
 }
 
 #[test]
-fn disallowed_command_is_rejected_with_steering_error_and_event() {
+fn disallowed_command_is_rejected_with_steered_event_and_the_run_continues() {
     let recorder = EventRecorder::new();
     // Policy permits Pause but not Cancel.
     let handle = SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::Pause));
@@ -247,8 +247,10 @@ fn disallowed_command_is_rejected_with_steering_error_and_event() {
         .with_steering(handle);
     let mut messages = Vec::new();
 
-    let err = apply_pending_steering(&mut ctx, &mut messages).unwrap_err();
-    assert!(matches!(err, TinyAgentsError::Steering(_)), "got {err:?}");
+    // A disallowed command is rejected on its own; it no longer fails the
+    // checkpoint (I-5/M-7).
+    let outcome = apply_pending_steering(&mut ctx, &mut messages).unwrap();
+    assert_eq!(outcome, SteeringOutcome::Continue);
     assert_eq!(
         recorder.events(),
         vec![AgentEvent::Steered {
