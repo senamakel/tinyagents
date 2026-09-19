@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use tinyagents_harness::agent_loop::phases;
 use tinyagents_harness::context::{LoopTarget, MiddlewareControl, RunContext};
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinyagents_harness::events::HarnessRunStatus;
+use tinyagents_harness::events::{AgentEvent, HarnessRunStatus};
 use tinyagents_harness::ids::{CallId, ComponentId, NodeId};
 use tinyagents_harness::middleware::{AgentRun, BoxModelFuture, ModelBaseCall};
 use tinyagents_harness::runtime::AgentHarness;
