@@ -1284,6 +1284,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages.extend(synthetic);
     }
 
+    /// Builds the [`StructuredExtractor`] for a resolved `structured_plan`
+    /// entry (A6).
+    ///
+    /// [`StructuredStrategy::ToolCallUnion`] needs its variant list, which
+    /// `structured_plan`'s `(strategy, name, schema)` tuple has nowhere to
+    /// carry — the variants live on
+    /// [`crate::runtime::RunPolicy::structured_strategy_override`] instead,
+    /// which this reaches back into rather than widening the tuple. Every
+    /// other strategy builds the extractor directly from the tuple as
+    /// before.
+    fn build_structured_extractor(
+        &self,
+        strategy: &StructuredStrategy,
+        name: &str,
+        schema: &Value,
+    ) -> StructuredExtractor {
+        if matches!(strategy, StructuredStrategy::ToolCallUnion)
+            && let Some(crate::runtime::StructuredStrategyOverride::ToolCallUnion { variants }) =
+                &self.policy.structured_strategy_override
+        {
+            return StructuredExtractor::new_union(name, variants.clone());
+        }
+        StructuredExtractor::new(strategy.clone(), name.to_string(), schema.clone())
+    }
+
     /// Resolves the effective response-cache decision for `request`.
     ///
     /// Returns `Some((cache, key))` when a [`ResponseCache`] is attached to the
