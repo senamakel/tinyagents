@@ -110,7 +110,10 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
-pub use stream::{CollectingSink, GraphEvent, GraphEventSink, NoopSink, StreamMode};
+pub use stream::{
+    CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
+    StreamProjection, project_graph_event,
+};
 pub use subagent_node::{
     AgentInvocation, AgentInvocationBinding, AgentInvoker, InputMapper, OutputMapper,
     SubAgentBudget, SubAgentInput, SubAgentNode, SubAgentOutput, SubAgentPolicy, subagent_node,

@@ -328,6 +328,7 @@ async fn on_tool_delta_hook_emits_no_bracketing_events() {
         call_id: "call-1".to_string(),
         content: "partial args".to_string(),
         tool_name: Some("search".to_string()),
+        ..Default::default()
     };
     stack
         .run_on_tool_delta(&mut c, &(), &mut delta)

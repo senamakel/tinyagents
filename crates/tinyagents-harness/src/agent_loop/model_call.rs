@@ -394,6 +394,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     call_id: call.id.clone(),
                     content: serde_json::to_string(&call.arguments).unwrap_or_default(),
                     tool_name: Some(call.name.clone()),
+                    ..Default::default()
                 }),
             });
         }

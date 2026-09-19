@@ -196,6 +196,8 @@ pub struct WorkflowEngine<S, E> {
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
     lease_for: Duration,
+    /// Monotonic sequence counter for [`tinyagents_graph::GraphEventEnvelope::seq`].
+    sequence: std::sync::atomic::AtomicU64,
 }
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
@@ -351,6 +353,7 @@ where
             executor,
             event_sink: None,
             lease_for: WORKFLOW_LEASE,
+            sequence: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -468,9 +471,12 @@ where
                 )
                 .await?;
         }
-        self.emit(tinyagents_graph::GraphEvent::RunStarted {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunStarted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+            },
+        );
         let mut total_spawned = run.child_run_ids.len() as u32;
 
         loop {
@@ -557,10 +563,13 @@ where
                 }
                 return Ok(());
             };
-            self.emit(tinyagents_graph::GraphEvent::NodeStarted {
-                node: tinyagents_harness::ids::NodeId::new("run_phase"),
-                step: total_spawned as usize + 1,
-            });
+            self.emit(
+                run_id,
+                tinyagents_graph::GraphEvent::NodeStarted {
+                    node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                    step: total_spawned as usize + 1,
+                },
+            );
             let phase_result = self
                 .run_phase(
                     &run,
@@ -589,10 +598,13 @@ where
                 }
             };
             run = updated;
-            self.emit(tinyagents_graph::GraphEvent::NodeCompleted {
-                node: tinyagents_harness::ids::NodeId::new("run_phase"),
-                step: total_spawned as usize + 1,
-            });
+            self.emit(
+                run_id,
+                tinyagents_graph::GraphEvent::NodeCompleted {
+                    node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                    step: total_spawned as usize + 1,
+                },
+            );
             total_spawned += spawned;
             if run.status != WorkflowRunStatus::Running {
                 match run.status {
@@ -904,25 +916,40 @@ where
             })
     }
 
-    fn emit(&self, event: tinyagents_graph::GraphEvent) {
+    fn emit(&self, run_id: &str, event: tinyagents_graph::GraphEvent) {
         if let Some(sink) = &self.event_sink {
-            sink.emit(event);
+            let seq = self
+                .sequence
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            sink.emit(tinyagents_graph::GraphEventEnvelope {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                task_id: None,
+                ns: Vec::new(),
+                seq,
+                event,
+            });
         }
     }
 
     fn finish_completed(&self, run_id: &str, steps: usize) {
-        self.emit(tinyagents_graph::GraphEvent::RunCompleted {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-            steps,
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunCompleted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                steps,
+            },
+        );
         self.flush_terminal_events();
     }
 
     fn finish_failed(&self, run_id: &str, error: String) {
-        self.emit(tinyagents_graph::GraphEvent::RunFailed {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-            error,
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunFailed {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                error,
+            },
+        );
         self.flush_terminal_events();
     }
 

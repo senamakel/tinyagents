@@ -122,6 +122,8 @@ fn provider_error_retryability_follows_its_flag() {
         retryable: true,
         retry_after_ms: None,
         raw: None,
+        partial_message: None,
+        stop_reason: None,
     };
     assert!(is_retryable(&TinyAgentsError::Provider(Box::new(
         retryable.clone()
@@ -196,6 +198,8 @@ fn classify_provider_error_and_reason_labels_are_stable() {
         retryable: true,
         retry_after_ms: None,
         raw: None,
+        partial_message: None,
+        stop_reason: None,
     };
     let class = classify_provider_error(&err);
     assert_eq!(class, ProviderFailureClass::UpstreamUnhealthy);

@@ -112,7 +112,7 @@ use crate::command::{Command, Interrupt, NodeResult, RouteTarget};
 use crate::recursion::{ChildRun, ChildRunSink, RecursionFrame, RecursionPolicy, RecursionStack};
 use crate::reducer::StateReducer;
 use crate::status::GraphRunStatus;
-use crate::stream::{GraphEvent, GraphEventSink};
+use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
 use crate::{Result, TinyAgentsError};
 use tinyagents_harness::ids::{
     CheckpointId, ExecutionStatus, GraphId, InterruptId, NodeId, RunId, TaskId, ThreadId,
@@ -338,6 +338,7 @@ impl<State, Update> CompiledGraph<State, Update> {
             run_deadline: None,
             durability: crate::checkpoint::DurabilityMode::default(),
             node_retry: None,
+            sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -494,22 +495,65 @@ impl<State, Update> CompiledGraph<State, Update> {
         self
     }
 
-    fn emit(&self, event: GraphEvent) {
-        if let Some(sink) = &self.event_sink {
-            // Durable sinks persist asynchronously off the executor thread. On a
-            // terminal run event, flush so a caller that reads the journal right
-            // after the run returns sees a complete log.
-            let terminal = matches!(
-                event,
-                GraphEvent::RunCompleted { .. }
-                    | GraphEvent::RunFailed { .. }
-                    | GraphEvent::RunCancelled { .. }
-            );
-            sink.emit(event);
-            if terminal {
-                sink.flush();
-            }
+    /// Wraps `event` in a [`crate::stream::GraphEventEnvelope`] stamped with
+    /// `run_id`, this graph instance's checkpoint namespace, and the next
+    /// value of its [`CompiledGraph::sequence`] counter, then delivers it to
+    /// the configured sink (a no-op without one).
+    fn emit(&self, run_id: &RunId, event: GraphEvent) {
+        let Some(sink) = &self.event_sink else {
+            return;
+        };
+        // Durable sinks persist asynchronously off the executor thread. On a
+        // terminal run event, flush so a caller that reads the journal right
+        // after the run returns sees a complete log.
+        let terminal = matches!(
+            event,
+            GraphEvent::RunCompleted { .. }
+                | GraphEvent::RunFailed { .. }
+                | GraphEvent::RunCancelled { .. }
+        );
+        let envelope = self.envelope(run_id, event);
+        sink.emit(envelope);
+        if terminal {
+            sink.flush();
         }
+    }
+
+    /// Builds a [`crate::stream::GraphEventEnvelope`] for `event` without
+    /// delivering it — the shared stamping logic behind [`Self::emit`] and
+    /// the async-checkpoint-write path in `boundary.rs`, which must build an
+    /// envelope on the calling thread (to keep `seq` ordered) before handing
+    /// the write off to a spawned task.
+    pub(crate) fn envelope(&self, run_id: &RunId, event: GraphEvent) -> GraphEventEnvelope {
+        let seq = self
+            .sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        GraphEventEnvelope {
+            run_id: run_id.clone(),
+            task_id: None,
+            ns: self.namespace.clone(),
+            seq,
+            event,
+        }
+    }
+
+    /// [`Self::emit`] for the handful of manual/out-of-band checkpoint APIs
+    /// (`update_state`, `bulk_update_state`, …) that run outside any live
+    /// [`RunCtx`], and so have no real [`RunId`] to stamp — the envelope
+    /// carries an empty one rather than a fabricated live run.
+    pub(crate) fn emit_unscoped(&self, event: GraphEvent) {
+        self.emit(&RunId::from(String::new()), event);
+    }
+
+    /// Resets this graph instance's sequence counter to a fresh, independent
+    /// one. Used when embedding a graph as a subgraph node
+    /// ([`crate::subgraph`]): the embedded instance gets its own namespace
+    /// already (see [`crate::stream::GraphEventEnvelope`]), and sharing the
+    /// parent's counter would only entangle two otherwise-independent
+    /// sequences for no benefit.
+    pub(crate) fn with_fresh_sequence(mut self) -> Self {
+        self.sequence = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        self
     }
 }
 

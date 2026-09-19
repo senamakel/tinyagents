@@ -118,6 +118,7 @@ where
                     }
                 }
                 let next = self.route_completed(
+                    &ctx.run_id,
                     &pairs,
                     &merged_goto_map,
                     state,
@@ -128,7 +129,13 @@ where
             }
             None => {
                 completed_tasks = sb.completed.iter().map(|(_, a)| a.clone()).collect();
-                self.route_completed(sb.completed, sb.goto_map, state, &mut ctx.barrier_arrivals)?
+                self.route_completed(
+                    &ctx.run_id,
+                    sb.completed,
+                    sb.goto_map,
+                    state,
+                    &mut ctx.barrier_arrivals,
+                )?
             }
         };
 
@@ -455,9 +462,13 @@ where
             }),
         };
         let id = checkpointer.put(checkpoint).await?;
-        self.emit(GraphEvent::CheckpointSaved {
-            checkpoint_id: id.clone(),
-        });
+        self.emit(
+            &ctx.run_id,
+            GraphEvent::CheckpointSaved {
+                checkpoint_id: id.clone(),
+                step: Some(ctx.steps),
+            },
+        );
         Ok(Some(id))
     }
 
@@ -478,10 +489,13 @@ where
         err: &TinyAgentsError,
         checkpoint_id: Option<CheckpointId>,
     ) {
-        self.emit(GraphEvent::RunFailed {
-            run_id: run_id.clone(),
-            error: err.to_string(),
-        });
+        self.emit(
+            run_id,
+            GraphEvent::RunFailed {
+                run_id: run_id.clone(),
+                error: err.to_string(),
+            },
+        );
         let mut status = self.base_status(run_id, thread_id, started_at);
         status.status = ExecutionStatus::Failed;
         status.current_step = steps;
@@ -588,9 +602,13 @@ where
         // that implement it can answer "did this task run?" without loading
         // the whole state payload.
         checkpointer.put_writes(&config, &writes).await?;
-        self.emit(GraphEvent::CheckpointSaved {
-            checkpoint_id: id.clone(),
-        });
+        self.emit(
+            &ctx.run_id,
+            GraphEvent::CheckpointSaved {
+                checkpoint_id: id.clone(),
+                step: Some(step),
+            },
+        );
         Ok(Some(id))
     }
 
@@ -617,9 +635,13 @@ where
         };
         let id = checkpointer.put(checkpoint).await?;
         checkpointer.put_writes(&config, &writes).await?;
-        self.emit(GraphEvent::CheckpointSaved {
-            checkpoint_id: id.clone(),
-        });
+        self.emit(
+            &ctx.run_id,
+            GraphEvent::CheckpointSaved {
+                checkpoint_id: id.clone(),
+                step: Some(step),
+            },
+        );
         Ok(Some(id))
     }
 
@@ -670,13 +692,25 @@ where
             Ok(handle) => {
                 let checkpointer = Arc::clone(checkpointer);
                 let sink = self.event_sink.clone();
+                // Build the envelope (and so claim its `seq` value) on the
+                // calling thread, before spawning: the background task's
+                // completion order relative to other work is not
+                // deterministic, but the sequence number it carries still
+                // reflects when this write was *requested*.
+                let envelope = sink.as_ref().map(|_| {
+                    self.envelope(
+                        &ctx.run_id,
+                        GraphEvent::CheckpointSaved {
+                            checkpoint_id: id.clone(),
+                            step: Some(step),
+                        },
+                    )
+                });
                 ctx.async_writes.spawn_ordered(&handle, async move {
                     let id = checkpointer.put(checkpoint).await?;
                     checkpointer.put_writes(&write_config, &writes).await?;
-                    if let Some(sink) = sink {
-                        sink.emit(GraphEvent::CheckpointSaved {
-                            checkpoint_id: id.clone(),
-                        });
+                    if let (Some(sink), Some(envelope)) = (sink, envelope) {
+                        sink.emit(envelope);
                     }
                     Ok(id)
                 });
@@ -685,9 +719,13 @@ where
             Err(_) => {
                 let id = checkpointer.put(checkpoint).await?;
                 checkpointer.put_writes(&write_config, &writes).await?;
-                self.emit(GraphEvent::CheckpointSaved {
-                    checkpoint_id: id.clone(),
-                });
+                self.emit(
+                    &ctx.run_id,
+                    GraphEvent::CheckpointSaved {
+                        checkpoint_id: id.clone(),
+                        step: Some(step),
+                    },
+                );
                 Ok(Some(id))
             }
         }

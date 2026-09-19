@@ -2691,6 +2691,7 @@ async fn streaming_turn_keeps_a_signed_thinking_signature_ahead_of_a_tool_call()
                 call_id: "call-1".to_string(),
                 content: "{}".to_string(),
                 tool_name: Some("lookup".to_string()),
+                ..Default::default()
             }),
             ModelStreamItem::Completed(terminal),
         ])),
@@ -2756,6 +2757,7 @@ async fn streaming_middleware_can_suppress_a_standalone_tool_delta() {
                 call_id: "blocked-call".to_string(),
                 content: "{}".to_string(),
                 tool_name: Some("blocked".to_string()),
+                ..Default::default()
             }),
             ModelStreamItem::Completed(terminal),
         ])),
@@ -2801,6 +2803,7 @@ async fn streaming_tool_delta_transform_controls_terminal_dispatch() {
                 call_id: "raw-call".to_string(),
                 content: r#"{"raw":true}"#.to_string(),
                 tool_name: Some("blocked".to_string()),
+                ..Default::default()
             }),
             ModelStreamItem::Completed(terminal),
         ])),

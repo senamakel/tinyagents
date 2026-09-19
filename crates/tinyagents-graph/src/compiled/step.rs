@@ -105,6 +105,16 @@ struct FoldAccum<Update> {
     goto_map: HashMap<usize, Vec<RouteTarget>>,
 }
 
+/// The per-branch identity [`StepRunner::fold_result`] needs to emit its
+/// events and update its accumulators. Bundled (rather than four separate
+/// parameters) to keep `fold_result`'s signature small.
+struct FoldBranch<'a> {
+    run_id: &'a RunId,
+    index: usize,
+    node_id: &'a NodeId,
+    step: usize,
+}
+
 /// Runs one superstep's active node set against a [`CompiledGraph`].
 ///
 /// A thin wrapper around a `&CompiledGraph` borrow — it exists to give the
@@ -202,11 +212,14 @@ where
                         return Err(error);
                     };
                     attempt += 1;
-                    self.graph.emit(GraphEvent::NodeRetryScheduled {
-                        node: node_id.clone(),
-                        step,
-                        attempt,
-                    });
+                    self.graph.emit(
+                        &ctx.run_id,
+                        GraphEvent::NodeRetryScheduled {
+                            node: node_id.clone(),
+                            step,
+                            attempt,
+                        },
+                    );
                     policy.sleep_backoff(attempt).await;
                 }
             }
@@ -229,7 +242,7 @@ where
         } else {
             self.run_sequential(ctx, active, state, step).await?
         };
-        Ok(self.fold_step(outcome, step, &mut ctx.visited))
+        Ok(self.fold_step(&ctx.run_id, outcome, step, &mut ctx.visited))
     }
 
     /// Runs the active node set one node at a time (default behavior).
@@ -255,14 +268,27 @@ where
                 .get(node_id)
                 .ok_or_else(|| TinyAgentsError::MissingNode(node_id.to_string()))?;
 
-            self.graph.emit(GraphEvent::TaskScheduled {
-                node: node_id.clone(),
-                step,
-            });
-            self.graph.emit(GraphEvent::NodeStarted {
-                node: node_id.clone(),
-                step,
-            });
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::TaskScheduled {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::NodeStarted {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::TaskStarted {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
 
             let node_ctx = ctx.node_context(
                 activation,
@@ -317,19 +343,35 @@ where
                 .get(node_id)
                 .ok_or_else(|| TinyAgentsError::MissingNode(node_id.to_string()))?;
 
-            self.graph.emit(GraphEvent::TaskScheduled {
-                node: node_id.clone(),
-                step,
-            });
-            self.graph.emit(GraphEvent::NodeStarted {
-                node: node_id.clone(),
-                step,
-            });
-            self.graph.emit(GraphEvent::ContextForked {
-                node: node_id.clone(),
-                fork: index,
-                step,
-            });
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::TaskScheduled {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::NodeStarted {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::TaskStarted {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::ContextForked {
+                    node: node_id.clone(),
+                    fork: index,
+                    step,
+                },
+            );
 
             let fork = Some(ForkId::new(index, node_id.clone()));
             let node_ctx = ctx.node_context(
@@ -407,45 +449,69 @@ where
     /// though it is not an `Err`.
     fn fold_result(
         &self,
-        index: usize,
-        node_id: &NodeId,
-        step: usize,
+        branch: FoldBranch<'_>,
         result: NodeResult<Update>,
         accum: &mut FoldAccum<Update>,
         visited: &mut Vec<NodeId>,
     ) -> Option<(usize, Interrupt)> {
+        let FoldBranch {
+            run_id,
+            index,
+            node_id,
+            step,
+        } = branch;
         visited.push(node_id.clone());
         match result {
             NodeResult::Update(update) => {
                 accum.updates.push(update);
-                self.graph.emit(GraphEvent::StateUpdated {
-                    node: node_id.clone(),
-                    step,
-                });
+                self.graph.emit(
+                    run_id,
+                    GraphEvent::StateUpdated {
+                        node: node_id.clone(),
+                        step,
+                    },
+                );
             }
             NodeResult::Command(command) => {
                 if let Some(update) = command.update {
                     accum.updates.push(update);
-                    self.graph.emit(GraphEvent::StateUpdated {
-                        node: node_id.clone(),
-                        step,
-                    });
+                    self.graph.emit(
+                        run_id,
+                        GraphEvent::StateUpdated {
+                            node: node_id.clone(),
+                            step,
+                        },
+                    );
                 }
                 if !command.goto.is_empty() {
                     accum.goto_map.insert(index, command.goto);
                 }
             }
             NodeResult::Interrupt(emitted) => {
-                self.graph.emit(GraphEvent::InterruptEmitted {
-                    interrupt: emitted.clone(),
-                });
+                self.graph.emit(
+                    run_id,
+                    GraphEvent::InterruptEmitted {
+                        interrupt: emitted.clone(),
+                    },
+                );
                 return Some((index, emitted));
             }
         }
-        self.graph.emit(GraphEvent::NodeCompleted {
-            node: node_id.clone(),
-            step,
-        });
+        self.graph.emit(
+            run_id,
+            GraphEvent::NodeCompleted {
+                node: node_id.clone(),
+                step,
+            },
+        );
+        self.graph.emit(
+            run_id,
+            GraphEvent::TaskCompleted {
+                node: node_id.clone(),
+                step,
+                cached: false,
+            },
+        );
         None
     }
 
@@ -468,6 +534,7 @@ where
     /// active set.
     fn fold_step(
         &self,
+        run_id: &RunId,
         outcome: StepOutcome<Update>,
         step: usize,
         visited: &mut Vec<NodeId>,
@@ -485,11 +552,22 @@ where
             let node_id = activation.node.clone();
             match result {
                 Err(error) => {
-                    self.graph.emit(GraphEvent::NodeFailed {
-                        node: node_id,
-                        step,
-                        error: error.to_string(),
-                    });
+                    self.graph.emit(
+                        run_id,
+                        GraphEvent::NodeFailed {
+                            node: node_id,
+                            step,
+                            error: error.to_string(),
+                        },
+                    );
+                    self.graph.emit(
+                        run_id,
+                        GraphEvent::TaskCompleted {
+                            node: activation.node.clone(),
+                            step,
+                            cached: false,
+                        },
+                    );
                     if failure.is_none() {
                         failure = Some(StepFailure {
                             failed_index: index,
@@ -499,7 +577,13 @@ where
                     stalled.push((index, activation));
                 }
                 Ok(result) => {
-                    match self.fold_result(index, &node_id, step, result, &mut accum, visited) {
+                    let branch = FoldBranch {
+                        run_id,
+                        index,
+                        node_id: &node_id,
+                        step,
+                    };
+                    match self.fold_result(branch, result, &mut accum, visited) {
                         Some(found) => {
                             interrupted.push(found);
                             stalled.push((index, activation));

@@ -84,34 +84,39 @@ sub-agent, or tool allowlist.
 
 ### 3. Reasoning And Tool-Argument Streaming
 
-Status: partial.
+Status: mostly implemented (runtime-comparison Phase 3, C1).
 
-`MessageDelta { text, reasoning, tool_call }`
-(`vendor/tinyinference/crates/tinyinference-llm/src/message/types.rs`) now
-carries a dedicated `reasoning` fragment alongside visible text, and
-`ModelDelta` events carry that delta — so reasoning streaming exists.
-What is still missing is explicit block start/end channels: there is no
-tool-call-start or tool-call-argument-delta / tool-call-completed signal
-separate from the accumulated `tool_call` fragment, so a consumer cannot tell
-when a tool-call block begins or ends without inferring it from delta
-content. OpenHuman providers also emit tool-call argument fragments that need
-that boundary information; the current adapter still uses an out-of-band
-`ThinkingForwarder` for parts of this.
+`MessageDelta { text, reasoning, tool_call }` carries reasoning alongside
+visible text. Block start/end channels now exist too:
+`ModelStreamItem::{BlockStart, BlockDelta, BlockEnd}` give a
+`BlockKind::{Text, Thinking, ToolCall { id, name }}` per index, so a consumer
+knows exactly when a tool-call block opens/closes instead of inferring it
+from delta content; `ToolDelta::content_index` carries the same index on the
+flat compatibility channel. Anthropic maps `content_block_start`/`_delta`/
+`_stop` 1:1 onto these; the OpenAI chat-completions adapter now derives them
+too, tracking the currently open block (text, reasoning, or each tool call by
+wire index) and emitting `BlockStart`/`BlockDelta`/`BlockEnd` as it switches
+or on `finish_reason`, sharing one dense index space across all three kinds
+so `content_index` matches the terminal message's `content` ordering. The
+OpenAI Responses API still has no true incremental SSE path in this crate
+(`stream()` does one unary call and replays it as `Started`/one
+`MessageDelta`/`Completed`), so there is nothing to derive blocks from there
+yet. `ProviderFailed` now also carries `partial_message`/`stop_reason` for a
+mid-stream failure on both adapters. Remaining: true mid-execution *tool*
+progress streaming — `tinytools::Tool` has no progress-callback surface, so
+`run_on_tool_delta`/`ToolProgress` still have no real caller; that needs a
+`tinytools` change, not a harness one.
 
-Implement:
+Remaining work:
 
-- Extend streaming deltas with explicit channels:
-  - visible text delta
-  - reasoning/thinking delta
-  - tool call start
-  - tool call argument delta
-  - tool call completed/assembled
-  - provider metadata/raw event summary
-- Keep channel semantics provider-neutral.
-- Emit the same data through `AgentEvent`, `AgentObservation`, journals, and live
-  stream items.
-- Attribute every delta to run id, model call id, optional thread id, parent run
-  id, and root run id.
+- Give the OpenAI Responses API a true incremental SSE path (currently
+  simulated as one unary call), then derive `BlockStart`/`BlockEnd` from its
+  `response.output_text.delta` / `response.function_call_arguments.delta` /
+  reasoning-summary delta events.
+- Give `tinytools::Tool` a progress-callback surface so `run_on_tool_delta`/
+  `ToolProgress` have a real, mid-execution caller.
+- Attribute every delta to run id, model call id, optional thread id, parent
+  run id, and root run id (partially covered by `ModelStreamMetadata`).
 
 Acceptance criteria:
 
@@ -176,23 +181,39 @@ Acceptance criteria:
 
 ### 6. Production Event And Status Journals
 
-Status: partially present.
+Status: partially present (runtime-comparison Phase 3, C2/C3, narrowed the
+late-attach-replay gap).
 
 TinyAgents has `HarnessEventJournal`, `StoreEventJournal`, `HarnessStatusStore`,
 and `HarnessRunStatus`. OpenHuman still bridges TinyAgents events into its own
 progress system, cost tracker, run ledger, and UI status stream.
 
-Implement:
+Late attach is now partially solved. `tinyagents_harness::stream::{AssistantFrame,
+FrameEncoder, reduce_frames}` give a durable per-block frame codec:
+`FrameEncoder` turns a `ModelStreamItem` sequence into frames (periodic
+`ToolArgsCheckpoint` snapshots bound replay depth), and `reduce_frames` folds
+a — possibly truncated — sequence into a `PartialAssistantMessage`. Every
+`GraphEvent` is now wrapped in a `GraphEventEnvelope { run_id, task_id, ns,
+seq, event }` (`seq` monotonic per emitting graph instance, fresh for an
+embedded subgraph), and `tinyagents_graph::stream::StreamProjection` folds
+graph envelopes plus harness `AgentEvent`s into cursor-ordered
+`messages`/`tool_calls`/`subagents` views; `StreamProjection::since(cursor)`
+is the late-attach replay primitive. `seq` does not chain across a subgraph
+boundary into one run-tree-wide sequence yet (D4's `TaskId` is the natural
+place for that). `JournalGraphSink::dropped()` exposes its best-effort drop
+counter so lossy-under-load is observable; the harness-side
+`HarnessEventJournal` has no equivalent yet. Filters/compaction/redaction
+hooks are still missing on both sides.
 
-- Durable event journals with cursors, replay windows, filters, compaction, and
-  redaction hooks.
+Remaining work:
+
+- Replay windows, filters, compaction, and redaction hooks on the durable
+  journals (cursors/`since` now exist for `StreamProjection`; the journals
+  themselves still lack cursor-addressable replay).
 - Status stores with parent/root lineage, thread-scoped listing, phase details,
   active tool/model call ids, usage totals, cost totals, and terminal summaries.
-- Event filters for UI surfaces: text stream only, tool timeline, cost updates,
-  graph lifecycle, errors, task lifecycle.
 - Redaction policies for prompts, tool args, tool results, PII, secrets, and
   provider payloads.
-- Stable event ids and offset semantics across process restarts.
 
 Acceptance criteria:
 

@@ -799,3 +799,58 @@ async fn parent_retry_after_subgraph_child_failure_resumes_not_restarts() {
     // bump(+1) -> maybe_fail(+1) = 2, once retried past the failure.
     assert_eq!(done.state, 2);
 }
+
+#[tokio::test]
+async fn nested_subgraph_run_yields_envelopes_with_correct_namespace_depth_and_seq() {
+    // C3: a subgraph run's envelopes must carry the deeper `ns` of the
+    // embedding node, and each graph instance's own `seq` counter must be
+    // strictly increasing within its emitted stream. Both the child and the
+    // parent are wired to the same collecting sink here — as they must be
+    // today for nested observability, since a subgraph node does not
+    // automatically inherit the parent's `event_sink` (D4 tracks true
+    // end-to-end task/observability propagation as future work).
+    let collector = Arc::new(crate::stream::CollectingSink::new());
+    let child = child_add_ten().with_event_sink(collector.clone());
+    let parent = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("child", shared_subgraph_node(child))
+        .set_entry("child")
+        .set_finish("child")
+        .compile()
+        .unwrap()
+        .with_event_sink(collector.clone());
+
+    parent.run_with_thread("t", 0).await.unwrap();
+
+    let envelopes = collector.envelopes();
+    assert!(!envelopes.is_empty());
+
+    let parent_ns: Vec<_> = envelopes.iter().filter(|e| e.ns.is_empty()).collect();
+    let child_ns: Vec<_> = envelopes
+        .iter()
+        .filter(|e| e.ns == vec!["child".to_string()])
+        .collect();
+    assert!(!parent_ns.is_empty(), "some events at the top-level ns");
+    assert!(!child_ns.is_empty(), "some events at the child's deeper ns");
+
+    // Every event belongs to one of exactly these two namespaces — there is
+    // no third, unexpected depth.
+    assert_eq!(parent_ns.len() + child_ns.len(), envelopes.len());
+
+    // Each graph instance's own sequence is strictly increasing.
+    let parent_seqs: Vec<u64> = parent_ns.iter().map(|e| e.seq).collect();
+    let mut sorted_parent = parent_seqs.clone();
+    sorted_parent.sort_unstable();
+    assert_eq!(parent_seqs, sorted_parent);
+    assert!(parent_seqs.windows(2).all(|w| w[0] < w[1]));
+
+    let child_seqs: Vec<u64> = child_ns.iter().map(|e| e.seq).collect();
+    let mut sorted_child = child_seqs.clone();
+    sorted_child.sort_unstable();
+    assert_eq!(child_seqs, sorted_child);
+    assert!(child_seqs.windows(2).all(|w| w[0] < w[1]));
+
+    // The child's own sequence starts fresh (not continuing the parent's),
+    // per `namespaced`'s `with_fresh_sequence` — its distinct `ns` already
+    // disambiguates the stream.
+    assert_eq!(child_seqs[0], 0);
+}
