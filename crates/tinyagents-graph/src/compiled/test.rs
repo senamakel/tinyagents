@@ -711,9 +711,10 @@ async fn update_state_as_command_node_is_rejected() {
 /// provenance and fanned the value across every pending node instead.
 #[tokio::test]
 async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
+    type ResumesSeen = Arc<std::sync::Mutex<Vec<(String, Option<serde_json::Value>)>>>;
+
     let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
-    let resumes_seen: Arc<std::sync::Mutex<Vec<(String, Option<serde_json::Value>)>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let resumes_seen: ResumesSeen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let lo_resumes = resumes_seen.clone();
     let y_resumes = resumes_seen.clone();
     let graph = GraphBuilder::<Counter, i32>::new()
