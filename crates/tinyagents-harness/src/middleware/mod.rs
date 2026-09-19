@@ -197,7 +197,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// order.
     pub async fn run_before_agent(&self, ctx: &mut RunContext<Ctx>, state: &State) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_agent(ctx, state))
+            .before_agent_control(ctx, state))
     }
 
     /// Runs every middleware's [`Middleware::after_agent`] in reverse
@@ -209,7 +209,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         run: &mut AgentRun,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_agent(ctx, state, run))
+            .after_agent_control(ctx, state, run))
     }
 
     /// Runs every middleware's [`Middleware::before_model`] in registration
@@ -221,7 +221,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         request: &mut ModelRequest,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_model(ctx, state, request))
+            .before_model_control(ctx, state, request))
     }
 
     /// Runs every middleware's [`Middleware::on_model_delta`] in registration
@@ -259,7 +259,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         response: &mut ModelResponse,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_model(ctx, state, response))
+            .after_model_control(ctx, state, response))
     }
 
     /// Runs every middleware's [`Middleware::before_tool`] in registration
@@ -271,7 +271,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         call: &mut ToolCall,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_tool(ctx, state, call))
+            .before_tool_control(ctx, state, call))
     }
 
     /// Runs every middleware's [`Middleware::on_tool_delta`] in registration
@@ -312,7 +312,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         result: &mut ToolResult,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_tool(ctx, state, invocation, result))
+            .after_tool_control(ctx, state, invocation, result))
     }
 
     /// Runs every middleware's [`Middleware::on_error`] in registration order,
