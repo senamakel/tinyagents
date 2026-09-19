@@ -520,4 +520,17 @@ async fn tool_schemas_projection_applies_to_wire_and_catalog() {
         .map(Message::text)
         .unwrap();
     assert!(answer.contains("\"name\": \"stock_quote\""));
+
+    // Regression: the intrinsic `tool_search`/`tool_call` bridge schemas used
+    // to be appended *after* provider preparation ran, so they reached the
+    // wire unprojected — a `max_description_bytes` budget (or a Gemini
+    // `minimum`/`maximum` strip) never applied to them even though the same
+    // policy is configured for the whole run. `tool_search`'s description
+    // embeds the deferred-tool manifest, which is comfortably over 40 bytes
+    // unprojected, so this is a real assertion, not a vacuous one.
+    let bridge_search = tools.iter().find(|t| t["name"] == TOOL_SEARCH_NAME).unwrap();
+    assert!(
+        bridge_search["description"].as_str().unwrap().len() <= 40,
+        "bridge schema description was not projected through the run's SchemaPreparation"
+    );
 }
