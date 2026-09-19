@@ -328,8 +328,8 @@ Status: partially present; queued steering/follow-ups shipped (A4).
 TinyAgents has sub-agent and steering primitives, but OpenHuman still owns
 session reuse, wait handles, detached run tracking, user-facing cancellation,
 early-exit handling, and parent-child progress aggregation. The generic
-`DetachedTaskRegistry` owns process-local owner checks, wait/timeout,
-cooperative-cancel-before-abort, steering lookup, and bounded terminal cleanup.
+`DetachedTaskRegistry` owns owner checks, wait/timeout, cancel-before-abort,
+steering lookup, and bounded terminal cleanup.
 
 A4 (`docs/runtime-comparison/plan.md` Phase 2) put `RunQueue<Message>` on the
 loop path: `RunContext::with_run_queue`; `Steer` drained after each tool batch
