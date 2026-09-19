@@ -513,9 +513,9 @@ where
                     .handle_failure_boundary(&mut ctx, sb, &state, fail)
                     .await;
             }
-            if let Some((index, emitted)) = step_run.interrupt {
+            if !step_run.interrupted.is_empty() {
                 return self
-                    .handle_interrupt_boundary(&mut ctx, sb, state, index, emitted)
+                    .handle_interrupt_boundary(&mut ctx, sb, state, step_run.interrupted)
                     .await;
             }
 
