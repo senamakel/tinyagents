@@ -218,16 +218,15 @@ where
         if let Some(node) = &as_node {
             route_into_merged(node)?;
         }
-        let next_nodes = activation_nodes(&merged);
-        let pending_activations = if merged.is_empty() {
-            None
-        } else {
-            Some(merged.iter().map(PendingActivation::from).collect())
-        };
+        let tasks: Vec<PendingActivation> = merged.iter().map(PendingActivation::from).collect();
         // This write resolves every carried-forward completion's routing
         // (above), so none of them are still "owed" afterward; only the
         // attributed node (if any) is freshly completed by this write.
-        let completed_tasks: Vec<NodeId> = as_node.iter().cloned().collect();
+        let completed: Vec<crate::checkpoint::CompletedTask> = as_node
+            .iter()
+            .cloned()
+            .map(|node| crate::checkpoint::CompletedTask::new(TaskId::from(String::new()), node))
+            .collect();
         let barrier_arrivals = barriers_to_persisted(&arrivals);
 
         // I2: carry the base checkpoint's interrupt provenance through this
