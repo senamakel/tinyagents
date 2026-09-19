@@ -133,6 +133,8 @@ pub struct ResolvedToolTimeout {
     pub budget_ms: u64,
 }
 
+/// Clamps a millisecond value into `[min_ms, max_ms]`, except that `0` always
+/// passes through unchanged since it is the sentinel for "disabled".
 fn clamp_or_disabled(timeout_ms: u64, min_ms: u64, max_ms: u64) -> u64 {
     if timeout_ms == 0 {
         0
