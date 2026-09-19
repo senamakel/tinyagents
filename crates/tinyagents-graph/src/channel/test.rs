@@ -418,8 +418,7 @@ fn decoding_binary_aggregate_without_reducer_name_errors() {
         }),
     );
     let json = serde_json::to_value(&set).unwrap();
-    let decoded: std::result::Result<ChannelSet, serde_json::Error> =
-        serde_json::from_value(json);
+    let decoded: std::result::Result<ChannelSet, serde_json::Error> = serde_json::from_value(json);
     assert!(decoded.is_err());
 }
 
@@ -556,7 +555,10 @@ async fn channel_state_graph_round_trips_through_sqlite_checkpointer() {
         let cp: Arc<dyn Checkpointer<ChannelState>> =
             Arc::new(SqliteCheckpointer::<ChannelState>::open(&db_path).unwrap());
         let g = graph().with_checkpointer(cp);
-        let paused = g.run_with_thread("ch-thread-sqlite", initial).await.unwrap();
+        let paused = g
+            .run_with_thread("ch-thread-sqlite", initial)
+            .await
+            .unwrap();
         assert!(paused.is_interrupted());
     }
     {
@@ -616,14 +618,20 @@ async fn node_context_changed_since_last_run_tracks_channel_writes() {
         .add_node("observe_a", move |_s: ChannelState, c: NodeContext| {
             let observed_a = observed_a.clone();
             async move {
-                observed_a.lock().unwrap().push(c.changed_since_last_run("v"));
+                observed_a
+                    .lock()
+                    .unwrap()
+                    .push(c.changed_since_last_run("v"));
                 Ok(NodeResult::Update(ChannelUpdate::new()))
             }
         })
         .add_node("observe_b", move |_s: ChannelState, c: NodeContext| {
             let observed_b = observed_b.clone();
             async move {
-                observed_b.lock().unwrap().push(c.changed_since_last_run("v"));
+                observed_b
+                    .lock()
+                    .unwrap()
+                    .push(c.changed_since_last_run("v"));
                 Ok(NodeResult::Update(ChannelUpdate::new()))
             }
         })
@@ -657,7 +665,11 @@ fn overwrite_bypasses_merge_and_rebases_baseline() {
 
     // Overwrite replaces the value outright...
     let state = state
-        .merge(ChannelUpdate::new().overwrite("log", json!(["reset"])).at_step(2))
+        .merge(
+            ChannelUpdate::new()
+                .overwrite("log", json!(["reset"]))
+                .at_step(2),
+        )
         .unwrap();
     assert_eq!(state.get("log"), Some(&json!(["reset"])));
 
@@ -674,10 +686,7 @@ fn delta_tracked_channel_accumulates_step_deltas_and_overwrite_rebases_them() {
         .with_channel("log", Topic)
         .with_delta("log", 1000);
     let state = ChannelState::new();
-    let state = ChannelState {
-        set,
-        ..state
-    };
+    let state = ChannelState { set, ..state };
     let state = state
         .merge(ChannelUpdate::new().set("log", "a").at_step(1))
         .unwrap();
@@ -709,7 +718,9 @@ async fn delta_history_replays_from_checkpoints() {
     use crate::checkpoint::{CheckpointConfig, Checkpointer, InMemoryCheckpointer};
     use std::sync::Arc;
 
-    let set = ChannelSet::new().with_channel("log", Topic).with_delta("log", 1000);
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 1000);
     let base = ChannelState {
         set,
         ..ChannelState::new()
@@ -944,10 +955,7 @@ async fn state_history_reconstruction_equals_live_state_at_every_step() {
 
     let _ = graph.run_with_thread("history-thread", base).await;
 
-    let history = cp
-        .state_history("history-thread", &[], None)
-        .await
-        .unwrap();
+    let history = cp.state_history("history-thread", &[], None).await.unwrap();
     for tuple in &history {
         let step = tuple.checkpoint.to_metadata().step;
         let expected: Vec<Value> = (1..=step).map(|n| json!(format!("item-{n}"))).collect();

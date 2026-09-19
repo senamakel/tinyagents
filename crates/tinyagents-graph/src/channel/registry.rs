@@ -121,13 +121,17 @@ impl ReducerRegistry {
         name: impl Into<String>,
         f: impl Fn(Value, Value) -> Result<Value> + Send + Sync + 'static,
     ) {
-        let mut guard = storage().lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut guard = storage()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         guard.insert(name.into(), Arc::new(f));
     }
 
     /// Looks up the reducer registered under `name`.
     pub(crate) fn get(name: &str) -> Option<ReduceFn> {
-        let guard = storage().lock().unwrap_or_else(|poison| poison.into_inner());
+        let guard = storage()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         guard.get(name).cloned()
     }
 

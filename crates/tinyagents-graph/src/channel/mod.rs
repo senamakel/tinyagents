@@ -418,10 +418,7 @@ fn channel_from_config(kind: &str, config: &Value) -> Result<Box<dyn Channel>> {
         "ephemeral" => Ok(Box::new(Ephemeral)),
         "untracked" => Ok(Box::new(Untracked)),
         "barrier" => {
-            let expected = config
-                .get("expected")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as usize;
+            let expected = config.get("expected").and_then(Value::as_u64).unwrap_or(0) as usize;
             Ok(Box::new(Barrier::new(expected)))
         }
         "named_barrier" => {
@@ -438,13 +435,16 @@ fn channel_from_config(kind: &str, config: &Value) -> Result<Box<dyn Channel>> {
             Ok(Box::new(NamedBarrier::new(expected)))
         }
         "binary_aggregate" => {
-            let name = config.get("reducer").and_then(Value::as_str).ok_or_else(|| {
-                TinyAgentsError::Checkpoint(
-                    "binary_aggregate channel requires a named reducer to decode; build it \
+            let name = config
+                .get("reducer")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    TinyAgentsError::Checkpoint(
+                        "binary_aggregate channel requires a named reducer to decode; build it \
                      with `BinaryAggregate::named` so its config persists a reducer name"
-                        .to_string(),
-                )
-            })?;
+                            .to_string(),
+                    )
+                })?;
             Ok(Box::new(BinaryAggregate::named(name)?))
         }
         other => Err(TinyAgentsError::Checkpoint(format!(
@@ -633,7 +633,10 @@ struct ChannelSetWire {
 }
 
 impl serde::Serialize for ChannelSet {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         let channels: BTreeMap<String, ChannelEntry> = self
             .channels
             .iter()
@@ -664,8 +667,8 @@ impl<'de> serde::Deserialize<'de> for ChannelSet {
         let mut channels: HashMap<String, Box<dyn Channel>> = HashMap::new();
         let mut values: HashMap<String, Value> = HashMap::new();
         for (name, entry) in wire.channels {
-            let channel =
-                channel_from_config(&entry.kind, &entry.config).map_err(serde::de::Error::custom)?;
+            let channel = channel_from_config(&entry.kind, &entry.config)
+                .map_err(serde::de::Error::custom)?;
             channels.insert(name.clone(), channel);
             if let Some(value) = entry.value {
                 values.insert(name, value);
