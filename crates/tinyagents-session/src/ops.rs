@@ -1,3 +1,17 @@
+//! Recording and querying operations over the session tables: sessions,
+//! messages, tool calls, and the FTS5 search index that shadows them.
+//!
+//! Every write that adds searchable content (a session, a message, a tool
+//! call) writes its row and its FTS entry inside one [`with_transaction`]
+//! call, since the two are one unit of work — see the repeated inline
+//! comment at each call site for why an autocommit connection would leave a
+//! permanently unsearchable row on partial failure.
+//!
+//! Read paths use [`with_connection`] (autocommit is fine; nothing here reads
+//! then acts on what it read). The `index_fts_*` and `map_session_row`
+//! helpers are shared plumbing between the write and read paths
+//! respectively.
+
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -12,6 +26,8 @@ use super::types::{
     SessionToolCall,
 };
 
+/// Cap on the bytes of tool output persisted per call; longer output is
+/// truncated on a character boundary with a marker appended.
 pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 
 // A record-shaped signature: each argument is one persisted column. Grouping
