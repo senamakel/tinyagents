@@ -94,7 +94,7 @@ impl StructuredStrategy {
     /// forced choice is dropped — leaving a request that asks for nothing in
     /// particular and an extractor waiting for a tool call that can never
     /// arrive. Provider-schema mode at least asks for JSON and, with the repair
-    /// ladder in [`super::structured::repair`], parses what a JSON-mode model
+    /// ladder in `repair`, parses what a JSON-mode model
     /// actually returns.
     ///
     /// [tc]: tinyinference_llm::model::ToolChoice::Tool
@@ -181,7 +181,7 @@ impl StructuredExtractor {
     /// * `schema_name` – the schema's logical name; used as the tool name when
     ///   matching tool calls in [`StructuredStrategy::ToolCall`] mode.
     /// * `schema` – the JSON Schema document. Enforced: every extracted value
-    ///   is validated against it (see [`validate`]).
+    ///   is validated against it (see `validate`).
     pub fn new(
         strategy: StructuredStrategy,
         schema_name: impl Into<String>,
@@ -213,14 +213,14 @@ impl StructuredExtractor {
     ///
     /// * **[`StructuredStrategy::ToolCall`]** – scans the response's tool
     ///   calls for the first one whose `name` matches
-    ///   [`StructuredExtractor::schema_name`] and returns its `arguments` as
+    ///   `schema_name` and returns its `arguments` as
     ///   the structured value.  Returns [`TinyAgentsError::Validation`] when no
     ///   matching call is found.
     ///
     /// # Validation
     ///
     /// Both strategies validate the extracted value against this extractor's
-    /// schema before returning it (see [`validate`]). A value that parses but
+    /// schema before returning it (see `validate`). A value that parses but
     /// does not conform is an error naming the failing instance path — not a
     /// success carrying the wrong shape.
     ///
@@ -393,7 +393,7 @@ impl StructuredExtractor {
 /// [`StructuredExtractor::extract`] after the model responds.
 ///
 /// For `ToolCall` the caller is responsible for registering an artificial
-/// tool with the given `name` and `schema` in the [`ModelRequest`]; the
+/// tool with the given `name` and `schema` in the [`ModelRequest`](tinyinference_llm::model::ModelRequest); the
 /// response format is plain text because the structure arrives via tool
 /// arguments.
 pub fn response_format_for_strategy(
