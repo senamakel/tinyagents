@@ -137,7 +137,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         request: &mut ModelRequest,
     ) -> Result<()> {
         // Below the window threshold: pass through untouched (no-op, no event).
-        if !self.policy.should_summarize(&request.messages) {
+        // The tool declarations count: they ride along on every request.
+        if !self
+            .policy
+            .should_summarize_with_tools(&request.messages, &request.tools)
+        {
             return Ok(());
         }
 
@@ -167,10 +171,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
                     CompressionFailurePolicy::PassThrough => return Ok(()),
                     // Deterministic front-drop to the policy's trigger budget,
                     // preserving system messages (see `TrimStrategy::MaxTokens`).
+                    // The trigger itself now charges tool schemas
+                    // (`should_summarize_with_tools` above), so the message
+                    // budget here must reserve that same schema cost first —
+                    // otherwise a request whose schemas already consume a
+                    // meaningful share of `trigger_budget` (or all of it)
+                    // would still trim messages to the *full* budget and can
+                    // remain above the threshold after trimming, with no
+                    // further recovery possible.
                     CompressionFailurePolicy::FallbackTrim => {
+                        let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+                            &request.tools,
+                            &crate::token_estimation::TokenCountOptions::default(),
+                        );
+                        let message_budget =
+                            self.policy.trigger_budget().saturating_sub(schema_tokens);
                         let trimmed = trim_messages(
                             &request.messages,
-                            &TrimStrategy::MaxTokens(self.policy.trigger_budget()),
+                            &TrimStrategy::MaxTokens(message_budget),
                         );
                         let to_tokens = total_message_tokens(&trimmed);
                         request.messages = trimmed;
@@ -323,7 +341,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Microcompa
             } else {
                 total_message_tokens(&request.messages)
             };
-            if tokens <= budget {
+            // The schemas are part of what the model has to fit, so they are
+            // part of what is measured against the budget.
+            let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+                &request.tools,
+                &crate::token_estimation::TokenCountOptions::default(),
+            );
+            if tokens + schema_tokens <= budget {
                 return Ok(());
             }
         }

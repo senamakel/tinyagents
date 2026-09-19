@@ -90,9 +90,11 @@ enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
         dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
         tool: Arc<dyn tinytools::Tool>,
     },
-    /// Unknown-tool recovery: no tool runs; this tool-error message is
-    /// appended to the transcript at the call's original position.
-    ErrorMessage(String),
+    /// No tool runs; this result is appended to the transcript at the call's
+    /// original position. A tool-error result for the recovery paths (unknown
+    /// tool, invalid arguments); a success result for an intrinsic answer
+    /// (`tool_search`).
+    Answered(tinytools::ToolResult),
 }
 
 /// One requested call after admission, in original order.
@@ -107,10 +109,13 @@ enum AdmittedCall<State: Send + Sync, Ctx: Send + Sync> {
         tool: Arc<dyn tinytools::Tool>,
         call: ToolCall,
     },
-    /// A recovery: no tool runs, but the call is still answered through the
-    /// normal result pipeline so it emits the same started/completed pair and
-    /// runs the same `after_tool` hooks (TOOL-11).
-    Recovered { call: ToolCall, message: String },
+    /// A recovery or an intrinsic answer: no tool runs, but the call is still
+    /// answered through the normal result pipeline so it emits the same
+    /// started/completed pair and runs the same `after_tool` hooks (TOOL-11).
+    Recovered {
+        call: ToolCall,
+        result: tinytools::ToolResult,
+    },
 }
 
 /// One transcript slot per requested call, in original order, used by the
@@ -119,7 +124,10 @@ enum ToolSlot {
     /// An executed call: consumes the next prepared/result pair in order.
     Execute,
     /// A recovery, folded in place through the normal result pipeline.
-    Recovered { call: ToolCall, message: String },
+    Recovered {
+        call: ToolCall,
+        result: tinytools::ToolResult,
+    },
 }
 
 /// Admission metadata for one executable call, paired 1:1 (in order) with its
@@ -135,6 +143,96 @@ struct PreparedToolCall {
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Builds the run's deferred-tool catalogue: every
+    /// [`tinytools::ToolExposure::Deferred`] registration the host allow-list
+    /// admits, or an empty catalogue when discovery is disabled.
+    pub(super) fn deferred_catalog(
+        &self,
+        host_allows: &dyn Fn(&str) -> bool,
+    ) -> crate::tool::discover::DeferredCatalog {
+        if !self.policy.discovery.enabled {
+            return crate::tool::discover::DeferredCatalog::default();
+        }
+        let mut schemas = self
+            .tools
+            .deferred_schemas()
+            .into_iter()
+            .filter(|schema| host_allows(&schema.name))
+            .collect::<Vec<_>>();
+        if let Some(preparation) = &self.policy.tool_schemas {
+            schemas = crate::tool::prepare_tool_schemas(&schemas, preparation);
+        }
+        crate::tool::discover::DeferredCatalog::build(schemas)
+    }
+
+    /// Resolves the discovery bridge for one call, when it is one.
+    ///
+    /// Returns `Some` with the answer for a `tool_search` call (no tool runs),
+    /// `None` after rewriting a `tool_call` in place to the real tool so
+    /// admission continues with it, and `None` untouched for any other name.
+    /// A malformed `tool_call` payload is answered with a tool error rather
+    /// than passed on, so the model can correct it.
+    fn answer_discovery_bridge(
+        &self,
+        ctx: &RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        call: &mut ToolCall,
+    ) -> Result<Option<ResolvedToolCall<State, Ctx>>> {
+        use crate::tool::discover::{TOOL_CALL_NAME, TOOL_SEARCH_NAME};
+        if !self.policy.discovery.enabled
+            || (call.name != TOOL_SEARCH_NAME && call.name != TOOL_CALL_NAME)
+        {
+            return Ok(None);
+        }
+        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+            .map(|binding| binding.allowed_tools);
+        let host_allows = |name: &str| {
+            allowed_tools
+                .as_ref()
+                .is_none_or(|allowed| allowed.is_empty() || allowed.contains(name))
+        };
+        let catalog = self.deferred_catalog(&host_allows);
+        if catalog.is_empty() {
+            // Nothing was deferred, so the bridge was never advertised; let
+            // the call fall through to the unknown-tool policy.
+            return Ok(None);
+        }
+        if call.name == TOOL_SEARCH_NAME {
+            let (result, matched) = crate::tool::discover::answer_tool_search(
+                &catalog,
+                &self.policy.discovery,
+                &call.arguments,
+            );
+            let record = ctx.emit(AgentEvent::ToolSearched {
+                call_id: CallId::new(call.id.clone()),
+                query: call
+                    .arguments
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                matched,
+            });
+            status.set_last_event(record.id);
+            return Ok(Some(ResolvedToolCall::Answered(result)));
+        }
+        match crate::tool::discover::unwrap_tool_call(&call.arguments) {
+            Ok((name, arguments)) => {
+                let record = ctx.emit(AgentEvent::DeferredToolCall {
+                    call_id: CallId::new(call.id.clone()),
+                    tool_name: name.clone(),
+                });
+                status.set_last_event(record.id);
+                call.name = name;
+                call.arguments = arguments;
+                Ok(None)
+            }
+            Err(message) => Ok(Some(ResolvedToolCall::Answered(
+                tinytools::ToolResult::error(message),
+            ))),
+        }
+    }
+
     /// Resolves this tool's own timeout policy. The separate run wall-clock
     /// budget remains the outer hard deadline: a per-tool timeout becomes a
     /// recoverable tool-error result, while exhausting the run budget aborts.
@@ -224,10 +322,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
     ) -> Result<ResolvedToolCall<State, Ctx>> {
-        // Preserve the exact attacker-controlled provider payload for host
-        // authorization/audit. `call.arguments` is later canonicalized for
-        // execution and must not overwrite what the gate evaluates.
-        let model_arguments = call.arguments.clone();
         // Safe cancellation checkpoint: stop before invoking the next
         // (side-effecting) tool if cancellation was requested.
         if ctx.cancellation.is_cancelled() {
@@ -251,6 +345,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
             return Err(TinyAgentsError::LimitExceeded(err.to_string()));
         }
+
+        // Discovery bridge, resolved before any hook runs. `tool_call` is
+        // unwrapped here so every `before_tool` hook, allow-list, and the host
+        // authorization gate below see the *real* tool name and arguments —
+        // a deferred tool is admitted exactly as if the model had called it
+        // directly. `tool_search` is answered from the run's catalogue without
+        // running a tool. A host-registered tool under either name wins, and
+        // a call the provider could not parse is left for the recovery below.
+        if call.invalid.is_none()
+            && self.tools.dispatch(&call.name).is_none()
+            && let Some(answered) = self.answer_discovery_bridge(ctx, status, call)?
+        {
+            return Ok(answered);
+        }
+        // Preserve the exact attacker-controlled provider payload for host
+        // authorization/audit, taken *after* discovery-bridge resolution:
+        // `answer_discovery_bridge` rewrites `call.name`/`call.arguments` in
+        // place when the call was a `tool_call` bridge wrapper (returning
+        // `None` so admission continues with the unwrapped call), so the
+        // snapshot here already reflects the real tool payload — not the
+        // stale `{"name", "arguments"}` wrapper the model actually sent.
+        // `call.arguments` is later canonicalized for execution and must not
+        // overwrite what the gate evaluates.
+        let model_arguments = call.arguments.clone();
 
         // The slot is *reserved* above (cap-first, so a middleware hook never
         // runs for a call the budget has already refused) and *released* here
@@ -291,7 +409,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::ErrorMessage(detail));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                detail,
+            )));
         }
 
         // Hosted turns carry an explicit definition allowlist. Do not merely
@@ -303,7 +423,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .as_ref()
             .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
         let (dispatch, tool) = match is_allowed
-            .then(|| self.tools.dispatch(&call.name))
+            .then(|| self.tools.model_dispatch(&call.name))
             .flatten()
         {
             Some(dispatch) => {
@@ -353,7 +473,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // tool-call budget slot above, bounding the loop.
                     let valid = self
                         .tools
-                        .names()
+                        .model_callable_names()
                         .into_iter()
                         .filter(|name| {
                             allowed_tools
@@ -375,7 +495,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         recovery: "tool_error".to_string(),
                     });
                     status.set_last_event(record.id);
-                    return Ok(ResolvedToolCall::ErrorMessage(message));
+                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                        message,
+                    )));
                 }
             }
         };
@@ -424,9 +546,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if matches!(self.policy.invalid_args, InvalidArgsPolicy::Fail) {
                     return Err(TinyAgentsError::Validation(error.to_string()));
                 }
-                return Ok(ResolvedToolCall::ErrorMessage(format!(
-                    "invalid injected arguments for tool `{}`: {error}",
-                    call.name
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                    format!(
+                        "invalid injected arguments for tool `{}`: {error}",
+                        call.name
+                    ),
                 )));
             }
         };
@@ -466,7 +590,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::ErrorMessage(message));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                message,
+            )));
         }
         // Host authorization is deliberately last in admission: the gate sees
         // the raw provider arguments (including any forged hidden fields),
@@ -507,7 +633,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // approval denials cannot exhaust the tool budget and block a
                 // later authorized call in the same turn.
                 ctx.limits.rollback_tool_calls(1);
-                return Ok(ResolvedToolCall::ErrorMessage(reason));
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                    reason,
+                )));
             }
         }
         Ok(ResolvedToolCall::Tool { dispatch, tool })
@@ -778,8 +906,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         for mut call in tool_calls {
             let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
                 ResolvedToolCall::Tool { dispatch, .. } => dispatch,
-                ResolvedToolCall::ErrorMessage(message) => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, message)
+                ResolvedToolCall::Answered(result) => {
+                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                     continue;
                 }
@@ -858,10 +986,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         call: &ToolCall,
-        message: String,
+        result: tinytools::ToolResult,
     ) -> Result<()> {
         tinyagents_tracing::debug!(
-            "[agent_loop::tools] recovering call `{}` for `{}` without executing a tool",
+            "[agent_loop::tools] answering call `{}` for `{}` without executing a tool",
             call.id,
             call.name
         );
@@ -873,7 +1001,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             false,
             crate::host::ContentOrigin::Tool,
         );
-        let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
     }
@@ -906,8 +1033,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool,
                     call,
                 }),
-                ResolvedToolCall::ErrorMessage(message) => {
-                    admitted.push(AdmittedCall::Recovered { call, message })
+                ResolvedToolCall::Answered(result) => {
+                    admitted.push(AdmittedCall::Recovered { call, result })
                 }
             }
         }
@@ -927,8 +1054,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool,
                     call,
                 } => (dispatch, tool, call),
-                AdmittedCall::Recovered { call, message } => {
-                    slots.push(ToolSlot::Recovered { call, message });
+                AdmittedCall::Recovered { call, result } => {
+                    slots.push(ToolSlot::Recovered { call, result });
                     continue;
                 }
             };
@@ -984,8 +1111,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut executed = prepared.into_iter().zip(results);
         for slot in slots {
             match slot {
-                ToolSlot::Recovered { call, message } => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, message)
+                ToolSlot::Recovered { call, result } => {
+                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                 }
                 ToolSlot::Execute => {

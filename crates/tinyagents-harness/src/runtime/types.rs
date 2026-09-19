@@ -256,6 +256,21 @@ pub struct RunPolicy {
     /// Defaults to `1` (one retry, two attempts total). Set to `0` to disable
     /// for exact-replay callers that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// How [`tinytools::ToolExposure::Deferred`] tools are surfaced: never in
+    /// the request's `tools` array, but findable through the intrinsic
+    /// `tool_search` / `tool_call` bridge. See
+    /// [`crate::tool::discover::ToolDiscoveryPolicy`].
+    pub discovery: crate::tool::discover::ToolDiscoveryPolicy,
+    /// Optional projection applied to every advertised tool schema before it
+    /// is sent (ref resolution, provider keyword stripping, byte budgets). See
+    /// [`crate::tool::SchemaPreparation`].
+    ///
+    /// `None` (the default) sends declarations verbatim, as the loop always
+    /// has. A host that registers third-party schemas — MCP servers, plugins —
+    /// should set one; a host that authors every schema by hand rarely needs
+    /// to. Admission still validates arguments against the *declared* schema,
+    /// which is never looser than the projected one.
+    pub tool_schemas: Option<crate::tool::SchemaPreparation>,
 }
 
 impl Default for RunPolicy {
@@ -281,6 +296,8 @@ impl Default for RunPolicy {
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
             truncated_empty_retries: 1,
+            discovery: crate::tool::discover::ToolDiscoveryPolicy::default(),
+            tool_schemas: None,
         }
     }
 }
