@@ -219,6 +219,49 @@ CREATE TABLE IF NOT EXISTS thread_leases (
 );
 ";
 
+/// Recursive parent-chain walk for [`Checkpointer::state_history`], newest
+/// first, capped by `?3` rows — a caller-supplied `limit` (already clamped to
+/// the namespace's total row count) rather than a truncation applied in Rust
+/// after decoding everything.
+///
+/// `latest` first dedups: `put` never updates a row in place (see the module
+/// doc), so a reused `checkpoint_id` — from `copy_thread`, a fork, or a
+/// hand-written record — can have more than one row. Keeping only the
+/// highest-`seq` row per id makes `checkpoint_id` unique within `latest`,
+/// which is what makes the following recursive join well-defined: a plain
+/// `JOIN` on `parent_checkpoint_id = checkpoint_id` over non-unique ids could
+/// fan out.
+///
+/// `chain` walks from the head (the namespace's own highest-`seq` row) along
+/// `parent_checkpoint_id`, capped by `depth < ?3`. Termination is guaranteed
+/// even over a corrupted lineage with a parent cycle: `latest` has at most one
+/// row per distinct id, so after at most that many hops the depth cap (itself
+/// bounded by the namespace's total row count, see the caller) stops the
+/// recursion regardless of what the pointers do.
+const STATE_HISTORY_CTE: &str = "\
+WITH RECURSIVE latest AS (
+    SELECT c1.seq, c1.checkpoint_id, c1.parent_checkpoint_id, c1.record
+    FROM checkpoints c1
+    WHERE c1.thread_id = ?1 AND c1.namespace = ?2
+      AND c1.seq = (
+        SELECT MAX(c2.seq) FROM checkpoints c2
+        WHERE c2.thread_id = c1.thread_id AND c2.namespace = c1.namespace
+          AND c2.checkpoint_id = c1.checkpoint_id
+      )
+),
+chain(seq, checkpoint_id, parent_checkpoint_id, record, depth) AS (
+    SELECT seq, checkpoint_id, parent_checkpoint_id, record, 1
+    FROM latest
+    WHERE seq = (SELECT MAX(seq) FROM latest)
+    UNION ALL
+    SELECT l.seq, l.checkpoint_id, l.parent_checkpoint_id, l.record, chain.depth + 1
+    FROM latest l
+    JOIN chain ON l.checkpoint_id = chain.parent_checkpoint_id
+    WHERE chain.depth < ?3
+)
+SELECT record FROM chain ORDER BY depth ASC LIMIT ?3;
+";
+
 /// The projected listing columns read from one `checkpoints` row.
 struct MetaRow {
     thread_id: String,
