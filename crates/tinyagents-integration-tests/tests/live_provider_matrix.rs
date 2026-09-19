@@ -59,6 +59,8 @@
 //! rather than a gate, and the normal choice when providers can fail for
 //! account reasons (quota, billing) rather than code reasons.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Instant;
