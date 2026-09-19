@@ -101,7 +101,18 @@ pub struct Command<Update> {
     /// plain node activation or a [`Send`] packet (see [`RouteTarget`]).
     pub goto: Vec<RouteTarget>,
     /// Resume value for an interrupted node (used by `CompiledGraph::resume`).
+    ///
+    /// Applies to every interrupted task when `resume_by_task` is empty. When
+    /// a `Send` fan-out of the same node produced several concurrent
+    /// interrupted tasks (I1), prefer `resume_by_task` so each gets its own
+    /// value; this field alone cannot distinguish them.
     pub resume: Option<serde_json::Value>,
+    /// Per-task resume values (R5/I1), keyed by the interrupted task's
+    /// [`TaskId`] (see [`crate::builder::NodeContext::task_id`]). Consulted
+    /// before `resume`: a task named here gets its own value; every other
+    /// pending task falls back to `resume` (if set).
+    #[serde(default)]
+    pub resume_by_task: std::collections::HashMap<TaskId, serde_json::Value>,
 }
 
 /// A human-in-the-loop pause point.
