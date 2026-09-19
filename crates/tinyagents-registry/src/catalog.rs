@@ -247,6 +247,9 @@ impl ModelCatalogSnapshot {
             if let Some(date) = &entry.deprecation_date {
                 validate_date(date, "deprecation_date")?;
             }
+            if let Some(date) = &entry.release_date {
+                validate_date(date, "release_date")?;
+            }
 
             validate_pricing(&entry.provider, &entry.model_id, &entry.pricing)?;
 
