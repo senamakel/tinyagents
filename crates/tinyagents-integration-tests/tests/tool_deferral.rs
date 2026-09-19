@@ -242,7 +242,17 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
         }))
         .push_middleware(Arc::new(BeforeToolSpy {
             seen: before_tool.clone(),
-        }));
+        }))
+        .with_policy(RunPolicy {
+            // `ToolSearched.query` follows the same `capture.tool_io` gate as
+            // a normal tool call's arguments; enable it so this test's
+            // assertion on the recorded query is meaningful.
+            capture: tinyagents_harness::runtime::PayloadCapture {
+                tool_io: true,
+                ..Default::default()
+            },
+            ..RunPolicy::default()
+        });
 
     let run = harness
         .invoke_default(&(), vec![Message::user("what is ACME trading at?")])
