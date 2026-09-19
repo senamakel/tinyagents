@@ -33,6 +33,11 @@ pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Creates a new session row with `status = "running"` and indexes it in
+/// FTS, returning the row as stored.
+///
+/// Row insert and FTS index are written in one transaction — see the module
+/// docs for why.
 #[allow(clippy::too_many_arguments)]
 pub fn record_session_start(
     workspace_dir: &Path,
