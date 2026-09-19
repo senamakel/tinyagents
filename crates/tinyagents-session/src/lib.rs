@@ -27,6 +27,18 @@
 //! A host that keeps its own transcript files (the source of truth for
 //! KV-cache resume) still wants this module for indexing and search over them.
 //!
+//! # The entry tree
+//!
+//! [`entry_tree`] adds a second, opt-in shape over the same session
+//! database: an append-only, branchable tree of entries (`id`/`parent_id`)
+//! rather than a flat list. It exists alongside the linear
+//! `record_message`/[`transcript`] paths above, not in place of them — a
+//! host that never forks a conversation can ignore it entirely, and the
+//! linear JSONL/SQLite writers are unchanged. See
+//! `docs/modules/session/README.md` for the full design (entry kinds, the
+//! context-projection rule, fork semantics) and [`entry_tree::legacy`] for
+//! how pre-tree data is deterministically read into the same model.
+//!
 //! # Layout
 //!
 //! Every entry point takes the workspace root and derives the database path,
