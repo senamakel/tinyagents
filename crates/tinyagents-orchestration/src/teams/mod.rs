@@ -8,9 +8,9 @@
 //! [`TeamService`] is the primary API: it validates team structure, manages
 //! member and task persistence (via the [`TeamLedger`] trait), and enforces
 //! coordination invariants (no duplicate names, no cycles in task dependencies,
-//! no dangling member or task references). [`runtime`] handles the per-member
+//! no dangling member or task references). `runtime` handles the per-member
 //! details: reading undelivered messages from the event log and composing the
-//! prompt a worker should receive. [`graph`] executes a member's work as a
+//! prompt a worker should receive. `graph` executes a member's work as a
 //! generic execute → complete/fail → done DAG, bridging the graph layer and
 //! durable team state.
 
