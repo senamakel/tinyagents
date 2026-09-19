@@ -1665,11 +1665,9 @@ async fn host_security_denial_returns_a_tool_message_without_executing_the_tool(
     ]));
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]),
+        ])),
         Arc::new(DenyToolGate),
         Arc::new(FixedModelResolver::new(model)),
     );
@@ -2098,11 +2096,9 @@ async fn denied_tool_calls_do_not_enter_terminal_executed_tool_summary() {
     let learning = Arc::new(RecordingLearning::default());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]),
+        ])),
         Arc::new(DenyToolGate),
         Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
             tool_response,
