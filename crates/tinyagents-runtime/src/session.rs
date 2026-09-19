@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc};
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::transcript::{
-    TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn,
+    TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn, TurnUsage,
 };
 use tinyinference_llm::message::Message;
 
@@ -247,11 +247,13 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 if let Some(partial) = failure.partial {
                     let partial_history = self.with_prefix(partial.history);
                     let raw = self.encode(&self.history, &partial_history, &codec_options)?;
+                    let turn_usage = self.turn_usage(&codec_options)?;
                     let receipt = self.persist(
                         &raw,
                         request_id.as_deref(),
                         thread_id.as_deref(),
                         partial.partial.as_ref(),
+                        turn_usage.as_ref(),
                     )?;
                     self.history = partial_history;
                     self.persisted = raw;
@@ -277,7 +279,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             return Err(RuntimeError::Cancelled);
         }
         let raw = self.encode(&self.history, &candidate, &codec_options)?;
-        let transcript = self.persist(&raw, request_id.as_deref(), thread_id.as_deref(), None)?;
+        let turn_usage = self.turn_usage(&codec_options)?;
+        let transcript = self.persist(
+            &raw,
+            request_id.as_deref(),
+            thread_id.as_deref(),
+            None,
+            turn_usage.as_ref(),
+        )?;
         self.history = committed.history.clone();
         self.persisted = raw;
         self.committed_turns += 1;
@@ -379,12 +388,23 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         }
     }
 
+    fn turn_usage(
+        &self,
+        options: &TranscriptTurnOptions<C>,
+    ) -> Result<Option<TurnUsage>, RuntimeError> {
+        match &self.codec {
+            Some(codec) => codec.turn_usage(options),
+            None => Ok(None),
+        }
+    }
+
     fn persist(
         &mut self,
         raw: &[TranscriptMessage],
         request_id: Option<&str>,
         thread_id: Option<&str>,
         partial: Option<&TranscriptPartial>,
+        turn_usage: Option<&TurnUsage>,
     ) -> Result<Option<TranscriptCommitReceipt>, RuntimeError> {
         let Some(target) = self.target.as_mut() else {
             return Ok(None);
@@ -408,7 +428,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     prev: &self.persisted,
                     next: raw,
                     meta: &meta,
-                    turn_usage: None,
+                    turn_usage,
                     request_id,
                 },
                 partial,

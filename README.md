@@ -157,8 +157,11 @@ the sequencing around one append-only transcript commit. A host supplies the
 driver, its lossless transcript codec, and lifecycle hooks. On a driver error,
 the runtime can commit recoverable logical history with an interrupted,
 display-only partial in the same history operation; model-context replay omits
-that partial. A post-commit hook observes durable successes but cannot change
-their result. See [the runtime module](docs/modules/runtime/README.md).
+that partial. A codec can also derive `TurnUsage` from its explicit host
+context after the driver runs; that usage is attached to the same atomic
+append's final assistant row for both success and recoverable partials. A
+post-commit hook observes durable successes but cannot change their result.
+See [the runtime module](docs/modules/runtime/README.md).
 
 ## Registry
 

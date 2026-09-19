@@ -56,6 +56,22 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
         next: &[tinyinference_llm::message::Message],
         options: &TranscriptTurnOptions<C>,
     ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError>;
+
+    /// Returns host-derived provider usage for this transition, if available.
+    ///
+    /// The runtime calls this after the driver has completed (and therefore
+    /// after a host's explicit context sidecars may have been updated), but
+    /// before opening or appending a transcript.  The returned value travels
+    /// through the same atomic [`tinyagents_session::transcript::TranscriptTurn`]
+    /// append as the reconciled rows, where the history implementation attaches
+    /// it to the turn's final assistant row.  Generic codecs need no usage
+    /// policy, so the default remains `None`.
+    fn turn_usage(
+        &self,
+        _: &TranscriptTurnOptions<C>,
+    ) -> Result<Option<tinyagents_session::transcript::TurnUsage>, RuntimeError> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

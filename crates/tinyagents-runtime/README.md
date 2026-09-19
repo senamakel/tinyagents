@@ -19,7 +19,9 @@ The host supplies three narrow seams:
   than the runtime, retains fields inference messages cannot express. `C` is
   `Clone` so reconciliation receives the current host context plus request,
   thread, stream, and resume options after the live `RunContext` moves into the
-  driver.
+  driver. Its optional `turn_usage` hook reads host sidecars after driver
+  execution and returns a `TurnUsage` for the same atomic transcript append;
+  the default returns `None` for generic codecs.
 - `SessionHooks<C>` prepares a request and mutable `TurnOptions<C>` in two
   stages. `before_resume` lazily chooses a `TranscriptTarget`, then the runtime
   binds it and loads any requested transcript. `before_turn` sees that decoded
@@ -51,9 +53,12 @@ uses `tinyagents-session`'s `TranscriptHistory::append_turn_with_partial`, so a 
 extension appends only the new tail and a reduced context writes one compaction
 record. A supplied partial driver outcome is represented through that single
 history operation: logical history is replayable and interrupted display text
-is not. Histories that cannot provide the combined operation reject a partial
-rather than risk a two-step write. A persistence failure leaves the session's
-in-memory history and persisted snapshot unchanged.
+is not. A codec-provided `TurnUsage` is attached to that append's final
+assistant row for both successful and recoverable-partial transitions.
+Histories that cannot provide the combined operation reject a partial rather
+than risk a two-step write. A reconciliation or usage-hook failure happens
+before the append and leaves the session's in-memory history and persisted
+snapshot unchanged.
 
 Every turn receives explicit `TurnOptions`, including its cancellation token
 and `RunContext<C>`; no task-local data crosses the runtime boundary. The

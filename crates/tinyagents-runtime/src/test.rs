@@ -13,7 +13,7 @@ use tinyagents_harness::{
 };
 use tinyagents_session::transcript::{
     DisplayRecord, FileTranscriptLocator, SessionTranscript, TranscriptHistory, TranscriptLocator,
-    TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, read_transcript,
+    TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, read_transcript,
     read_transcript_display,
 };
 use tinyinference_llm::message::Message;
@@ -212,6 +212,8 @@ fn locator(session: Option<SessionTranscript>) -> (Arc<Locator>, Arc<MemoryHisto
 struct Codec {
     seen_prior: Mutex<Vec<Vec<TranscriptMessage>>>,
     seen_options: Mutex<Vec<String>>,
+    turn_usage: Mutex<Option<TurnUsage>>,
+    fail_turn_usage: bool,
 }
 
 impl TranscriptCodec for Codec {
@@ -249,6 +251,31 @@ impl TranscriptCodec for Codec {
             );
         }
         Ok(rows)
+    }
+
+    fn turn_usage(&self, _: &TranscriptTurnOptions) -> Result<Option<TurnUsage>, RuntimeError> {
+        if self.fail_turn_usage {
+            return Err(RuntimeError::Driver("planned turn-usage failure".into()));
+        }
+        Ok(self.turn_usage.lock().unwrap().clone())
+    }
+}
+
+fn turn_usage() -> TurnUsage {
+    TurnUsage {
+        provider: "provider".into(),
+        model: "model".into(),
+        usage: tinyagents_session::transcript::MessageUsage {
+            input: 11,
+            output: 7,
+            cached_input: 3,
+            context_window: 128,
+            cost_usd: 0.42,
+        },
+        ts: "now".into(),
+        reasoning_content: Some("because".into()),
+        tool_calls: Vec::new(),
+        iteration: 2,
     }
 }
 
@@ -642,6 +669,10 @@ async fn harness_driver_rejects_a_snapshot_not_registered_by_the_harness() {
 async fn file_history_commits_partial_model_history_and_display_only_partial_together() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let codec = Arc::new(Codec {
+        turn_usage: Mutex::new(Some(turn_usage())),
+        ..Default::default()
+    });
     let partial = DriverOutcome {
         history: vec![Message::assistant("recoverable")],
         output: None,
@@ -652,7 +683,7 @@ async fn file_history_commits_partial_model_history_and_display_only_partial_tog
         error: RuntimeError::Driver("interrupted".into()),
         partial: Some(partial),
     })])))
-    .codec(Arc::new(Codec::default()))
+    .codec(codec)
     .transcript(locator, "agent", meta())
     .build()
     .unwrap();
@@ -666,13 +697,120 @@ async fn file_history_commits_partial_model_history_and_display_only_partial_tog
             .is_err()
     );
     let path = directory.path().join("session_raw/agent.jsonl");
-    assert_eq!(
-        read_transcript(&path).unwrap().messages[0].content,
-        "recoverable"
-    );
+    let persisted = read_transcript(&path).unwrap();
+    assert_eq!(persisted.messages[0].content, "recoverable");
+    assert_eq!(persisted.messages[0].turn_usage, Some(turn_usage()));
     assert!(read_transcript_display(&path).unwrap().records.iter().any(|record| matches!(record,
         DisplayRecord::Message(message) if message.interrupted && message.message.content == "display partial"
     )));
+}
+
+#[tokio::test]
+async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let codec = Arc::new(Codec {
+        turn_usage: Mutex::new(Some(turn_usage())),
+        ..Default::default()
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("final"),
+    ]))])))
+    .codec(codec)
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    let transcript = read_transcript(&directory.path().join("session_raw/agent.jsonl")).unwrap();
+    assert_eq!(transcript.messages.len(), 1);
+    assert_eq!(transcript.messages[0].content, "final");
+    assert_eq!(transcript.messages[0].turn_usage, Some(turn_usage()));
+}
+
+#[tokio::test]
+async fn codec_turn_usage_error_prevents_any_durable_commit() {
+    let (locator, history) = locator(None);
+    let codec = Arc::new(Codec {
+        fail_turn_usage: true,
+        ..Default::default()
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("final"),
+    ]))])))
+    .codec(codec)
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+
+    assert_eq!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default(),
+            )
+            .await,
+        Err(RuntimeError::Driver("planned turn-usage failure".into()))
+    );
+    assert!(history.state.lock().unwrap().is_none());
+    assert_eq!(*history.opens.lock().unwrap(), 0);
+    assert!(session.history().is_empty());
+}
+
+#[tokio::test]
+async fn partial_usage_error_leaves_the_session_and_target_entirely_uncommitted() {
+    let (locator, history) = locator(None);
+    let codec = Arc::new(Codec {
+        fail_turn_usage: true,
+        ..Default::default()
+    });
+    let partial = DriverOutcome {
+        history: vec![Message::assistant("recoverable")],
+        output: None,
+        partial: Some(crate::TranscriptPartial::new("display partial")),
+        interrupted: true,
+    };
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
+        error: RuntimeError::Driver("driver interrupted".into()),
+        partial: Some(partial),
+    })])))
+    .codec(codec)
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+
+    assert_eq!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default(),
+            )
+            .await,
+        Err(RuntimeError::Driver("planned turn-usage failure".into()))
+    );
+    // `turn_usage` runs before `persist`, so neither a lazy target bind nor
+    // its atomic append can happen on this failure path.
+    assert_eq!(*history.opens.lock().unwrap(), 0);
+    assert!(history.state.lock().unwrap().is_none());
+    assert!(session.history().is_empty());
+    // A seed is only rejected after `committed_turns` advances. Its success
+    // also replaces the runtime's raw persisted snapshot, proving the failed
+    // partial never became the next in-memory durable baseline.
+    assert!(
+        session
+            .seed_history(
+                vec![Message::assistant("seed")],
+                vec![TranscriptMessage::assistant("seed")],
+            )
+            .is_ok()
+    );
 }
 
 #[tokio::test]
