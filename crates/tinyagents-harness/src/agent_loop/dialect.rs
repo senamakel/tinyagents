@@ -52,14 +52,6 @@ impl RunDialect {
         !matches!(self, Self::Native)
     }
 
-    /// The P-Format registry, when this dialect has one.
-    pub(super) fn registry(&self) -> Option<Arc<PFormatRegistry>> {
-        match self {
-            Self::PFormat(registry) => Some(Arc::clone(registry)),
-            _ => None,
-        }
-    }
-
     /// The P-Format registry for one call, extended with any tool in `tools`
     /// beyond the run-level set the registry was built from.
     ///
