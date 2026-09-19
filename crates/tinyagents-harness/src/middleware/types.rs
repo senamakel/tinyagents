@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::cache::CacheLayoutEvent;
-use crate::context::RunContext;
+use crate::context::{MiddlewareControl, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::ids::{CallId, RunId};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
