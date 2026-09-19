@@ -68,6 +68,30 @@ pub enum GraphEvent {
         /// Step number.
         step: usize,
     },
+    /// A task began executing (the [`StreamMode::Tasks`] counterpart of
+    /// [`GraphEvent::NodeStarted`], emitted alongside it at the same
+    /// boundary).
+    TaskStarted {
+        /// Target node.
+        node: NodeId,
+        /// Step number.
+        step: usize,
+    },
+    /// A task finished, successfully or not (the [`StreamMode::Tasks`]
+    /// counterpart of [`GraphEvent::NodeCompleted`]/[`GraphEvent::NodeFailed`],
+    /// emitted alongside them at the same boundary).
+    TaskCompleted {
+        /// Target node.
+        node: NodeId,
+        /// Step number.
+        step: usize,
+        /// Whether this result was served from a task cache rather than
+        /// executed. Always `false` today — per-node task caching
+        /// (`docs/runtime-comparison/feature-gaps.md` D2) is not yet
+        /// implemented; the field exists so [`StreamMode::Tasks`] consumers
+        /// do not need a breaking change once it lands.
+        cached: bool,
+    },
     /// A node handler began executing.
     NodeStarted {
         /// Node id.
