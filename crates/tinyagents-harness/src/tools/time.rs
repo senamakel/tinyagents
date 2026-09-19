@@ -303,7 +303,7 @@ pub(crate) fn parse_relative_duration(raw: &str) -> Option<Duration> {
 /// ([`parse_relative_duration`]), `"today"`/`"yesterday"`/`"tomorrow"`
 /// (civil midnight in `zone`), RFC-3339, a handful of naive datetime formats,
 /// then a bare `YYYY-MM-DD` date. Returns an error string (not
-/// `TinyAgentsError`) so [`ResolveTimeTool::execute`] can surface it directly
+/// `TinyAgentsError`) so `ResolveTimeTool::execute` can surface it directly
 /// as a tool-error result without wrapping.
 pub(crate) fn resolve_expr(
     expr: &str,
