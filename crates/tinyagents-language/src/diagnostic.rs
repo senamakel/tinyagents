@@ -24,12 +24,14 @@
 
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 use crate::source::SourceFile;
 use crate::span::Span;
-use tinyagents_harness::error::TinyAgentsError;
+use tinyagents_harness::error::{RenderedDiagnostic, TinyAgentsError};
 
 /// The severity of a [`Diagnostic`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     /// A hard error: compilation cannot proceed.
     Error,
