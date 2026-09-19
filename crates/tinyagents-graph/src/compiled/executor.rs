@@ -20,19 +20,19 @@ use crate::compiled::step::StepRunner;
 /// [`CompiledGraph::execute`]/[`CompiledGraph::execute_run`] take one
 /// parameter instead of positional state/thread/resume/barrier/binding
 /// arguments.
-struct RunSeed<State, Update> {
-    state: State,
-    active: Vec<Activation>,
-    thread_id: Option<ThreadId>,
-    resume_map: HashMap<NodeId, serde_json::Value>,
-    barriers: HashMap<NodeId, HashSet<NodeId>>,
-    parent: Option<String>,
-    binding: Option<crate::subagent_node::AgentInvocationBinding>,
+pub(super) struct RunSeed<State, Update> {
+    pub(super) state: State,
+    pub(super) active: Vec<Activation>,
+    pub(super) thread_id: Option<ThreadId>,
+    pub(super) resume_map: HashMap<NodeId, serde_json::Value>,
+    pub(super) barriers: HashMap<NodeId, HashSet<NodeId>>,
+    pub(super) parent: Option<String>,
+    pub(super) binding: Option<crate::subagent_node::AgentInvocationBinding>,
     _update: std::marker::PhantomData<Update>,
 }
 
 impl<State, Update> RunSeed<State, Update> {
-    fn fresh(state: State, active: Vec<Activation>, thread_id: Option<ThreadId>) -> Self {
+    pub(super) fn fresh(state: State, active: Vec<Activation>, thread_id: Option<ThreadId>) -> Self {
         Self {
             state,
             active,
@@ -45,7 +45,10 @@ impl<State, Update> RunSeed<State, Update> {
         }
     }
 
-    fn with_binding(mut self, binding: crate::subagent_node::AgentInvocationBinding) -> Self {
+    pub(super) fn with_binding(
+        mut self,
+        binding: crate::subagent_node::AgentInvocationBinding,
+    ) -> Self {
         self.binding = Some(binding);
         self
     }
