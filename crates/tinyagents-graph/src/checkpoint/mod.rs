@@ -705,7 +705,10 @@ where
             Some(id) => list.iter().rfind(|c| c.checkpoint_id == id),
             None => list.last(),
         };
-        Ok(found.cloned())
+        Ok(found.cloned().map(|mut c| {
+            c.normalize();
+            c
+        }))
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
