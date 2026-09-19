@@ -75,6 +75,14 @@ impl RunLimits {
         self.behavior = behavior;
         self
     }
+
+    /// Caps how many tool calls a concurrently-executed batch may run at
+    /// once. `None` removes the cap. See
+    /// [`RunLimits::max_tool_concurrency`].
+    pub fn with_max_tool_concurrency(mut self, n: Option<usize>) -> Self {
+        self.max_tool_concurrency = n;
+        self
+    }
 }
 
 /// Tracks live counters for a single harness run and enforces [`RunLimits`].
