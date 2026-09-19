@@ -379,6 +379,14 @@ pub fn is_retryable(err: &TinyAgentsError) -> bool {
         // guessing. Callers that know better narrow this with
         // [`RetryPolicy::retry_on`].
         TinyAgentsError::Tool(_) => true,
+        // A1/A3's unified retry vocabulary: `ModelRetry` is explicitly the
+        // recoverable half (ask the model to try again), `ToolFailed` the
+        // permanent half. Unlike the generic `Tool(_)` classification above,
+        // these two carry an explicit author intent rather than arbitrary
+        // caller-authored text, so retryability follows the variant directly
+        // instead of guessing.
+        TinyAgentsError::ModelRetry(_) => true,
+        TinyAgentsError::ToolFailed(_) => false,
         // A per-model-call ceiling firing means this one call wedged, with
         // run time still left — retryable, unlike a run-deadline `Timeout`
         // (see that variant's own retryability rationale above).
