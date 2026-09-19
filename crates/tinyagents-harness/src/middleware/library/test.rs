@@ -1064,8 +1064,8 @@ async fn tool_policy_strict_preserves_the_discovery_bridge() {
     };
     let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
         schema("safe"),
-        schema(tinyagents_harness::tool::discover::TOOL_SEARCH_NAME),
-        schema(tinyagents_harness::tool::discover::TOOL_CALL_NAME),
+        schema(crate::tool::discover::TOOL_SEARCH_NAME),
+        schema(crate::tool::discover::TOOL_CALL_NAME),
     ]);
     stack
         .run_before_model(&mut ctx, &(), &mut request)
@@ -1074,8 +1074,8 @@ async fn tool_policy_strict_preserves_the_discovery_bridge() {
     let names: std::collections::HashSet<_> =
         request.tools.iter().map(|t| t.name.as_str()).collect();
     assert!(names.contains("safe"));
-    assert!(names.contains(tinyagents_harness::tool::discover::TOOL_SEARCH_NAME));
-    assert!(names.contains(tinyagents_harness::tool::discover::TOOL_CALL_NAME));
+    assert!(names.contains(crate::tool::discover::TOOL_SEARCH_NAME));
+    assert!(names.contains(crate::tool::discover::TOOL_CALL_NAME));
 }
 
 #[tokio::test]
