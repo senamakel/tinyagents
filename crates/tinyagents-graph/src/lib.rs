@@ -69,7 +69,8 @@ pub use checkpoint::{
 };
 pub use command::{Command, Interrupt, NodeResult, RouteTarget, Send};
 pub use compiled::{
-    CompiledGraph, GraphExecution, GraphInput, ResumeTarget, RunOptions, StateSnapshot,
+    CompiledGraph, DrainHandle, DrainSignal, GraphExecution, GraphInput, ResumeTarget, RunOptions,
+    StateSnapshot,
 };
 pub use dag::{DagIssue, DagNode};
 pub use delegation::{

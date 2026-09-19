@@ -46,7 +46,10 @@ impl GraphRunStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+            ExecutionStatus::Completed
+                | ExecutionStatus::Failed
+                | ExecutionStatus::Cancelled
+                | ExecutionStatus::Drained
         )
     }
 }

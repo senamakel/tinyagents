@@ -49,6 +49,16 @@ pub enum GraphEvent {
         /// The run that was cancelled.
         run_id: RunId,
     },
+    /// The run stopped gracefully at a superstep boundary because its
+    /// [`crate::DrainSignal`] was raised: the step in flight finished and
+    /// committed, and the next step's activations were checkpointed instead
+    /// of run (see [`crate::GraphExecution::drained`]).
+    RunDrained {
+        /// The run that drained.
+        run_id: RunId,
+        /// The superstep count at which it stopped (the last completed step).
+        steps: usize,
+    },
     /// A superstep started with the given active node set.
     StepStarted {
         /// 1-based step number.
@@ -195,6 +205,7 @@ impl GraphEvent {
             GraphEvent::RunCompleted { .. } => "run.completed",
             GraphEvent::RunFailed { .. } => "run.failed",
             GraphEvent::RunCancelled { .. } => "run.cancelled",
+            GraphEvent::RunDrained { .. } => "run.drained",
             GraphEvent::StepStarted { .. } => "step.started",
             GraphEvent::StepCompleted { .. } => "step.completed",
             GraphEvent::TaskScheduled { .. } => "task.scheduled",
@@ -231,7 +242,9 @@ impl GraphEvent {
             | GraphEvent::TaskCompleted { step, .. }
             | GraphEvent::StateUpdated { step, .. }
             | GraphEvent::ContextForked { step, .. } => Some(*step),
-            GraphEvent::RunCompleted { steps, .. } => Some(*steps),
+            GraphEvent::RunCompleted { steps, .. } | GraphEvent::RunDrained { steps, .. } => {
+                Some(*steps)
+            }
             _ => None,
         }
     }

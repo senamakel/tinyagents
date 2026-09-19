@@ -91,7 +91,8 @@ mod step;
 mod types;
 
 pub use types::{
-    CompiledGraph, GraphExecution, GraphInput, ResumeTarget, RunOptions, StateSnapshot,
+    CompiledGraph, DrainHandle, DrainSignal, GraphExecution, GraphInput, ResumeTarget, RunOptions,
+    StateSnapshot,
 };
 
 pub(crate) use types::AsyncCheckpointWrites;
@@ -102,7 +103,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::builder::{
     BarrierRelief, Branch, BuilderNode, END, ForkId, IdleClock, NodeContext, NodeFuture,
-    NodeHandler, NodeMeta, NodePolicy, START,
+    NodeHandler, NodeMeta, NodePolicy, START, UpdateCodec,
 };
 use crate::checkpoint::{
     BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointTuple, Checkpointer, DurabilityMode,
@@ -345,7 +346,25 @@ impl<State, Update> CompiledGraph<State, Update> {
             node_defaults: None,
             task_cache: None,
             cached_nodes: Arc::new(HashMap::new()),
+            interrupt_before: Arc::new(HashSet::new()),
+            interrupt_after: Arc::new(HashSet::new()),
+            update_codec: None,
         }
+    }
+
+    /// Installs the `interrupt_before`/`interrupt_after` node selectors and
+    /// the `Update` codec the latter persists deferred results with (called
+    /// from `GraphBuilder::compile`).
+    pub(crate) fn with_interrupt_selectors(
+        mut self,
+        interrupt_before: HashSet<NodeId>,
+        interrupt_after: HashSet<NodeId>,
+        update_codec: Option<UpdateCodec<Update>>,
+    ) -> Self {
+        self.interrupt_before = Arc::new(interrupt_before);
+        self.interrupt_after = Arc::new(interrupt_after);
+        self.update_codec = update_codec;
+        self
     }
 
     /// Installs the per-node policies and graph-wide default policy the
@@ -584,6 +603,7 @@ impl<State, Update> CompiledGraph<State, Update> {
                 GraphEvent::RunCompleted { .. }
                     | GraphEvent::RunFailed { .. }
                     | GraphEvent::RunCancelled { .. }
+                    | GraphEvent::RunDrained { .. }
             );
             sink.emit(event);
             if terminal {
