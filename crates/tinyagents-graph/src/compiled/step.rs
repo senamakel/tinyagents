@@ -322,14 +322,13 @@ where
         node_id: &NodeId,
         step: usize,
         result: NodeResult<Update>,
-        updates: &mut Vec<Update>,
-        goto_map: &mut HashMap<usize, Vec<RouteTarget>>,
+        accum: &mut FoldAccum<Update>,
         visited: &mut Vec<NodeId>,
     ) -> Option<(usize, Interrupt)> {
         visited.push(node_id.clone());
         match result {
             NodeResult::Update(update) => {
-                updates.push(update);
+                accum.updates.push(update);
                 self.graph.emit(GraphEvent::StateUpdated {
                     node: node_id.clone(),
                     step,
@@ -337,14 +336,14 @@ where
             }
             NodeResult::Command(command) => {
                 if let Some(update) = command.update {
-                    updates.push(update);
+                    accum.updates.push(update);
                     self.graph.emit(GraphEvent::StateUpdated {
                         node: node_id.clone(),
                         step,
                     });
                 }
                 if !command.goto.is_empty() {
-                    goto_map.insert(index, command.goto);
+                    accum.goto_map.insert(index, command.goto);
                 }
             }
             NodeResult::Interrupt(emitted) => {
