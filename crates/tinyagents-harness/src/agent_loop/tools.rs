@@ -1326,6 +1326,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 true,
                 dispatch.output_origin(),
             ));
+            let just_prepared = prepared.last().expect("just pushed");
+            if let Err(err) = self
+                .record_tool_effect_started(ctx, &call.arguments, just_prepared)
+                .await
+            {
+                // Every call in `prepared` so far (including this one) already
+                // emitted `ToolStarted`; give each one a terminal event before
+                // bailing, mirroring the sibling-abort handling in phase 4.
+                for sibling in &prepared {
+                    self.fail_tool_call(
+                        ctx,
+                        status,
+                        &sibling.call_id,
+                        &sibling.tool_name,
+                        sibling.started_at_ms,
+                        &err,
+                    );
+                }
+                return Err(err);
+            }
             slots.push(ToolSlot::Execute);
 
             // Each call is bounded by its recoverable tool policy inside the
