@@ -346,6 +346,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let binding = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
                 let mut resolve_request =
                     crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
+                if ctx.depth() == 0 {
+                    resolve_request = resolve_request.as_team_lead();
+                }
                 if let Some(model_pin) = host_run.model_pin.clone() {
                     resolve_request = resolve_request.with_model_pin(model_pin);
                 }

@@ -42,6 +42,11 @@ struct DenyThenAllowGate {
 
 struct RetryableClassifier;
 
+struct LeadRecordingResolver {
+    model: Arc<dyn ChatModel<()>>,
+    team_lead_flags: Mutex<Vec<bool>>,
+}
+
 struct RecordingBudget {
     hint: CompressionHint,
     records: Mutex<Vec<Usage>>,
@@ -124,6 +129,20 @@ impl ChatModel<()> for PartialThenPendingModel {
 impl crate::host::ToolOutcomeClassifier for RetryableClassifier {
     fn classify(&self, _name: &str, _result: &ToolResult) -> crate::host::OutcomeClass {
         crate::host::OutcomeClass::RetryableFailure
+    }
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for LeadRecordingResolver {
+    async fn resolve(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        self.team_lead_flags
+            .lock()
+            .expect("resolver lock")
+            .push(request.is_team_lead);
+        Ok(Arc::clone(&self.model))
     }
 }
 
@@ -409,6 +428,60 @@ async fn host_driven_turn_requires_an_installed_bundle_before_model_resolution()
         .await
         .expect_err("host entry point rejects missing configuration");
     assert!(error.to_string().contains("with_host_capabilities"));
+}
+
+#[tokio::test]
+async fn hosted_model_resolution_marks_only_root_contexts_as_team_leads() {
+    let model = Arc::new(ScriptedModel::replies(vec!["root", "child"]));
+    let resolver = Arc::new(LeadRecordingResolver {
+        model: model.clone(),
+        team_lead_flags: Mutex::new(Vec::new()),
+    });
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        resolver.clone(),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("root")],
+            ),
+            RunContext::new(RunConfig::new("root").with_max_depth(2), ()),
+            &(),
+        )
+        .await
+        .expect("root turn succeeds");
+
+    let parent: RunContext<()> = RunContext::new(RunConfig::new("parent").with_max_depth(2), ());
+    let child = parent
+        .child(RunConfig::new("child"), ())
+        .expect("child context is valid");
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("child")],
+            ),
+            child,
+            &(),
+        )
+        .await
+        .expect("child turn succeeds");
+
+    assert_eq!(
+        *resolver.team_lead_flags.lock().expect("resolver lock"),
+        vec![true, false]
+    );
 }
 
 #[tokio::test]
