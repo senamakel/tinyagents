@@ -264,7 +264,10 @@ impl SchemaDrivenModel {
 
     /// Number of `invoke`/`stream` calls made so far.
     pub fn call_count(&self) -> u64 {
-        *self.calls.lock().expect("SchemaDrivenModel calls lock poisoned")
+        *self
+            .calls
+            .lock()
+            .expect("SchemaDrivenModel calls lock poisoned")
     }
 
     /// Every request received by `invoke`, in call order.
