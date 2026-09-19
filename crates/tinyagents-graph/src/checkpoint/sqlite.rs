@@ -120,6 +120,7 @@ impl<State> SqliteCheckpointer<State> {
         prepare_connection(&conn)?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| sqlite_err("create schema", e))?;
+        migrate_checkpoint_format_columns(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             _marker: PhantomData,
