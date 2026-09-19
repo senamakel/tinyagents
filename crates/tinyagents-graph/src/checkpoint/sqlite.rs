@@ -372,14 +372,20 @@ fn insert_checkpoint_row<State: Serialize>(
     let meta = checkpoint.to_metadata();
     let namespace = serde_json::to_string(&checkpoint.namespace)
         .map_err(|e| sqlite_err("encode namespace", e))?;
-    let next_nodes = serde_json::to_string(&checkpoint.next_nodes)
+    // Projected from `to_metadata()`'s v2-or-derived-from-v1 resolution
+    // (`Checkpoint::effective_tasks`), not `checkpoint.next_nodes` directly —
+    // a v2 checkpoint (every write this crate performs) leaves that legacy
+    // field empty, so reading it here would silently persist an empty
+    // `next_nodes` listing column for every checkpoint going forward.
+    let next_nodes = serde_json::to_string(&meta.next_nodes)
         .map_err(|e| sqlite_err("encode next_nodes", e))?;
     let record = serde_json::to_string(checkpoint).map_err(|e| sqlite_err("encode record", e))?;
     conn.execute(
         "INSERT INTO checkpoints (
             thread_id, checkpoint_id, parent_checkpoint_id, run_id,
-            namespace, next_nodes, source, step, has_interrupts, record
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            namespace, next_nodes, source, step, has_interrupts, record,
+            format_version, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             checkpoint.thread_id,
             checkpoint.checkpoint_id,
@@ -391,6 +397,8 @@ fn insert_checkpoint_row<State: Serialize>(
             meta.step as i64,
             i64::from(meta.has_interrupts),
             record,
+            checkpoint.version as i64,
+            checkpoint.created_at as i64,
         ],
     )
     .map_err(|e| sqlite_err("insert checkpoint", e))?;
