@@ -70,7 +70,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx> for DirectM
         state: &'a State,
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
-        Box::pin(async move { self.model.invoke(state, request).await })
+        Box::pin(async move {
+            self.model
+                .invoke(state, request)
+                .await
+                .map_err(TinyAgentsError::from)
+        })
     }
 }
 
