@@ -127,4 +127,6 @@ pub(crate) use stream::{StreamRunner, invoke_stream_with_runner};
 #[cfg(test)]
 mod deferred_test;
 #[cfg(test)]
+mod run_queue_test;
+#[cfg(test)]
 mod test;

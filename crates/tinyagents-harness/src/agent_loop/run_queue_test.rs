@@ -131,7 +131,6 @@ fn shape(messages: &[Message]) -> Vec<String> {
             }
             Message::Assistant(_) => format!("assistant:{}", message.text()),
             Message::Tool(t) => format!("tool:{}", t.tool_call_id),
-            _ => "other".to_string(),
         })
         .collect()
 }
