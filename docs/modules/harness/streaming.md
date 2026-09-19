@@ -73,3 +73,49 @@ Streaming adapters must merge chunks deterministically:
 - cumulative usage is converted into deltas or clearly marked cumulative
 - final message equals the merged stream
 - invalid partial tool calls are surfaced as repairable parse errors
+
+## Implementation status (runtime-comparison Phase 3, C1/C2)
+
+The design above names the target shape; here is what exists in code today,
+one layer down at `tinyinference_llm::model::ModelStreamItem` and
+`tinyagents_harness::stream`.
+
+**Block-indexed streaming (C1, vendor `tinyinference-llm`).** Content block
+indexes are respected via new `ModelStreamItem` variants: `BlockStart {
+index, kind: BlockKind::{Text, Thinking, ToolCall { id, name }} }`,
+`BlockDelta { index, delta: BlockDelta::{Text, Thinking, ToolArgs} }`, and
+`BlockEnd { index, block: ContentBlock }`. The pre-existing flat
+`MessageDelta`/`ToolCallDelta` channel is still emitted alongside them
+(`model::block_delta_to_message_delta` is the shared derivation), so nothing
+that only understood the old shape breaks. `ToolDelta::content_index` carries
+the wire block index on the flat channel too. The Anthropic adapter maps
+`content_block_start`/`_delta`/`_stop` 1:1 onto the new items; the OpenAI
+chat-completions adapter stamps `content_index` but does not yet derive
+block boundaries from its delta shape (tracked in `docs/sdk-gaps.md` §3).
+`ModelStreamItem::{Failed, ProviderFailed}` — specifically `ProviderError` —
+now carries `partial_message: Option<AssistantMessage>` and
+`stop_reason: Option<String>`, so a mid-stream failure does not discard
+whatever content had already arrived.
+
+**Frame codec (C2, `crates/tinyagents-harness/src/stream/frame.rs`).**
+`AssistantFrame` is the durable, journal-friendly encoding of a block-aware
+stream: `FrameEncoder` turns a sequence of `ModelStreamItem`s into frames
+(only the block-indexed and terminal items are framed — `Started` and the
+flat compatibility deltas carry no information a reducer needs beyond what
+the block items already have), emitting a periodic
+`AssistantFrame::ToolArgsCheckpoint { index, json_so_far }` full snapshot for
+long tool-argument streams. `reduce_frames(&[AssistantFrame]) ->
+PartialAssistantMessage` folds a — possibly truncated — frame sequence back
+into closed `content` blocks plus whatever `open_blocks` were still
+in-progress, without needing the original provider stream. A checkpoint is a
+full snapshot, not a delta, so a reader that only has frames from a
+checkpoint onward (earlier per-fragment frames pruned from the journal) still
+reduces to a consistent result.
+
+**Not yet wired**: `MiddlewareStack::run_on_tool_delta` and
+`AgentEvent::ToolProgress` still have no real caller — that hook models
+progress from a *running* tool, and `tinytools::Tool` has no
+progress-callback surface for a tool to report through yet (a `tinytools`
+change, not a harness one; see `docs/sdk-gaps.md` §3). The typed
+`HarnessStreamItem` enum, `StreamMode::{tools, usage, cost, events, final}`,
+and stream replay from event stores are still design-only.
