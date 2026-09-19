@@ -286,7 +286,8 @@ where
         // (merged with anything already carried from an earlier resume of
         // this step) for `advance` to route once the pending set finishes.
         let pending: Vec<Activation> = sb.stalled.iter().map(|(_, a)| a.clone()).collect();
-        let completed_tasks = self.merged_completed_tasks(ctx, sb.completed);
+        let (completed_tasks, completed_routes) =
+            self.merged_completed(ctx, sb.completed, sb.goto_map);
         let pending_nodes = activation_nodes(&pending);
         let interrupt_id = InterruptId::new(emitted.id.clone());
         // An interrupt hands control back to the caller expecting a fully
