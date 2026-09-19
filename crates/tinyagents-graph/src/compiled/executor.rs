@@ -561,13 +561,30 @@ where
 
         let mut active = initial_active;
         while !active.is_empty() {
+            // I4 part 2: check cooperative cancellation at every superstep
+            // boundary, before starting a new step. `active` at this point is
+            // exactly what the next step would run, so a cancellation here
+            // schedules the whole set as pending (nothing of this step has
+            // executed yet).
+            if ctx.is_cancelled() {
+                return self.handle_cancel_boundary(&mut ctx, &active, &state).await;
+            }
+
             let step = match self.begin_step(&mut ctx, &mut active).await {
                 Ok(step) => step,
                 Err(err) => return self.fail_and_return(&mut ctx, err).await,
             };
 
-            let step_run = match runner.run_step(&mut ctx, &active, &state, step).await {
-                Ok(step_run) => step_run,
+            let step_run = match self
+                .run_step_with_cancel(&runner, &mut ctx, &active, &state, step)
+                .await
+            {
+                Ok(Some(step_run)) => step_run,
+                // Cancelled while this step's handlers were in flight: none
+                // of them are trusted to have applied (the step's own future
+                // was raced and abandoned, not awaited to completion), so the
+                // whole active set is still pending.
+                Ok(None) => return self.handle_cancel_boundary(&mut ctx, &active, &state).await,
                 Err(err) => return self.fail_and_return(&mut ctx, err).await,
             };
 
