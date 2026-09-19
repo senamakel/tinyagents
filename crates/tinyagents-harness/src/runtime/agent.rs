@@ -675,6 +675,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     /// controls as model resolution.  Definitions, security screening, and
     /// context composition are all host I/O boundaries, not setup work that
     /// may outlive a cancelled turn.
+    ///
+    /// Returns the raw, unsanitized [`TinyAgentsError`] — callers decide how
+    /// to sanitize: `prepare_hosted_turn` classifies it into a
+    /// [`HostedError`] (which does its own kind-scoped sanitization), while
+    /// `invoke_agent_stream_with_capabilities` (the one caller that still
+    /// returns a plain `TinyAgentsError` to the public API) applies
+    /// [`sanitize_hosted_preparation_error`] itself.
     async fn prepare_agent_turn_bounded(
         &self,
         host: std::sync::Arc<crate::host::HostCapabilities<State>>,
@@ -683,7 +690,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     ) -> Result<PreparedAgentTurn<State, Ctx>> {
         let cancellation = context.cancellation.clone();
         let preparation = self.prepare_agent_turn(host, request, context);
-        let outcome = match self.host_io_budget(context) {
+        match self.host_io_budget(context) {
             Some(remaining) => tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
@@ -697,8 +704,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
                 result = preparation => result,
             },
-        };
-        outcome.map_err(sanitize_hosted_preparation_error)
+        }
     }
 
     fn host_io_budget(&self, context: &RunContext<Ctx>) -> Option<Duration> {
