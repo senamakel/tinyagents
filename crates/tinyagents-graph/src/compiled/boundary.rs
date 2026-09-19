@@ -22,11 +22,10 @@ use crate::compiled::run_ctx::RunCtx;
 pub(super) struct BoundaryCheckpoint<'a, State> {
     pub(super) state: &'a State,
     pub(super) pending: &'a [Activation],
-    pub(super) completed_tasks: &'a [Activation],
-    /// Explicit `Command::goto` routing for each entry of
-    /// `completed_tasks`, positionally aligned (R1: see
-    /// [`crate::checkpoint::Checkpoint::completed_routes`]).
-    pub(super) completed_routes: &'a [Vec<RouteTarget>],
+    /// The step's completed tasks, each carrying its own explicit
+    /// `Command::goto` routing (R1: see
+    /// [`crate::checkpoint::CompletedTask`]).
+    pub(super) completed: Vec<crate::checkpoint::CompletedTask>,
     pub(super) child_runs: &'a serde_json::Value,
 }
 
