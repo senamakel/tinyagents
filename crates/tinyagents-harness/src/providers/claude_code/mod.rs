@@ -55,6 +55,7 @@ pub fn render_request_stdin(request: &ModelRequest, is_new_session: bool) -> Vec
 pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 pub(crate) fn test_set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: every moved environment-mutating test serializes access through
     // `ENV_TEST_LOCK`; no provider work runs concurrently in those tests.
@@ -62,6 +63,7 @@ pub(crate) fn test_set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<s
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 pub(crate) fn test_remove_env(key: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: see `test_set_env`.
     unsafe { std::env::remove_var(key) }
