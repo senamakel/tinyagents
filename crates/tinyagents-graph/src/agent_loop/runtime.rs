@@ -474,20 +474,18 @@ where
         let last_response = last_response_from_messages(&loop_state.messages);
         let outcome = extractor.extract_outcome(&last_response);
         let variant = outcome.variant.clone();
+        // Note: unlike the direct loop, this does not consult
+        // `AgentHarness::with_output_validator` (A3's post-extraction
+        // validator hook) — out of scope for this rendition (see the module
+        // doc on `super`).
         let error = match outcome.value {
-            Some(value) => match &harness.policy().output_retry {
-                _ => {
-                    // Output validator hook (A3), mirroring the direct loop:
-                    // consult `AgentHarness::with_output_validator` when set.
-                    None::<String>.or({
-                        run.structured = Some(value.clone());
-                        run.structured_variant = variant.clone();
-                        loop_state.structured = Some(value);
-                        loop_state.structured_variant = variant;
-                        None
-                    })
-                }
-            },
+            Some(value) => {
+                run.structured = Some(value.clone());
+                run.structured_variant = variant.clone();
+                loop_state.structured = Some(value);
+                loop_state.structured_variant = variant;
+                None
+            }
             None => outcome.error,
         };
         if let Some(error) = error {
