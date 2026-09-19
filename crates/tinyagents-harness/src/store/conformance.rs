@@ -14,9 +14,10 @@
 //! use tinyagents_harness::store::InMemoryStore;
 //! use tinyagents_harness::store::conformance::run_store_conformance;
 //!
-//! # tokio_test::block_on(async {
+//! # #[tokio::main]
+//! # async fn main() {
 //! run_store_conformance(&InMemoryStore::new()).await;
-//! # });
+//! # }
 //! ```
 //!
 //! Each function panics with a descriptive message on the first violation.
