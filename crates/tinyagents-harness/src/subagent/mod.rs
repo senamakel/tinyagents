@@ -607,6 +607,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
             tool_name,
             child_data,
             parameters: Self::default_parameters(),
+            declaration: std::sync::OnceLock::new(),
         }
     }
 
