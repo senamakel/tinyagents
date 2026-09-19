@@ -151,6 +151,60 @@ fn workflow_driver_lease_is_atomic_and_cas_rejects_a_stale_writer() {
 }
 
 #[test]
+fn expired_workflow_lease_takeover_fences_the_crashed_owner() {
+    let dir = TempDir::new().unwrap();
+    let workspace = test_workspace(&dir);
+    seed_workflow(workspace, "workflow-expired-owner");
+    let old = match try_claim_workflow_run(
+        workspace,
+        "workflow-expired-owner",
+        "crashed-owner",
+        chrono::Duration::milliseconds(1),
+    )
+    .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected old owner lease, got {other:?}"),
+    };
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let replacement = match try_claim_workflow_run(
+        workspace,
+        "workflow-expired-owner",
+        "replacement",
+        chrono::Duration::minutes(1),
+    )
+    .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected expired lease takeover, got {other:?}"),
+    };
+    assert_eq!(replacement.lease_owner.as_deref(), Some("replacement"));
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace,
+            WorkflowRunUpsert {
+                id: old.id.clone(),
+                definition_id: old.definition_id.clone(),
+                parent_thread_id: old.parent_thread_id.clone(),
+                input: old.input.clone(),
+                phase_states: json!({"phase": {"status": "failed"}}),
+                child_run_ids: old.child_run_ids.clone(),
+                status: WorkflowRunStatus::Failed,
+                summary: Some("stale driver".into()),
+                started_at: Some(old.started_at),
+                completed_at: Some(Utc::now()),
+            },
+            old.revision,
+            "crashed-owner",
+            chrono::Duration::minutes(1),
+        )
+        .unwrap()
+        .is_none(),
+        "the old owner must not overwrite the replacement's recovery state"
+    );
+}
+
+#[test]
 fn lifecycle_fences_an_old_driver_and_lease_renewal_keeps_takeover_out() {
     let dir = TempDir::new().unwrap();
     let workspace = test_workspace(&dir);

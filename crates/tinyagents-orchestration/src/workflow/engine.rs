@@ -312,6 +312,31 @@ where
                 )));
             }
         };
+        // A crashed owner can leave the durable phase marked `running`. That
+        // marker is intentionally not runnable, so reclaiming the lease must
+        // turn it back into retryable work before scheduling. The claim above
+        // fences every prior owner; this CAS is the new owner's durable
+        // recovery transition rather than a read/modify/write race.
+        if run.phase_states.as_object().is_some_and(|phases| {
+            phases
+                .values()
+                .any(|phase| phase.get("status").and_then(Value::as_str) == Some("running"))
+        }) {
+            let mut phase_states = run.phase_states.clone();
+            reset_running_phases(
+                &mut phase_states,
+                "workflow owner expired; phase will retry after lease takeover",
+            );
+            run = self.persist(
+                &run,
+                phase_states,
+                run.child_run_ids.clone(),
+                WorkflowRunStatus::Running,
+                None,
+                false,
+                &owner,
+            )?;
+        }
         self.emit(tinyagents_graph::GraphEvent::RunStarted {
             run_id: tinyagents_harness::ids::RunId::new(run_id),
         });
@@ -334,7 +359,9 @@ where
                     false,
                     &owner,
                 ) {
-                    if self.emit_recorded_terminal(run_id, total_spawned as usize) {
+                    if self.owner_lost(run_id, &owner)
+                        || self.emit_recorded_terminal(run_id, total_spawned as usize)
+                    {
                         return Ok(());
                     }
                     self.finish_failed(run_id, error.to_string());
@@ -354,6 +381,9 @@ where
                         true,
                         &owner,
                     ) {
+                        if self.owner_lost(run_id, &owner) {
+                            return Ok(());
+                        }
                         self.finish_failed(run_id, error.to_string());
                         return Err(error);
                     }
@@ -369,6 +399,9 @@ where
                         true,
                         &owner,
                     ) {
+                        if self.owner_lost(run_id, &owner) {
+                            return Ok(());
+                        }
                         self.finish_failed(run_id, error.to_string());
                         return Err(error);
                     }
@@ -396,7 +429,9 @@ where
                     // A host stop/resume fences this owner with a revision CAS.
                     // Do not turn that intentional hand-off into a stale
                     // failure event or overwrite the newer durable state.
-                    if self.emit_recorded_terminal(run_id, total_spawned as usize) {
+                    if self.owner_lost(run_id, &owner)
+                        || self.emit_recorded_terminal(run_id, total_spawned as usize)
+                    {
                         return Ok(());
                     }
                     self.finish_failed(run_id, error.to_string());
@@ -726,6 +761,16 @@ where
         if let Some(sink) = &self.event_sink {
             sink.flush();
         }
+    }
+
+    /// A lifecycle hand-off or lease takeover has fenced this driver. It must
+    /// not manufacture a terminal graph event for the replacement owner.
+    fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
+        self.store
+            .load(run_id)
+            .ok()
+            .flatten()
+            .is_some_and(|current| current.lease_owner.as_deref() != Some(owner))
     }
 
     /// Returns true after emitting the terminal event already committed by a

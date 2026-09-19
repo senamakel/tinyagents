@@ -534,6 +534,81 @@ async fn concurrent_drives_acquire_one_lease_and_do_not_duplicate_children() {
 }
 
 #[tokio::test]
+async fn expired_owner_takeover_resets_running_phase_and_retries_once() {
+    let (store, executor, engine) = engine();
+    let mut def = definition();
+    def.phases = vec![WorkflowPhase {
+        name: "recover".into(),
+        description: "recover".into(),
+        agent_ids: vec!["worker".into()],
+        depends_on: vec![],
+    }];
+    engine
+        .initialise("takeover".into(), &def, json!("q"), None)
+        .unwrap();
+
+    // Simulate a process death after the owner has persisted `running`, but
+    // before it can complete or reset the phase.
+    let old = match store
+        .claim("takeover", "crashed-owner", Duration::from_millis(3))
+        .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => run,
+        other => panic!("expected lease, got {other:?}"),
+    };
+    store
+        .compare_and_swap(
+            WorkflowRunUpsert {
+                id: old.id.clone(),
+                definition_id: old.definition_id.clone(),
+                parent_thread_id: old.parent_thread_id.clone(),
+                input: old.input.clone(),
+                phase_states: json!({
+                    "recover": {"status": "running", "outputs": []}
+                }),
+                child_run_ids: vec!["recover-0".into()],
+                status: WorkflowRunStatus::Running,
+                summary: None,
+                started_at: Some(old.started_at),
+                completed_at: None,
+            },
+            old.revision,
+            "crashed-owner",
+            Duration::from_millis(3),
+        )
+        .unwrap()
+        .expect("crashed owner persists phase start");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    engine
+        .drive("takeover", &def, CancellationToken::new())
+        .await
+        .expect("new owner retries reclaimed phase");
+
+    let run = store.load("takeover").unwrap().expect("run remains");
+    assert_eq!(run.status, WorkflowRunStatus::Completed);
+    assert_eq!(run.phase_states["recover"]["status"], json!("completed"));
+    assert_eq!(
+        executor
+            .calls
+            .lock()
+            .iter()
+            .filter(|call| call.phase == "recover")
+            .count(),
+        1,
+        "lease takeover must schedule the reclaimed phase once"
+    );
+    assert_eq!(
+        run.child_run_ids
+            .iter()
+            .filter(|id| id.as_str() == "recover-0")
+            .count(),
+        1,
+        "the retry must not duplicate a durably registered child id"
+    );
+}
+
+#[tokio::test]
 async fn heartbeat_renews_a_short_lease_while_a_child_is_running() {
     let store = Arc::new(MemoryStore::default());
     let executor = Arc::new(BlockingExecutor::default());
@@ -644,6 +719,80 @@ async fn terminal_events_are_truthful_and_flushed() {
     assert_eq!(
         store.load("failed").unwrap().unwrap().status,
         WorkflowRunStatus::Failed
+    );
+}
+
+#[tokio::test]
+async fn fenced_driver_exits_silently_when_a_replacement_is_running() {
+    let store = Arc::new(RenewFailStore::default());
+    let executor = Arc::new(BlockingExecutor::default());
+    let sink = Arc::new(CollectingSink::new());
+    let engine = Arc::new(
+        WorkflowEngine::new(store.clone(), executor.clone())
+            .with_lease_duration(Duration::from_millis(30))
+            .with_event_sink(sink.clone()),
+    );
+    let mut def = definition();
+    def.phases = vec![WorkflowPhase {
+        name: "live".into(),
+        description: "live".into(),
+        agent_ids: vec!["one".into()],
+        depends_on: vec![],
+    }];
+    engine
+        .initialise("handoff".into(), &def, json!("q"), None)
+        .unwrap();
+    let first = {
+        let engine = engine.clone();
+        let def = def.clone();
+        tokio::spawn(async move {
+            engine
+                .drive("handoff", &def, CancellationToken::new())
+                .await
+        })
+    };
+    executor.started.notified().await;
+
+    // A replacement owner acquires after expiry before the old driver's
+    // heartbeat sees its loss. The old loop must not flush a false failure.
+    let current = store.load("handoff").unwrap().unwrap();
+    store
+        .compare_and_swap(
+            WorkflowRunUpsert {
+                id: current.id.clone(),
+                definition_id: current.definition_id.clone(),
+                parent_thread_id: current.parent_thread_id.clone(),
+                input: current.input.clone(),
+                phase_states: current.phase_states.clone(),
+                child_run_ids: current.child_run_ids.clone(),
+                status: WorkflowRunStatus::Running,
+                summary: None,
+                started_at: Some(current.started_at),
+                completed_at: None,
+            },
+            current.revision,
+            current.lease_owner.as_deref().unwrap(),
+            Duration::from_millis(3),
+        )
+        .unwrap()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    match store
+        .claim("handoff", "replacement", Duration::from_secs(1))
+        .unwrap()
+    {
+        WorkflowLeaseClaim::Acquired(run) => {
+            assert_eq!(run.lease_owner.as_deref(), Some("replacement"));
+        }
+        other => panic!("expected replacement lease, got {other:?}"),
+    }
+    first.await.unwrap().expect("fenced driver exits cleanly");
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|event| matches!(event, tinyagents_graph::GraphEvent::RunFailed { .. })),
+        "a fenced driver must not report the active replacement as failed"
     );
 }
 
