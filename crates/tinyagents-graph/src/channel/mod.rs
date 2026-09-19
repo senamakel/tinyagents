@@ -736,6 +736,13 @@ impl ChannelState {
         self
     }
 
+    /// Marks an already-registered channel for delta-history tracking; see
+    /// [`ChannelSet::with_delta`].
+    pub fn with_delta(mut self, name: impl Into<String>, snapshot_every: u32) -> Self {
+        self.set = self.set.with_delta(name, snapshot_every);
+        self
+    }
+
     /// Borrows the underlying [`ChannelSet`].
     pub fn channels(&self) -> &ChannelSet {
         &self.set
