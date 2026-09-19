@@ -95,7 +95,9 @@ loop.
 | `pairing.rs` | Tool-call-pairing-safe cut-point repair. |
 | `render.rs` | `render_message_for_summary`. |
 | `trim.rs` | `trim_messages`/`trim_messages_with`/`trim_messages_to_token_budget_with`. |
+| `compaction.rs` | `find_cut_point`, `summarize_with_split`, `OverflowClassifier`, `CompactionContext`/`CompactionDecision`. |
 | `test.rs` | Coverage for token estimation, trim strategies, pairing repair, policy triggering/planning, and `ConcatSummarizer`. |
+| `compaction/test.rs` | Coverage for cut points, split-turn merge, iterative summaries, `OverflowClassifier`. |
 
 ## Key invariants
 
