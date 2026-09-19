@@ -232,7 +232,7 @@ pub fn record_message_with_reasoning(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
-/// Records a tool call, bounding its output to [`MAX_TOOL_OUTPUT_BYTES`],
+/// Records a tool call, bounding its output to `MAX_TOOL_OUTPUT_BYTES`,
 /// and returns the new row's id.
 ///
 /// Row insert and FTS index are written in one transaction — see the module
