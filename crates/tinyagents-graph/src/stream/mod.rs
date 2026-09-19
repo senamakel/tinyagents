@@ -16,7 +16,10 @@
 pub mod project;
 mod types;
 
-pub use project::project_graph_event;
+pub use project::{
+    Cursored, MessageEntry, ProjectedSince, StreamProjection, SubagentEntry, SubagentPhase,
+    ToolCallEntry, ToolCallPhase, project_graph_event,
+};
 pub use types::{GraphEvent, GraphEventEnvelope, StreamMode};
 
 use std::sync::{Arc, Mutex};
