@@ -749,15 +749,6 @@ pub enum CompressionFailurePolicy {
 /// [`CompressionFailurePolicy`] /
 /// [`with_failure_policy`](ContextCompressionMiddleware::with_failure_policy)
 /// for how a summarizer error is recovered.
-/// The type of a `before_compaction` hook, consulted before every
-/// compaction [`ContextCompressionMiddleware`] runs. Named to keep the
-/// struct field's type simple (`clippy::type_complexity`).
-pub type BeforeCompactionHook = std::sync::Arc<
-    dyn Fn(&crate::summarization::CompactionContext) -> crate::summarization::CompactionDecision
-        + Send
-        + Sync,
->;
-
 pub struct ContextCompressionMiddleware {
     /// Label reported in `MiddlewareStarted`/`MiddlewareCompleted` events.
     pub(crate) label: &'static str,
