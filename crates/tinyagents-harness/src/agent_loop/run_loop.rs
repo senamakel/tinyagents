@@ -580,6 +580,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     );
                                 }
                             }
+                            // `for_profile` only ever returns these two; the
+                            // `Prompted`/`ToolCallUnion` strategies are
+                            // reached exclusively through the dedicated
+                            // `structured_strategy_override` arms above.
+                            StructuredStrategy::Prompted { .. }
+                            | StructuredStrategy::ToolCallUnion => unreachable!(
+                                "StructuredStrategy::for_profile never returns Prompted or \
+                                 ToolCallUnion"
+                            ),
                         }
                         Some((strategy, name, schema))
                     }
