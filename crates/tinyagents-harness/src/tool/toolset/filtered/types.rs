@@ -18,6 +18,6 @@ pub type ToolFilterPredicate = Arc<dyn Fn(&dyn Tool) -> bool + Send + Sync>;
 /// unregistered name — a filtered-out tool must not be reachable just
 /// because a model guesses or is told its name.
 pub struct FilteredToolSet<State: Send + Sync, Ctx: Send + Sync> {
-    pub(crate) inner: Arc<dyn super::ToolSet<State, Ctx>>,
+    pub(crate) inner: Arc<dyn ToolSet<State, Ctx>>,
     pub(crate) predicate: ToolFilterPredicate,
 }
