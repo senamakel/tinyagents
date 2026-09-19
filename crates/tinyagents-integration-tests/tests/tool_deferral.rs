@@ -213,7 +213,11 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
     );
     let hidden = ExposedTool::new("internal_step", "Host-only step.", ToolExposure::Hidden);
     let model = RecordingModel::new(vec![
-        tool_call("c1", TOOL_SEARCH_NAME, json!({"query": "price of a ticker"})),
+        tool_call(
+            "c1",
+            TOOL_SEARCH_NAME,
+            json!({"query": "price of a ticker"}),
+        ),
         tool_call(
             "c2",
             TOOL_CALL_NAME,
@@ -250,7 +254,10 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
     // deterministic order, and is byte-identical on every model call.
     let seen = model.tools_seen();
     assert_eq!(seen.len(), 5);
-    assert!(seen.iter().all(|tools| tools == &seen[0]), "tools array drifted: {seen:#?}");
+    assert!(
+        seen.iter().all(|tools| tools == &seen[0]),
+        "tools array drifted: {seen:#?}"
+    );
     assert_eq!(
         tool_names(&seen[0]),
         vec!["read_file", TOOL_SEARCH_NAME, TOOL_CALL_NAME]
@@ -262,7 +269,10 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
 
     // Both the bridged and the direct-by-name call reached the real tool.
     let calls = deferred.calls.lock().unwrap().clone();
-    assert_eq!(calls, vec![json!({"symbol": "ACME"}), json!({"symbol": "XYZ"})]);
+    assert_eq!(
+        calls,
+        vec![json!({"symbol": "ACME"}), json!({"symbol": "XYZ"})]
+    );
     assert!(hidden.calls.lock().unwrap().is_empty());
 
     // `before_tool` saw the real name for the bridged call, never `tool_call`;

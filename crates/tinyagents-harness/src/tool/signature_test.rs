@@ -52,7 +52,10 @@ fn collapses_past_max_depth_and_clips_long_signatures() {
 
     let mut properties = serde_json::Map::new();
     for index in 0..60 {
-        properties.insert(format!("property_number_{index}"), json!({"type": "string"}));
+        properties.insert(
+            format!("property_number_{index}"),
+            json!({"type": "string"}),
+        );
     }
     let wide = json!({"type": "object", "properties": properties});
     let rendered = type_signature(&wide);
@@ -63,7 +66,10 @@ fn collapses_past_max_depth_and_clips_long_signatures() {
 #[test]
 fn handles_degenerate_schemas() {
     assert_eq!(type_signature(&json!({"type": "object"})), "object");
-    assert_eq!(type_signature(&json!({"type": "object", "properties": {}})), "{}");
+    assert_eq!(
+        type_signature(&json!({"type": "object", "properties": {}})),
+        "{}"
+    );
     assert_eq!(type_signature(&json!(null)), "unknown");
     assert_eq!(type_signature(&json!({})), "unknown");
     assert!(argument_notes(&json!({"type": "object"})).is_empty());
