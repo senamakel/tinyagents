@@ -2534,6 +2534,76 @@ async fn streaming_delta_transform_controls_final_run_and_cached_response() {
     );
 }
 
+/// C-2 regression: a streaming turn whose terminal response carries a signed
+/// `Thinking` block ahead of a tool call must keep that exact signature in
+/// `run.messages`. Anthropic requires the signed thinking block to precede a
+/// `tool_use` block verbatim on replay; synthesizing a fresh, unsigned block
+/// from the streamed reasoning text (the old behavior) breaks that replay on
+/// the very next model call. No delta middleware is registered here, so the
+/// streamed reasoning text is identical to the terminal block's text and the
+/// fix's "keep it verbatim" branch is exercised.
+#[tokio::test]
+async fn streaming_turn_keeps_a_signed_thinking_signature_ahead_of_a_tool_call() {
+    use crate::testkit::StreamingMock;
+
+    let tool = Arc::new(FakeTool::returning("lookup", "ok"));
+    let mut terminal = ModelResponse::assistant("");
+    terminal.message.content = vec![tinyinference_llm::message::ContentBlock::Thinking {
+        text: "let me think".to_string(),
+        signature: Some("sig-123".to_string()),
+    }];
+    terminal
+        .message
+        .tool_calls
+        .push(ToolCall::new("call-1", "lookup", json!({})));
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "stream",
+        Arc::new(StreamingMock::new(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::MessageDelta(MessageDelta::reasoning("let me think")),
+            ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
+                call_id: "call-1".to_string(),
+                content: "{}".to_string(),
+                tool_name: Some("lookup".to_string()),
+            }),
+            ModelStreamItem::Completed(terminal),
+        ])),
+    );
+    harness.register_tool(tool.clone());
+
+    // Cap the run at one model call: the mock always replays the same
+    // scripted tool call, so a second turn would just repeat it forever.
+    // Only the first turn's assistant message (the one under test) is
+    // needed.
+    let ctx = RunContext::new(RunConfig::new("thinking-signature").with_max_model_calls(1), ());
+    let outcome = harness
+        .invoke_streaming_in_context_collecting_partial(&(), ctx, vec![Message::user("go")])
+        .await;
+
+    let thinking_blocks: Vec<_> = outcome
+        .run
+        .messages
+        .iter()
+        .flat_map(|message| message.content_blocks())
+        .filter(|block| {
+            matches!(
+                block,
+                tinyinference_llm::message::ContentBlock::Thinking { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        thinking_blocks,
+        vec![&tinyinference_llm::message::ContentBlock::Thinking {
+            text: "let me think".to_string(),
+            signature: Some("sig-123".to_string()),
+        }],
+        "the terminal Thinking block's signature must survive into run.messages verbatim"
+    );
+}
+
 #[tokio::test]
 async fn streaming_middleware_can_suppress_a_standalone_tool_delta() {
     use crate::testkit::StreamingMock;
