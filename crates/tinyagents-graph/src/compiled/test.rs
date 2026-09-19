@@ -3364,18 +3364,18 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
     let before = cp.get("t-fork-update", None).await.unwrap().unwrap();
     assert_eq!(
         before
-            .next_nodes
+            .tasks
             .iter()
-            .map(|n| n.to_string())
+            .map(|t| t.node.to_string())
             .collect::<Vec<_>>(),
         vec!["c".to_string()],
         "precondition: only the interrupted branch is pending, b's routing is deferred"
     );
     assert_eq!(
         before
-            .completed_tasks
+            .completed
             .iter()
-            .map(|n| n.to_string())
+            .map(|c| c.node.to_string())
             .collect::<Vec<_>>(),
         vec!["b".to_string()],
         "precondition: b completed this step but its routing was not yet resolved"
@@ -3386,30 +3386,19 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
         .await
         .unwrap();
     let written = cp.get("t-fork-update", None).await.unwrap().unwrap();
+    let written_next_nodes: Vec<NodeId> = written.tasks.iter().map(|t| t.node.clone()).collect();
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "x"),
-        "b's deferred successor x must now be scheduled, got {:?}",
-        written.next_nodes
+        written_next_nodes.iter().any(|n| n.as_str() == "x"),
+        "b's deferred successor x must now be scheduled, got {written_next_nodes:?}"
     );
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "c"),
-        "the untouched pending branch must stay scheduled, got {:?}",
-        written.next_nodes
+        written_next_nodes.iter().any(|n| n.as_str() == "c"),
+        "the untouched pending branch must stay scheduled, got {written_next_nodes:?}"
     );
     assert!(
-        !written.next_nodes.iter().any(|n| n.as_str() == "b"),
-        "the attributed node itself is completed, not pending: {:?}",
-        written.next_nodes
+        !written_next_nodes.iter().any(|n| n.as_str() == "b"),
+        "the attributed node itself is completed, not pending: {written_next_nodes:?}"
     );
-    // Resume prefers `pending_activations` over `next_nodes`, so the two must
-    // never disagree.
-    if let Some(pending) = &written.pending_activations {
-        assert_eq!(
-            pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
-            written.next_nodes,
-            "pending activations and next nodes must describe the same schedule"
-        );
-    }
 
     let done = graph.retry("t-fork-update").await.unwrap();
     assert!(
