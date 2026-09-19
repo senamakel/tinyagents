@@ -422,6 +422,7 @@ impl PendingWrite {
     pub fn identity(&self) -> (&str, i64) {
         (self.task_id.as_str(), self.idx)
     }
+
 }
 
 /// Merges `incoming` into `existing`, applying the replace-vs-ignore rule.
