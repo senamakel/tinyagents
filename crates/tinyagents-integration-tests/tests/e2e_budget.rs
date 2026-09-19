@@ -318,16 +318,17 @@ async fn cost_pricing_records_and_enforces_money_budget() {
         "a UsageRecorded event accompanies the recorded usage"
     );
 
-    // The next preflight blocks because 6.0 >= the 5.0 cost budget.
+    // A1: the next preflight now requests `JumpTo(End)` (graceful stop)
+    // instead of erroring, because 6.0 >= the 5.0 cost budget.
     let mut req = ModelRequest::new(vec![Message::user("go")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("the cost budget must block the next model call");
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("an exhausted cost budget stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(LoopTarget::End))
+    ));
     assert!(
         any_event(&recorder, |e| matches!(
             e,
