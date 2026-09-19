@@ -314,14 +314,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
     ) -> Result<ResolvedToolCall<State, Ctx>> {
-        // Preserve the exact attacker-controlled provider payload for host
-        // authorization/audit. `call.arguments` is later canonicalized for
-        // execution and must not overwrite what the gate evaluates. Mutable:
-        // a `tool_call` bridge payload is unwrapped below, and the snapshot
-        // must be refreshed to the unwrapped arguments so authorization
-        // inspects the same payload validation and execution use — not the
-        // stale `{"name", "arguments"}` wrapper the model actually sent.
-        let mut model_arguments = call.arguments.clone();
         // Safe cancellation checkpoint: stop before invoking the next
         // (side-effecting) tool if cancellation was requested.
         if ctx.cancellation.is_cancelled() {
