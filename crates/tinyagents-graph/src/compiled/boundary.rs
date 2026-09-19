@@ -408,6 +408,7 @@ where
         ctx: &mut RunCtx<'_, State, Update>,
         err: TinyAgentsError,
     ) -> Result<T> {
+        ctx.disarm_drop_guard();
         let _ = ctx.async_writes.drain().await;
         self.fail_run(
             &ctx.run_id,
