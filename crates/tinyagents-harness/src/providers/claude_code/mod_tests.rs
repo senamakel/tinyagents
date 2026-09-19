@@ -98,7 +98,7 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
 #[test]
 fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut scrubber = ToolCallStreamScrubber::new();
+    let mut scrubber = TextScrubber::new(&[]);
     let fragments = [
         "before ",
         "<tool_",
