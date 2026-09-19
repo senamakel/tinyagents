@@ -775,28 +775,21 @@ where
                     .collect::<Vec<_>>()
             );
         }
-        Checkpoint {
-            thread_id: thread.to_string(),
-            checkpoint_id: next_checkpoint_id(),
-            run_id: Some(ctx.run_id.to_string()),
-            parent_checkpoint_id: ctx.parent_checkpoint.clone(),
-            namespace: self.namespace.clone(),
-            state: boundary.state.clone(),
-            next_nodes: activation_nodes(boundary.pending),
-            completed_tasks: activation_nodes(boundary.completed_tasks),
-            completed_routes: boundary.completed_routes.to_vec(),
-            pending_writes: Self::completion_writes(boundary.completed_tasks),
-            pending_activations: Some(
-                boundary
-                    .pending
-                    .iter()
-                    .map(PendingActivation::from)
-                    .collect(),
-            ),
-            barrier_arrivals: barriers_to_persisted(&ctx.barrier_arrivals),
-            interrupts,
-            metadata,
-        }
+        let pending_writes = Self::completion_writes(&boundary.completed);
+        Checkpoint::new(
+            boundary.state.clone(),
+            boundary.pending.iter().map(PendingActivation::from).collect(),
+        )
+        .with_thread_id(thread.to_string())
+        .with_checkpoint_id(next_checkpoint_id())
+        .with_run_id(ctx.run_id.to_string())
+        .with_parent_checkpoint_id(ctx.parent_checkpoint.clone())
+        .with_namespace(self.namespace.clone())
+        .with_completed(boundary.completed)
+        .with_pending_writes(pending_writes)
+        .with_barrier_arrivals(barriers_to_persisted(&ctx.barrier_arrivals))
+        .with_interrupts(interrupts)
+        .with_metadata(metadata)
     }
 
     pub(super) fn base_status(
