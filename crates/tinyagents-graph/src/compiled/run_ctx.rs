@@ -405,12 +405,29 @@ where
         step: usize,
         fork: Option<ForkId>,
         siblings: usize,
+        state: &State,
     ) -> NodeContext {
         let node_id = &activation.node;
         let resume = self
             .resume_map
             .remove(activation.task_id.as_str())
             .or_else(|| self.resume_map.remove(node_id.as_str()));
+        // I5/R3: the channel versions this node's invocation observes are
+        // whatever the committed `state` reports right now (downcast to
+        // `ChannelState` when the graph uses the channel model; a plain
+        // whole-state graph reports nothing here — `changed_since_last_run`
+        // is only meaningful for a channel graph). This node's own
+        // last-observed snapshot (`versions_seen`) is recorded *before*
+        // being overwritten with the current one, so
+        // `NodeContext::changed_since_last_run` can compare "what I saw last
+        // time" against "what is current".
+        let current_versions = (state as &dyn std::any::Any)
+            .downcast_ref::<crate::channel::ChannelState>()
+            .map(|cs| cs.channel_versions().clone())
+            .unwrap_or_default();
+        let key = node_id.to_string();
+        let seen_before = self.versions_seen.get(&key).cloned().unwrap_or_default();
+        self.versions_seen.insert(key, current_versions.clone());
         NodeContext {
             graph_id: self.graph.graph_id.clone(),
             node_id: node_id.clone(),
@@ -426,6 +443,8 @@ where
             agent_binding: self.binding.clone(),
             task_id: activation.task_id.clone(),
             siblings,
+            channel_versions: current_versions,
+            versions_seen: seen_before,
         }
     }
 }
