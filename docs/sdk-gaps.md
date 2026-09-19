@@ -443,6 +443,29 @@ becomes a `DeferredToolHandler`. Persistence of `run.messages` +
 the loop cannot write it); see
 [`docs/modules/harness/tool.md`](modules/harness/tool.md#deferred-tool-calls-approval-and-external-execution-a2).
 
+### 15. Registry Diagnostics And Introspection
+
+Status: partially present.
+
+TinyAgents has registry primitives. OpenHuman still needs richer diagnostics for
+duplicate components, alias resolution, component health, model/provider/tool
+capabilities, and event listener wiring.
+
+Implement:
+
+- Registry snapshot export with models, tools, middleware, graph nodes,
+  checkpointers, task stores, event listeners, and aliases.
+- Duplicate and shadowing diagnostics.
+- Health/status probes for registered providers and stores.
+- Machine-readable component dependency graph.
+- Optional DOT/JSON graph export for runtime components, not only graph nodes.
+
+Acceptance criteria:
+
+- A CLI or UI can show exactly what TinyAgents components are active.
+- Registry failures are actionable without inspecting app-specific logs.
+- OpenHuman dead-code audits can map old modules to SDK-owned registry entries.
+
 ### 16. Tool Execution Context Parity And Rich Returns (B1/B2)
 
 Status: shipped (harness); OpenHuman adapters still to migrate.
@@ -468,29 +491,6 @@ rides `AgentEvent::ToolCompleted { metadata }` and
 Still open: an approval flag on the context (a tool raising
 `ApprovalRequired` from `execute` cannot see it was approved on resume), and
 a native file block in the message model.
-
-### 15. Registry Diagnostics And Introspection
-
-Status: partially present.
-
-TinyAgents has registry primitives. OpenHuman still needs richer diagnostics for
-duplicate components, alias resolution, component health, model/provider/tool
-capabilities, and event listener wiring.
-
-Implement:
-
-- Registry snapshot export with models, tools, middleware, graph nodes,
-  checkpointers, task stores, event listeners, and aliases.
-- Duplicate and shadowing diagnostics.
-- Health/status probes for registered providers and stores.
-- Machine-readable component dependency graph.
-- Optional DOT/JSON graph export for runtime components, not only graph nodes.
-
-Acceptance criteria:
-
-- A CLI or UI can show exactly what TinyAgents components are active.
-- Registry failures are actionable without inspecting app-specific logs.
-- OpenHuman dead-code audits can map old modules to SDK-owned registry entries.
 
 ### 17. Storage And Graph Conformance
 
