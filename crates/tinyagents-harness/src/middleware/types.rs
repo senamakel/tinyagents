@@ -472,13 +472,30 @@ impl From<ModelResponse> for MiddlewareModelOutcome {
 pub enum MiddlewareToolOutcome {
     /// The result to use as the result of the wrapped tool call.
     Result(ToolResult),
+    /// Short-circuit with a [`MiddlewareControl`] instead of a result. The
+    /// tool-wrap counterpart of [`MiddlewareModelOutcome::Command`]; see its
+    /// docs for the placeholder-result and control-recovery contract.
+    Command {
+        /// The control outcome to apply.
+        control: MiddlewareControl,
+    },
 }
 
 impl MiddlewareToolOutcome {
-    /// Unwraps the contained [`ToolResult`].
+    /// Unwraps the contained [`ToolResult`], or an empty error placeholder for
+    /// [`Self::Command`] (prefer [`Self::into_result_with_control`] when a
+    /// `Command` must not be silently discarded).
     pub fn into_result(self) -> ToolResult {
+        self.into_result_with_control().0
+    }
+
+    /// Splits this outcome into a [`ToolResult`] (a placeholder for
+    /// [`Self::Command`]) and the [`MiddlewareControl`] to apply, when this
+    /// was a `Command` outcome.
+    pub fn into_result_with_control(self) -> (ToolResult, Option<MiddlewareControl>) {
         match self {
-            Self::Result(result) => result,
+            Self::Result(result) => (result, None),
+            Self::Command { control } => (ToolResult::success(String::new()), Some(control)),
         }
     }
 }
