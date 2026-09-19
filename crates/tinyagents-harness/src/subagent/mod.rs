@@ -207,7 +207,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         parent_depth: usize,
         input: impl Into<String>,
     ) -> Result<AgentRun> {
-        let config = self.child_config(parent_depth, None, None)?;
+        let config = self.child_config(parent_depth, None, None, None)?;
         let ctx = RunContext::new(config, ctx_data);
         self.run_child(state, ctx, input.into(), false).await
     }
@@ -223,7 +223,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         input: impl Into<String>,
         events: &EventSink,
     ) -> Result<AgentRun> {
-        let config = self.child_config(parent_depth, None, None)?;
+        let config = self.child_config(parent_depth, None, None, None)?;
         let ctx = RunContext::new(config, ctx_data).with_events(events.clone());
         self.run_child(state, ctx, input.into(), false).await
     }
@@ -264,6 +264,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
+            Some((parent.run_id().as_str(), parent.limits.tool_calls() as u64)),
         )?;
         let ctx = parent.child(config, ctx_data)?;
         self.run_child(state, ctx, input.into(), parent.streaming)
@@ -337,6 +338,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
+            Some((parent.run_id().as_str(), parent.limits.tool_calls() as u64)),
         )?;
         let child = parent.child(config, ctx_data)?;
         self.run_hosted_child(state, child, input.into(), parent.streaming)
