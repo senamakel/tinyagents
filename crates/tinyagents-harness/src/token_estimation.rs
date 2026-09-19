@@ -189,6 +189,7 @@ pub fn count_tokens_approximately_with(messages: &[Message], options: &TokenCoun
         if options.use_usage_metadata_scaling
             && let Message::Assistant(AssistantMessage {
                 usage: Some(usage), ..
+                origin: None,
             }) = message
             && usage.total_tokens > 0
         {

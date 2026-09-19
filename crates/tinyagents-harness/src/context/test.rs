@@ -377,6 +377,7 @@ fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
             content: vec![ContentBlock::Text("call it".into())],
             tool_calls: vec![ToolCall::new("call-1", "lookup", serde_json::json!({}))],
             usage: None,
+            origin: None,
         }),
         Message::Tool(tinyinference_llm::message::ToolMessage {
             tool_call_id: "call-1".into(),
@@ -448,6 +449,7 @@ fn token_estimation_includes_structured_blocks_for_every_role() {
             content: vec![ContentBlock::ProviderExtension(json.clone())],
             tool_calls: vec![],
             usage: None,
+            origin: None,
         }),
         Message::Tool(ToolMessage {
             tool_call_id: "call".into(),
@@ -476,6 +478,7 @@ fn token_estimation_includes_assistant_tool_names_and_arguments() {
             serde_json::json!({"query": "one two three"}),
         )],
         usage: None,
+        origin: None,
     })];
 
     let rendered = std::cell::RefCell::new(String::new());

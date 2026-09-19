@@ -41,6 +41,7 @@ fn text_response(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(3, 1)),
+            origin: None,
         },
         usage: Some(Usage::new(3, 1)),
         finish_reason: Some("stop".into()),

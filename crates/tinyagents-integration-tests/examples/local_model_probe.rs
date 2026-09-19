@@ -150,6 +150,7 @@ async fn tool_roundtrip(model: &OpenAiModel) -> Outcome {
         content: resp.message.content.clone(),
         tool_calls: resp.message.tool_calls.clone(),
         usage: None,
+        origin: None,
     });
     let mut req2 = base_request(vec![
         user,

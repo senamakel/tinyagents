@@ -424,6 +424,7 @@ fn model_response(response: ChatResponse) -> ModelResponse {
             content: response.text.into_iter().map(ContentBlock::Text).collect(),
             tool_calls: Vec::new(),
             usage,
+            origin: None,
         },
         usage,
         finish_reason: Some("stop".into()),
