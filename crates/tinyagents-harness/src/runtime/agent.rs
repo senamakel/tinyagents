@@ -343,7 +343,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
-            binding: prepared.binding.clone(),
+            binding: std::sync::Arc::new(prepared.binding.clone()),
         }));
         runner.install_host_terminal_observer(&mut context, prepared.clone());
         emit_host_progress::<State, Ctx>(
