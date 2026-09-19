@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::builder::{GraphBuilder, NodeContext};
-use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+use crate::checkpoint::InMemoryCheckpointer;
 use crate::command::NodeResult;
 use crate::stream::{CollectingSink, GraphEvent};
 use std::sync::Arc;

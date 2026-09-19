@@ -313,7 +313,7 @@ fn interrupt_selectors_must_name_real_nodes() {
         .compile()
         .unwrap_err();
     assert!(
-        matches!(err, TinyAgentsError::MissingNode(n) if n == "ghost"),
+        matches!(&err, TinyAgentsError::MissingNode(n) if n == "ghost"),
         "got {err:?}"
     );
 }
