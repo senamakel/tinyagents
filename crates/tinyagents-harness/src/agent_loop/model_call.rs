@@ -20,7 +20,7 @@ use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
 use tinyinference_llm::cache::CachePolicy;
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     pub(super) async fn resolve_host_model(
         &self,
         ctx: &RunContext<Ctx>,
@@ -1009,7 +1009,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) streaming: bool,
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ModelCallBase<'_, State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
     /// Produces the binding for one invocation, honouring a model override that
     /// a wrap middleware wrote into `request.model`.
     ///
@@ -1087,7 +1087,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ModelCallBase<'_,
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ModelBaseCall<State, Ctx>
+impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
     for ModelCallBase<'_, State, Ctx>
 {
     fn call<'a>(
