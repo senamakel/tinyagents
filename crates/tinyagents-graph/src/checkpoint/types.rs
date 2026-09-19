@@ -383,7 +383,7 @@ impl PendingWrite {
     /// Builds an ordinary data write for `task_id` at position `idx`.
     pub fn data(
         node: impl Into<NodeId>,
-        task_id: impl Into<String>,
+        task_id: impl Into<TaskId>,
         idx: i64,
         channel: impl Into<String>,
         payload: serde_json::Value,
@@ -399,7 +399,7 @@ impl PendingWrite {
 
     /// Builds a completion marker: a data write at index `0` whose payload is
     /// `null`, recording only that `task_id` ran to completion.
-    pub fn completion_marker(node: impl Into<NodeId>, task_id: impl Into<String>) -> Self {
+    pub fn completion_marker(node: impl Into<NodeId>, task_id: impl Into<TaskId>) -> Self {
         let node = node.into();
         let channel = node.as_str().to_string();
         Self {
