@@ -369,6 +369,7 @@ impl ResolveZone {
         }
     }
 
+    /// Converts a civil date's midnight in this zone to a UTC instant.
     fn civil_midnight_to_utc(&self, date: NaiveDate) -> std::result::Result<DateTime<Utc>, String> {
         let naive = date
             .and_hms_opt(0, 0, 0)
@@ -376,6 +377,9 @@ impl ResolveZone {
         self.naive_to_utc(naive)
     }
 
+    /// Converts a naive (offset-less) datetime, interpreted in this zone, to
+    /// a UTC instant. Errors on an ambiguous or nonexistent local time (a DST
+    /// fold or gap), where a single unambiguous mapping does not exist.
     fn naive_to_utc(&self, naive: NaiveDateTime) -> std::result::Result<DateTime<Utc>, String> {
         use chrono::TimeZone;
         match self {
