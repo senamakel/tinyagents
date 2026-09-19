@@ -14,8 +14,14 @@
 //!    "Started/terminal pairing" below.
 //! 2. **Execution**: when the turn requests **two or more** tools and **no
 //!    tool-wrap middleware** ([`crate::middleware::ToolMiddleware`])
-//!    is registered, the admitted calls run **concurrently**
-//!    (`join_all`), so turn latency is the slowest tool instead of the sum.
+//!    is registered, the admitted calls run **concurrently**, so turn latency
+//!    is the slowest tool instead of the sum (bounded by
+//!    [`RunLimits::max_tool_concurrency`][crate::limits::RunLimits::max_tool_concurrency]
+//!    when set — see I-8; unbounded, i.e. every eligible call starts at once,
+//!    when unset). Lifecycle middleware does **not** force the serial path:
+//!    admission (phase 1) already ran every `before_tool` hook to completion,
+//!    serially, before any concurrent future is built, so there is nothing
+//!    left for a lifecycle middleware to mutate once execution starts.
 //!    Otherwise execution is serial, preserving the historical semantics.
 //!    [`AgentEvent::ToolStarted`] is emitted here, once every admission has
 //!    succeeded, so a call that is announced always runs.
