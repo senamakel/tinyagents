@@ -539,7 +539,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let offered_tool_count = request.tools.len();
             let recovery = super::dialect::TextRecovery {
                 offered: Arc::new(request.tools.clone()),
-                registry: run_dialect.registry(),
+                registry: run_dialect.registry_for(&request.tools),
             };
             // Applied before budget preflight below: for a text dialect this
             // rewrite folds the protocol block and full tool catalogue into
