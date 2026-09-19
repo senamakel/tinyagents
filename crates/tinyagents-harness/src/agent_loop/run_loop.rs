@@ -257,7 +257,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // output tool-call fallback can still narrow or grow what an
         // individual request actually sends.
         let record = ctx.emit(AgentEvent::ToolsAdvertised {
-            direct: tool_schemas.len(),
+            direct: direct_schema_count,
             deferred: deferred_catalog.len(),
             schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
         });
