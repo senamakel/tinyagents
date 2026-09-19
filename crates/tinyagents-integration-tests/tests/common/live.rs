@@ -30,6 +30,12 @@
 //! test, combined with this explicit double opt-in (an env flag *and*
 //! `--ignored`), makes both failure modes impossible.
 
+// Not every `live_*.rs` binary that pulls in this module calls every function
+// here (some call `require_live`, others only `is_flag_on`), and each test
+// file compiles as its own separate crate, so an item unused *in one binary*
+// would otherwise warn there even though it is used elsewhere.
+#![allow(dead_code)]
+
 /// Returns `true` when live tests are enabled (`TINYAGENTS_LIVE=1`, or the
 /// `PROMPT_CACHE_LIVE=1` alias) and every variable named in `keys` is set to a
 /// non-empty value. Loads `.env` (via `dotenvy`) only after confirming the
