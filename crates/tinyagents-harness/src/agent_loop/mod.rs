@@ -125,4 +125,6 @@ pub use stream::AgentStreamItem;
 pub(crate) use stream::{StreamRunner, invoke_stream_with_runner};
 
 #[cfg(test)]
+mod deferred_test;
+#[cfg(test)]
 mod test;
