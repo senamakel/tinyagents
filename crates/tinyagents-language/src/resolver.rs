@@ -199,6 +199,21 @@ impl Resolver {
                 out,
             );
         }
+
+        // 5. A referenced capability bundle (gap G3) must be registered.
+        // Unconditional, like tools above, since a capability reference is
+        // not tied to a particular node `kind`.
+        if let Some(capability) = &node.capability {
+            self.check_ref(
+                self.caps.capability_allowed(capability),
+                &node.name,
+                "capability",
+                capability,
+                node.span,
+                CODE_UNKNOWN_CAPABILITY,
+                out,
+            );
+        }
     }
 
     fn resolve_channel(&self, channel: &ChannelDecl, out: &mut Vec<Diagnostic>) {
