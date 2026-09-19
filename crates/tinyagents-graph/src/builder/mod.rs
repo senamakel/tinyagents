@@ -309,11 +309,70 @@ where
         self.branches.insert(
             from.into(),
             Branch {
-                router: Arc::new(move |state| router(state).to_string()),
+                router: Arc::new(move |state| Route::new(router(state))),
                 routes,
             },
         );
         self
+    }
+
+    /// Like [`Self::add_conditional_edges`], but additionally declares the
+    /// **exhaustive** set of labels `router` can ever return.
+    ///
+    /// [`Self::compile`] (via [`Self::validate_routes`]) cross-checks
+    /// `all_labels` against `routes`'s keys and rejects the build if a
+    /// declared label has no route — catching a typo'd route label (e.g. the
+    /// router returns `AgentRoute::Toool` because `Toool`/`Tool` are both
+    /// wired but one is missing from `routes`) before the graph ever runs,
+    /// instead of only failing at run time with
+    /// [`crate::TinyAgentsError::MissingRoute`] on whichever branch happens
+    /// to be taken.
+    ///
+    /// `all_labels` shares `router`'s return type `R`, so the compiler (not
+    /// just this check) ties the declared label set to what the router can
+    /// actually produce — a typed enum with, e.g., a `strum::EnumIter`-style
+    /// listing of its own variants is the natural `all_labels` source.
+    pub fn add_conditional_edges_checked<F, R, I, K, V, L>(
+        mut self,
+        from: impl Into<NodeId>,
+        router: F,
+        routes: I,
+        all_labels: L,
+    ) -> Self
+    where
+        F: Fn(&State) -> R + Send + Sync + 'static,
+        R: ToString,
+        I: IntoIterator<Item = (K, V)>,
+        K: ToString,
+        V: Into<NodeId>,
+        L: IntoIterator<Item = R>,
+    {
+        let from = from.into();
+        let labels: Vec<String> = all_labels.into_iter().map(|l| l.to_string()).collect();
+        self = self.add_conditional_edges(from.clone(), router, routes);
+        self.route_label_checks.insert(from, labels);
+        self
+    }
+
+    /// Cross-checks every [`Self::add_conditional_edges_checked`] declaration
+    /// against its node's actual route table, returning
+    /// [`crate::TinyAgentsError::MissingRoute`] for the first declared label
+    /// with no matching route. Called automatically by [`Self::compile`].
+    fn validate_routes(&self) -> Result<()> {
+        for (node, labels) in &self.route_label_checks {
+            let Some(branch) = self.branches.get(node) else {
+                continue;
+            };
+            for label in labels {
+                if !branch.routes.contains_key(label) {
+                    return Err(TinyAgentsError::MissingRoute {
+                        node: node.to_string(),
+                        route: label.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Declares that `node` routes exclusively via [`crate::Command`]
