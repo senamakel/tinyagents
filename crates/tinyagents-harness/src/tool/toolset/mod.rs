@@ -77,6 +77,13 @@ pub use prepared::PreparedToolSet;
 pub use renamed::RenamedToolSet;
 pub use types::ToolExposureExplanation;
 
+// Crate-internal reuse seams: the pure predicate logic behind
+// `FilteredToolSet`/`PreparedToolSet` is shared with the older
+// `ToolAllowlistMiddleware`/`DynamicToolSelectionMiddleware` (see those
+// modules) instead of each keeping its own copy.
+pub(crate) use filtered::tool_name_allowed;
+pub(crate) use prepared::retain_matching_schemas;
+
 /// A composable source of tools, generic over the harness's application
 /// `State` and run-context data `Ctx` — the same split
 /// [`crate::tool::ToolRegistry`] and [`crate::runtime::AgentHarness`] use.
