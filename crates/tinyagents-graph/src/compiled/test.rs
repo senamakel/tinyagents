@@ -4062,6 +4062,102 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
     assert_eq!(done.state, 1);
 }
 
+#[tokio::test]
+async fn resume_from_a_checkpoint_format_v1_json_record() {
+    // A genuine checkpoint format v1 record — as a build before `version`/
+    // `tasks`/`completed` existed would have written: no `version` key at
+    // all, pending work in `next_nodes`, nothing in `pending_activations`.
+    // `InMemoryCheckpointer::get`/`put` normalize on every decode path (see
+    // `Checkpoint::normalize`), so a hand-built v1 record put straight into
+    // the store must resume exactly like a v2 one.
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("gate", |s: i32, c: NodeContext| async move {
+            match c.resume {
+                Some(_) => Ok(NodeResult::Update(s + 1)),
+                None => Ok(NodeResult::Interrupt(Interrupt::new("gate", json!({})))),
+            }
+        })
+        .set_entry("gate")
+        .set_finish("gate")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let v1_json = json!({
+        "thread_id": "t-v1-record",
+        "checkpoint_id": "c1",
+        "run_id": null,
+        "parent_checkpoint_id": null,
+        "namespace": [],
+        "state": 0,
+        "next_nodes": ["gate"],
+        "completed_tasks": [],
+        "completed_routes": [],
+        "pending_writes": [],
+        "interrupts": [],
+        "pending_activations": null,
+        "barrier_arrivals": [],
+        "metadata": { "source": "loop", "step": 1, "interrupted_nodes": ["gate"] },
+    });
+    let v1: Checkpoint<i32> = serde_json::from_value(v1_json).unwrap();
+    assert_eq!(v1.version, 1, "precondition: this is a genuine v1 record");
+    cp.put(v1).await.unwrap();
+
+    // The store normalized it on `get` before this handed it back — confirm
+    // that directly before exercising resume through it.
+    let normalized = cp.get("t-v1-record", None).await.unwrap().unwrap();
+    assert_eq!(normalized.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(normalized.tasks.len(), 1);
+    assert_eq!(normalized.tasks[0].node, NodeId::from("gate"));
+
+    let done = graph
+        .resume("t-v1-record", Command::resume(json!("go")))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+    assert_eq!(done.state, 1, "resumed and ran gate to completion");
+}
+
+#[tokio::test]
+async fn update_state_and_fork_state_write_checkpoint_format_v2() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let graph = chain_graph(cp.clone());
+    graph.run_with_thread("t-v2-writes", 0).await.unwrap();
+
+    let config = graph
+        .update_state("t-v2-writes", 5, None)
+        .await
+        .expect("update_state");
+    let written = cp
+        .get(&config.thread_id, config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        written.version,
+        crate::checkpoint::CHECKPOINT_FORMAT_VERSION,
+        "update_state writes checkpoint format v2"
+    );
+    assert!(written.next_nodes.is_empty(), "v1 fields left unpopulated");
+
+    let fork_config = graph
+        .fork_state("t-v2-writes", None, "t-v2-forked")
+        .await
+        .expect("fork_state");
+    let forked = cp
+        .get(&fork_config.thread_id, fork_config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        forked.version,
+        crate::checkpoint::CHECKPOINT_FORMAT_VERSION,
+        "fork_state writes checkpoint format v2"
+    );
+    assert!(forked.next_nodes.is_empty(), "v1 fields left unpopulated");
+}
+
 // ── I4: panic safety, cooperative cancellation, and the run-drop guard ──────
 
 /// A single-node graph whose handler panics the first `panic_times`
