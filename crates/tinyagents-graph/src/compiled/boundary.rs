@@ -255,17 +255,15 @@ where
         if let Err(err) = self.require_interrupt_durability(&ctx.thread_id) {
             return self.fail_and_return(ctx, err).await;
         }
-        let successors = match self.route_completed(
-            &sb.active[..index],
-            sb.goto_map,
-            &state,
-            &mut ctx.barrier_arrivals,
-        ) {
-            Ok(successors) => successors,
-            Err(route_err) => return self.fail_and_return(ctx, route_err).await,
-        };
-        let mut pending = successors;
-        pending.extend(sb.active[index..].iter().cloned());
+        // Deferred routing, same as the failure boundary above: the
+        // completed siblings (whichever side of `index` they fall on) are
+        // not routed here. `pending` is exactly `sb.stalled` (the
+        // interrupted branch first, any other stalled branch after), and
+        // `completed_tasks` carries every completed node id forward
+        // (merged with anything already carried from an earlier resume of
+        // this step) for `advance` to route once the pending set finishes.
+        let pending: Vec<Activation> = sb.stalled.iter().map(|(_, a)| a.clone()).collect();
+        let completed_tasks = self.merged_completed_tasks(ctx, sb.completed);
         let pending_nodes = activation_nodes(&pending);
         let interrupt_id = InterruptId::new(emitted.id.clone());
         // An interrupt hands control back to the caller expecting a fully
@@ -281,7 +279,7 @@ where
                 BoundaryCheckpoint {
                     state: &state,
                     pending: &pending,
-                    completed_tasks: &sb.active[..index],
+                    completed_tasks: &completed_tasks,
                     child_runs: sb.child_runs_meta,
                 },
                 sb.step,
