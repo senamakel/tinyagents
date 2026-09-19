@@ -400,6 +400,8 @@ impl<Ctx> RunContext<Ctx> {
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
         child.host_agent_id = self.host_agent_id.clone();
+        child.tool_effect_ledger = self.tool_effect_ledger.clone();
+        child.tool_effect_ledger_failure = self.tool_effect_ledger_failure;
         Ok(child)
     }
 
