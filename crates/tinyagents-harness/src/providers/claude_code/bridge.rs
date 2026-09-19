@@ -37,6 +37,7 @@ impl ChatMessage {
     }
 }
 
+/// Token/cost accounting parsed out of the CLI's terminal `result` event.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct UsageInfo {
     pub(crate) input_tokens: u64,
