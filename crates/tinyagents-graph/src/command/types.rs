@@ -117,4 +117,15 @@ pub struct Interrupt {
     pub node: NodeId,
     /// Arbitrary payload presented to the human/approver.
     pub payload: serde_json::Value,
+    /// The scheduled task this interrupt paused, when known (R5/I1).
+    ///
+    /// Stamped by the interrupt boundary from the pausing branch's
+    /// [`crate::compiled` activation task id — distinct fan-out activations
+    /// of the same node (a `Send` `[node_id, task_id]`-scoped subgraph, for
+    /// example) each get their own interrupt/resume identity instead of
+    /// sharing the node's. `None` for a hand-built interrupt or one recorded
+    /// before task identity was tracked; `#[serde(default)]` keeps legacy
+    /// checkpoint JSON without this field decoding.
+    #[serde(default)]
+    pub task_id: Option<TaskId>,
 }
