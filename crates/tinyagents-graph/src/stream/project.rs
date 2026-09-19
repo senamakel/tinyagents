@@ -298,26 +298,5 @@ impl ProjectedSince {
     }
 }
 
-/// Distinct node ids observed in a set of graph events, in first-seen order.
-///
-/// Small helper used by tests asserting namespace/task attribution; kept here
-/// (rather than duplicated per test) since it is generic enough to be useful
-/// beyond this module's own tests.
-#[cfg(test)]
-pub(crate) fn distinct_nodes(envelopes: &[GraphEventEnvelope]) -> Vec<NodeId> {
-    let mut seen = HashSet::new();
-    let mut order = Vec::new();
-    for envelope in envelopes {
-        let node = match &envelope.event {
-            GraphEvent::NodeStarted { node, .. } => node.clone(),
-            _ => continue,
-        };
-        if seen.insert(node.clone()) {
-            order.push(node);
-        }
-    }
-    order
-}
-
 #[cfg(test)]
 mod test;
