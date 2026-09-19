@@ -1953,11 +1953,9 @@ async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
         let progress = Arc::new(RecordingProgressSink::new());
         let host = crate::host::HostCapabilities::new(
             Arc::new(StaticContextComposer::empty()),
-            Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-                "helper",
-                "Helper",
-                "test helper",
-            )])),
+            Arc::new(InMemoryDefinitionRegistry::new(vec![
+                AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]),
+            ])),
             Arc::new(AllowAllSecurityGate),
             Arc::new(FixedModelResolver::new(model)),
         )
