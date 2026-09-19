@@ -359,6 +359,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         {
             return Ok(answered);
         }
+        // `answer_discovery_bridge` rewrites `call.name`/`call.arguments` in
+        // place when the call was a `tool_call` bridge wrapper (it returns
+        // `None` in that case so admission continues with the unwrapped
+        // call). Refresh the authorization snapshot now, so it reflects the
+        // payload validation and execution below will actually use.
+        model_arguments = call.arguments.clone();
 
         // The slot is *reserved* above (cap-first, so a middleware hook never
         // runs for a call the budget has already refused) and *released* here
