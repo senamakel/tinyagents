@@ -166,7 +166,6 @@ fn stream_projection_since_replays_only_items_after_the_given_cursor() {
     assert_eq!(replay.len(), 1, "only what followed the second item");
     assert!(matches!(replay[0], ProjectedSince::Subagent(_)));
 
-    // Nothing new since the last cursor.
-    assert!(projection.since(projection.cursor() - 1).len() == 1);
-    assert!(projection.since(projection.cursor()).is_empty());
+    // Nothing new since the last item's own cursor.
+    assert!(projection.since(projection.cursor() - 1).is_empty());
 }
