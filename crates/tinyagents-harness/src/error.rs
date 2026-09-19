@@ -130,6 +130,32 @@ pub enum TinyAgentsError {
     #[error("tool error: {0}")]
     Tool(String),
 
+    /// A tool or an output validator ([`crate::structured::OutputValidator`])
+    /// reported a *recoverable* failure the model should be asked to fix and
+    /// retry, rather than one that ends the run.
+    ///
+    /// Mirrors Pydantic AI's `ModelRetry`. A tool returning this from
+    /// [`tinytools::Tool::execute`] is folded into a recoverable
+    /// [`tinytools::ToolResult::retry`] result instead of aborting the run —
+    /// see `agent_loop/tools.rs`'s `map_tool_dispatch_error`. An
+    /// [`crate::structured::OutputValidator`] returning it on the agent
+    /// loop's final turn drives the output-validation retry loop (A3): the
+    /// message is pushed back to the model as a repair prompt and the turn
+    /// continues, bounded by
+    /// [`crate::runtime::RunPolicy::output_retry`]'s `max_attempts`.
+    /// Contrast with [`Self::ToolFailed`], which is permanent.
+    #[error("retryable failure: {0}")]
+    ModelRetry(String),
+
+    /// A tool reported a **permanent** failure that must not be retried —
+    /// the counterpart to [`Self::ModelRetry`]. Folded into a
+    /// [`tinytools::ToolResult::failed`] result (still recoverable at the
+    /// transcript level — the model sees the message — but
+    /// [`crate::retry::RetryMiddleware`] and any other retry policy treat it
+    /// as non-retryable rather than re-attempting the call).
+    #[error("permanent tool failure: {0}")]
+    ToolFailed(String),
+
     /// A run referenced a tool name that is not present in the
     /// [`crate::tool::ToolRegistry`]. The payload is the tool name.
     #[error("tool `{0}` is not registered")]
