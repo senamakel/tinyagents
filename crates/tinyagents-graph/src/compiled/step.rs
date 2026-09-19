@@ -223,20 +223,29 @@ where
             {
                 Ok(result) => return Ok(result),
                 Err(error) => {
-                    let retry = policy
+                    let retry_policy = policy
                         .retry
                         .as_ref()
-                        .filter(|policy| policy.should_retry(attempt) && is_retryable(&error));
-                    let Some(policy) = retry else {
-                        return Err(error);
-                    };
-                    attempt += 1;
-                    self.graph.emit(GraphEvent::NodeRetryScheduled {
-                        node: node_id.clone(),
-                        step,
-                        attempt,
-                    });
-                    policy.sleep_backoff(attempt).await;
+                        .filter(|retry| retry.should_retry(attempt) && is_retryable(&error));
+                    if let Some(retry_policy) = retry_policy {
+                        attempt += 1;
+                        self.graph.emit(GraphEvent::NodeRetryScheduled {
+                            node: node_id.clone(),
+                            step,
+                            attempt,
+                        });
+                        retry_policy.sleep_backoff(attempt).await;
+                        continue;
+                    }
+                    // Retries (if any) are exhausted, or the error is not
+                    // retryable at all: give `on_error` a last chance to
+                    // recover the node's result before the error escalates.
+                    if let Some(on_error) = policy.on_error.as_ref()
+                        && let Some(command) = on_error(state, &error)
+                    {
+                        return Ok(NodeResult::Command(command));
+                    }
+                    return Err(error);
                 }
             }
         }
