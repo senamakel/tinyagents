@@ -150,11 +150,5 @@ where
         .mark_interrupt(node::MODEL)
         .mark_interrupt(node::TOOLS);
 
-    builder.compile().map_err(Into::into)
+    builder.compile()
 }
-
-/// Only referenced to keep `NodeResult` imported for the doc links above
-/// without an unused-import warning when doc-only references are stripped
-/// under some lint configurations.
-#[allow(dead_code)]
-type _NodeResultDocAnchor<S> = NodeResult<S>;
