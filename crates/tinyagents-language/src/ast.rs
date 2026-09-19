@@ -179,10 +179,8 @@ pub struct NodeDecl {
 /// declaration with a [`TinyAgentsError::Compile`](tinyagents_harness::error::TinyAgentsError::Compile)
 /// diagnostic. The AST node exists so the documented grammar still parses (and
 /// so tooling can read the declaration), not because compilation accepts it.
-///
-/// [`SteeringCommandKind`]: tinyagents_harness::steering::SteeringCommandKind
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct SteeringDecl {
+pub struct SteeringDeclPlaceholder {
     /// Steering commands a parent orchestrator run may send (`parent allow [...]`).
     pub parent_allow: Vec<String>,
     /// Steering commands a human may send (`human allow [...]`).
