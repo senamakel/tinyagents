@@ -187,7 +187,57 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         }
 
         let from_tokens = total_message_tokens(&request.messages);
-        let record = match self.summarizer.summarize(&to_summarize).await {
+        // `plan` splits by count (`non_system[..first_kept_index]` is exactly
+        // `to_summarize`); the record's `first_kept_index` is therefore just
+        // its length — see `compaction::CompactionRecord::first_kept_index`.
+        let first_kept_index = to_summarize.len();
+
+        match self.hook_decision(CompactionReason::Threshold, from_tokens, &to_summarize, &to_keep) {
+            CompactionDecision::Decline => return Ok(()),
+            CompactionDecision::UseSummary(text) => {
+                let record = SummaryRecord {
+                    summary: Message::system(text),
+                    provenance: crate::summarization::CompressionProvenance {
+                        source_ids: Vec::new(),
+                        original_token_estimate: 0,
+                        summary_token_estimate: 0,
+                        reason: "before_compaction hook supplied the summary".to_string(),
+                    },
+                };
+                let new_messages = splice_summary(to_keep, record.summary.clone());
+                let to_tokens = total_message_tokens(&new_messages);
+                self.finish_compaction(
+                    ctx,
+                    record,
+                    first_kept_index,
+                    from_tokens,
+                    to_tokens,
+                    CompactionReason::Threshold,
+                );
+                request.messages = new_messages;
+                ctx.emit(AgentEvent::Compressed {
+                    from_tokens,
+                    to_tokens,
+                });
+                return Ok(());
+            }
+            CompactionDecision::Proceed => {}
+        }
+
+        let previous_summary = self
+            .last_summary
+            .lock()
+            .expect("last_summary mutex poisoned")
+            .clone();
+        let record = match summarize_with_split(
+            self.summarizer.as_ref(),
+            &to_summarize,
+            self.max_turn_tokens.unwrap_or(u64::MAX),
+            previous_summary,
+            crate::token_estimation::estimate_message_tokens,
+        )
+        .await
+        {
             Ok(record) => record,
             Err(err) => {
                 // A summarizer failure hits precisely the longest, most valuable
