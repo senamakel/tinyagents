@@ -117,13 +117,12 @@ pub fn answer_tool_search(
             0,
         );
     }
+    let (default_limit, max_limit) = policy.effective_limits();
     let limit = arguments
         .get("limit")
         .and_then(Value::as_u64)
-        .map_or(policy.default_limit, |n| {
-            usize::try_from(n)
-                .unwrap_or(usize::MAX)
-                .clamp(1, policy.max_limit)
+        .map_or(default_limit, |n| {
+            usize::try_from(n).unwrap_or(usize::MAX).clamp(1, max_limit)
         });
 
     let matches = catalog.search(query, limit);
