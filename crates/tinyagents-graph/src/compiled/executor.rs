@@ -518,7 +518,7 @@ where
                 active: &active,
                 goto_map: &step_run.goto_map,
                 child_runs_meta: &child_runs_meta,
-                step: ctx.steps,
+                step,
             };
 
             // Node-handler failure (survived any node-retry policy) or an
