@@ -89,12 +89,22 @@ fn folded_patch_does_not_add_a_new_system_message() {
     let patch = diff_tool_set(&previous, &current).expect("tool set changed");
     apply_tool_change_patch(&mut messages, patch, false);
 
-    let system_count = messages.iter().filter(|m| matches!(m, Message::System(_))).count();
+    let system_count = messages
+        .iter()
+        .filter(|m| matches!(m, Message::System(_)))
+        .count();
     assert_eq!(system_count, 1);
     let Message::System(leading) = &messages[0] else {
         panic!("expected a leading system message");
     };
-    assert_eq!(leading.tools_added.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["browse"]);
+    assert_eq!(
+        leading
+            .tools_added
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["browse"]
+    );
 }
 
 /// Test 2: `replay_system_state` on a transcript carrying multiple patches
@@ -189,7 +199,11 @@ fn folded_patch_changes_the_leading_prefix_fingerprint_but_stays_correct() {
         panic!("expected a leading system message");
     };
     assert_eq!(
-        leading_after.tools_added.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        leading_after
+            .tools_added
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
         vec!["browse"]
     );
 }

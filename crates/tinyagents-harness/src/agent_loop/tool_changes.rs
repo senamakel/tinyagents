@@ -37,9 +37,14 @@ pub(super) const TOOL_CHANGES_SECTION: &str = "tool_changes";
 /// `tools_removed` — [`replay_system_state`](tinyinference_llm::message::replay_system_state)'s
 /// fold semantics already let a later `tools_added` entry for an existing
 /// name supersede the earlier one.
-pub(super) fn diff_tool_set(previous: &[ToolSchema], current: &[ToolSchema]) -> Option<SystemMessage> {
-    let previous_by_name: BTreeMap<&str, &ToolSchema> =
-        previous.iter().map(|schema| (schema.name.as_str(), schema)).collect();
+pub(super) fn diff_tool_set(
+    previous: &[ToolSchema],
+    current: &[ToolSchema],
+) -> Option<SystemMessage> {
+    let previous_by_name: BTreeMap<&str, &ToolSchema> = previous
+        .iter()
+        .map(|schema| (schema.name.as_str(), schema))
+        .collect();
     let current_names: HashSet<&str> = current.iter().map(|schema| schema.name.as_str()).collect();
 
     let mut tools_added: Vec<ToolSchema> = current
@@ -83,7 +88,10 @@ fn describe_delta(added: &[ToolSchema], removed: &[String]) -> String {
         lines.push(format!("Tools now available: {}.", names.join(", ")));
     }
     if !removed.is_empty() {
-        lines.push(format!("Tools no longer available: {}.", removed.join(", ")));
+        lines.push(format!(
+            "Tools no longer available: {}.",
+            removed.join(", ")
+        ));
     }
     lines.join(" ")
 }
@@ -112,7 +120,11 @@ fn describe_delta(added: &[ToolSchema], removed: &[String]) -> String {
 /// since the provider has no mid-transcript system slot for the patch to
 /// occupy without moving it there on the wire anyway. A transcript with no
 /// leading `Message::System` gets one inserted at the front.
-pub(super) fn apply_tool_change_patch(messages: &mut Vec<Message>, patch: SystemMessage, mid_conversation: bool) {
+pub(super) fn apply_tool_change_patch(
+    messages: &mut Vec<Message>,
+    patch: SystemMessage,
+    mid_conversation: bool,
+) {
     if mid_conversation {
         messages.push(Message::System(patch));
         return;
@@ -141,7 +153,9 @@ fn fold_patch(leading: &mut SystemMessage, patch: SystemMessage) {
     }
     for tool in patch.tools_added {
         leading.tools_removed.retain(|name| *name != tool.name);
-        leading.tools_added.retain(|existing| existing.name != tool.name);
+        leading
+            .tools_added
+            .retain(|existing| existing.name != tool.name);
         leading.tools_added.push(tool);
     }
     for name in patch.tools_removed {

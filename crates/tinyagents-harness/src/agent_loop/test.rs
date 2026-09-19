@@ -317,7 +317,12 @@ impl crate::tool::toolset::ToolSet<(), ()> for DynamicToolSet {
         }
     }
 
-    async fn call(&self, name: &str, args: serde_json::Value, _ctx: &RunContext<()>) -> Result<ToolResult> {
+    async fn call(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        _ctx: &RunContext<()>,
+    ) -> Result<ToolResult> {
         let tool = if name == self.search.name() {
             &self.search
         } else if name == self.browse.name() {
@@ -346,7 +351,11 @@ impl ChatModel<()> for ProfiledModel {
         Some(&self.profile)
     }
 
-    async fn invoke(&self, state: &(), request: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+    async fn invoke(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
         <MockModel as ChatModel<()>>::invoke(&self.inner, state, request).await
     }
 }
@@ -1097,7 +1106,11 @@ async fn dynamic_toolset_change_folds_into_the_leading_system_message_by_default
         .iter()
         .filter(|message| matches!(message, Message::System(_)))
         .collect();
-    assert_eq!(system_messages.len(), 1, "no new system message was appended");
+    assert_eq!(
+        system_messages.len(),
+        1,
+        "no new system message was appended"
+    );
     let Message::System(leading) = system_messages[0] else {
         unreachable!("filtered above");
     };
@@ -1180,7 +1193,10 @@ async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allow
 
     // The reconstructed effective tool set matches what was actually offered.
     let (_, effective_tools) = tinyinference_llm::message::replay_system_state(&run.messages);
-    let mut names: Vec<&str> = effective_tools.iter().map(|schema| schema.name.as_str()).collect();
+    let mut names: Vec<&str> = effective_tools
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect();
     names.sort();
     assert_eq!(names, vec!["browse", "search"]);
 }

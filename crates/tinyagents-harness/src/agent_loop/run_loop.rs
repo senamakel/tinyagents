@@ -449,8 +449,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .into_iter()
                     .filter(|schema| host_allows(&schema.name))
                     .collect();
-                let existing: std::collections::HashSet<&str> =
-                    live_schemas.iter().map(|schema| schema.name.as_str()).collect();
+                let existing: std::collections::HashSet<&str> = live_schemas
+                    .iter()
+                    .map(|schema| schema.name.as_str())
+                    .collect();
                 let extra: Vec<_> = toolset
                     .tools(ctx)
                     .await?
@@ -465,7 +467,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if let Some(preparation) = &self.policy.tool_schemas {
                     live_schemas = crate::tool::prepare_tool_schemas(&live_schemas, preparation);
                 }
-                if let Some(patch) = tool_changes::diff_tool_set(&declared_tool_schemas, &live_schemas) {
+                if let Some(patch) =
+                    tool_changes::diff_tool_set(&declared_tool_schemas, &live_schemas)
+                {
                     // A cheap, non-mutating preview resolution against the
                     // transcript as it stands (pre-patch) decides fold vs.
                     // insert. It is a pure registry lookup (no network call,
