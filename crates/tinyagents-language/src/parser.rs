@@ -479,6 +479,15 @@ impl Parser<'_> {
                 self.advance();
                 node.tools = self.parse_string_list()?;
             }
+            "capability" => {
+                let span = tok.span;
+                self.advance();
+                let value = self.expect_string()?;
+                if node.capability.is_some() {
+                    return dup(self, span, "capability");
+                }
+                node.capability = Some(value);
+            }
             "next" => {
                 self.advance();
                 node.next = Some(self.parse_node_ref()?);
