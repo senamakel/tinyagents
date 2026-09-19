@@ -450,6 +450,10 @@ where
         // invocation — the post-loop pass below must not re-cache it (that
         // would spuriously refresh its TTL on every hit).
         let mut cache_hits = vec![false; active.len()];
+        // The activation's cache key, computed once here and reused by the
+        // post-loop miss-store pass below (see `cache_key_for`'s doc on why
+        // the key function is called at most once per activation).
+        let mut cache_keys: Vec<Option<TaskCacheKey>> = Vec::with_capacity(active.len());
         for (index, activation) in active.iter().enumerate() {
             let node_id = &activation.node;
             let node = self
@@ -464,10 +468,13 @@ where
             });
 
             let send_arg = activation.send_arg.clone();
-            if let Some(update) = self
-                .try_cache_get(node_id, state, send_arg.as_ref())
-                .await
-            {
+            let cache_key = self.cache_key_for(node_id, state, send_arg.as_ref());
+            let cache_hit = match &cache_key {
+                Some(key) => self.cache_get(node_id, key).await,
+                None => None,
+            };
+            cache_keys.push(cache_key);
+            if let Some(update) = cache_hit {
                 self.graph.emit(GraphEvent::TaskCompleted {
                     node: node_id.clone(),
                     step,
