@@ -91,6 +91,8 @@ pub enum CapabilityKind {
     Agent,
     /// Registered scripts.
     Script,
+    /// Registered capability bundles (gap G3).
+    Capability,
 }
 
 /// Read-only capability names consumed by the language binding gate.
