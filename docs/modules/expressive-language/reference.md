@@ -274,6 +274,18 @@ graph support_agent {
 
 Policies lower into graph node policies and harness request policies.
 
+### Literal values and list separators
+
+A `defaults { … }`/`retry { … }`/`metadata { … }` value is a string, a number,
+`true`/`false` (a real boolean — `Literal::Bool`, not the bare identifier
+`"true"`), or any other bare identifier (e.g. `inherit`, `exponential`).
+
+Every bracketed list (`tools [...]`, `sources [...]`, `options [...]`,
+`sends [...]`, `join [...] -> target`) shares one separator rule:
+comma-separated, with an optional trailing comma after the last entry. A
+comma is required *between* entries — `[send a send b]` (no comma) is a parse
+error; `[send a, send b]` and `[send a, send b,]` both parse.
+
 ## Comments And Strings
 
 Comments:
