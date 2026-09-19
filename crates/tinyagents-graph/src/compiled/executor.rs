@@ -127,6 +127,68 @@ where
         .await
     }
 
+    /// Runs the graph to completion (or to an interrupt/cancellation) without
+    /// a thread, honoring `options` (I4 part 2) — currently a cooperative
+    /// [`RunOptions::cancellation`] token checked at every superstep
+    /// boundary and raced against that step's in-flight node handlers.
+    ///
+    /// Without a thread id, cancellation still stops the run and records a
+    /// `Cancelled` status, but there is nothing to persist a resumable
+    /// checkpoint against (checkpoints are keyed by thread), exactly like
+    /// [`Self::run`].
+    pub async fn run_with_options(
+        &self,
+        state: State,
+        options: RunOptions,
+    ) -> Result<GraphExecution<State>> {
+        self.execute(
+            RunSeed::fresh(state, vec![Activation::node(self.entry.clone())], None)
+                .with_options(options),
+        )
+        .await
+    }
+
+    /// Runs the graph under a thread id, honoring `options` (I4 part 2).
+    ///
+    /// This is the checkpointed counterpart to [`Self::run_with_options`]: a
+    /// cancellation observed mid-run persists a resumable checkpoint naming
+    /// the still-pending activations, so the run can be continued later with
+    /// [`Self::resume`]/[`Self::retry`].
+    pub async fn run_with_thread_options(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        state: State,
+        options: RunOptions,
+    ) -> Result<GraphExecution<State>> {
+        self.execute(
+            RunSeed::fresh(
+                state,
+                vec![Activation::node(self.entry.clone())],
+                Some(thread_id.into()),
+            )
+            .with_options(options),
+        )
+        .await
+    }
+
+    /// Resumes a run from its latest checkpoint, honoring `options` (I4 part
+    /// 2) — see [`Self::run_with_thread_options`].
+    pub async fn resume_with_options(
+        &self,
+        thread_id: impl Into<ThreadId>,
+        command: Command<Update>,
+        options: RunOptions,
+    ) -> Result<GraphExecution<State>> {
+        self.resume_from_inner(
+            thread_id.into(),
+            ResumeTarget::Latest,
+            command,
+            None,
+            options,
+        )
+        .await
+    }
+
     /// Runs one execution with an explicit host-bound recursive-agent binding.
     ///
     /// The binding is scoped to this run and descendants spawned from it; it is

@@ -237,7 +237,7 @@ where
     pub fn add_waiting_edge(mut self, from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
         let from = from.into();
         let to = to.into();
-        self.edges.insert(from.clone(), to.clone());
+        Self::push_edge(&mut self.edges, from.clone(), to.clone());
         self.waiting.entry(to).or_default().insert(from);
         self
     }

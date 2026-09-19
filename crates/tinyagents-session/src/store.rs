@@ -115,7 +115,9 @@ pub fn with_connection<T>(
 ) -> Result<T> {
     let db_path = db_path(workspace_dir);
     let handle = cached_connection(&db_path)?;
-    let conn = handle.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let conn = handle
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     f(&conn)
 }
 
