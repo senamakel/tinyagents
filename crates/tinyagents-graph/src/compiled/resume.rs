@@ -20,6 +20,7 @@ where
         target: ResumeTarget,
         command: Command<Update>,
         binding: Option<crate::subagent_node::AgentInvocationBinding>,
+        options: RunOptions,
     ) -> Result<GraphExecution<State>> {
         let checkpointer = self
             .checkpointer
@@ -261,6 +262,7 @@ where
                 initial_node_visits,
                 carried_completed,
             },
+            options,
             _update: std::marker::PhantomData,
         })
         .await
