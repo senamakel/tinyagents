@@ -602,7 +602,7 @@ where
                         config.thread_id,
                         namespace_json,
                         checkpoint_id,
-                        write.task_id,
+                        write.task_id.as_str(),
                         write.idx,
                         write.node.as_str(),
                         write.channel,
