@@ -456,7 +456,7 @@ mod tests {
 
         assert_eq!(catalog.snapshot().schema_version, 1);
         assert!(catalog.get("openai", "gpt-4.1").is_some());
-        assert!(catalog.get("anthropic", "claude-sonnet-4").is_some());
+        assert!(catalog.get("anthropic", "claude-opus-4-5").is_some());
         assert!(catalog.get("gemini", "gemini-2.5-flash").is_some());
     }
 
@@ -464,8 +464,11 @@ mod tests {
     fn looks_up_model_by_alias_or_id() {
         let catalog = ModelCatalog::seed().unwrap();
 
-        let by_id = catalog.get_by_model_id("gemini/gemini-2.5-pro").unwrap();
-        let by_alias = catalog.get_by_model_id("gemini-2.5-pro").unwrap();
+        // `openai/gpt-4.1` is a curated alias for `gpt-4.1` in the seed
+        // snapshot, added by hand since models.dev does not publish
+        // provider-prefixed aliases itself.
+        let by_id = catalog.get_by_model_id("gpt-4.1").unwrap();
+        let by_alias = catalog.get_by_model_id("openai/gpt-4.1").unwrap();
 
         assert_eq!(by_id.model_id, by_alias.model_id);
     }
