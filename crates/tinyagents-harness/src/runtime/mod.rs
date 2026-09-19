@@ -1,12 +1,9 @@
 //! Harness runtime facade.
 //!
-//! [`AgentHarness`] is the single composed runtime that every level of the
-//! recursion runs *inside*: a sub-agent, a subgraph node, a REPL session, or a
-//! model-authored blueprint all execute on the same harness — the same model
-//! and tool registries, middleware stack, and [`RunPolicy`]. That shared,
-//! re-entrant runtime is what makes "agents calling agents" and self-authored
-//! workflows recurse on one consistent set of capabilities rather than spinning
-//! up disjoint engines.
+//! [`AgentHarness`] is the durable runtime facade. Hosted roots may provide an
+//! invocation-local [`InvocationRuntime`] for models, tools, and middleware;
+//! authorized children inherit that exact overlay and never substitute their
+//! own durable registries.
 //! Hosted roots may attach an [`InvocationRuntime`] for their model, tool, and
 //! middleware surface. It is invocation-local and every hosted child must
 //! inherit it; a missing overlay is rejected rather than falling back to a

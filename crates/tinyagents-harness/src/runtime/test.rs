@@ -2996,17 +2996,32 @@ async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
     let authorized = child
         .invoke_hosted_in_parent(&(), (), &hosted_parent_context(authorized_host), "delegate")
         .await
-        .expect("the dedicated hosted entry authorizes the declared child");
-    assert_eq!(authorized.text().as_deref(), Some("child answer"));
+        .expect_err("a hosted child without the parent's invocation overlay fails closed");
     assert_eq!(
         hosted_child_model.requests().len(),
-        1,
-        "the authorized child resolves through the parent host bundle, not its local harness"
+        0,
+        "a missing overlay must not resolve the parent-host model"
     );
     assert!(
         local_child_model.requests().is_empty(),
         "the child harness's local model cannot replace hosted parent authority"
     );
+    let mut streaming_parent = hosted_parent_context(Arc::new(crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("parent", "Parent", "delegates").with_subagents(["worker"]),
+            AgentDefinition::new("worker", "Worker", "child"),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(hosted_child_model.clone())),
+    )));
+    streaming_parent.streaming = true;
+    assert!(matches!(
+        child
+            .invoke_hosted_in_parent(&(), (), &streaming_parent, "delegate")
+            .await,
+        Err(crate::error::TinyAgentsError::Validation(_))
+    ));
 }
 
 #[tokio::test]
