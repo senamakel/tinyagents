@@ -295,6 +295,104 @@ fn row_metadata(row: MetaRow) -> Result<CheckpointMetadata> {
     })
 }
 
+/// Inserts one `checkpoints` row for `checkpoint`.
+///
+/// Takes `&Connection` rather than `&SqliteCheckpointer` so it can run either
+/// directly against a locked connection ([`Checkpointer::put`]) or against a
+/// [`rusqlite::Transaction`] (which derefs to `Connection`) shared with a
+/// `put_writes` insert in the same commit
+/// ([`SqliteCheckpointer`]'s `put_with_writes` override).
+fn insert_checkpoint_row<State: Serialize>(
+    conn: &Connection,
+    checkpoint: &Checkpoint<State>,
+) -> Result<()> {
+    let meta = checkpoint.to_metadata();
+    let namespace = serde_json::to_string(&checkpoint.namespace)
+        .map_err(|e| sqlite_err("encode namespace", e))?;
+    let next_nodes = serde_json::to_string(&checkpoint.next_nodes)
+        .map_err(|e| sqlite_err("encode next_nodes", e))?;
+    let record =
+        serde_json::to_string(checkpoint).map_err(|e| sqlite_err("encode record", e))?;
+    conn.execute(
+        "INSERT INTO checkpoints (
+            thread_id, checkpoint_id, parent_checkpoint_id, run_id,
+            namespace, next_nodes, source, step, has_interrupts, record
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            checkpoint.thread_id,
+            checkpoint.checkpoint_id,
+            checkpoint.parent_checkpoint_id,
+            checkpoint.run_id,
+            namespace,
+            next_nodes,
+            meta.source.as_str(),
+            meta.step as i64,
+            i64::from(meta.has_interrupts),
+            record,
+        ],
+    )
+    .map_err(|e| sqlite_err("insert checkpoint", e))?;
+    Ok(())
+}
+
+/// Inserts `writes` into `checkpoint_writes` for the checkpoint addressed by
+/// `config`, returning how many rows were actually stored (a control-plane
+/// write always stores; a data write with an already-seen `(task_id, idx)` is
+/// ignored — see [`Checkpointer::put_writes`]'s doc comment for the rule).
+///
+/// Takes `&Connection` for the same reason as [`insert_checkpoint_row`]: it
+/// runs standalone under [`Checkpointer::put_writes`] and shares a
+/// transaction with [`insert_checkpoint_row`] under `put_with_writes`.
+fn insert_checkpoint_writes(
+    conn: &Connection,
+    config: &CheckpointConfig,
+    checkpoint_id: &str,
+    writes: &[PendingWrite],
+) -> Result<usize> {
+    let namespace_json = serde_json::to_string(&config.namespace)
+        .map_err(|e| sqlite_err("encode namespace", e))?;
+    let mut stored = 0usize;
+    for write in writes {
+        // The replace-vs-ignore rule pushed into SQL: a control-plane write
+        // (`idx < 0`) legitimately changes on a retry and upserts, while a
+        // data write is append-once so a retried `put_writes` is a no-op.
+        // Doing it with two conflict clauses rather than a read-then-write
+        // keeps it correct under concurrent writers.
+        let sql = if write.is_control_plane() {
+            "INSERT INTO checkpoint_writes
+                (thread_id, namespace, checkpoint_id, task_id, idx, node, channel, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(thread_id, namespace, checkpoint_id, task_id, idx) DO UPDATE SET
+                node = excluded.node,
+                channel = excluded.channel,
+                payload = excluded.payload"
+        } else {
+            "INSERT INTO checkpoint_writes
+                (thread_id, namespace, checkpoint_id, task_id, idx, node, channel, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(thread_id, namespace, checkpoint_id, task_id, idx) DO NOTHING"
+        };
+        let payload = serde_json::to_string(&write.payload)
+            .map_err(|e| sqlite_err("encode write payload", e))?;
+        stored += conn
+            .execute(
+                sql,
+                params![
+                    config.thread_id,
+                    namespace_json,
+                    checkpoint_id,
+                    write.task_id.as_str(),
+                    write.idx,
+                    write.node.as_str(),
+                    write.channel,
+                    payload,
+                ],
+            )
+            .map_err(|e| sqlite_err("insert checkpoint write", e))?;
+    }
+    Ok(stored)
+}
+
 #[async_trait]
 impl<State> Checkpointer<State> for SqliteCheckpointer<State>
 where
@@ -307,42 +405,51 @@ where
         // never stalls a tokio worker on the step-critical path.
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let meta = checkpoint.to_metadata();
-            let namespace = serde_json::to_string(&checkpoint.namespace)
-                .map_err(|e| sqlite_err("encode namespace", e))?;
-            let next_nodes = serde_json::to_string(&checkpoint.next_nodes)
-                .map_err(|e| sqlite_err("encode next_nodes", e))?;
-            let record =
-                serde_json::to_string(&checkpoint).map_err(|e| sqlite_err("encode record", e))?;
-
-            let conn = conn.lock().map_err(|_| {
-                TinyAgentsError::Checkpoint(
-                    "sqlite checkpointer: connection lock poisoned".to_string(),
-                )
-            })?;
-            conn.execute(
-                "INSERT INTO checkpoints (
-                thread_id, checkpoint_id, parent_checkpoint_id, run_id,
-                namespace, next_nodes, source, step, has_interrupts, record
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    checkpoint.thread_id,
-                    checkpoint.checkpoint_id,
-                    checkpoint.parent_checkpoint_id,
-                    checkpoint.run_id,
-                    namespace,
-                    next_nodes,
-                    meta.source.as_str(),
-                    meta.step as i64,
-                    i64::from(meta.has_interrupts),
-                    record,
-                ],
-            )
-            .map_err(|e| sqlite_err("insert checkpoint", e))?;
-            Ok(())
+            let conn = lock_conn(&conn)?;
+            insert_checkpoint_row(&conn, &checkpoint)
         })
         .await
         .map_err(|e| sqlite_err("join blocking put task", e))??;
+        Ok(id)
+    }
+
+    async fn put_with_writes(
+        &self,
+        checkpoint: Checkpoint<State>,
+        writes: &[PendingWrite],
+    ) -> Result<CheckpointId> {
+        // One transaction covering both the checkpoint row and its writes —
+        // the boundary the executor commits at should never observe the
+        // checkpoint durable but its writes lost (or vice versa) to a crash
+        // between two separate autocommit statements.
+        let id = CheckpointId::new(checkpoint.checkpoint_id.clone());
+        if writes.is_empty() {
+            // Nothing to share a transaction with; `put` alone is already one
+            // statement.
+            self.put(checkpoint).await?;
+            return Ok(id);
+        }
+        let config = CheckpointConfig {
+            thread_id: checkpoint.thread_id.clone(),
+            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+            namespace: checkpoint.namespace.clone(),
+        };
+        let checkpoint_id = checkpoint.checkpoint_id.clone();
+        let writes = writes.to_vec();
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = lock_conn(&conn)?;
+            let tx = conn
+                .transaction()
+                .map_err(|e| sqlite_err("begin put_with_writes", e))?;
+            insert_checkpoint_row(&tx, &checkpoint)?;
+            insert_checkpoint_writes(&tx, &config, &checkpoint_id, &writes)?;
+            tx.commit()
+                .map_err(|e| sqlite_err("commit put_with_writes", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| sqlite_err("join blocking put_with_writes task", e))??;
         Ok(id)
     }
 

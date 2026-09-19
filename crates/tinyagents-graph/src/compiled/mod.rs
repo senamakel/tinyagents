@@ -90,7 +90,9 @@ mod state_api;
 mod step;
 mod types;
 
-pub use types::{CompiledGraph, GraphExecution, GraphInput, ResumeTarget, StateSnapshot};
+pub use types::{
+    CompiledGraph, GraphExecution, GraphInput, ResumeTarget, RunOptions, StateSnapshot,
+};
 
 pub(crate) use types::AsyncCheckpointWrites;
 
