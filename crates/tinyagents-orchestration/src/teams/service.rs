@@ -238,17 +238,16 @@ impl<L: TeamLedger> TeamService<L> {
             .get_team(team_id)?
             .ok_or_else(|| anyhow!("unknown team: {team_id}"))?;
         let existing = self.ledger.list_tasks(team_id)?;
-        if let Some(owner) = owner_member_id {
-            if !self
+        if let Some(owner) = owner_member_id
+            && !self
                 .ledger
                 .list_members(team_id)?
                 .iter()
                 .any(|member| member.id == owner)
-            {
-                return Err(anyhow!(TeamError::UnknownMember {
-                    member_id: owner.to_string()
-                }));
-            }
+        {
+            return Err(anyhow!(TeamError::UnknownMember {
+                member_id: owner.to_string()
+            }));
         }
         let task_id = format!("task-{}", Uuid::new_v4().simple());
         validate_dependencies(&task_id, depends_on, &existing)?;
@@ -426,6 +425,33 @@ fn has_task_cycle(new_task_id: &str, depends_on: &[String], existing: &[AgentTea
     has_cycle(&nodes)
 }
 
+/// Select the next task a member may claim without making any policy decision.
+pub fn claimable_task<'a>(
+    tasks: &'a [AgentTeamTask],
+    member_id: &str,
+) -> Option<&'a AgentTeamTask> {
+    let done: HashSet<&str> = tasks
+        .iter()
+        .filter(|task| task.status == AgentTeamTaskStatus::Done)
+        .map(|task| task.id.as_str())
+        .collect();
+    tasks.iter().find(|task| {
+        matches!(
+            task.status,
+            AgentTeamTaskStatus::Todo | AgentTeamTaskStatus::Ready
+        ) && task.claimed_by_member_id.is_none()
+            && task
+                .owner_member_id
+                .as_deref()
+                .map(|owner| owner == member_id)
+                .unwrap_or(true)
+            && task
+                .depends_on
+                .iter()
+                .all(|dependency| done.contains(dependency.as_str()))
+    })
+}
+
 #[cfg(test)]
 mod dependency_tests {
     use chrono::Utc;
@@ -480,31 +506,4 @@ mod dependency_tests {
             TeamError::CyclicDependency
         );
     }
-}
-
-/// Select the next task a member may claim without making any policy decision.
-pub fn claimable_task<'a>(
-    tasks: &'a [AgentTeamTask],
-    member_id: &str,
-) -> Option<&'a AgentTeamTask> {
-    let done: HashSet<&str> = tasks
-        .iter()
-        .filter(|task| task.status == AgentTeamTaskStatus::Done)
-        .map(|task| task.id.as_str())
-        .collect();
-    tasks.iter().find(|task| {
-        matches!(
-            task.status,
-            AgentTeamTaskStatus::Todo | AgentTeamTaskStatus::Ready
-        ) && task.claimed_by_member_id.is_none()
-            && task
-                .owner_member_id
-                .as_deref()
-                .map(|owner| owner == member_id)
-                .unwrap_or(true)
-            && task
-                .depends_on
-                .iter()
-                .all(|dependency| done.contains(dependency.as_str()))
-    })
 }

@@ -192,6 +192,14 @@ pub struct WorkflowEngine<S, E> {
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
 
+struct PersistRequest {
+    phase_states: Value,
+    child_run_ids: Vec<String>,
+    status: WorkflowRunStatus,
+    summary: Option<String>,
+    terminal: bool,
+}
+
 struct PhaseRegistration<S: WorkflowStore> {
     store: Arc<S>,
     owner: String,
@@ -329,11 +337,13 @@ where
             );
             run = self.persist(
                 &run,
-                phase_states,
-                run.child_run_ids.clone(),
-                WorkflowRunStatus::Running,
-                None,
-                false,
+                PersistRequest {
+                    phase_states,
+                    child_run_ids: run.child_run_ids.clone(),
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    terminal: false,
+                },
                 &owner,
             )?;
         }
@@ -352,11 +362,13 @@ where
                 );
                 if let Err(error) = self.persist(
                     &run,
-                    phase_states,
-                    run.child_run_ids.clone(),
-                    WorkflowRunStatus::Interrupted,
-                    None,
-                    false,
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: run.child_run_ids.clone(),
+                        status: WorkflowRunStatus::Interrupted,
+                        summary: None,
+                        terminal: false,
+                    },
                     &owner,
                 ) {
                     if self.owner_lost(run_id, &owner)
@@ -374,11 +386,13 @@ where
                 if all_phases_completed(definition, &run.phase_states) {
                     if let Err(error) = self.persist(
                         &run,
-                        run.phase_states.clone(),
-                        run.child_run_ids.clone(),
-                        WorkflowRunStatus::Completed,
-                        synthesize_summary(definition, &run.phase_states),
-                        true,
+                        PersistRequest {
+                            phase_states: run.phase_states.clone(),
+                            child_run_ids: run.child_run_ids.clone(),
+                            status: WorkflowRunStatus::Completed,
+                            summary: synthesize_summary(definition, &run.phase_states),
+                            terminal: true,
+                        },
                         &owner,
                     ) {
                         if self.owner_lost(run_id, &owner) {
@@ -392,11 +406,13 @@ where
                     let reason = "no runnable phase (dependency deadlock)".to_owned();
                     if let Err(error) = self.persist(
                         &run,
-                        run.phase_states.clone(),
-                        run.child_run_ids.clone(),
-                        WorkflowRunStatus::Failed,
-                        Some(reason.clone()),
-                        true,
+                        PersistRequest {
+                            phase_states: run.phase_states.clone(),
+                            child_run_ids: run.child_run_ids.clone(),
+                            status: WorkflowRunStatus::Failed,
+                            summary: Some(reason.clone()),
+                            terminal: true,
+                        },
                         &owner,
                     ) {
                         if self.owner_lost(run_id, &owner) {
@@ -479,11 +495,13 @@ where
         set_phase_status(&mut phase_states, &phase.name, PhaseStatus::Running, None);
         let running = self.persist(
             run,
-            phase_states.clone(),
-            child_ids.clone(),
-            WorkflowRunStatus::Running,
-            None,
-            false,
+            PersistRequest {
+                phase_states: phase_states.clone(),
+                child_run_ids: child_ids.clone(),
+                status: WorkflowRunStatus::Running,
+                summary: None,
+                terminal: false,
+            },
             owner,
         )?;
 
@@ -577,11 +595,13 @@ where
                 );
                 let updated = self.persist(
                     &registration.current(),
-                    phase_states,
-                    children,
-                    WorkflowRunStatus::Interrupted,
-                    None,
-                    false,
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: children,
+                        status: WorkflowRunStatus::Interrupted,
+                        summary: None,
+                        terminal: false,
+                    },
                     owner,
                 )?;
                 return Ok((updated, 0));
@@ -623,11 +643,13 @@ where
             );
             let updated = self.persist(
                 &registration.current(),
-                phase_states,
-                children,
-                WorkflowRunStatus::Interrupted,
-                None,
-                false,
+                PersistRequest {
+                    phase_states,
+                    child_run_ids: children,
+                    status: WorkflowRunStatus::Interrupted,
+                    summary: None,
+                    terminal: false,
+                },
                 owner,
             )?;
             return Ok((updated, 0));
@@ -657,11 +679,13 @@ where
         );
         let updated = self.persist(
             &registration.current(),
-            phase_states,
-            child_ids,
-            WorkflowRunStatus::Running,
-            None,
-            false,
+            PersistRequest {
+                phase_states,
+                child_run_ids: child_ids,
+                status: WorkflowRunStatus::Running,
+                summary: None,
+                terminal: false,
+            },
             owner,
         )?;
         Ok((updated, spawned))
@@ -685,11 +709,13 @@ where
         set_phase_reason(phase_states, &phase.name, &reason);
         let updated = self.persist(
             run,
-            phase_states.clone(),
-            child_ids,
-            WorkflowRunStatus::Failed,
-            Some(reason),
-            true,
+            PersistRequest {
+                phase_states: phase_states.clone(),
+                child_run_ids: child_ids,
+                status: WorkflowRunStatus::Failed,
+                summary: Some(reason),
+                terminal: true,
+            },
             owner,
         )?;
         Ok((updated, 0))
@@ -698,11 +724,7 @@ where
     fn persist(
         &self,
         run: &WorkflowRun,
-        phase_states: Value,
-        child_run_ids: Vec<String>,
-        status: WorkflowRunStatus,
-        summary: Option<String>,
-        terminal: bool,
+        request: PersistRequest,
         owner: &str,
     ) -> Result<WorkflowRun, OrchestrationError> {
         self.store
@@ -712,12 +734,12 @@ where
                     definition_id: run.definition_id.clone(),
                     parent_thread_id: run.parent_thread_id.clone(),
                     input: run.input.clone(),
-                    phase_states,
-                    child_run_ids,
-                    status,
-                    summary,
+                    phase_states: request.phase_states,
+                    child_run_ids: request.child_run_ids,
+                    status: request.status,
+                    summary: request.summary,
                     started_at: Some(run.started_at),
-                    completed_at: terminal.then(Utc::now),
+                    completed_at: request.terminal.then(Utc::now),
                 },
                 run.revision,
                 owner,

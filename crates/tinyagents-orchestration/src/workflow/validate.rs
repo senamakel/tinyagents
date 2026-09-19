@@ -52,12 +52,14 @@ where
         .phases
         .iter()
         .flat_map(|phase| {
-            phase.agent_ids.iter().filter_map(|agent_id| {
-                (!is_known(agent_id)).then(|| DefinitionError::UnknownAgent {
+            phase
+                .agent_ids
+                .iter()
+                .filter(|agent_id| !is_known(agent_id))
+                .map(|agent_id| DefinitionError::UnknownAgent {
                     phase: phase.name.clone(),
                     agent_id: agent_id.clone(),
                 })
-            })
         })
         .collect()
 }
