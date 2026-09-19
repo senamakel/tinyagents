@@ -30,6 +30,7 @@ use tinyagents_harness::tinyinference_llm::{ContentBlock, Message};
 use crate::context::StorageContext;
 use crate::store::{with_connection, with_transaction};
 
+pub use compaction_sink::SessionCompactionSink;
 pub use legacy::{from_messages, from_session_messages, from_transcript};
 pub use types::{
     Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind, Fork,
