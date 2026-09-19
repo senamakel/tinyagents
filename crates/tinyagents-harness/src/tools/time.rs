@@ -349,13 +349,19 @@ pub(crate) fn resolve_expr(
     Err(format!("could not parse time expression {trimmed:?}"))
 }
 
+/// Timezone an offset-less expression (`"today"`, a naive datetime, a bare
+/// date) is interpreted in, when [`ResolveTimeTool`]'s optional `timezone`
+/// argument was not given or was invalid.
 #[derive(Clone, Copy)]
 pub(crate) enum ResolveZone {
+    /// The machine's local timezone.
     Local,
+    /// An explicit IANA timezone.
     Iana(Tz),
 }
 
 impl ResolveZone {
+    /// Today's civil (wall-clock) date in this zone.
     fn now_civil_date(&self) -> NaiveDate {
         match self {
             ResolveZone::Local => Local::now().date_naive(),
