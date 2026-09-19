@@ -496,6 +496,5 @@ Acceptance criteria:
 4. Add durable stores and compatibility adapters second.
 5. Add middleware helpers and high-level graph helpers.
 6. Migrate OpenHuman adapters to the new SDK surfaces.
-7. Remove OpenHuman-specific compatibility shims once the SDK behavior is
-   equivalent.
+7. Remove OpenHuman-specific compatibility shims once SDK behavior matches.
 8. Implement conformance and regression tests last.
