@@ -63,8 +63,12 @@ macro_rules! run_stack_hook {
             let name = $mw.name().to_string();
             $ctx.emit(AgentEvent::MiddlewareStarted { name: name.clone() });
             let result = $call.await;
-            $ctx.emit(AgentEvent::MiddlewareCompleted { name });
+            $ctx.emit(AgentEvent::MiddlewareCompleted { name: name.clone() });
             if let Err(e) = result {
+                $ctx.emit(AgentEvent::MiddlewareFailed {
+                    name,
+                    error: e.to_string(),
+                });
                 $self.fan_out_on_error($ctx, &e).await;
                 return Err(e);
             }
