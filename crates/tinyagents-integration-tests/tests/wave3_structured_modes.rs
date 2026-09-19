@@ -110,27 +110,27 @@ fn schema() -> serde_json::Value {
 
 fn mixed_turn_then_final(second_answer: &str) -> Vec<ModelResponse> {
     vec![
-        ModelResponse {
-            message: tinyinference_llm::message::AssistantMessage {
-                id: Some("m1".to_string()),
-                content: Vec::new(),
-                tool_calls: vec![
-                    ToolCall::new("c1", "search", json!({})),
-                    ToolCall::new("c2", "result", json!({"answer": "first"})),
-                ],
-                usage: None,
-            },
-            usage: None,
-            finish_reason: None,
-            raw: None,
-            resolved_model: None,
-            continue_turn: None,
-            served_from_cache: false,
-            correlation: None,
-            resolved_route: None,
-        },
-        ModelResponse::assistant(format!(r#"{{"answer":"{second_answer}"}}"#)),
+        tool_call_response(vec![
+            ToolCall::new("c1", "search", json!({})),
+            ToolCall::new("c2", "result", json!({"answer": "first"})),
+        ]),
+        tool_call_response(vec![ToolCall::new(
+            "c3",
+            "result",
+            json!({"answer": second_answer}),
+        )]),
     ]
+}
+
+/// Builds a response carrying exactly the supplied tool calls, matching the
+/// `StructuredStrategy::ToolCall` strategy [`RecordingModel::new`]'s profile
+/// selects.
+fn tool_call_response(calls: Vec<ToolCall>) -> ModelResponse {
+    let mut response = ModelResponse::assistant("");
+    response.message.content.clear();
+    response.message.tool_calls = calls;
+    response.finish_reason = Some("tool_calls".to_string());
+    response
 }
 
 // ── EndStrategy::Graceful (default) ─────────────────────────────────────────
