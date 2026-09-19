@@ -526,7 +526,11 @@ impl<Ctx> RunContext<Ctx> {
     }
 }
 
-/// Applies the child metadata semantics used by [`RunContext::child_with_metadata`].
+/// Applies the child metadata semantics used by [`RunContext::child`]: an
+/// object-valued child metadata shallow-merges onto (and overrides) the
+/// parent's object, a non-null non-object child metadata replaces the
+/// parent's wholesale, and a `null` child metadata inherits the parent's
+/// unchanged.
 fn shallow_merge_metadata(
     parent: &serde_json::Value,
     child: serde_json::Value,

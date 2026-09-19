@@ -38,6 +38,10 @@ impl PhaseStatus {
     }
 }
 
+/// Initializes a phase-state document from a workflow definition.
+///
+/// All phases start in the Pending status with empty outputs. The returned
+/// JSON structure maps phase names to `{ status, outputs, ... }` objects.
 pub fn init_phase_states(definition: &WorkflowDefinition) -> Value {
     Value::Object(
         definition
@@ -53,6 +57,7 @@ pub fn init_phase_states(definition: &WorkflowDefinition) -> Value {
     )
 }
 
+/// Queries the current status string of a phase, or None if the phase is unknown.
 pub fn phase_status<'a>(phase_states: &'a Value, name: &str) -> Option<&'a str> {
     phase_states.get(name)?.get("status")?.as_str()
 }

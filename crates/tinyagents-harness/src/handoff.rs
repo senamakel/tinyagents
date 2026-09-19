@@ -103,6 +103,9 @@ impl ResultHandoffCache {
         id
     }
 
+    /// Looks up a previously stashed result by id, returning `None` if it was
+    /// never stored or has since been evicted (FIFO, past
+    /// [`HANDOFF_MAX_ENTRIES`]).
     pub fn get(&self, result_id: &str) -> Option<CachedResult> {
         let g = self.inner.lock().ok()?;
         g.entries.get(result_id).map(|r| CachedResult {
