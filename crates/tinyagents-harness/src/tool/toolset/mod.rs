@@ -53,7 +53,7 @@ mod renamed;
 mod types;
 
 #[cfg(test)]
-mod test;
+pub(crate) mod test;
 
 use std::any::Any;
 use std::sync::Arc;
