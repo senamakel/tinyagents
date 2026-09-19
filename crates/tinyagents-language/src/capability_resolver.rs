@@ -321,7 +321,11 @@ impl CapabilityResolver {
     /// primary reference that must resolve and the allowlist class it resolves
     /// against — or `None` when the node declares no primary reference. The
     /// `subgraph` argument is the caller's already-resolved subgraph target
-    /// (the dedicated graph field falling back to the legacy `model` field).
+    /// (the dedicated graph field falling back to the legacy `model` field);
+    /// `router` is the caller's already-resolved router target (the dedicated
+    /// `router "name"` field falling back to the legacy `model` field, which
+    /// previously overloaded `router` nodes' route-function name — M4 in
+    /// `docs/runtime-comparison/code-review-workspace.md`).
     ///
     /// Centralising this mapping is what keeps
     /// [`bind_blueprint`](Self::bind_blueprint) and both
@@ -333,10 +337,11 @@ impl CapabilityResolver {
         subgraph: Option<&'a str>,
         agent: Option<&'a str>,
         script: Option<&'a str>,
+        router: Option<&'a str>,
     ) -> Option<PrimaryReference<'a>> {
         let (class, target) = match kind {
             "subgraph" | "graph" => (ReferenceClass::Subgraph, subgraph?),
-            "router" => (ReferenceClass::Router, model?),
+            "router" => (ReferenceClass::Router, router?),
             "subagent" => (ReferenceClass::Agent, agent?),
             "repl_agent" => (ReferenceClass::Script, script?),
             // Unknown kinds fall through to a model check, mirroring the
