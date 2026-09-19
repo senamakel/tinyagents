@@ -42,6 +42,11 @@ pub struct TranscriptMessage {
     /// one. This is deliberately opaque to the session crate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Whether `request_id` is authoritative even when it is absent. Readers
+    /// set this for replayed rows so a resumed write does not attribute an
+    /// earlier request-less row to the current turn.
+    #[serde(default)]
+    pub preserve_request_id: bool,
     /// Whether this row is display-only because a streamed answer stopped
     /// before completion.
     #[serde(default)]
@@ -61,6 +66,7 @@ impl TranscriptMessage {
             cache_breakpoints: Vec::new(),
             turn_usage: None,
             request_id: None,
+            preserve_request_id: false,
             interrupted: false,
             tool_failure: None,
         }

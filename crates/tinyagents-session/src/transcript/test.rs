@@ -52,7 +52,9 @@ fn jsonl_round_trip_keeps_raw_tool_arguments_and_provider_extension() {
 
     write_transcript(&path, &messages, &meta(), Some(&usage)).unwrap();
     let loaded = read_transcript(&path).unwrap();
-    assert_eq!(loaded.messages[0], messages[0]);
+    assert_eq!(loaded.messages[0].role, messages[0].role);
+    assert_eq!(loaded.messages[0].content, messages[0].content);
+    assert!(loaded.messages[0].preserve_request_id);
     let restored_usage = loaded.messages[1].turn_usage.as_ref().unwrap();
     assert_eq!(restored_usage.tool_calls[0].arguments, "{not-json}");
     assert_eq!(
@@ -73,7 +75,10 @@ fn unknown_jsonl_records_are_ignored() {
     let loaded = read_transcript(&path).unwrap();
     assert_eq!(
         loaded.messages,
-        vec![TranscriptMessage::new("user", "hello")]
+        vec![TranscriptMessage {
+            preserve_request_id: true,
+            ..TranscriptMessage::new("user", "hello")
+        }]
     );
 }
 
@@ -173,6 +178,7 @@ fn file_history_never_converts_or_drops_durable_fields() {
         cache_breakpoints: vec![4],
         turn_usage: None,
         request_id: None,
+        preserve_request_id: false,
         interrupted: false,
         tool_failure: None,
     };

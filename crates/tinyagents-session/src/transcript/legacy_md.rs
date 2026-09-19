@@ -120,6 +120,7 @@ fn parse_legacy_messages(raw: &str) -> Result<Vec<TranscriptMessage>> {
                 cache_breakpoints: Vec::new(),
                 turn_usage: None,
                 request_id: None,
+                preserve_request_id: false,
                 interrupted: false,
                 tool_failure: None,
             });
@@ -136,6 +137,7 @@ fn parse_legacy_messages(raw: &str) -> Result<Vec<TranscriptMessage>> {
             cache_breakpoints: Vec::new(),
             turn_usage: None,
             request_id: None,
+            preserve_request_id: false,
             interrupted: false,
             tool_failure: None,
         });

@@ -187,10 +187,11 @@ pub(super) fn build_message_line(
         .and_then(|failure| failure.detail.clone());
     // A row read from a transcript owns its recorded correlation id; only a
     // newly-created row takes the opaque id supplied for this append.
-    let request_id = msg
-        .request_id
-        .clone()
-        .or_else(|| request_id.map(str::to_string));
+    let request_id = if msg.preserve_request_id {
+        msg.request_id.clone()
+    } else {
+        request_id.map(str::to_string)
+    };
     let message_reasoning = (msg.role == "assistant")
         .then(|| {
             extra_metadata
@@ -328,6 +329,7 @@ pub(super) fn message_from_line(ml: MessageLine) -> TranscriptMessage {
         cache_breakpoints: ml.cache_breakpoints,
         turn_usage: turn_usage.clone(),
         request_id: ml.request_id,
+        preserve_request_id: true,
         interrupted: ml.interrupted,
         tool_failure: failure_detail.map(|detail| ToolFailure {
             failed: true,
@@ -388,6 +390,7 @@ pub(super) fn display_message_from_line(ml: MessageLine) -> DisplayMessage {
             cache_breakpoints: ml.cache_breakpoints,
             turn_usage,
             request_id: ml.request_id,
+            preserve_request_id: true,
             interrupted: ml.interrupted,
             tool_failure: ml.failure.then(|| ToolFailure {
                 failed: true,
