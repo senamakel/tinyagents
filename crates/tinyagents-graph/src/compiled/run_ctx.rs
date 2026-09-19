@@ -42,7 +42,9 @@ pub(super) struct RunCtx<'a, State, Update> {
     pub(super) node_visits: HashMap<NodeId, usize>,
     pub(super) barrier_arrivals: HashMap<NodeId, HashSet<NodeId>>,
     pub(super) async_writes: AsyncCheckpointWrites,
-    pub(super) resume_map: HashMap<NodeId, serde_json::Value>,
+    /// Keyed by task id, falling back to node id (I1/R5); see
+    /// [`super::executor::RunSeed::resume_map`].
+    pub(super) resume_map: HashMap<String, serde_json::Value>,
     pub(super) visited: Vec<NodeId>,
     pub(super) all_child_runs: Vec<ChildRun>,
     pub(super) steps: usize,
