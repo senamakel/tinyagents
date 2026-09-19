@@ -1167,13 +1167,15 @@ async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allow
     let Message::System(patch) = system_messages[1] else {
         unreachable!("filtered above");
     };
+    // As in the fold-path test above, turn 1's patch declares the whole live
+    // set, not just a later delta.
     assert_eq!(
         patch
             .tools_added
             .iter()
             .map(|schema| schema.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["browse"]
+        vec!["browse", "search"]
     );
 
     // The reconstructed effective tool set matches what was actually offered.
