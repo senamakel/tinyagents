@@ -224,6 +224,7 @@ fn blueprint_export_helpers_preserve_channels_routing_and_validation() {
                 model: Some("planner".into()),
                 prompt: Some("plan".into()),
                 tools: vec!["search".into()],
+                capability: None,
                 routing: Routing::Conditional(vec![
                     ("ok".into(), "answer".into()),
                     ("retry".into(), "plan".into()),
