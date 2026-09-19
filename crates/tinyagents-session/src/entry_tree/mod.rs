@@ -16,7 +16,7 @@
 //! parents entry *n+1*, in file/row order) so that data reads into this same
 //! model; [`EntryTree::import_legacy`] persists the result idempotently.
 
-mod legacy;
+pub mod legacy;
 mod store;
 mod types;
 
