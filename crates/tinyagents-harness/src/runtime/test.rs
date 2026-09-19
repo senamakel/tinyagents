@@ -3287,7 +3287,11 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_childs_local_harness() {
     ]));
     let child_model = Arc::new(ScriptedModel::replies(vec!["must never run"]));
     let parent_definitions = Arc::new(InMemoryDefinitionRegistry::new(vec![
-        AgentDefinition::new("parent", "Parent", "does not delegate"),
+        // Declares the "worker" tool (so dispatch reaches the delegate
+        // boundary) but no subagents (so the delegate-authorization check
+        // itself still denies it) — the assertion under test is about that
+        // authorization, not the tool allow-list (I-9).
+        AgentDefinition::new("parent", "Parent", "does not delegate").with_tools(["worker"]),
         AgentDefinition::new("worker", "Worker", "child"),
     ]));
     let parent_host = crate::host::HostCapabilities::new(
