@@ -558,6 +558,80 @@ mod file_backend {
         assert_eq!(records[1].state, 2);
         assert!(cp.get_thread("missing").await.unwrap().is_empty());
     }
+
+    // ---- I9 regression: `list` must not decode full `State` -----------------
+
+    /// A `State` whose `Deserialize` impl counts every call it makes, so a
+    /// test can assert *how many times* something deserialized it rather than
+    /// just observing the (correct either way) return value.
+    #[derive(Clone, serde::Serialize)]
+    struct CountedState(i32);
+
+    /// Process-wide count of `CountedState` deserializations. `CountedState`
+    /// is private to this test module, so nothing outside these tests can
+    /// bump it — safe to share across the (OS-threaded) test binary without a
+    /// dedicated fixture.
+    static STATE_DECODE_COUNT: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    impl<'de> serde::Deserialize<'de> for CountedState {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            STATE_DECODE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            i32::deserialize(deserializer).map(CountedState)
+        }
+    }
+
+    fn counted_checkpoint(thread: &str, id: &str, parent: Option<&str>, step: usize) -> Checkpoint<CountedState> {
+        Checkpoint {
+            thread_id: thread.to_string(),
+            checkpoint_id: id.to_string(),
+            run_id: None,
+            parent_checkpoint_id: parent.map(|s| s.to_string()),
+            namespace: vec![],
+            state: CountedState(step as i32),
+            next_nodes: vec![tinyagents_harness::ids::NodeId::from("n")],
+            completed_tasks: vec![],
+            completed_routes: vec![],
+            pending_writes: vec![],
+            interrupts: vec![],
+            pending_activations: None,
+            barrier_arrivals: vec![],
+            metadata: serde_json::json!({ "source": "loop", "step": step }),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_on_a_large_thread_does_not_decode_full_state() {
+        let tmp = TempDir::new("list-header-only");
+        let cp = FileCheckpointer::<CountedState>::new(tmp.path());
+
+        let mut parent: Option<String> = None;
+        for step in 0..200usize {
+            let id = format!("c{step}");
+            cp.put(counted_checkpoint("t", &id, parent.as_deref(), step))
+                .await
+                .unwrap();
+            parent = Some(id);
+        }
+
+        // `put` only serializes, so the counter should already read 0 here;
+        // reset explicitly anyway so this assertion is about `list` alone,
+        // not an assumption about what came before it.
+        STATE_DECODE_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        let list = cp.list("t").await.unwrap();
+        assert_eq!(list.len(), 200, "list still returns every record's metadata");
+        assert_eq!(list[0].checkpoint_id, "c0");
+        assert_eq!(list[199].checkpoint_id, "c199");
+        assert_eq!(
+            STATE_DECODE_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "list on a 200-record thread must not deserialize any record's full State"
+        );
+    }
 }
 
 // ---- SQLite-backed checkpointer (feature = "sqlite") ----------------------
