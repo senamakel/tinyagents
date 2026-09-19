@@ -45,6 +45,12 @@ pub struct LoopRuntime<State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) ctx: Mutex<RunContext<Ctx>>,
     pub(crate) run: Mutex<AgentRun>,
     pub(crate) status: Mutex<HarnessRunStatus>,
+    /// Not yet consulted: `model_node`'s `DirectModelBase` always dispatches
+    /// through `ChatModel::invoke`, not `ChatModel::stream` (see the module
+    /// doc on `super` — streaming is out of scope for this rendition of the
+    /// loop). Kept so `LoopRuntime::new`'s signature already matches what a
+    /// future streaming node would need.
+    #[allow(dead_code)]
     pub(crate) streaming: bool,
 }
 
