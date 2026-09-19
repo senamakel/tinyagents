@@ -1282,11 +1282,13 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
     let resumed_hi = Arc::new(AtomicUsize::new(0));
     let resumed_lo = Arc::new(AtomicUsize::new(0));
     let resumed_y = Arc::new(AtomicUsize::new(0));
+    let resumed_y_observed = Arc::new(std::sync::atomic::AtomicI32::new(-1));
     let resumed_graph = build(
         true,
         resumed_hi.clone(),
         resumed_lo.clone(),
         resumed_y.clone(),
+        resumed_y_observed.clone(),
     )
     .with_checkpointer(cp.clone());
     let paused = resumed_graph
