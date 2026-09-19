@@ -10,6 +10,7 @@
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 
@@ -408,7 +409,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<PreparedAgentTurn<State>> {
         let cancellation = context.cancellation.clone();
         let preparation = self.prepare_agent_turn(host, request, context);
-        match context.remaining_wall_clock() {
+        let outcome = match self.host_io_budget(context) {
             Some(remaining) => tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
@@ -422,6 +423,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
                 result = preparation => result,
             },
+        };
+        outcome.map_err(sanitize_hosted_preparation_error)
+    }
+
+    fn host_io_budget(&self, context: &RunContext<Ctx>) -> Option<Duration> {
+        let config = context.remaining_wall_clock();
+        let policy = self.policy.limits.max_wall_clock_ms.map(|milliseconds| {
+            Duration::from_millis(milliseconds)
+                .checked_sub(context.limits.elapsed())
+                .unwrap_or(Duration::ZERO)
+        });
+        match (config, policy) {
+            (Some(config), Some(policy)) => Some(config.min(policy)),
+            (Some(config), None) => Some(config),
+            (None, Some(policy)) => Some(policy),
+            (None, None) => None,
         }
     }
 
@@ -604,6 +621,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return;
         };
         progress.send_nonterminal(event);
+    }
+}
+
+fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError {
+    match error {
+        TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+        _ => TinyAgentsError::Model("hosted agent invocation failed".to_string()),
     }
 }
 

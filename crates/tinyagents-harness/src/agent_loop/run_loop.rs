@@ -469,7 +469,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             .unwrap_or_else(|| ctx.run_id().as_str().into()),
                     )
                     .with_tool_count(request.tools.len());
-                    let permit = match ctx.remaining_wall_clock() {
+                    let permit = match self.call_budget(ctx) {
                         Some(remaining) => tokio::select! {
                             _ = ctx.cancellation.cancelled() => {
                                 return Err(TinyAgentsError::Cancelled);
@@ -905,7 +905,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<()> {
         let cancellation = ctx.cancellation.clone();
         let recording = budget.record(usage);
-        match ctx.remaining_wall_clock() {
+        match self.call_budget(ctx) {
             Some(remaining) => tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
