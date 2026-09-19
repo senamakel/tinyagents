@@ -173,6 +173,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
+        // Captured before the bridge schemas are appended below, so
+        // `ToolsAdvertised.direct` reports the actual `Direct`-exposure
+        // count. Otherwise it would silently include the two intrinsic
+        // bridge schemas whenever discovery is enabled, double-counting
+        // relative to `deferred` and making `direct` mean different things
+        // depending on whether any tool happens to be deferred.
+        let direct_schema_count = tool_schemas.len();
         let deferred_catalog = self.deferred_catalog(&host_allows);
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
