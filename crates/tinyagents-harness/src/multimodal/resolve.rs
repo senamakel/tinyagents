@@ -335,6 +335,9 @@ pub async fn resolve_file(
     .await
 }
 
+/// Resolve a `data:` file source: decompresses a gzip-wrapped payload when
+/// present, extracts the `name` parameter, and checks size. MIME allowlisting
+/// happens later in [`build_file_payload`].
 fn resolve_file_data_uri(source: &str, max_bytes: usize) -> Result<(Vec<u8>, String, String)> {
     let parsed = parse_data_uri(source).map_err(|reason| MultimodalError::InvalidFileMarker {
         input: source.to_string(),
