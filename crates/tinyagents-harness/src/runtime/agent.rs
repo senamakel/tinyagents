@@ -38,6 +38,34 @@ pub(crate) struct HostInvocationAuthority<State: Send + Sync, Ctx: Send + Sync> 
     pub(crate) binding: std::sync::Arc<HostInvocationBinding<State, Ctx>>,
 }
 
+/// Type-erasure boundary for [`RunContext::host_authority`][crate::context::RunContext].
+///
+/// This is a hand-written alternative to `dyn Any`. `Any::downcast_ref`
+/// requires the caller's own generic parameters to be provably `'static`,
+/// which the generic agent loop cannot promise: it deliberately keeps
+/// working with a borrowed `State`/`Ctx` on the explicit-model path (see
+/// `explicit_model_paths_accept_borrowed_state`). [`type_name`][Self::type_name]
+/// is callable with no `'static` bound at all (`std::any::type_name` never
+/// requires one), so [`host_invocation_binding`] can use it as a fail-closed
+/// guard in front of the unavoidable unsafe cast, without forcing `'static`
+/// onto the whole generic loop.
+///
+/// `type_name` is documented as not a guaranteed-unique identifier, so this
+/// is a defensive, best-effort check rather than the same soundness
+/// guarantee `TypeId` gives genuinely `'static` types. It still closes the
+/// realistic C-1 repro (a hosted context read by a *different* harness):
+/// distinct concrete `HostInvocationAuthority<State, Ctx>` monomorphizations
+/// in this crate reliably produce distinct strings.
+pub(crate) trait ErasedHostAuthority: Send + Sync {
+    fn type_name(&self) -> &'static str;
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> ErasedHostAuthority for HostInvocationAuthority<State, Ctx> {
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+}
+
 /// A host-owned turn request.
 ///
 /// `agent_id` is opaque to the harness. It is resolved only through the host
