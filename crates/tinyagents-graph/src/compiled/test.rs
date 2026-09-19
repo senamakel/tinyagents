@@ -1489,7 +1489,10 @@ async fn carried_completed_sibling_goto_survives_resume() {
         .await
         .unwrap();
     assert!(paused.is_interrupted());
-    assert_eq!(paused.state.value, 20, "hi's update committed before the pause");
+    assert_eq!(
+        paused.state.value, 20,
+        "hi's update committed before the pause"
+    );
 
     let done = graph
         .resume("t-carried-goto", Command::resume(json!(null)))
