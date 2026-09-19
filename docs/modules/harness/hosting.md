@@ -1,7 +1,8 @@
 # Host Authorization and Tool Timeouts
 
-Split out of `README.md` (see that module's overview for architecture
-context); covers the two host-facing pieces of the `Package Shape` runtime
+Split out of [`README.md`](README.md) (see that module's overview for
+architecture context) to keep the module `README.md` at or under the 500-line
+limit. Covers the two host-facing pieces of the `Package Shape` runtime
 surface: how a host capability bundle is bound to one invocation, and how
 per-tool timeouts are resolved.
 
@@ -52,3 +53,14 @@ allowlist and inherits the exact bundle. The borrowed-state-compatible
 `SubAgent::invoke_in_parent` is explicit-only and rejects a hosted parent
 context before it can start a child.
 
+## Tool timeout policy
+
+Hosts enable per-tool deadlines with
+`AgentHarness::with_tool_timeout_settings(ToolTimeoutSettings)`. The setting is
+shared and dynamically updateable. Each tool supplies `ToolTimeout::Inherit`
+(the default), `Millis(budget)`, or `Unbounded`; resolution happens at the
+innermost tool call after wrap middleware has had a chance to rewrite its
+arguments. On expiry the loop appends a recoverable tool-error result and keeps
+running, allowing model repair. The independent run wall-clock limit remains a
+hard error. See [`tool.md`](tool.md) for the tool contract and
+[`runtime.md`](runtime.md) for harness assembly.
