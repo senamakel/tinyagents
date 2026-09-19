@@ -830,17 +830,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // sibling call in the same turn — a turn returning
             // `[search(...), my_schema(...)]` broke out with `search` never
             // executed and no event to say so.
-            let structured_call_name = match &structured_plan {
-                Some((StructuredStrategy::ToolCall, name, _)) => Some(name.clone()),
-                _ => None,
+            let structured_call_names: Vec<String> = match &structured_plan {
+                Some((StructuredStrategy::ToolCall, name, _)) => vec![name.clone()],
+                Some((StructuredStrategy::ToolCallUnion, _, _)) => {
+                    match &self.policy.structured_strategy_override {
+                        Some(crate::runtime::StructuredStrategyOverride::ToolCallUnion {
+                            variants,
+                        }) => variants.iter().map(|(n, _)| n.clone()).collect(),
+                        _ => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
             };
             let (structured_hits, real_tool_calls): (Vec<ToolCall>, Vec<ToolCall>) =
-                match &structured_call_name {
-                    Some(name) => tool_calls
+                if structured_call_names.is_empty() {
+                    (Vec::new(), tool_calls.clone())
+                } else {
+                    tool_calls
                         .iter()
                         .cloned()
-                        .partition(|call| &call.name == name),
-                    None => (Vec::new(), tool_calls.clone()),
+                        .partition(|call| structured_call_names.contains(&call.name))
                 };
             let structured_tool_hit = !structured_hits.is_empty();
 
