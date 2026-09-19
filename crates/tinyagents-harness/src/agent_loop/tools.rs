@@ -134,7 +134,7 @@ struct PreparedToolCall {
     output_origin: crate::host::ContentOrigin,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
     /// Resolves this tool's own timeout policy. The separate run wall-clock
     /// budget remains the outer hard deadline: a per-tool timeout becomes a
     /// recoverable tool-error result, while exhausting the run budget aborts.
