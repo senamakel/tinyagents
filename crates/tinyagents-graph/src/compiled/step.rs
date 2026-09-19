@@ -320,22 +320,6 @@ where
         });
     }
 
-    /// Prepares and (if applicable) stores a cache-miss result in one call —
-    /// the common case for [`Self::run_sequential`]/[`Self::run_parallel`],
-    /// which never need the two steps split apart.
-    async fn try_cache_put(
-        &self,
-        node_id: &NodeId,
-        state: &State,
-        send_arg: Option<&serde_json::Value>,
-        result: &Result<NodeResult<Update>>,
-        step: usize,
-    ) {
-        if let Some((key, value, ttl)) = self.prepare_cache_put(node_id, state, send_arg, result)
-        {
-            self.store_cache_entry(key, value, ttl, node_id, step).await;
-        }
-    }
 
     /// Runs one superstep's active node set — concurrently when the graph
     /// opts into it (`with_parallel`) and more than one node is active, else
