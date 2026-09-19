@@ -687,9 +687,19 @@ impl ChannelUpdate {
         Self::default()
     }
 
-    /// Adds a `(name, value)` write, returning the update for chaining.
+    /// Adds a `(name, value)` merged write, returning the update for
+    /// chaining.
     pub fn set(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.writes.push((name.into(), value.into()));
+        self.writes
+            .push((name.into(), ChannelWrite::Merge(value.into())));
+        self
+    }
+
+    /// Adds a `(name, value)` write that bypasses the channel's merge rule
+    /// and replaces its value outright (see [`ChannelWrite::Overwrite`]).
+    pub fn overwrite(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.writes
+            .push((name.into(), ChannelWrite::Overwrite(value.into())));
         self
     }
 
