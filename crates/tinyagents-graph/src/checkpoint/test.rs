@@ -66,11 +66,22 @@ fn legacy_checkpoint_json_without_new_fields_still_loads() {
         "interrupts": [],
         "metadata": { "source": "loop", "step": 1 }
     });
-    let cp: Checkpoint<i32> = serde_json::from_value(legacy).unwrap();
+    let mut cp: Checkpoint<i32> = serde_json::from_value(legacy).unwrap();
     assert_eq!(cp.state, 7);
+    // Un-normalized: decodes as a v1 record with the legacy fields intact and
+    // `tasks`/`completed` still empty.
+    assert_eq!(cp.version, 1);
     assert_eq!(cp.next_nodes.len(), 2);
+    assert!(cp.tasks.is_empty());
     assert!(cp.pending_activations.is_none());
     assert!(cp.barrier_arrivals.is_empty());
+
+    // `normalize()` folds the legacy fields into the v2 shape and clears them.
+    cp.normalize();
+    assert_eq!(cp.version, CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(cp.tasks.len(), 2);
+    assert_eq!(cp.tasks[0].node, NodeId::from("a"));
+    assert!(cp.next_nodes.is_empty());
 }
 
 #[test]
