@@ -217,11 +217,14 @@ where
             self.validate_route_targets(node_id, targets)?;
             return Ok(targets.to_vec());
         }
-        if let Some(target) = self.edges.get(node_id) {
-            return Ok(vec![RouteTarget::Node(target.clone())]);
+        if let Some(targets) = self.edges.get(node_id) {
+            return Ok(targets
+                .iter()
+                .map(|target| RouteTarget::Node(target.clone()))
+                .collect());
         }
         if let Some(branch) = self.branches.get(node_id) {
-            let route = (branch.router)(state);
+            let route = (branch.router)(state).to_string();
             let target = branch.routes.get(&route).cloned().ok_or_else(|| {
                 TinyAgentsError::MissingRoute {
                     node: node_id.to_string(),
