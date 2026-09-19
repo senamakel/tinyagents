@@ -218,18 +218,16 @@ async fn shared_tracker_rolls_up_and_blocks_across_runs() {
             BudgetMiddleware::new(limits).with_tracker(tracker.clone()),
         ));
 
-    let err = harness_b
+    // A1: graceful stop, not an error — see the comment on the first test in
+    // this file.
+    harness_b
         .invoke_in_context(
             &(),
             RunContext::new(RunConfig::new("budget-child"), ()),
             vec![Message::user("child")],
         )
         .await
-        .expect_err("the shared budget must block the second run");
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("the shared budget stops the second run gracefully");
 
     // Both runs rolled into the single tracker: 16 (parent) + 16 (child) = 32.
     assert_eq!(
