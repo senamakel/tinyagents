@@ -1001,6 +1001,9 @@ async fn screen_stored<State: Send + Sync>(
     }
 }
 
+/// Covers the [`ProgressSender`] / [`start_progress_dispatcher`] backpressure
+/// contract: a saturated stream of nonterminal progress events must never
+/// crowd out the one reserved terminal slot.
 #[cfg(test)]
 mod progress_dispatcher_tests {
     use std::sync::{Arc, Mutex};
