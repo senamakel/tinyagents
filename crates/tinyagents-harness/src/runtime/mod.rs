@@ -240,6 +240,92 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.toolset.as_ref()
     }
 
+    /// Installs a [`crate::capability::Capability`] bundle (gap G3): its
+    /// toolset, middleware, and model-request defaults are applied to this
+    /// harness, and its [`crate::capability::Capability::exposure`]/
+    /// [`crate::capability::Capability::defer_loading`] settings are honored
+    /// by the [`crate::capability::CapabilityToolSet`] this method installs.
+    ///
+    /// May be called more than once; every installed capability accumulates
+    /// (see [`Self::capabilities`]) and [`Self::toolset`] is rebuilt each
+    /// time from the complete list, so a `defer_loading` capability's
+    /// [`crate::capability::LoadCapabilityTool`] always covers every deferred
+    /// capability installed so far, under one shared load state.
+    ///
+    /// # What this changes
+    ///
+    /// - **Toolset**: composes a fresh
+    ///   [`crate::capability::CapabilityToolSet`] over every installed
+    ///   capability with whatever toolset was already installed via
+    ///   [`Self::with_toolset`] *before* the first `with_capability` call
+    ///   (captured once, in [`Self::capability_base_toolset`]) through
+    ///   [`crate::tool::toolset::CombinedToolSet`]. As with
+    ///   [`Self::with_toolset`], dispatch for a capability's own tools is not
+    ///   automatically bridged into [`Self::tools`] — bridge explicitly with
+    ///   [`crate::tool::toolset::ToolSetDispatchBridge`] and
+    ///   [`Self::register_tool_dispatch`] for a tool that must be callable,
+    ///   not just advertised. The synthetic `load_capability` tool is the one
+    ///   exception: it is registered directly into [`Self::tools`] (it needs
+    ///   no `RunContext`/`State` to execute), so it is callable immediately.
+    /// - **Middleware**: each capability's middleware is appended, in
+    ///   installation order, via [`Self::push_middleware`].
+    /// - **Model defaults**: each capability's
+    ///   [`crate::capability::ModelRequestDefaults`], if set, is applied onto
+    ///   [`Self::policy`] via
+    ///   [`crate::capability::ModelRequestDefaults::apply_to`] — a later
+    ///   capability's set fields win over an earlier one's.
+    ///
+    /// Returns `&mut Self` for chaining.
+    pub fn with_capability(&mut self, capability: crate::capability::Capability<State, Ctx>) -> &mut Self
+    where
+        State: 'static,
+        Ctx: 'static,
+    {
+        if self.capabilities.is_empty() {
+            self.capability_base_toolset = self.toolset.take();
+        }
+        if let Some(middleware) = capability.middleware.clone().into_iter().next() {
+            let _ = middleware; // documented below; pushed in the loop
+        }
+        for middleware in capability.middleware.clone() {
+            self.push_middleware(middleware);
+        }
+        if let Some(defaults) = &capability.model_defaults {
+            defaults.apply_to(&mut self.policy);
+        }
+        self.capabilities.push(capability);
+
+        let capability_toolset: Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>> =
+            Arc::new(crate::capability::CapabilityToolSet::new(
+                self.capabilities.clone(),
+            ));
+        self.toolset = Some(match &self.capability_base_toolset {
+            Some(base) => Arc::new(crate::tool::toolset::CombinedToolSet::new(vec![
+                base.clone(),
+                capability_toolset,
+            ])),
+            None => capability_toolset,
+        });
+
+        // The `load_capability` tool needs no `RunContext`/`State` to run,
+        // so it is registered directly into `self.tools` — the one part of
+        // a capability's contribution that is callable, not just advertised,
+        // without a caller-supplied dispatch bridge (see the doc comment
+        // above). Re-registering on every call keeps it in sync with the
+        // full, still-accumulating capability list; `register_tool` errors
+        // on a duplicate name, so remove any earlier registration first.
+        self.tools.remove(crate::capability::LOAD_CAPABILITY_TOOL_NAME);
+        if let Some(load_tool) = crate::capability::CapabilityToolSet::<State, Ctx>::new(
+            self.capabilities.clone(),
+        )
+        .load_tool()
+        {
+            self.register_tool(load_tool);
+        }
+
+        self
+    }
+
     /// Returns a reference to the model registry.
     pub fn models(&self) -> &ModelRegistry<State> {
         &self.models
