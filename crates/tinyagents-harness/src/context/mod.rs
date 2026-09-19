@@ -403,6 +403,7 @@ impl<Ctx> RunContext<Ctx> {
         child.host_agent_id = self.host_agent_id.clone();
         child.tool_effect_ledger = self.tool_effect_ledger.clone();
         child.tool_effect_ledger_failure = self.tool_effect_ledger_failure;
+        child.compaction_sink = self.compaction_sink.clone();
         Ok(child)
     }
 
