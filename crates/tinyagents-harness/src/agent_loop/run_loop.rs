@@ -206,12 +206,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             }
         }
-        // The dialect is a run-level policy decision; the text protocols need
-        // a registry built from these same schemas — the *prepared* direct
-        // set plus the discovery bridge, i.e. exactly what is rendered into
-        // the catalogue and can come back as a call.
-        let run_dialect =
-            super::dialect::RunDialect::resolve(self.policy.tool_dialect, &tool_schemas);
+        // The dialect itself is resolved per turn, once the model for that
+        // turn is known (see the `run_dialect` binding below, right after
+        // `binding`): `Auto` needs the model's capability to decide between
+        // `Native` and the documented `Xml` fallback, and that capability is
+        // not known this early. `tool_schemas` — what the text protocols need
+        // a registry built from (the *prepared* direct set plus the discovery
+        // bridge, i.e. exactly what is rendered into the catalogue and can
+        // come back as a call) — is fixed for the whole run and captured here.
 
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool *or* the intrinsic discovery bridge. Under the
