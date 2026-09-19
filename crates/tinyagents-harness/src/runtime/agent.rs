@@ -142,7 +142,7 @@ pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
     // that owns its harness. See `extend_overlay_stream_lifetime`.
     #[expect(
         dead_code,
-        reason = "retains the invocation overlay for the borrowed inner stream's lifetime"
+        reason = "drop order keeps the invocation runtime alive until the borrowed stream is dropped"
     )]
     runtime: Option<std::sync::Arc<InvocationRuntime<State, Ctx>>>,
     cancellation: crate::CancellationToken,
