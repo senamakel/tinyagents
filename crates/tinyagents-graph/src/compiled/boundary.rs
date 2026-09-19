@@ -284,6 +284,7 @@ where
         state: State,
         interrupted: Vec<(usize, Interrupt)>,
     ) -> Result<GraphExecution<State>> {
+        ctx.disarm_drop_guard();
         if let Err(err) = self.require_interrupt_durability(&ctx.thread_id) {
             return self.fail_and_return(ctx, err).await;
         }
