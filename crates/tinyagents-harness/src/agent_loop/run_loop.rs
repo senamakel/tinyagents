@@ -559,23 +559,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // a recovered call against; the catalogue already advertises it
             // because it is rendered fresh from `tools` on every call.
             let offered_tool_count = request.tools.len();
-            // An empty recovery when the effective choice is `None`: a
-            // `before_model` middleware asking for no tool calls this turn
-            // must actually get none. `apply_to_request` below already skips
-            // its rewrite for `None`, but that alone left recovery/the
-            // stream scrubber still treating every offered name as
-            // recognizable — so a model that narrated `<tool_call>` markup
-            // as plain text anyway would still have it parsed and dispatched
-            // as a real, side-effecting call despite the explicit
-            // prohibition. An empty `offered` list makes every grammar in
-            // `tinytools-agent` decline to recognize anything as a call.
-            let recovery = if request.tool_choice == ToolChoice::None {
-                super::dialect::TextRecovery::default()
-            } else {
-                super::dialect::TextRecovery {
-                    offered: Arc::new(request.tools.clone()),
-                    registry: run_dialect.registry_for(&request.tools),
-                }
+            let recovery = super::dialect::TextRecovery {
+                offered: Arc::new(request.tools.clone()),
+                registry: run_dialect.registry_for(&request.tools),
             };
             // Applied before budget preflight below: for a text dialect this
             // rewrite folds the protocol block and full tool catalogue into
