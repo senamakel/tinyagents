@@ -425,8 +425,41 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
         if saw_streamed_content {
+            // Same rule as the live streaming path (see the matching comment
+            // in `invoke_model_streaming_once`): keep the cached response's
+            // own `Thinking` blocks (with their signature) verbatim unless
+            // the synthetic replay deltas were actually transformed by
+            // `on_model_delta`, since a signed thinking block must be
+            // replayed byte-for-byte ahead of a tool call on the next turn.
+            let cached_reasoning: String = cached
+                .message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let reasoning_untransformed = cached_reasoning == streamed_reasoning;
+
             let mut transformed_content = Vec::new();
-            if !streamed_reasoning.is_empty() {
+            if reasoning_untransformed {
+                transformed_content.extend(
+                    cached
+                        .message
+                        .content
+                        .iter()
+                        .filter(|block| {
+                            matches!(
+                                block,
+                                tinyinference_llm::message::ContentBlock::Thinking { .. }
+                            )
+                        })
+                        .cloned(),
+                );
+            } else if !streamed_reasoning.is_empty() {
                 transformed_content.push(tinyinference_llm::message::ContentBlock::Thinking {
                     text: streamed_reasoning,
                     signature: None,
