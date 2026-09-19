@@ -332,6 +332,11 @@ impl CapabilityResolver {
         self.scripts.contains(name)
     }
 
+    /// Returns true if `name` is an allowed capability bundle (gap G3).
+    pub fn capability_allowed(&self, name: &str) -> bool {
+        self.capabilities.contains(name)
+    }
+
     /// The single kind-to-reference policy every binding gate shares.
     ///
     /// Given a node `kind` and the reference fields it carries, returns the
