@@ -736,6 +736,7 @@ impl AgentEvent {
             AgentEvent::SubAgentReused { .. } => "subagent.reused",
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
+            AgentEvent::OutputRetry { .. } => "output.retry",
             AgentEvent::RouteSelected { .. } => "route.selected",
             AgentEvent::UsageRecorded { .. } => "usage.recorded",
             AgentEvent::CostRecorded { .. } => "cost.recorded",
