@@ -16,18 +16,37 @@ three as a proposal for where the module is headed.
   Tracks presence/discovery metadata per `(kind, name)` and an alias map per
   `(kind, alias)`. This is the type `.rag` sources bind against.
 - **`ModelCatalog`** (`catalog.rs`) — a deterministic, offline snapshot of
-  provider model prices, context windows, and capability flags, embedded at
-  compile time from `docs/modules/registry/model-catalog.snapshot.json` and
-  looked up by `(provider, model_id)` or alias. `ModelCatalogSnapshot`,
-  `ModelCatalogSource`, `ModelCatalogEntry`, and `ModelCapabilities` are its
-  supporting types.
-- **`ModelRouter`** (`router/mod.rs`, `router/types.rs`) — a declarative,
-  name-addressable router that maps workload-tier aliases (`chat-v1`,
-  `vision-v1`, …) onto concrete registered model names, with per-tier
-  capability gates (`required_capabilities`) and same-family fallback
-  ordering (`fallback_policy`). Holds no models and drives no I/O; it is pure
-  policy read while wiring a registry + run policy. `WorkloadRoute` is its
-  route type.
+  provider model prices (including `ModelPricing::tiers` context-size-tiered
+  rates), context windows, modalities, and capability flags, embedded at
+  compile time from `crates/tinyagents-registry/model-catalog.snapshot.json`
+  (the sole copy — the old byte-identical duplicate under
+  `docs/modules/registry/` was removed) and looked up by `(provider,
+  model_id)` or alias. `ModelCatalogSnapshot::validate()` /
+  `validate_with_providers(Some(allowed))` reject a malformed snapshot
+  (duplicate `(provider, model_id)`, negative price, missing `source`, an
+  `max_output_tokens` exceeding `max_input_tokens`, an alias collision, an
+  invalid date, or — only when an allowlist is passed — an unrecognized
+  provider id) before `ModelCatalog::from_json`/`try_from_snapshot` accept
+  it; `from_snapshot` itself stays non-validating for already-trusted data.
+  `cargo run -p tinyagents-registry --bin catalog_gen` (`src/bin/catalog_gen.rs`)
+  refreshes the checked-in snapshot from `https://models.dev/api.json`
+  (curated provider list, tiered pricing, modalities, reasoning flags),
+  validating its own output against `catalog::KNOWN_PROVIDERS` before
+  writing. `ModelCatalogSnapshot`, `ModelCatalogSource`, `ModelCatalogEntry`,
+  and `ModelCapabilities` are its supporting types.
+- **`WorkloadRouter`** (`router/mod.rs`, `router/types.rs`; renamed from
+  `ModelRouter`, which remains as a `#[deprecated]` type alias) — a
+  declarative, name-addressable router that maps workload-tier aliases
+  (`chat-v1`, `vision-v1`, …) onto concrete registered model names, with
+  per-tier capability gates (`required_capabilities`) and same-family
+  fallback ordering (`fallback_policy`). Holds no models and drives no I/O;
+  it is pure policy read while wiring a registry + run policy.
+  `WorkloadRoute` is its route type. `CapabilityRegistry` now holds one
+  (`with_router`/`set_router`/`router()`) and projects it through
+  `route_workload(tier) -> Option<&Arc<dyn ChatModel<State>>>`, which
+  resolves a tier through the router *and* checks the resolved model name is
+  actually registered in that registry (a route naming an unregistered model
+  returns `None` rather than panicking).
 - **`RegistrySnapshot` / `RegistryDiagnostic`** (`diagnostics.rs`) — a
   serializable, point-in-time projection of a registry's presence metadata
   (`RegistrySnapshot`, with `AliasBinding` entries) for CLIs/UIs/audit logs,
