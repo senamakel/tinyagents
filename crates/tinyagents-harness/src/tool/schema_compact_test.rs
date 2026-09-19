@@ -104,7 +104,10 @@ fn drop_compositions_leaves_an_open_object() {
         "type": "object",
         "properties": {"v": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
     }));
-    assert_eq!(dropped["properties"]["v"], json!({"type": "object"}));
+    // A composition can describe a primitive or a union of types, so the
+    // opened schema is unconstrained (`{}`) rather than forced to
+    // `{"type": "object"}` — see `drop_compositions`'s doc comment.
+    assert_eq!(dropped["properties"]["v"], json!({}));
 }
 
 #[test]
