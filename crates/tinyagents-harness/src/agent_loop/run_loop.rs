@@ -431,6 +431,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .run_before_model(ctx, state, &mut request)
                 .await?;
 
+            // Safe checkpoint: a control requested from `before_model_control`
+            // (for example `BudgetMiddleware` finding the budget already
+            // exhausted) is honored **before** the model is actually
+            // dispatched, not one billable call late. Without this checkpoint
+            // the queued control would only be drained at the next one (after
+            // this response comes back), spending exactly the call the
+            // control was raised to prevent.
+            match self.apply_pending_control(ctx, run, status, messages)? {
+                ControlEffect::None => {}
+                ControlEffect::ContinueLoop => continue,
+                ControlEffect::Exit(exit) => return Ok(exit),
+            }
+
             // Resolve the model for the event/log name before invoking.
             // Hosted turns install their routing decision against this live
             // `RunContext`; explicit-model SDK calls continue to resolve only
