@@ -176,6 +176,14 @@ pub struct NamedBarrier {
 #[derive(Clone)]
 pub struct BinaryAggregate {
     pub(crate) fold: std::sync::Arc<dyn Fn(Value, Value) -> Result<Value> + Send + Sync>,
+    /// The reducer's registered name (see [`BinaryAggregate::named`]), when
+    /// it was constructed from the [`crate::channel::ReducerRegistry`].
+    /// `None` for a channel built from a bare closure via
+    /// [`BinaryAggregate::new`]/[`BinaryAggregate::from_reducer`] — such a
+    /// channel merges correctly at runtime but cannot round-trip through a
+    /// durable checkpointer (its [`Channel::config`] carries no reducer name
+    /// to decode from).
+    pub(crate) reducer_name: Option<String>,
 }
 
 impl std::fmt::Debug for BinaryAggregate {
