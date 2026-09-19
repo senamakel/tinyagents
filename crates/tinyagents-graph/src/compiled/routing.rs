@@ -34,6 +34,7 @@ where
     /// `completed`'s own position.
     pub(super) fn route_completed(
         &self,
+        run_id: &RunId,
         completed: &[(usize, Activation)],
         goto_map: &HashMap<usize, Vec<RouteTarget>>,
         state: &State,
