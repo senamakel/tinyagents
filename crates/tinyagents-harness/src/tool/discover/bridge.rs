@@ -34,6 +34,11 @@ pub fn bridge_schemas(catalog: &DeferredCatalog, policy: &ToolDiscoveryPolicy) -
 
 fn tool_search_schema(catalog: &DeferredCatalog, policy: &ToolDiscoveryPolicy) -> ToolSchema {
     let manifest = render_manifest(catalog, policy.manifest_token_budget);
+    // Normalized, not the raw policy fields: a misconfigured `max_limit: 0`
+    // must not advertise `"minimum": 1, "maximum": 0`, and the advertised
+    // default must never exceed the advertised maximum. `answer_tool_search`
+    // clamps against this same pair.
+    let (default_limit, max_limit) = policy.effective_limits();
     ToolSchema {
         name: TOOL_SEARCH_NAME.to_string(),
         description: format!(
@@ -53,11 +58,10 @@ fn tool_search_schema(catalog: &DeferredCatalog, policy: &ToolDiscoveryPolicy) -
                 "limit": {
                     "type": "integer",
                     "description": format!(
-                        "How many matches to return (default {}, max {}).",
-                        policy.default_limit, policy.max_limit
+                        "How many matches to return (default {default_limit}, max {max_limit})."
                     ),
                     "minimum": 1,
-                    "maximum": policy.max_limit
+                    "maximum": max_limit
                 }
             },
             "required": ["query"]
