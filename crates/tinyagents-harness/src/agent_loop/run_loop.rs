@@ -1841,6 +1841,42 @@ fn recover_text_dialect_calls<Ctx>(
     }
 }
 
+/// The tool calls on the transcript's last assistant row that have no
+/// matching tool-result row after it — the calls a previous run deferred
+/// (A2). Errors when the transcript has nothing to resume.
+fn pending_tool_calls(messages: &[Message]) -> Result<Vec<ToolCall>> {
+    let Some(assistant_at) = messages
+        .iter()
+        .rposition(|message| matches!(message, Message::Assistant(_)))
+    else {
+        return Err(TinyAgentsError::Validation(
+            "cannot resume: the transcript has no assistant tool-call row".to_string(),
+        ));
+    };
+    let Message::Assistant(assistant) = &messages[assistant_at] else {
+        unreachable!("rposition matched an assistant row");
+    };
+    let answered: std::collections::HashSet<&str> = messages[assistant_at + 1..]
+        .iter()
+        .filter_map(|message| match message {
+            Message::Tool(tool) => Some(tool.tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let pending: Vec<ToolCall> = assistant
+        .tool_calls
+        .iter()
+        .filter(|call| !answered.contains(call.id.as_str()))
+        .cloned()
+        .collect();
+    if pending.is_empty() {
+        return Err(TinyAgentsError::Validation(
+            "cannot resume: the transcript has no unanswered tool calls".to_string(),
+        ));
+    }
+    Ok(pending)
+}
+
 /// Resolves one run-scoped call cap from the per-run [`RunConfig`] value and
 /// the harness-wide [`crate::runtime::RunPolicy`] value.
 ///

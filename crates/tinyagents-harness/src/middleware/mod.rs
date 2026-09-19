@@ -296,14 +296,57 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
 
     /// Runs every middleware's [`Middleware::before_tool`] in registration
     /// order, threading the mutable tool call through each.
+    ///
+    /// Unlike the other stack runners this one recognises the per-call
+    /// signals of A2/A3 — `ApprovalRequired`, `CallDeferred`, `ToolFailed`,
+    /// `ModelRetry` — as *decisions about the call* rather than hook
+    /// failures: they propagate to admission (which defers or answers the
+    /// call) without a `MiddlewareFailed` event or an `on_error` fan-out.
+    /// An `ApprovalRequired` for a call the resume path already approved
+    /// ([`RunContext::is_call_approved`]) is treated as `Continue`, so a
+    /// gate that cannot see the approval does not re-defer the call.
     pub async fn run_before_tool(
         &self,
         ctx: &mut RunContext<Ctx>,
         state: &State,
         call: &mut ToolCall,
     ) -> Result<()> {
-        run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_tool_control(ctx, state, call))
+        let mut winning: Option<MiddlewareControl> = None;
+        for mw in self.middlewares.iter() {
+            if winning.is_some() && !mw.is_observer() {
+                continue;
+            }
+            let name = mw.name().to_string();
+            ctx.emit(AgentEvent::MiddlewareStarted { name: name.clone() });
+            let result = mw.before_tool_control(ctx, state, call).await;
+            ctx.emit(AgentEvent::MiddlewareCompleted { name: name.clone() });
+            match result {
+                Ok(control) => {
+                    if winning.is_none() && !matches!(control, MiddlewareControl::Continue) {
+                        winning = Some(control);
+                    }
+                }
+                Err(TinyAgentsError::ApprovalRequired { .. }) if ctx.is_call_approved(&call.id) => {}
+                Err(
+                    signal @ (TinyAgentsError::ApprovalRequired { .. }
+                    | TinyAgentsError::CallDeferred { .. }
+                    | TinyAgentsError::ToolFailed(_)
+                    | TinyAgentsError::ModelRetry(_)),
+                ) => return Err(signal),
+                Err(e) => {
+                    ctx.emit(AgentEvent::MiddlewareFailed {
+                        name,
+                        error: e.to_string(),
+                    });
+                    self.fan_out_on_error(ctx, &e).await;
+                    return Err(e);
+                }
+            }
+        }
+        if let Some(control) = winning {
+            ctx.request_control(control);
+        }
+        Ok(())
     }
 
     /// Runs every middleware's [`Middleware::on_tool_delta`] in registration
