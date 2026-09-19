@@ -18,11 +18,12 @@
 //! * an image block when the target model has no vision input.
 //!
 //! [`prepare_for_model`] runs as a pure, read-only-in/owned-out pass over the
-//! working transcript immediately before a [`ModelRequest`] is dispatched. It
-//! never touches [`Turn`][crate::run_queue]/`RunQueue` bookkeeping (a
-//! different concern owned elsewhere in the loop) and never mutates its
-//! input: same-origin transcripts — the overwhelming common case, a run that
-//! never switches provider — are returned as
+//! working transcript immediately before a
+//! [`ModelRequest`][tinyinference_llm::model::ModelRequest] is dispatched. It
+//! never touches `Turn`/`RunQueue` bookkeeping (a different concern owned
+//! elsewhere in the loop) and never mutates its input: same-origin
+//! transcripts — the overwhelming common case, a run that never switches
+//! provider — are returned as
 //! [`Cow::Borrowed`][std::borrow::Cow::Borrowed] with zero allocation.
 //!
 //! # What counts as "foreign"

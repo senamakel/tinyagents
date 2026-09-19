@@ -116,6 +116,7 @@ use tinyinference_llm::model::{
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
 mod entry;
+mod handoff_transform;
 mod model_call;
 mod run_loop;
 pub(crate) mod stream;
