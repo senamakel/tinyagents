@@ -314,6 +314,8 @@ where
     if let Some(usage) = response.usage {
         run.usage.record(usage);
         loop_state.usage = run.usage;
+        let usage_record = ctx.emit(AgentEvent::UsageRecorded { usage });
+        status.set_last_event(usage_record.id);
     }
 
     harness
