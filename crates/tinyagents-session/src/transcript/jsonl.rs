@@ -84,9 +84,9 @@ pub(super) struct MessageLine {
     pub(super) iteration: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ts: Option<String>,
-    /// Turn boundary marker: the web-chat `request_id` this message belongs to,
-    /// when available. Stamped on every line of a turn so the display projection
-    /// can group a turn's messages. Absent for CLI / non-request-scoped runs.
+    /// Turn boundary marker: the caller-provided `request_id` this message
+    /// belongs to, when available. Stamped on every line of a turn so the
+    /// display projection can group a turn's messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) request_id: Option<String>,
     /// `true` when this line is a *partial* assistant answer captured because

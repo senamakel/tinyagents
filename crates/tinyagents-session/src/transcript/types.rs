@@ -158,11 +158,9 @@ pub struct TranscriptMeta {
     pub cached_input_tokens: u64,
     /// Cumulative amount charged in USD.
     pub charged_amount_usd: f64,
-    /// Backend-side LLM thread identifier (the `thread_id` forwarded on
-    /// `/openai/v1/chat/completions` so the OpenHuman backend can group
-    /// `InferenceLog` entries and align KV-cache keys with the same logical
-    /// chat thread the user sees in the UI). `None` for runs that don't
-    /// originate from a thread-scoped channel (e.g. CLI-only sessions).
+    /// Caller-owned logical thread identifier. Hosts may forward it to a
+    /// compatible inference endpoint for request grouping or cache affinity.
+    /// `None` for sessions that are not thread-scoped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     /// Sub-agent task id, when this transcript belongs to a spawned worker.

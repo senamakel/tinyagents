@@ -314,8 +314,8 @@ pub fn transition_agent_run_status(
 /// A freshly-booted core has no in-flight subagents — any detached run task
 /// from a prior process is gone with that process. So a row still marked
 /// `running` (or `pending`) at startup is, by definition, orphaned: its driver
-/// died without firing a terminal `DomainEvent::Subagent{Completed,Failed}`, so
-/// the [`register_run_ledger_finalize_subscriber`] never settled it. Without
+/// died without firing the host's terminal completion notification, so the
+/// host's run-ledger finalizer never settled it. Without
 /// this sweep those rows render as perpetual "running" timeline entries on every
 /// thread reopen.
 ///
@@ -324,7 +324,6 @@ pub fn transition_agent_run_status(
 /// `paused` are intentionally left untouched: those are resumable states a user
 /// may still continue.
 ///
-/// [`register_run_ledger_finalize_subscriber`]: crate::openhuman::agent::orchestration::run_ledger_finalize::register_run_ledger_finalize_subscriber
 pub fn interrupt_orphaned_agent_runs(workspace_dir: &Path) -> Result<usize> {
     let now = Utc::now();
     crate::store::with_connection(workspace_dir, |conn| {

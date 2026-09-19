@@ -70,8 +70,8 @@ pub fn write_transcript(
 /// view — always the reduced/current set). Returns nothing; the caller updates
 /// its tracked `prev_persisted` to `messages` on success.
 ///
-/// `request_id` (when available from the web-chat path) is stamped on every
-/// appended line as a turn boundary marker.
+/// `request_id`, when supplied by the caller, is stamped on every appended
+/// line as a turn boundary marker.
 pub fn append_transcript_turn(
     jsonl_path: &Path,
     prev_persisted: &[TranscriptMessage],

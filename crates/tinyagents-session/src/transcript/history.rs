@@ -50,7 +50,7 @@ pub struct TranscriptTurn<'a> {
     pub meta: &'a TranscriptMeta,
     /// Usage + provenance attributed to the turn's last assistant row.
     pub turn_usage: Option<&'a TurnUsage>,
-    /// Web-chat request id, stamped on every line of the turn.
+    /// Caller-provided request id, stamped on every line of the turn.
     pub request_id: Option<&'a str>,
 }
 
