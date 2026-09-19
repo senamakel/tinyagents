@@ -1158,6 +1158,38 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     assert!(result.is_error);
 }
 
+#[tokio::test]
+async fn tool_policy_truncation_marker_stays_within_tiny_utf8_caps() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mut policies = std::collections::HashMap::new();
+    policies.insert(
+        "reader".to_string(),
+        ToolPolicy::classified().with_runtime(ToolRuntime {
+            max_result_bytes: Some(2),
+            ..ToolRuntime::default()
+        }),
+    );
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(
+        ToolPolicyMiddleware::new(policies).enforce_result_bytes(true),
+    ));
+    let mut result = ToolResult::success("éééé").with_markdown("éééé");
+
+    stack
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("reader-call", "reader"),
+            &mut result,
+        )
+        .await
+        .expect("after_tool runs");
+
+    assert_eq!(result.output(), "[t");
+    assert_eq!(result.markdown_formatted.as_deref(), Some("[t"));
+    assert!(result.output().is_char_boundary(result.output().len()));
+}
+
 // ── HumanApprovalMiddleware ─────────────────────────────────────────────────
 
 #[tokio::test]

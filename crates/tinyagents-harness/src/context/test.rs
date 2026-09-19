@@ -410,3 +410,18 @@ fn token_estimation_uses_the_callers_tokenizer() {
         3
     );
 }
+
+#[test]
+fn token_estimation_includes_json_user_blocks() {
+    use tinyinference_llm::message::{ContentBlock, Message, UserMessage};
+    let messages = vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Json(
+            serde_json::json!({"payload": "one two three"}),
+        )],
+    })];
+
+    assert_eq!(
+        estimate_context_tokens(&messages, |text| text.split_whitespace().count()),
+        3
+    );
+}

@@ -40,6 +40,10 @@ struct DenyThenAllowGate {
     denials_remaining: AtomicUsize,
 }
 
+struct RedactJsonUserGate;
+
+struct RedactDeltaMiddleware;
+
 struct RetryableClassifier;
 
 struct LeadRecordingResolver {
@@ -273,6 +277,42 @@ impl SecurityGate for DenyThenAllowGate {
 }
 
 #[async_trait]
+impl SecurityGate for RedactJsonUserGate {
+    async fn authorize_tool(&self, _call: &ToolCallRequest) -> crate::error::Result<GateDecision> {
+        Ok(GateDecision::Allow)
+    }
+
+    async fn screen_input(
+        &self,
+        text: &str,
+        origin: crate::host::ContentOrigin,
+    ) -> crate::error::Result<ScreenOutcome> {
+        if origin == crate::host::ContentOrigin::User && text.contains("secret") {
+            Ok(ScreenOutcome::Redacted(r#"{"safe":true}"#.to_string()))
+        } else {
+            Ok(ScreenOutcome::Pass)
+        }
+    }
+}
+
+#[async_trait]
+impl crate::middleware::Middleware<(), ()> for RedactDeltaMiddleware {
+    fn name(&self) -> &str {
+        "redact-delta"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut tinyinference_llm::model::ModelDelta,
+    ) -> crate::error::Result<()> {
+        delta.content = "[redacted]".to_string();
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl Tool for NoopTool {
     fn name(&self) -> &str {
         "noop"
@@ -428,6 +468,54 @@ async fn host_driven_turn_requires_an_installed_bundle_before_model_resolution()
         .await
         .expect_err("host entry point rejects missing configuration");
     assert!(error.to_string().contains("with_host_capabilities"));
+}
+
+#[tokio::test]
+async fn hosted_turn_screens_and_redacts_json_user_blocks_before_model_submission() {
+    let model = Arc::new(ScriptedModel::replies(vec!["ok"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(RedactJsonUserGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+    let message =
+        tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
+            content: vec![tinyinference_llm::message::ContentBlock::Json(
+                json!({"secret": "do not forward"}),
+            )],
+        });
+
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new("helper", vec![message]),
+            RunContext::new(RunConfig::new("json-screen"), ()),
+            &(),
+        )
+        .await
+        .expect("hosted turn succeeds");
+
+    let request = model.requests().pop().expect("model request");
+    let user = request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            tinyinference_llm::message::Message::User(user) => Some(user),
+            _ => None,
+        })
+        .expect("user message retained");
+    assert_eq!(
+        user.content,
+        vec![tinyinference_llm::message::ContentBlock::Json(
+            json!({"safe": true})
+        )]
+    );
 }
 
 #[tokio::test]
@@ -1232,6 +1320,79 @@ async fn soft_budget_compression_hint_reduces_multiturn_context_without_blocking
         model.requests()[0].messages.len() < 4,
         "soft compression reduced the provider request"
     );
+}
+
+#[tokio::test]
+async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
+    let model = Arc::new(ScriptedModel::replies(vec!["secret"]));
+    let progress = Arc::new(RecordingProgressSink::new());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_progress(progress.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_response_cache(Arc::new(crate::cache::InMemoryResponseCache::new()));
+    harness.with_host_capabilities(host);
+    harness.push_middleware(Arc::new(RedactDeltaMiddleware));
+
+    let mut seeded = harness
+        .invoke_agent_stream(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("same")],
+            ),
+            RunContext::new(RunConfig::new("cache-seed"), ()),
+            &(),
+        )
+        .await
+        .expect("cache seed starts");
+    while seeded.next().await.is_some() {}
+
+    let mut replay = harness
+        .invoke_agent_stream(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("same")],
+            ),
+            RunContext::new(RunConfig::new("cache-replay"), ()),
+            &(),
+        )
+        .await
+        .expect("cache replay starts");
+    let mut replayed_events = Vec::new();
+    while let Some(item) = replay.next().await {
+        if let crate::agent_loop::AgentStreamItem::Event(event) = item {
+            replayed_events.push(event);
+        }
+    }
+
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "replay does not invoke the model"
+    );
+    assert!(replayed_events.iter().any(
+        |record| matches!(&record.event, crate::events::AgentEvent::ModelDelta { delta, .. } if delta.text == "[redacted]")
+    ));
+    assert!(!replayed_events.iter().any(
+        |record| matches!(&record.event, crate::events::AgentEvent::ModelDelta { delta, .. } if delta.text == "secret")
+    ));
+    yield_until(|| {
+        progress.events().iter().any(
+            |event| matches!(event, crate::host::ProgressEvent::Token { text, .. } if text == "[redacted]")
+        )
+    })
+    .await;
+    assert!(!progress.events().iter().any(
+        |event| matches!(event, crate::host::ProgressEvent::Token { text, .. } if text == "secret")
+    ));
 }
 
 #[tokio::test]
