@@ -707,17 +707,19 @@ where
                     &mut phase_states,
                     "workflow interrupted; phase will retry on resume",
                 );
-                let updated = self.persist(
-                    &registration.current(),
-                    PersistRequest {
-                        phase_states,
-                        child_run_ids: children,
-                        status: WorkflowRunStatus::Interrupted,
-                        summary: None,
-                        terminal: false,
-                    },
-                    owner,
-                )?;
+                let updated = self
+                    .persist(
+                        &registration.current(),
+                        PersistRequest {
+                            phase_states,
+                            child_run_ids: children,
+                            status: WorkflowRunStatus::Interrupted,
+                            summary: None,
+                            terminal: false,
+                        },
+                        owner,
+                    )
+                    .await?;
                 return Ok((updated, 0));
             }
             Err(error) => return Err(OrchestrationError(error.to_string())),
