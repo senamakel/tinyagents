@@ -10,6 +10,33 @@
 //! The harness is intentionally split by feature. Each submodule owns one
 //! substantial part of model/tool orchestration so the implementation can grow
 //! without creating one large runtime file.
+//!
+//! # Cargo features
+//!
+//! - `sqlite` — durable, file-backed stores (`rusqlite`).
+//! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
+//!   old name `tools` is kept as a deprecated alias.
+//! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
+//!   pulling in `reqwest` and `flate2`.
+//! - `claude-code` — the Claude Code CLI and Claude Agent SDK provider
+//!   adapters under [`providers`].
+//! - `langfuse` — the Langfuse observability exporter under [`observability`],
+//!   pulling in `reqwest`.
+//! - `tracing` — a no-op compatibility alias; tracing instrumentation is
+//!   always compiled in.
+//!
+//! `claude-code` and `langfuse` are part of `default` so existing consumers
+//! see no change; disable default features to opt out of either.
+//!
+//! # Vendor re-exports
+//!
+//! The harness pins exact versions of the `tinyinference-llm`, `tinytools`,
+//! and `tinytools-agent` vendor crates and exposes their public types
+//! (e.g. `ChatMessage`, tool schemas) across its own API. Downstream crates
+//! must reach those types through [`tinyinference_llm`], [`tinytools`], and
+//! [`tinytools_agent`] re-exported here rather than depending on the vendor
+//! crates directly, or the compiler will see two distinct copies of the same
+//! type.
 
 pub mod agent_loop;
 pub mod artifacts;
