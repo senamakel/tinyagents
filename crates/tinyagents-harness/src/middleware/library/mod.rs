@@ -40,7 +40,9 @@ use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use crate::ids::CallId;
-use crate::middleware::{Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
+use crate::middleware::{
+    Middleware, MiddlewareModelOutcome, ModelHandler, ModelMiddleware, ToolInvocationIdentity,
+};
 use crate::retry::{RateLimiter, RetryPolicy, is_retryable};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use tinyinference_llm::message::{ContentBlock, Message};

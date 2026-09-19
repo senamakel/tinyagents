@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use crate::cache::CacheLayoutEvent;
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
-use crate::ids::RunId;
+use crate::ids::{CallId, RunId};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
 use tinyinference_llm::tool::{ToolCall, ToolDelta};
@@ -33,6 +33,37 @@ use tinyinference_llm::usage::UsageTotals;
 use tinytools::ToolResult;
 
 // ── AgentRun ────────────────────────────────────────────────────────────────
+
+/// Harness-owned identity for one completed tool invocation.
+///
+/// [`Middleware::after_tool`] receives this separately from
+/// [`ToolResult`][tinytools::ToolResult] so canonical TinyTools results remain
+/// correlation-free and a tool cannot forge its own execution identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolInvocationIdentity {
+    call_id: CallId,
+    tool_name: String,
+}
+
+impl ToolInvocationIdentity {
+    /// Creates an identity for a completed invocation.
+    pub fn new(call_id: impl Into<CallId>, tool_name: impl Into<String>) -> Self {
+        Self {
+            call_id: call_id.into(),
+            tool_name: tool_name.into(),
+        }
+    }
+
+    /// The provider/harness correlation id for this invocation.
+    pub fn call_id(&self) -> &CallId {
+        &self.call_id
+    }
+
+    /// The canonical name of the invoked tool.
+    pub fn tool_name(&self) -> &str {
+        &self.tool_name
+    }
+}
 
 /// The accumulated result of a single agent run.
 ///
@@ -195,12 +226,12 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
     }
 
     /// Runs after each tool invocation completes, allowing the middleware to
-    /// inspect its canonical tool name and mutate the [`ToolResult`].
+    /// inspect harness-owned invocation identity and mutate the [`ToolResult`].
     async fn after_tool(
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
-        _tool_name: &str,
+        _invocation: &ToolInvocationIdentity,
         _result: &mut ToolResult,
     ) -> Result<()> {
         Ok(())

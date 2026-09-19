@@ -251,7 +251,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for RedactionM
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
-        _tool_name: &str,
+        _invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()> {
         let mut hits = 0;
@@ -423,7 +423,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for TracingMid
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
-        _tool_name: &str,
+        _invocation: &ToolInvocationIdentity,
         _result: &mut ToolResult,
     ) -> Result<()> {
         self.push("tool", TraceBoundary::End);
@@ -562,7 +562,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for LoggingMid
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
-        _tool_name: &str,
+        _invocation: &ToolInvocationIdentity,
         _result: &mut ToolResult,
     ) -> Result<()> {
         self.counts

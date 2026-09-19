@@ -244,12 +244,13 @@ impl RunConfig {
     /// 1`, and uses `child_run_id` as the run identity.
     /// It does **not** copy tags or metadata, which are run-specific.
     pub fn child(&self, mut config: Self) -> Result<Self> {
-        let child_depth = Self::checked_child_depth(self.depth(), self.max_depth())?;
+        let max_depth = self.max_depth().min(config.max_depth());
+        let child_depth = Self::checked_child_depth(self.depth(), max_depth)?;
         config.lineage = RunLineage {
             root_run_id: self.lineage.root_run_id.clone(),
             parent_run_id: Some(self.run_id.clone()),
             depth: child_depth,
-            max_depth: self.max_depth().min(config.max_depth()),
+            max_depth,
         };
         if config.thread_id.is_none() {
             config.thread_id = self.thread_id.clone();

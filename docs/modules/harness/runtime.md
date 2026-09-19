@@ -170,6 +170,7 @@ pub trait Middleware<State, Ctx = ()>: Send + Sync {
         &self,
         state: &State,
         ctx: &mut RunContext<Ctx>,
+        invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()>;
 
@@ -328,4 +329,3 @@ Store events should flow through `harness::events` or the registry event bus:
 - `store.error`
 
 Sensitive store fields must support redaction before event emission.
-

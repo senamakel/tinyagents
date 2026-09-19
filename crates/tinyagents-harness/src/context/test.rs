@@ -231,6 +231,19 @@ fn child_keeps_its_stricter_recursion_cap() {
 }
 
 #[test]
+fn non_root_child_rejects_a_stricter_cap_already_below_its_next_depth() {
+    let root: RunContext<()> = RunContext::new(RunConfig::new("root").with_max_depth(4), ());
+    let parent = root
+        .child(RunConfig::new("parent"), ())
+        .expect("parent is within the root cap");
+
+    assert!(matches!(
+        parent.child(RunConfig::new("child").with_max_depth(1), ()),
+        Err(crate::TinyAgentsError::SubAgentDepth(1))
+    ));
+}
+
+#[test]
 fn child_accepts_its_own_tags_timeout_and_call_caps() {
     let parent: RunContext<()> =
         RunContext::new(RunConfig::new("parent").with_thread("thread"), ());

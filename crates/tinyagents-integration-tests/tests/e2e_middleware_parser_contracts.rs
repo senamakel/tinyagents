@@ -12,7 +12,7 @@ use tinyagents_harness::middleware::{
     LoggingMiddleware, Middleware, MiddlewareModelOutcome, MiddlewareStack, MiddlewareToolOutcome,
     ModelBaseCall, ModelFallbackMiddleware, ModelMiddleware, RedactionMiddleware,
     StructuredOutputValidatorMiddleware, TimeoutMiddleware, ToolAllowlistMiddleware, ToolBaseCall,
-    ToolHandler, ToolMiddleware, TracingMiddleware,
+    ToolHandler, ToolInvocationIdentity, ToolMiddleware, TracingMiddleware,
 };
 use tinyagents_language::{lexer, parser};
 use tinyinference_llm::message::Message;
@@ -197,7 +197,12 @@ async fn middleware_stack_runs_lifecycle_hooks_and_builtin_guards() {
         .unwrap();
     let mut tool_result = ToolResult::success("secret tool result");
     stack
-        .run_after_tool(&mut ctx, &(), "lookup", &mut tool_result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("lookup-call", "lookup"),
+            &mut tool_result,
+        )
         .await
         .unwrap();
     assert_eq!(tool_result.text(), "*** tool result");

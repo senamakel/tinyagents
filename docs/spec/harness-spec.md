@@ -270,7 +270,7 @@ pub trait Middleware<State, Ctx = ()>: Send + Sync {
     async fn after_model(&self, ctx: &mut RunContext<Ctx>, state: &State, response: &mut ModelResponse) -> Result<()>;
     async fn before_tool(&self, ctx: &mut RunContext<Ctx>, state: &State, call: &mut ToolCall) -> Result<()>;
     async fn on_tool_delta(&self, ctx: &mut RunContext<Ctx>, state: &State, delta: &mut ToolDelta) -> Result<()>;
-    async fn after_tool(&self, ctx: &mut RunContext<Ctx>, state: &State, result: &mut ToolResult) -> Result<()>;
+    async fn after_tool(&self, ctx: &mut RunContext<Ctx>, state: &State, invocation: &ToolInvocationIdentity, result: &mut ToolResult) -> Result<()>;
     async fn on_error(&self, ctx: &mut RunContext<Ctx>, error: &TinyAgentsError) -> Result<()>;
 }
 ```
@@ -438,4 +438,3 @@ The harness should ship a `testkit` module early. It should include:
 - event recorder
 - trajectory assertions that check tool calls and state changes without relying
   on exact LLM prose
-

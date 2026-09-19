@@ -19,7 +19,7 @@ use crate::events::{AgentEvent, EventSink};
 use crate::limits::RunLimits;
 use crate::middleware::{
     AgentRun, Middleware, MiddlewareModelOutcome, MiddlewareToolOutcome, ModelHandler,
-    ModelMiddleware, ToolHandler, ToolMiddleware,
+    ModelMiddleware, ToolHandler, ToolInvocationIdentity, ToolMiddleware,
 };
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
@@ -391,6 +391,31 @@ fn truncated_empty_response(reasoning_tokens: u64) -> ModelResponse {
 /// Middleware that appends a user message to every model request.
 struct InjectMiddleware {
     text: &'static str,
+}
+
+struct ToolInvocationRecorder {
+    seen: Arc<Mutex<Vec<(String, String)>>>,
+}
+
+#[async_trait]
+impl Middleware<(), ()> for ToolInvocationRecorder {
+    fn name(&self) -> &str {
+        "tool-invocation-recorder"
+    }
+
+    async fn after_tool(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        invocation: &ToolInvocationIdentity,
+        _result: &mut ToolResult,
+    ) -> Result<()> {
+        self.seen.lock().expect("recorder lock").push((
+            invocation.call_id().as_str().to_string(),
+            invocation.tool_name().to_string(),
+        ));
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -970,6 +995,41 @@ async fn model_requests_tool_then_finishes() {
     assert_eq!(run.messages.len(), 4);
     assert!(matches!(run.messages[2], Message::Tool(_)));
     assert_eq!(run.messages[2].text(), "tool-output");
+}
+
+#[tokio::test]
+async fn after_tool_receives_distinct_identity_for_same_named_calls() {
+    let mut parallel_calls = ModelResponse::assistant("");
+    parallel_calls.message.tool_calls = vec![
+        ToolCall::new("lookup-one", "lookup", json!({"q": "one"})),
+        ToolCall::new("lookup-two", "lookup", json!({"q": "two"})),
+    ];
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            parallel_calls,
+            text_response("done", 1, 1),
+        ])),
+    );
+    harness.register_tool(Arc::new(FakeTool::new("lookup", "tool-output")));
+    harness.push_middleware(Arc::new(ToolInvocationRecorder {
+        seen: Arc::clone(&seen),
+    }));
+
+    harness
+        .invoke_default(&(), vec![Message::user("look up both")])
+        .await
+        .expect("parallel calls complete");
+
+    assert_eq!(
+        *seen.lock().expect("recorder lock"),
+        vec![
+            ("lookup-one".to_string(), "lookup".to_string()),
+            ("lookup-two".to_string(), "lookup".to_string()),
+        ]
+    );
 }
 
 #[tokio::test]

@@ -10,7 +10,7 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
-use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall};
+use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
 use crate::retry::{RateLimiter, RetryPolicy};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
@@ -1145,7 +1145,12 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
 
     let mut result = ToolResult::error("abcdefgh").with_markdown("abcdefgh");
     stack
-        .run_after_tool(&mut ctx, &(), "reader", &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("reader-call", "reader"),
+            &mut result,
+        )
         .await
         .expect("after_tool runs");
     assert_eq!(result.output(), "abcd");
@@ -1286,7 +1291,12 @@ async fn redaction_masks_response_and_tool_text() {
 
     let mut result = ToolResult::success("token sk-secret");
     stack
-        .run_after_tool(&mut ctx, &(), "t", &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("redact-call", "t"),
+            &mut result,
+        )
         .await
         .expect("redaction runs on tool");
     assert_eq!(result.output(), "token [REDACTED]");
@@ -1372,7 +1382,12 @@ async fn redaction_scrubs_tool_call_arguments_and_raw_payloads() {
     let mut result =
         ToolResult::json(json!({"echo": "sk-secret"})).with_markdown("auth failed for sk-secret");
     stack
-        .run_after_tool(&mut ctx, &(), "http", &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("http-call", "http"),
+            &mut result,
+        )
         .await
         .expect("redaction runs after tool");
     assert!(matches!(
@@ -1412,7 +1427,12 @@ async fn tracing_records_phase_boundaries_and_counts() {
         .unwrap();
     let mut result = ToolResult::success("");
     stack
-        .run_after_tool(&mut ctx, &(), "t", &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("trace-call", "t"),
+            &mut result,
+        )
         .await
         .unwrap();
     let mut run = crate::middleware::AgentRun::new();

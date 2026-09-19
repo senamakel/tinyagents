@@ -588,7 +588,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         if let Err(err) = self
             .middleware
-            .run_after_tool(ctx, state, &prepared.tool_name, &mut result)
+            .run_after_tool(
+                ctx,
+                state,
+                &crate::middleware::ToolInvocationIdentity::new(
+                    prepared.call_id.clone(),
+                    prepared.tool_name.clone(),
+                ),
+                &mut result,
+            )
             .await
         {
             self.fail_tool_call(

@@ -234,7 +234,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolPolicy
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
-        tool_name: &str,
+        invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()> {
         if !self.enforce_result_bytes {
@@ -242,7 +242,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolPolicy
         }
         let Some(max_result_bytes) = self
             .policies
-            .get(tool_name)
+            .get(invocation.tool_name())
             .and_then(|policy| policy.runtime.max_result_bytes)
         else {
             return Ok(());
