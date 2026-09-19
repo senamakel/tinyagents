@@ -264,7 +264,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
-            Some((parent.run_id().as_str(), parent.limits.tool_calls() as u64)),
+            Some((parent.run_id().as_str(), parent.next_child_ordinal())),
         )?;
         let ctx = parent.child(config, ctx_data)?;
         self.run_child(state, ctx, input.into(), parent.streaming)
@@ -338,7 +338,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
-            Some((parent.run_id().as_str(), parent.limits.tool_calls() as u64)),
+            Some((parent.run_id().as_str(), parent.next_child_ordinal())),
         )?;
         let child = parent.child(config, ctx_data)?;
         self.run_hosted_child(state, child, input.into(), parent.streaming)
@@ -658,7 +658,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
-            Some((parent.run_id().as_str(), parent.limits.tool_calls() as u64)),
+            Some((parent.run_id().as_str(), parent.next_child_ordinal())),
         ) {
             Ok(config) => config,
             Err(error) => {
