@@ -793,16 +793,16 @@ async fn delta_channel_checkpoint_bytes_grow_linearly_over_two_hundred_steps() {
             .checkpoint_id
             .clone()
     };
-    let bytes_at = |id: &str| -> usize {
+    async fn bytes_at(cp: &Arc<dyn Checkpointer<ChannelState>>, id: &str) -> usize {
         let checkpoint = cp
             .get("linear-thread", Some(id))
             .await
             .unwrap()
             .expect("checkpoint exists");
         serde_json::to_vec(&checkpoint).unwrap().len()
-    };
-    let bytes_at_100 = bytes_at(&id_at(100)).await;
-    let bytes_at_200 = bytes_at(&id_at(200)).await;
+    }
+    let bytes_at_100 = bytes_at(&cp, &id_at(100)).await;
+    let bytes_at_200 = bytes_at(&cp, &id_at(200)).await;
 
     let ratio = bytes_at_200 as f64 / bytes_at_100 as f64;
     assert!(
