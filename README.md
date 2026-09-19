@@ -29,7 +29,9 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   middleware, structured output, streaming, usage/cost accounting, retries,
   caching, memory, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
-  `tools`, `multimodal`, `tracing`.
+  `builtin-tools` (`tools` kept as a deprecated alias), `multimodal`,
+  `claude-code`, `langfuse`, `tracing`. `claude-code` and `langfuse` are
+  enabled by default.
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
