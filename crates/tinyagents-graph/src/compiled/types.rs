@@ -25,7 +25,6 @@ pub struct CompiledGraph<State, Update> {
     pub(crate) nodes: Arc<HashMap<NodeId, BuilderNode<State, Update>>>,
     pub(crate) edges: Arc<HashMap<NodeId, NodeId>>,
     pub(crate) branches: Arc<HashMap<NodeId, Branch<State>>>,
-    #[allow(dead_code)]
     pub(crate) command_nodes: Arc<HashSet<NodeId>>,
     /// Barrier/waiting edges: target -> the predecessor set that must all
     /// complete (across steps) before the target activates.
