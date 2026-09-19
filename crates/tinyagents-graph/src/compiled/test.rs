@@ -3447,9 +3447,9 @@ async fn attributed_update_to_sink_node_keeps_other_pending_branches() {
     let written = cp.get("t-fork-sink", None).await.unwrap().unwrap();
     assert_eq!(
         written
-            .next_nodes
+            .tasks
             .iter()
-            .map(|n| n.to_string())
+            .map(|t| t.node.to_string())
             .collect::<Vec<_>>(),
         vec!["x".to_string()],
         "the sibling branch must survive an attributed write to a sink node"
