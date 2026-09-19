@@ -1252,7 +1252,7 @@ mod recovery_tests {
     fn text_dialect_markup_is_not_recovered_when_the_policy_disables_it() {
         let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
         let mut response = ModelResponse::assistant(
-            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
+            r#"<tool_call>{"name": "shell", "arguments": {"command": "id"}}</tool_call>"#,
         );
 
         recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), true, false);
@@ -1268,7 +1268,7 @@ mod recovery_tests {
     fn text_dialect_markup_inside_a_fenced_code_block_is_never_recovered() {
         let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
         let mut response = ModelResponse::assistant(
-            "Here is the format:\n```\n<tool_call><name>shell</name><arguments>{}</arguments></tool_call>\n```\n",
+            "Here is the format:\n```\n<tool_call>{\"name\": \"shell\", \"arguments\": {}}</tool_call>\n```\n",
         );
 
         recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), true, true);
@@ -1286,7 +1286,7 @@ mod recovery_tests {
     fn text_dialect_markup_outside_a_fenced_code_block_is_recovered() {
         let ctx: RunContext<()> = RunContext::new(RunConfig::new("recovery-test"), ());
         let mut response = ModelResponse::assistant(
-            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
+            r#"<tool_call>{"name": "shell", "arguments": {"command": "id"}}</tool_call>"#,
         );
 
         recover_text_dialect_calls(&ctx, &mut response, &CallId::new("model-1"), true, true);
