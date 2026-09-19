@@ -239,11 +239,13 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
         call_id: "call-1".into(),
         content: r#"{"a":"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
     accumulator.push(&ModelStreamItem::ToolCallDelta(ToolDelta {
         call_id: "call-1".into(),
         content: r#""b"}"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
     accumulator.push(&ModelStreamItem::UsageDelta(Usage::new(4, 5)));
     accumulator.push(&ModelStreamItem::MessageDelta(MessageDelta {
@@ -325,6 +327,7 @@ fn model_profiles_stream_chunks_usage_and_cost_are_additive() {
                 call_id: "tool-1".into(),
                 content: "partial".into(),
                 tool_name: None,
+                ..Default::default()
             }),
         }),
         StreamChunk::Debug("trace".into()),
