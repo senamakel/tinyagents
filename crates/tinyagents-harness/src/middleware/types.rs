@@ -519,25 +519,6 @@ pub struct MessageTrimMiddleware {
 
 // ── ContextCompressionMiddleware ──────────────────────────────────────────────
 
-/// Middleware that summarizes/compresses the request transcript, but **only**
-/// when it nears the model's context window.
-///
-/// In `before_model` it consults the configured [`SummarizationPolicy`]. The
-/// policy is normally built with a context window (for example via
-/// [`SummarizationPolicy::from_profile`] or
-/// [`SummarizationPolicy::with_context_window`]) and a `threshold_fraction`
-/// (default `0.9`). When the estimated transcript tokens are **below** the
-/// window threshold this middleware is a complete no-op: `request.messages` is
-/// left untouched and no event is emitted. When the threshold is reached, the
-/// older messages are condensed by the [`Summarizer`] into a single summary
-/// message, the recent window and system messages are kept verbatim, the
-/// resulting [`SummaryRecord`] (with its compression provenance) is recorded,
-/// and an [`AgentEvent::Compressed`][crate::events::AgentEvent::Compressed]
-/// event is emitted.
-///
-/// [`ConcatSummarizer`][crate::summarization::ConcatSummarizer] is used
-/// by default; supply any [`Summarizer`] via
-/// [`ContextCompressionMiddleware::with_summarizer`].
 /// Default cap on the number of [`SummaryRecord`]s a
 /// [`ContextCompressionMiddleware`] retains before evicting the oldest.
 pub const DEFAULT_COMPRESSION_RECORD_CAP: usize = 1024;
