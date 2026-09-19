@@ -735,4 +735,76 @@ mod sqlite_backend {
         assert_eq!(records[1].state, 2);
         assert!(cp.get_thread("missing").await.unwrap().is_empty());
     }
+
+    // ---- C3/R4: durable per-thread execution lease -------------------------
+
+    #[tokio::test]
+    async fn a_live_lease_is_refused_to_a_different_owner() {
+        let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
+        assert!(
+            cp.try_claim("t", "owner-a", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        // A different owner is refused while the lease is still live.
+        assert!(
+            !cp.try_claim("t", "owner-b", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        // The same owner re-claiming (e.g. a renew-by-reclaim) succeeds.
+        assert!(
+            cp.try_claim("t", "owner-a", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_lease_past_its_ttl_is_reclaimable() {
+        let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
+        // Claim with a TTL of 0 - expires immediately (simulates a dead
+        // owner's lease that has aged out).
+        assert!(
+            cp.try_claim("t", "dead-owner", std::time::Duration::from_millis(0))
+                .await
+                .unwrap()
+        );
+        // A short sleep guarantees `now` has moved past the zero-TTL expiry.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        assert!(
+            cp.try_claim("t", "new-owner", std::time::Duration::from_secs(60))
+                .await
+                .unwrap(),
+            "an expired lease must be reclaimable by a different owner"
+        );
+        // The reclaim actually transferred ownership: the dead owner can no
+        // longer renew it.
+        assert!(
+            !cp.renew("t", "dead-owner", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        assert!(
+            cp.renew("t", "new-owner", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn release_frees_the_lease_for_another_owner() {
+        let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
+        assert!(
+            cp.try_claim("t", "owner-a", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+        cp.release("t", "owner-a").await.unwrap();
+        assert!(
+            cp.try_claim("t", "owner-b", std::time::Duration::from_secs(60))
+                .await
+                .unwrap()
+        );
+    }
 }
