@@ -2577,6 +2577,109 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
     assert_eq!(budget.records.lock().expect("budget lock").len(), 1);
 }
 
+/// A tool with a deliberately long description, so folding its catalogue
+/// entry into the system prompt (as a forced text dialect does) is a large,
+/// easily distinguished jump in estimated prompt size.
+struct VerboseTool;
+
+#[async_trait]
+impl Tool for VerboseTool {
+    fn name(&self) -> &str {
+        "verbose_lookup"
+    }
+
+    fn description(&self) -> &str {
+        // ~2 KiB: large enough that folding it into the system prompt moves
+        // the token estimate by hundreds of tokens under the `chars / 4`
+        // heuristic `token_estimation::estimate_slice_tokens` uses.
+        "look something up in the verbose index. "
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": { "q": { "type": "string", "description": "x".repeat(2000) } },
+            "required": ["q"]
+        })
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("verbose-output"))
+    }
+}
+
+#[tokio::test]
+async fn budget_preflight_estimate_reflects_the_dialect_rewritten_request() {
+    // A forced text dialect (`Xml` here) folds the protocol block and full
+    // tool catalogue into `request.messages` and clears `request.tools`.
+    // `token_estimation::estimate_slice_tokens` only looks at
+    // `request.messages`, so the host budget preflight estimate has to be
+    // taken *after* that rewrite or it silently estimates a request far
+    // smaller than the one actually sent to the provider — the whole point
+    // of a pre-call budget limit defeated by the rewrite arriving late.
+    let model = Arc::new(ScriptedModel::replies(vec!["done"]));
+    let budget = Arc::new(EstimateRecordingBudget::new());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_budget(budget.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_tool(Arc::new(VerboseTool))
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Xml,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("dialect-budget"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.text().as_deref(), Some("done"));
+
+    // The request the provider actually received carries the rendered
+    // catalogue, not a schema — confirming the dialect rewrite did happen
+    // before this call.
+    let request = model.requests().pop().expect("provider was called once");
+    assert!(request.tools.is_empty(), "no schema goes on the wire");
+    let system = request
+        .messages
+        .iter()
+        .find(|m| matches!(m, tinyinference_llm::message::Message::System(_)))
+        .expect("a system turn carries the protocol")
+        .text();
+    assert!(system.contains("verbose_lookup"), "{system}");
+
+    let estimates = budget.estimates.lock().expect("estimate budget lock");
+    assert_eq!(estimates.len(), 1);
+    // The bare user turn ("go") alone estimates to a handful of tokens; the
+    // rewritten request additionally carries the ~2 KiB tool description
+    // folded into the system prompt. A stale pre-rewrite estimate would stay
+    // near the former; this asserts it reflects the latter.
+    assert!(
+        estimates[0] > 300,
+        "preflight estimate ({}) does not reflect the dialect-rewritten request",
+        estimates[0]
+    );
+}
+
 #[tokio::test]
 async fn public_hosted_stream_sanitizes_provider_middleware_and_budget_failures() {
     fn host(model: Arc<dyn ChatModel<()>>) -> crate::host::HostCapabilities<()> {
