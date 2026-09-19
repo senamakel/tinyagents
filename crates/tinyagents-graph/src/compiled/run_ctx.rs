@@ -223,6 +223,10 @@ pub(super) struct ResumeSeed {
     /// [`super::boundary`]'s checkpoint builders), so per-node visit counts
     /// accumulate across a resume instead of resetting.
     pub(super) initial_node_visits: HashMap<NodeId, usize>,
+    /// The loaded checkpoint's persisted `versions_seen` (I5/R3), so
+    /// per-node "have I already seen this channel change" bookkeeping
+    /// survives a resume instead of resetting.
+    pub(super) initial_versions_seen: HashMap<String, std::collections::BTreeMap<String, u64>>,
     /// Nodes (with their persisted goto, R1) carried forward from a
     /// mid-step (interrupt/failure) checkpoint whose completed siblings
     /// were never routed — see [`RunCtx::carried_completed`].
