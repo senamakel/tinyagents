@@ -311,6 +311,46 @@ async fn on_model_delta_hook_emits_no_bracketing_events() {
 }
 
 #[tokio::test]
+async fn on_tool_delta_hook_emits_no_bracketing_events() {
+    // M-12 regression: `run_on_tool_delta` was the one delta hook still
+    // routed through `run_stack_hook!`, so it emitted
+    // `MiddlewareStarted`/`MiddlewareCompleted` on every streamed
+    // tool-progress delta while `run_on_model_delta` (the sibling hook, same
+    // hot-path shape) did not. The two delta hooks must agree.
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(LoggingMiddleware::new()));
+
+    let recorder = Arc::new(RecordingListener::new());
+    let mut c = ctx();
+    c.events.subscribe(recorder.clone());
+
+    let mut delta = tinyinference_llm::tool::ToolDelta {
+        call_id: "call-1".to_string(),
+        content: "partial args".to_string(),
+        tool_name: Some("search".to_string()),
+    };
+    stack
+        .run_on_tool_delta(&mut c, &(), &mut delta)
+        .await
+        .unwrap();
+
+    let bracketing = recorder
+        .events()
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                r.event,
+                AgentEvent::MiddlewareStarted { .. } | AgentEvent::MiddlewareCompleted { .. }
+            )
+        })
+        .count();
+    assert_eq!(
+        bracketing, 0,
+        "the tool-delta hook must not bracket middleware with events"
+    );
+}
+
+#[tokio::test]
 async fn message_trim_middleware_shrinks_request() {
     let mw = MessageTrimMiddleware::new(TrimStrategy::KeepLast(1));
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
