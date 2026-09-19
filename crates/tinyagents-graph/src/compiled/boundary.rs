@@ -166,15 +166,28 @@ where
     }
 
     /// The failure boundary: a node-handler failure that survived the
-    /// node-retry policy. The updates of the branches that completed before
-    /// it are already folded into `state` (by [`Self::apply_updates`]
-    /// before this is called), so this routes just that completed prefix
-    /// (their routing must not be lost), schedules the failed node and the
-    /// not-yet-run tail for a later `resume`/`retry`, persists a resumable
-    /// failure-boundary checkpoint, records a `Failed` status carrying the
-    /// error and that checkpoint, and returns the error. Without a
-    /// checkpointer/thread the checkpoint is a no-op and the run aborts
-    /// exactly as before.
+    /// node-retry policy.
+    ///
+    /// The updates of every branch that completed this step — regardless of
+    /// its index relative to the failed one — are already folded into
+    /// `state` (by [`Self::apply_updates`] before this is called, from
+    /// [`crate::compiled::step::StepRun::updates`]). This boundary does
+    /// *not* route those completed branches yet (see [`Self::advance`]'s
+    /// `carried_completed` doc): routing them now, before the failed/pending
+    /// branches are known, would let their successors observe a state that
+    /// omits whatever those pending branches eventually write — the exact
+    /// same-superstep ordering bug C2 describes for the interrupt boundary.
+    /// Instead `pending` is exactly `sb.stalled` (the failed node plus any
+    /// other branch that also errored/interrupted this step — the
+    /// not-yet-run set, not `active[failed_index..]`), and the completed
+    /// branches' node ids are stamped into the checkpoint's
+    /// `completed_tasks` (merged with any already-carried-forward ones from
+    /// an earlier resume of this same logical step) so a resuming
+    /// `retry`/`resume` can route the whole step together once the pending
+    /// branches finish. Persists a resumable failure-boundary checkpoint,
+    /// records a `Failed` status carrying the error and that checkpoint, and
+    /// returns the error. Without a checkpointer/thread the checkpoint is a
+    /// no-op and the run aborts exactly as before.
     pub(super) async fn handle_failure_boundary(
         &self,
         ctx: &mut RunCtx<'_, State, Update>,
@@ -187,21 +200,8 @@ where
             error,
         } = fail;
         let failed_node = sb.active[failed_index].node.clone();
-        // Schedule the successors of the branches that completed before the
-        // failure (they succeeded; their routing must not be lost) followed
-        // by the failed branch and the not-yet-run tail, which re-run on
-        // resume with their `Send` args preserved.
-        let successors = match self.route_completed(
-            &sb.active[..failed_index],
-            sb.goto_map,
-            state,
-            &mut ctx.barrier_arrivals,
-        ) {
-            Ok(successors) => successors,
-            Err(route_err) => return self.fail_and_return(ctx, route_err).await,
-        };
-        let mut pending = successors;
-        pending.extend(sb.active[failed_index..].iter().cloned());
+        let pending: Vec<Activation> = sb.stalled.iter().map(|(_, a)| a.clone()).collect();
+        let completed_tasks = self.merged_completed_tasks(ctx, sb.completed);
         // Settle any in-flight Async background writes before the
         // failure-boundary persist so earlier boundaries are durable when
         // the run aborts. Like the persist error below, a background write
@@ -217,7 +217,7 @@ where
                 BoundaryCheckpoint {
                     state,
                     pending: &pending,
-                    completed_tasks: &sb.active[..failed_index],
+                    completed_tasks: &completed_tasks,
                     child_runs: sb.child_runs_meta,
                 },
                 sb.step,
