@@ -307,7 +307,17 @@ impl<Ctx> RunContext<Ctx> {
             host_authority: None,
             terminal_observer: None,
             active_model_call: None,
+            child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
+    }
+
+    /// Returns the next value from this context's own child-ordinal counter
+    /// (starting at `0`), advancing it. See
+    /// [`RunContext::child_ordinal`][types::RunContext::child_ordinal] for
+    /// why this is per-context rather than process-global.
+    pub fn next_child_ordinal(&self) -> u64 {
+        self.child_ordinal
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Builds an isolated child context from this live parent context,
