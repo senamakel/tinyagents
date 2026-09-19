@@ -350,6 +350,10 @@ where
         // `source` was already normalized on read, so `.tasks`/`.completed`
         // are the single source of truth regardless of the stored record's
         // original format version.
+        // A fork copies the source checkpoint verbatim rather than writing —
+        // its channel bookkeeping is copied unchanged too, not bumped
+        // through `channel_bookkeeping` (there is no new write to account
+        // for).
         let forked = Checkpoint::new(source.state.clone(), source.tasks.clone())
             .with_thread_id(target_thread.to_string())
             .with_checkpoint_id(checkpoint_id)
@@ -358,6 +362,9 @@ where
             .with_pending_writes(source.pending_writes.clone())
             .with_interrupts(source.interrupts.clone())
             .with_barrier_arrivals(source.barrier_arrivals.clone())
+            .with_channel_versions(source.channel_versions.clone())
+            .with_channel_deltas(source.channel_deltas.clone())
+            .with_versions_seen(source.versions_seen.clone())
             .with_metadata(serde_json::json!({ "source": "fork", "step": step }));
         let id = checkpointer.put(forked).await?;
         self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
