@@ -500,6 +500,7 @@ async fn context_compression_falls_back_to_trim_when_summarizer_errors() {
 #[tokio::test]
 async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
     let (policy, before) = over_threshold_request();
+    let trigger_budget = policy.trigger_budget();
     let mw = Arc::new(ContextCompressionMiddleware::with_summarizer(
         policy,
         Box::new(FailingSummarizer),
