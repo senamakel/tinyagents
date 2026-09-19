@@ -147,7 +147,10 @@ async fn deferred_run_survives_a_json_round_trip_and_resumes_in_a_fresh_harness(
     // The resumed leg only needs the final answer from the model.
     second_harness.register_model(
         "mock",
-        Arc::new(MockModel::with_responses(vec![assistant(Vec::new(), "done")])),
+        Arc::new(MockModel::with_responses(vec![assistant(
+            Vec::new(),
+            "done",
+        )])),
     );
     let run = second_harness
         .resume_deferred(
@@ -160,7 +163,10 @@ async fn deferred_run_survives_a_json_round_trip_and_resumes_in_a_fresh_harness(
         .expect("resume completes");
 
     assert!(delete.seen.lock().unwrap().is_empty());
-    assert_eq!(delete2.seen.lock().unwrap().clone(), vec![json!({"path": "/tmp/y"})]);
+    assert_eq!(
+        delete2.seen.lock().unwrap().clone(),
+        vec![json!({"path": "/tmp/y"})]
+    );
     assert!(run.deferred.is_none());
     assert_eq!(run.text().as_deref(), Some("done"));
     let tool_rows: Vec<(String, String)> = run
