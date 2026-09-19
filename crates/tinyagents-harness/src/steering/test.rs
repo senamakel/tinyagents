@@ -688,7 +688,12 @@ fn run_addressed_command_reaches_only_that_run() {
 }
 
 #[test]
-fn all_addressed_command_reaches_every_run_sharing_the_handle() {
+fn all_addressed_command_is_drained_by_whichever_run_checkpoints_first() {
+    // `SteeringTarget::All` matches any handle sharing the queue, but delivery
+    // is still pull-and-consume-once: whichever run reaches its checkpoint
+    // first drains it, exactly like the pre-routing behaviour for every
+    // command. It is documented that way (see `SteeringTarget::All`), unlike
+    // `Root`/`Run(id)` which are exclusive to one run by construction.
     let handle = SteeringHandle::allow_all();
     let parent: RunContext =
         RunContext::new(RunConfig::new("parent"), ()).with_steering(handle.clone());
@@ -701,7 +706,8 @@ fn all_addressed_command_reaches_every_run_sharing_the_handle() {
     apply_pending_steering(&mut child, &mut child_messages).unwrap();
     assert_eq!(child_messages, vec![Message::user("broadcast")]);
 
+    // Already drained by the child; the parent's checkpoint sees nothing.
     let mut parent_messages = Vec::new();
     apply_pending_steering(&mut parent, &mut parent_messages).unwrap();
-    assert_eq!(parent_messages, vec![Message::user("broadcast")]);
+    assert!(parent_messages.is_empty());
 }
