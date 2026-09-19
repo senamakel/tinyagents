@@ -1,4 +1,12 @@
 //! Host-free transcript statistics.
+//!
+//! [`context_statistics`] derives deterministic, tokenizer-free counts
+//! ([`ContextStatistics`]) directly from a message transcript, and
+//! [`estimate_context_tokens`] estimates a token count through a
+//! caller-supplied tokenizer. Neither function names a host tokenizer, memory
+//! system, or product message type, so callers — prompt budgeting,
+//! compaction heuristics, diagnostics — can use these without pulling host
+//! policy into the harness.
 
 use tinyinference_llm::message::{ContentBlock, Message};
 
