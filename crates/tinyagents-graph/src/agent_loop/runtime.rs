@@ -518,15 +518,19 @@ fn apply_control<Ctx>(
     loop_state: &mut LoopState,
     control: MiddlewareControl,
     from_node: &str,
+    natural_next: &str,
 ) -> Result<NodeResult<LoopState>>
 where
     Ctx: Send + Sync,
 {
     match control {
-        MiddlewareControl::Continue => Ok(NodeResult::Update(loop_state.clone())),
+        // `Continue`/`UpdateState` request no override: route to whatever
+        // the calling node had already determined the turn's natural next
+        // step to be (see the call sites in `model_node`/`tools_node`).
+        MiddlewareControl::Continue => Ok(goto(loop_state.clone(), natural_next)),
         MiddlewareControl::UpdateState(update) => {
             ctx.push_state_update(update);
-            Ok(NodeResult::Update(loop_state.clone()))
+            Ok(goto(loop_state.clone(), natural_next))
         }
         MiddlewareControl::JumpTo(LoopTarget::Tools) => {
             let route = if loop_state.pending_tool_calls.is_empty() {
