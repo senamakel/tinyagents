@@ -221,6 +221,7 @@ impl NodeDecl {
             model: None,
             prompt: None,
             tools: Vec::new(),
+            capability: None,
             next: None,
             routes: Vec::new(),
             agent: None,
