@@ -113,6 +113,14 @@ pub struct NodeContext {
     pub siblings: usize,
 }
 
+impl NodeContext {
+    /// This activation's stable task identity (R5). See the field docs on
+    /// [`Self::task_id`].
+    pub fn task_id(&self) -> &TaskId {
+        &self.task_id
+    }
+}
+
 impl std::fmt::Debug for NodeContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -129,6 +137,8 @@ impl std::fmt::Debug for NodeContext {
             .field("recursion_frames", &self.recursion_frames)
             .field("has_child_runs", &self.child_runs.is_some())
             .field("has_agent_binding", &self.agent_binding.is_some())
+            .field("task_id", &self.task_id)
+            .field("siblings", &self.siblings)
             .finish()
     }
 }
