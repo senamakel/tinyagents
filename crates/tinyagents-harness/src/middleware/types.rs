@@ -726,6 +726,15 @@ pub enum CompressionFailurePolicy {
     PassThrough,
 }
 
+/// The type of a `before_compaction` hook, consulted before every compaction
+/// [`ContextCompressionMiddleware`] runs. Named to keep the struct field's
+/// type simple (`clippy::type_complexity`).
+pub type BeforeCompactionHook = std::sync::Arc<
+    dyn Fn(&crate::summarization::CompactionContext) -> crate::summarization::CompactionDecision
+        + Send
+        + Sync,
+>;
+
 /// Middleware that summarizes/compresses the request transcript, but **only**
 /// when it nears the model's context window.
 ///
