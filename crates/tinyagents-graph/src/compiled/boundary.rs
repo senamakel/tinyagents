@@ -267,35 +267,46 @@ where
     /// not-yet-completed members of this step (interrupted node first).
     /// Each pending branch keeps its `Send` arg; accumulated barrier
     /// arrivals are persisted too. Returns control to the caller.
+    ///
+    /// `interrupted` is every branch of this step whose result was an
+    /// interrupt (I1), in ascending active-set index order — a `Send`
+    /// fan-out of one subgraph node interrupting on every one of its
+    /// concurrent activations, for example, surfaces all of them here rather
+    /// than only the (arbitrarily chosen) lowest-index one. Each is stamped
+    /// with its own branch's task id before being persisted/returned, so the
+    /// caller's subsequent `resume` can address each individually (see
+    /// `resume_from_inner`'s `resume_map` / `Command::resume_tasks`).
     pub(super) async fn handle_interrupt_boundary(
         &self,
         ctx: &mut RunCtx<'_, State, Update>,
         sb: StepBoundary<'_>,
         state: State,
-        index: usize,
-        emitted: Interrupt,
+        interrupted: Vec<(usize, Interrupt)>,
     ) -> Result<GraphExecution<State>> {
         if let Err(err) = self.require_interrupt_durability(&ctx.thread_id) {
             return self.fail_and_return(ctx, err).await;
         }
-        // R5/I1: stamp the pausing branch's task id onto the interrupt
-        // before it is persisted/returned, so a `Send` fan-out of the same
-        // node (each activation with its own task id) is resumable per
-        // activation rather than sharing one node-keyed resume slot — see
-        // `resume_from_inner`'s `resume_map`.
-        let emitted = emitted.with_task_id(sb.active[index].task_id.clone());
+        let stamped: Vec<Interrupt> = interrupted
+            .into_iter()
+            .map(|(index, interrupt)| interrupt.with_task_id(sb.active[index].task_id.clone()))
+            .collect();
         // Deferred routing, same as the failure boundary above: the
-        // completed siblings (whichever side of `index` they fall on) are
-        // not routed here. `pending` is exactly `sb.stalled` (the
-        // interrupted branch first, any other stalled branch after), and
-        // `completed_tasks` carries every completed node id forward
-        // (merged with anything already carried from an earlier resume of
-        // this step) for `advance` to route once the pending set finishes.
+        // completed siblings (whichever side of the interrupted branches
+        // they fall on) are not routed here. `pending` is exactly
+        // `sb.stalled` (every interrupted branch — no error can be mixed in
+        // here, since the executor dispatches a step with any failure to
+        // `handle_failure_boundary` first), and `completed_tasks` carries
+        // every completed node id forward (merged with anything already
+        // carried from an earlier resume of this step) for `advance` to
+        // route once the pending set finishes.
         let pending: Vec<Activation> = sb.stalled.iter().map(|(_, a)| a.clone()).collect();
         let (completed_tasks, completed_routes) =
             self.merged_completed(ctx, sb.completed, sb.goto_map);
         let pending_nodes = activation_nodes(&pending);
-        let interrupt_id = InterruptId::new(emitted.id.clone());
+        let interrupt_ids: Vec<InterruptId> = stamped
+            .iter()
+            .map(|i| InterruptId::new(i.id.clone()))
+            .collect();
         // An interrupt hands control back to the caller expecting a fully
         // durable pause point: settle any in-flight Async background writes
         // first, failing the run if one was lost (a broken lineage cannot
@@ -314,8 +325,8 @@ where
                     child_runs: sb.child_runs_meta,
                 },
                 sb.step,
-                vec![emitted.clone()],
-                std::slice::from_ref(&sb.active[index].node),
+                stamped.clone(),
+                &pending_nodes,
             )
             .await
         {
@@ -327,7 +338,7 @@ where
         status.status = ExecutionStatus::Interrupted;
         status.current_step = sb.step;
         status.active_nodes = pending_nodes;
-        status.pending_interrupts = vec![interrupt_id];
+        status.pending_interrupts = interrupt_ids;
         status.checkpoint_id = checkpoint_id.clone();
         ctx.save_status(status.clone()).await;
 
@@ -340,7 +351,7 @@ where
             child_runs: std::mem::take(&mut ctx.all_child_runs),
             visited: std::mem::take(&mut ctx.visited),
             steps: sb.step,
-            interrupts: vec![emitted],
+            interrupts: stamped,
             status,
             checkpoint_id,
         })
