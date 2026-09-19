@@ -89,7 +89,7 @@ where
         // edges, evaluated against the freshly-committed state. Barrier
         // arrivals accumulate into `ctx.barrier_arrivals` (persisted below).
         let carried = ctx.carried_completed.take();
-        let mut completed_tasks: Vec<Activation>;
+        let completed_tasks: Vec<Activation>;
         let next = match &carried {
             Some(carried_nodes) => {
                 // Reserve an index range that cannot collide with `sb`'s own
@@ -135,7 +135,7 @@ where
             let boundary = BoundaryCheckpoint {
                 state,
                 pending: &next,
-                completed_tasks: sb.active,
+                completed_tasks: &completed_tasks,
                 child_runs: sb.child_runs_meta,
             };
             if matches!(self.durability, DurabilityMode::Async) && !terminal {
