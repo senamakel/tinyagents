@@ -838,14 +838,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ));
                 }
 
-                // A mixed turn (structured payload alongside real tool calls)
-                // is a resolved turn exactly like an ordinary tool-calling one
-                // (see the reset below at the non-mixed path): it must not
-                // leave a spent `dropped_tool_call_nudges_used` counter to
-                // leak into a later, unrelated dropped-call turn, which would
-                // otherwise receive fewer than the policy's configured number
-                // of consecutive re-prompts.
-                dropped_tool_call_nudges_used = 0;
                 reset_truncated_empty_recovery(
                     &mut truncated_empty_retries_used,
                     &mut boosted_max_tokens,
