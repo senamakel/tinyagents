@@ -1234,10 +1234,16 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
                     Ok(NodeResult::Update(20))
                 }
             })
-            .add_node("y", move |_s: Counter, _c: NodeContext| {
+            .add_node("y", move |s: Counter, _c: NodeContext| {
                 let completions = y_completions.clone();
+                let observed = y_observed_value.clone();
                 async move {
                     completions.fetch_add(1, AtomicOrdering::SeqCst);
+                    // The C2 property: `y` (the shared successor of both
+                    // `hi` and `lo`) must observe a state that already
+                    // includes *both* their updates, in either run — not
+                    // just whichever of them completed first.
+                    observed.store(s.value, AtomicOrdering::SeqCst);
                     Ok(NodeResult::Update(5))
                 }
             })
