@@ -60,6 +60,14 @@ Extended (H2):
   both validate whichever value was used.
 - `script "name"` — host script capability for a `repl_agent` node
   (`NodeSpec::script`). Declaration only — never inline code.
+- `capability "name"` — reference to a registered `Capability` bundle (gap
+  G3, `docs/modules/registry/implementation-status.md#capability-bundle-gap-g3`).
+  A single string on `AstNode`/`NodeSpec::capability`, not tied to any one
+  node `kind`; `serde(default)` so existing `.rag` sources and serialized
+  ASTs parse unchanged. Gated by `CapabilityResolver::capability_allowed`
+  (`capability_resolver.rs`) the same unconditional way `tool`/`model`
+  references are gated, from both `CapabilityResolver::bind_blueprint` and
+  `Resolver::resolve_blueprint`.
 - `input "mapping"` — input mapping for sub-agent / subgraph nodes.
 - `command { goto <target> update { key value … } }` — typed command
   (`NodeSpec::command`, `CommandSpec`). A bare `goto` also lowers into the
