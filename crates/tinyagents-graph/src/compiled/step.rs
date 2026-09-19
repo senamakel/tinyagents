@@ -21,6 +21,8 @@
 
 use super::*;
 
+use crate::compiled::run_ctx::RunCtx;
+
 /// The raw, unfolded result of running a superstep's active node set: one
 /// `(Activation, Result<NodeResult>)` pair per branch that was actually
 /// invoked, in active-set index order.
