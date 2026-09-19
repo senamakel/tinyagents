@@ -126,8 +126,9 @@ where
     /// returned (last-write-wins, consistent with [`Checkpointer::get`]).
     ///
     /// Composed from [`Checkpointer::list`] + [`Checkpointer::get`] so every
-    /// backend inherits it; override for a cheaper scoped query — both durable
-    /// backends do, because the default costs a full thread scan per call and
+    /// backend inherits it; override for a cheaper scoped query — both
+    /// [`FileCheckpointer`] and [`SqliteCheckpointer`](crate::SqliteCheckpointer)
+    /// do, because the default costs a full thread scan per call and
     /// [`Checkpointer::state_history`] issues one per lineage hop.
     async fn get_scoped(
         &self,
