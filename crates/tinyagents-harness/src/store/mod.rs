@@ -211,9 +211,8 @@ impl Store for FileStore {
         let path = self.key_path(namespace, key);
         crate::blocking::run_blocking(move || -> Result<()> {
             if path.exists() {
-                fs::remove_file(&path).map_err(|e| {
-                    TinyAgentsError::Validation(format!("store delete error: {e}"))
-                })?;
+                fs::remove_file(&path)
+                    .map_err(|e| TinyAgentsError::Validation(format!("store delete error: {e}")))?;
             }
             Ok(())
         })

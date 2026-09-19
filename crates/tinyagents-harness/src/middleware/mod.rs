@@ -141,9 +141,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// [`crate::runtime::RunPolicy::retry`] loop, so `RetryMiddleware` and the
     /// loop's built-in retry do not multiply attempts together (I-7).
     pub fn has_retry_override(&self) -> bool {
-        self.model_middlewares
-            .iter()
-            .any(|mw| mw.overrides_retry())
+        self.model_middlewares.iter().any(|mw| mw.overrides_retry())
     }
 
     /// Returns the number of registered [`ToolMiddleware`] wrap hooks.

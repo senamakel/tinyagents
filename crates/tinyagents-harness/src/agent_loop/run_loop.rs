@@ -897,7 +897,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // provider rejects (400) if the transcript is ever replayed
                 // (M-1). Append a synthetic tool result for each unanswered
                 // call so the transcript stays replayable.
-                Self::close_unanswered_tool_calls(messages, "run stopped before this tool call was executed");
+                Self::close_unanswered_tool_calls(
+                    messages,
+                    "run stopped before this tool call was executed",
+                );
                 run.final_response = Some(ModelResponse::assistant(text));
                 Ok(Some(LoopExit::Finished))
             }
