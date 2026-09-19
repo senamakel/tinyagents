@@ -149,6 +149,8 @@ impl<State, Update> Clone for CompiledGraph<State, Update> {
             node_retry: self.node_retry.clone(),
             node_policies: self.node_policies.clone(),
             node_defaults: self.node_defaults.clone(),
+            task_cache: self.task_cache.clone(),
+            cached_nodes: self.cached_nodes.clone(),
         }
     }
 }
