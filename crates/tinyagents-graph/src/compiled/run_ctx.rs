@@ -227,9 +227,10 @@ where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
 {
-    /// Forwards to the owning graph's event sink (a no-op without one).
+    /// Forwards to the owning graph's event sink (a no-op without one),
+    /// stamping the envelope with this run's id.
     pub(super) fn emit(&self, event: GraphEvent) {
-        self.graph.emit(event);
+        self.graph.emit(&self.run_id, event);
     }
 
     /// Whether this run's cooperative-cancellation token (if any) has been
