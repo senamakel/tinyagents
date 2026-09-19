@@ -102,6 +102,46 @@ async fn conditional_routing_selects_branch() {
 }
 
 #[tokio::test]
+async fn static_edge_fan_out_activates_every_target() {
+    // `add_edge("start", "a").add_edge("start", "b")` must schedule BOTH "a"
+    // and "b" as successors of "start" in the same superstep (I10), not
+    // silently overwrite the first edge with the second.
+    let graph = GraphBuilder::<Vec<String>, String>::new()
+        .set_reducer(ClosureStateReducer::new(
+            |mut s: Vec<String>, u: String| {
+                s.push(u);
+                Ok(s)
+            },
+        ))
+        .add_node("start", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Update("start".to_string()))
+        })
+        .add_node("a", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Update("a".to_string()))
+        })
+        .add_node("b", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Update("b".to_string()))
+        })
+        .set_entry("start")
+        .add_edge("start", "a")
+        .add_edge("start", "b")
+        .set_finish("a")
+        .set_finish("b")
+        .compile()
+        .unwrap();
+
+    let run = graph.run(vec![]).await.unwrap();
+    assert_eq!(run.state, vec!["start", "a", "b"]);
+    assert_eq!(
+        run.visited
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        vec!["start", "a", "b"]
+    );
+}
+
+#[tokio::test]
 async fn command_goto_overrides_edges() {
     let graph = GraphBuilder::<i32, i32>::overwrite()
         .add_node("router", |_s, _c: NodeContext| async move {
