@@ -19,6 +19,15 @@
 //! * the [`ResultHandoffCache`] store itself (FIFO-evicting, `Arc`-shared);
 //! * the [`build_handoff_placeholder`] renderer used when rewriting tool
 //!   results into history.
+//!
+//! # Not on the agent loop path (M-10)
+//!
+//! This is a host utility, not something [`crate::agent_loop`] calls on its
+//! own: nothing in the built-in loop invokes [`apply_handoff`] or registers
+//! the extraction tool it references. A host wires this in itself — calling
+//! `apply_handoff` on each tool result before it is appended to history, and
+//! registering an extraction tool (named per [`HandoffConfig::extractor_tool_name`])
+//! that reads from the same [`ResultHandoffCache`].
 
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
