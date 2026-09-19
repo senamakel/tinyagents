@@ -88,6 +88,7 @@ async fn typed_tool_dispatch_runs_child_with_non_default_parent_data() {
         .expect("typed parent dispatcher is registered")
         .execute(
             &(),
+            crate::ids::CallId::new("call-1"),
             json!({"input": "work"}),
             tinytools::ToolCallOptions::default(),
             &parent,
@@ -134,6 +135,7 @@ async fn stricter_parent_depth_cap_is_a_recoverable_typed_tool_result() {
         .expect("typed parent dispatcher is registered")
         .execute(
             &(),
+            crate::ids::CallId::new("call-1"),
             json!({"input": "work"}),
             tinytools::ToolCallOptions::default(),
             &parent,
@@ -172,6 +174,7 @@ async fn typed_tool_dispatch_inherits_parent_cancellation() {
         .expect("typed parent dispatcher is registered")
         .execute(
             &(),
+            crate::ids::CallId::new("call-1"),
             json!({"input": "work"}),
             tinytools::ToolCallOptions::default(),
             &parent,
