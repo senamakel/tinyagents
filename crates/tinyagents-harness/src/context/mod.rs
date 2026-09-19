@@ -300,6 +300,7 @@ impl<Ctx> RunContext<Ctx> {
             steering: None,
             cancellation: CancellationToken::new(),
             control: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            state_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             workspace: None,
             on_error_dispatched: false,
             streaming: false,
