@@ -336,22 +336,18 @@ where
         let step = source.to_metadata().step;
         let checkpoint_id = next_checkpoint_id();
         let config = self.config_for(target_thread, Some(&checkpoint_id));
-        let forked = Checkpoint {
-            thread_id: target_thread.to_string(),
-            checkpoint_id,
-            run_id: None,
-            parent_checkpoint_id: None,
-            namespace: source.namespace.clone(),
-            state: source.state.clone(),
-            next_nodes: source.next_nodes.clone(),
-            completed_tasks: source.completed_tasks.clone(),
-            completed_routes: source.completed_routes.clone(),
-            pending_writes: source.pending_writes.clone(),
-            interrupts: source.interrupts.clone(),
-            pending_activations: source.pending_activations.clone(),
-            barrier_arrivals: source.barrier_arrivals.clone(),
-            metadata: serde_json::json!({ "source": "fork", "step": step }),
-        };
+        // `source` was already normalized on read, so `.tasks`/`.completed`
+        // are the single source of truth regardless of the stored record's
+        // original format version.
+        let forked = Checkpoint::new(source.state.clone(), source.tasks.clone())
+            .with_thread_id(target_thread.to_string())
+            .with_checkpoint_id(checkpoint_id)
+            .with_namespace(source.namespace.clone())
+            .with_completed(source.completed.clone())
+            .with_pending_writes(source.pending_writes.clone())
+            .with_interrupts(source.interrupts.clone())
+            .with_barrier_arrivals(source.barrier_arrivals.clone())
+            .with_metadata(serde_json::json!({ "source": "fork", "step": step }));
         let id = checkpointer.put(forked).await?;
         self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
         Ok(config)
