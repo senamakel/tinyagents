@@ -99,7 +99,10 @@ where
         // Executor-injected `interrupt_before`/`interrupt_after` pauses this
         // checkpoint recorded: resuming acknowledges them, so the re-run of
         // that task skips the same phase instead of pausing again.
-        let acknowledged_interrupts: HashSet<String> = checkpoint
+        // Plus the acks an earlier pause of a still-pending task already
+        // carried into this checkpoint's metadata (see
+        // `boundary::with_carried_acks`).
+        let mut acknowledged_interrupts: HashSet<String> = checkpoint
             .interrupts
             .iter()
             .filter_map(|interrupt| {
@@ -115,6 +118,18 @@ where
                 )
             })
             .collect();
+        if let Some(carried) = checkpoint
+            .metadata
+            .get("acknowledged_interrupts")
+            .and_then(serde_json::Value::as_array)
+        {
+            acknowledged_interrupts.extend(
+                carried
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string),
+            );
+        }
         let active: Vec<Activation> = if done.is_empty() {
             active
         } else {
