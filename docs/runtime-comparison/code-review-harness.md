@@ -1,14 +1,6 @@
 # `tinyagents-harness` — deep code-quality and design review
 
-Worktree: `/home/enamakel/work/tinyagents/worktrees/runtime-comparison`, branch `runtime-comparison` @ `38f1c5c`.
-All paths below are relative to `crates/tinyagents-harness/src/` unless they start with `docs/`, `vendor/` or `crates/`.
-
-> **Pre-flight (repo state, not crate code).** Branch HEAD `38f1c5c` ("chore(deps): update vendored submodules", a hook-typed
-> commit) moved `vendor/tinyinference` from `219b0ea` → `b5bcb85` and `vendor/tinytools` from `a14e24d` → `7dbd540`. Both targets
-> are *older* commits that predate `crates/tinyinference-llm` and `crates/tinytools-agent`, so at HEAD the workspace does not resolve
-> (`failed to read vendor/tinyinference/crates/tinyinference-llm/Cargo.toml`). Upstream `main` (`fc33c43`) records the correct gitlinks.
-> To run clippy/doc I checked the two submodules out at the upstream-recorded commits (`219b0ea` / `a14e24d`); the auto-commit hook
-> then recorded those gitlinks as `6c12ae0` and `9d91875`, so the branch resolves again. No source file in the crate was edited.
+Reviewed at v2.1.2 (`fc33c43`). All paths below are relative to `crates/tinyagents-harness/src/` unless they start with `docs/`, `vendor/` or `crates/`.
 
 ---
 

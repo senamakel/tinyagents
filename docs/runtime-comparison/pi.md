@@ -1,11 +1,8 @@
 # pi (earendil-works/pi) as an agent runtime library, compared with TinyAgents
 
-Scope note: pi source was read from a `--depth 1` clone at commit `36b60d2e` (2026-09-19).
-TinyAgents was read at the `runtime-comparison` worktree; its model layer is the vendored
-`tinyinference` submodule, whose gitlink in that worktree (`b5bcb85`, old `crates/tinyinference`
-layout) is stale relative to the harness `Cargo.toml` (which wants `crates/tinyinference-llm`). Model-layer
-paths below therefore point at the main checkout `/home/enamakel/work/tinyagents/vendor/tinyinference`.
-Paths prefixed `pi:` are relative to the clone; `ta:` to the TinyAgents worktree; `ti:` to that vendor dir.
+Research date: 2026-09-19. pi source was read from a `--depth 1` clone at commit `36b60d2e`.
+TinyAgents baseline: v2.1.2 (`fc33c43`), vendored `tinyinference` at `219b0ea`.
+Paths prefixed `pi:` are relative to the pi checkout; `ta:` to this repository; `ti:` to `vendor/tinyinference`.
 
 ## 1. What pi is
 
@@ -335,8 +332,7 @@ output, and no permission model; TinyAgents has all of those and should not impo
 
 ## 7. Sources
 
-- pi repo: https://github.com/earendil-works/pi (clone at
-  `/tmp/claude-1000/-home-enamakel-work-tinyagents/a6361e17-1223-4c8a-801e-6d29c5e1236c/scratchpad/pi-src`)
+- pi repo: https://github.com/earendil-works/pi (commit `36b60d2e`)
 - `pi:README.md`, `pi:packages/ai/README.md`, `pi:packages/agent/README.md`, `pi:packages/durable/README.md`,
   `pi:packages/chord/README.md`
 - `pi:packages/ai/src/types.ts`, `src/models.ts`, `src/index.ts`, `src/api/transform-messages.ts`,
@@ -353,5 +349,5 @@ output, and no permission model; TinyAgents has all of those and should not impo
   `ta:crates/tinyagents-graph/src/checkpoint/types.rs`
 - tinyinference (main checkout): `ti:crates/tinyinference-llm/src/{message,model,catalog,usage}/types.rs`,
   `ti:crates/tinyinference-llm/src/providers/`, `ti:crates/tinyinference-providers/src/oauth.rs`
-- OpenHuman calibration: `/home/enamakel/work/openhuman/crates/openhuman-core/src/agent/README.md`,
+- OpenHuman calibration: `openhuman/crates/openhuman-core/src/agent/README.md`,
   `src/agent/harness/`, `src/security/`

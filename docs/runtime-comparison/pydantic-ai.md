@@ -2,11 +2,8 @@
 
 Researched 2026-09-19 against primary sources (pydantic.dev/docs/ai, the
 `pydantic/pydantic-ai` repo and release list, the v2 announcement article).
-TinyAgents checked at `worktrees/runtime-comparison` (v2.1.2). Note: the
-vendored `vendor/tinyinference` and `vendor/tinytools` gitlinks in that
-worktree are stale (they lack `tinyinference-llm` and `tinytools-agent`, which
-`crates/tinyagents-harness/Cargo.toml` depends on); TinyAgents model/tool
-trait facts below were read from those submodules' `origin/main`.
+TinyAgents baseline: v2.1.2 (`fc33c43`), vendored `tinyinference` at `219b0ea`
+and `tinytools` at `a14e24d`.
 
 ## 1. What Pydantic AI is today
 
@@ -57,8 +54,8 @@ trait facts below were read from those submodules' `origin/main`.
 
 ## 2. Feature inventory
 
-Paths are relative to the TinyAgents worktree unless prefixed `vendor:` (read
-from the submodule's `origin/main`). H = `crates/tinyagents-harness/src`,
+Paths are relative to this repository unless prefixed `vendor:`
+(`vendor/tinyinference` / `vendor/tinytools`). H = `crates/tinyagents-harness/src`,
 G = `crates/tinyagents-graph/src`.
 
 | Feature | Pydantic AI | TinyAgents | Notes |

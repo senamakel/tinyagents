@@ -1,20 +1,8 @@
 # tinyagents-graph / -orchestration / -session: durable-runtime code review
 
-Worktree: `/home/enamakel/work/tinyagents/worktrees/runtime-comparison` @ `38f1c5c`. Read-only.
-All paths below are relative to the worktree root unless absolute.
+Reviewed at v2.1.2 (`fc33c43`), read-only. Paths are relative to the repository root.
 
-Environment note (not a crate finding, but it blocks verification): HEAD's gitlink
-`vendor/tinyinference` = `b5bcb85`, whose tree has `crates/tinyinference` (v0.2.1), while
-`crates/tinyagents-graph/Cargo.toml:23` requires `vendor/tinyinference/crates/tinyinference-llm`
-(v0.3.0). `cargo` cannot resolve the workspace in this worktree. `upstream/main` records
-`219b0ea`, which has the expected layout. To run clippy without touching the checkout I
-archived HEAD + the `219b0ea` submodule tree into the scratchpad and ran
-`cargo clippy -p tinyagents-graph -p tinyagents-orchestration -p tinyagents-session --all-targets
---target-dir <worktree>/target -- -W clippy::pedantic`. Result: clean under default lints;
-564 pedantic warnings for graph (mostly `must_use`, `missing_errors_doc`, casts), notable:
-`execute_run` 499 lines, `run_active_parallel` 121 lines, `state_api::update_state` 121 lines.
-Full log: `scratchpad/clippy.txt`. The `38f1c5c` "update vendored submodules" commit on local
-`main` should be fixed or dropped before it is pushed anywhere.
+`cargo clippy -p tinyagents-graph -p tinyagents-orchestration -p tinyagents-session --all-targets -- -W clippy::pedantic` is clean under default lints; 564 pedantic warnings for graph (mostly `must_use`, `missing_errors_doc`, casts), notably: `execute_run` 499 lines, `run_active_parallel` 121 lines, `state_api::update_state` 121 lines.
 
 ## 1. Architecture as-built
 

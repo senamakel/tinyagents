@@ -1,15 +1,6 @@
 # Workspace / registry / language / definition / tracing / integration-tests review
 
-Worktree reviewed: `/home/enamakel/work/tinyagents/worktrees/runtime-comparison`
-(branch `runtime-comparison`, HEAD `38f1c5c`). Read-only; no repo file was edited.
-
-**Build note.** The worktree itself does not resolve (`cargo tree` fails, see C1),
-so every cargo command below (`cargo tree`, `cargo doc`, `cargo clippy -W pedantic`,
-`cargo build --workspace --all-targets`, example binaries) was run with
-`--manifest-path /home/enamakel/work/tinyagents/Cargo.toml` against the main
-checkout, which is on `main` (`fc33c43`) with correctly checked-out submodules.
-`git diff main HEAD --stat -- . ':!vendor'` is empty, so the Rust sources reviewed
-here are byte-identical between the two.
+Reviewed at v2.1.2 (`fc33c43`), read-only.
 
 ---
 
@@ -59,15 +50,7 @@ integration-tests 217, session 177, language 95, orchestration 68, registry 47).
 
 ### Critical
 
-**C1. The `runtime-comparison` branch pins vendor submodules to commits whose crate layout no longer matches the path dependencies, so the workspace cannot resolve.**
-`git ls-tree HEAD vendor/` → `tinyinference @ b5bcb85`, `tinytools @ 7dbd540`; `main` records `219b0ea` / `a14e24d`. The one commit on the branch is `38f1c5c chore(deps): update vendored submodules` (a hook checkpoint) which *downgraded* both pointers 37 and 1 commits respectively. At `b5bcb85` the tree is `vendor/tinyinference/crates/tinyinference/` (single crate), but
-`crates/tinyagents-graph/Cargo.toml:18`
-```toml
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
-```
-so `cargo tree` in the worktree fails with `failed to read .../tinyinference-llm/Cargo.toml`. Why it matters: anything built or CI'd from this branch is red before a single line of Rust is compiled; a PR from it would fail `submodules: recursive` checkout in `.github/workflows/ci.yml:23`. Fix: `git -C vendor/tinyinference checkout 219b0ea && git -C vendor/tinytools checkout a14e24d`, commit the gitlinks (or drop `38f1c5c`), and consider a CI/pre-commit guard that fails when a gitlink moves *backwards* relative to `upstream/main`. Effort S.
-
-**C2. CI's core `cargo test` / `cargo clippy` steps never touch the 637 integration tests, the examples, `tinyagents-definition`, or `tinyagents-tracing`.**
+**C1. CI's core `cargo test` / `cargo clippy` steps never touch the 637 integration tests, the examples, `tinyagents-definition`, or `tinyagents-tracing`.**
 Root `Cargo.toml:3-10` sets `default-members` to six crates; `tinyagents-integration-tests`, `-definition`, `-tracing` are absent. `.github/workflows/ci.yml:41-58` runs `cargo clippy --all-targets -- -D warnings`, `cargo build --all-targets`, `cargo test`, `cargo test --all-features`, and the three `--no-default-features --features …` runs *without* `--workspace`, so all of them operate on default members only. The only step that exercises the whole workspace is the coverage step (`cargo llvm-cov --all-features --workspace`, line 66), and it runs with `--all-features` only. Consequences: (1) an integration test that fails only without `sqlite`/`tracing` is invisible; (2) `-D warnings` is never applied to `tests/` or `examples/` (the crate even sets `[lints.rust] unused_imports = "allow"` at `crates/tinyagents-integration-tests/Cargo.toml:41`); (3) `cargo test --no-default-features --features sqlite` does not cover `tinyagents-integration-tests`' `sqlite` forwarding feature at all. CLAUDE.md prescribes `cargo clippy --workspace …` and `cargo test --workspace`; CI does not follow it. Fix: add `--workspace` to every cargo step in `ci.yml` (and `release.yml:50-56`), or add the three crates to `default-members`. Effort S.
 
 ### Important
@@ -223,7 +206,7 @@ Integration-test coverage holes (from `grep -l` over `tests/` + `examples/`):
 - `build_graph` with a `Routing::Conditional` route table validated against handler `goto`s: none (cannot exist, see I2).
 - No test for duplicate node items (M1), no formatter/round-trip tests (`implementation-status.md:92` L8 open), no test that `Blueprint` JSON without the older fields deserializes (M5).
 - Live gating inconsistency (I10); `live_local_models.rs`/`live_local_embeddings.rs` (20 tests) depend on LM Studio/Ollama on localhost.
-- CI never runs the integration crate without `--all-features` (C2).
+- CI never runs the integration crate without `--all-features` (C1).
 
 ---
 

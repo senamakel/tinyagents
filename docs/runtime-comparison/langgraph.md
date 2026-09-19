@@ -1,7 +1,7 @@
 # LangGraph / LangChain 1.x vs TinyAgents — runtime comparison
 
-Research date: 2026-09-19. TinyAgents baseline: `worktrees/runtime-comparison` (v2.1.2 per `ROADMAP.md`).
-Paths below are relative to that checkout unless prefixed `openhuman:`.
+Research date: 2026-09-19. TinyAgents baseline: v2.1.2 (`fc33c43`).
+Paths below are relative to this repository unless prefixed `openhuman:`.
 
 ## 1. What LangGraph/LangChain is today
 
@@ -266,7 +266,7 @@ some (background runs, cron, multitask) as hosted services.
 
 ## 5. Runtime-level vs harness-level split
 
-Calibration: `openhuman:crates/openhuman-core/src` already owns `skills/`, `memory/`, `sandbox/`,
+Calibration: `openhuman:crates/openhuman-core/src` (the OpenHuman desktop host) already owns `skills/`, `memory/`, `sandbox/`,
 `cron/`, `hooks/`, `security/{approval,audit,bubblewrap}`, `agent/tools`, `agent/tool_policy.rs`,
 `agent/orchestration/{worktree,spawn_parallel_graph,running_subagents}` and `agent/harness/{memory_context,
 artifact_offload,tool_result_artifacts}`. Those are the OpenHuman analogues of Deep Agents.
