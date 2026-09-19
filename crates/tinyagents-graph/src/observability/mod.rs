@@ -543,12 +543,12 @@ impl JournalGraphSink {
 }
 
 impl GraphEventSink for JournalGraphSink {
-    fn emit(&self, event: GraphEvent) {
-        let obs = self.observe(&event);
+    fn emit(&self, envelope: GraphEventEnvelope) {
+        let obs = self.observe(&envelope.event);
         // Hand off to the background drain; never block the executor on I/O.
         self.worker.submit(obs);
         if let Some(inner) = &self.inner {
-            inner.emit(event);
+            inner.emit(envelope);
         }
     }
 
