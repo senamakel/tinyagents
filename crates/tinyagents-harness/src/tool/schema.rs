@@ -197,6 +197,8 @@ impl SchemaCleanr {
                 "const" => {
                     cleaned.insert("enum".to_string(), json!([value]));
                 }
+                // An unsimplified union already carries per-variant `type`s;
+                // a sibling top-level `type` would be redundant or conflicting.
                 "type" if has_union => {}
                 "type" if matches!(value, Value::Array(_)) => {
                     cleaned.insert(key, Self::clean_type_array(value));

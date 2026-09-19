@@ -53,11 +53,19 @@ pub struct ClaudeAgentSdkProvider {
     profile: ModelProfile,
 }
 
+/// Fully-formed CLI arguments and stdin payload for one `claude -p` call.
 struct ClaudeInvocation {
     args: Vec<String>,
     stdin: String,
 }
 
+/// Builds the argv and stdin payload for one `claude -p` invocation.
+///
+/// The system prompt, when present, is wrapped in `[SYSTEM]...[/SYSTEM]`
+/// tags and prepended to stdin rather than passed as a CLI flag, keeping the
+/// full request off argv (see [`ClaudeAgentSdkProvider::invoke_cli`]). A
+/// `max_budget_usd` also pins `--max-turns 10` so a budget-capped run cannot
+/// wander indefinitely before the budget check kicks in.
 fn build_invocation(
     system_prompt: Option<&str>,
     message: &str,
