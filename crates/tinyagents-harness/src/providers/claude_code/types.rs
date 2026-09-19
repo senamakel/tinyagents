@@ -11,20 +11,24 @@ pub const MIN_CLI_VERSION: &str = "2.0.0";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum CliStatus {
+    /// A usable CLI at or above [`MIN_CLI_VERSION`] was found.
     Ok {
+        /// Reported CLI version.
         version: String,
+        /// Resolved path to the binary.
         path: String,
     },
+    /// No `claude` binary could be located.
     NotInstalled,
+    /// A binary was found but its version is below [`MIN_CLI_VERSION`].
     Outdated {
         version: String,
         min_required: String,
         path: String,
     },
-    Unusable {
-        path: String,
-        reason: String,
-    },
+    /// A binary was found but failed a usability check (e.g. `--version`
+    /// spawn or parse failure) for a reason other than being missing.
+    Unusable { path: String, reason: String },
 }
 
 /// Branding string used in user-facing copy. Locked decision (PLAN §13.4).

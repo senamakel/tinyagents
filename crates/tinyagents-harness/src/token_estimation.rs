@@ -5,7 +5,7 @@
 //! Several independent places in the harness need "roughly how many tokens is
 //! this transcript?" — compaction gating, context middleware, and budget
 //! preflight. Each grew its own `chars / 4` loop over
-//! [`Message::text`][super::Message::text], and every one of them silently
+//! [`Message::text`], and every one of them silently
 //! under-counted the same way: a transcript's *structure* (tool calls, tool
 //! result correlation ids, role labels, per-message framing) is invisible to
 //! `text()`, and an assistant turn that only calls tools has **no text at
@@ -20,7 +20,7 @@
 //!
 //! | Part | Source |
 //! | ---- | ------ |
-//! | content blocks (text, JSON, reasoning, provider extensions) | [`ContentBlock::estimated_char_weight`][super::ContentBlock::estimated_char_weight] |
+//! | content blocks (text, JSON, reasoning, provider extensions) | [`ContentBlock::estimated_char_weight`](tinyinference_llm::message::ContentBlock::estimated_char_weight) |
 //! | images | flat per-image weight, not the base64 length |
 //! | assistant `tool_calls` | JSON rendering of the call array |
 //! | tool `tool_call_id` | the id string |
@@ -248,6 +248,26 @@ pub fn count_tool_schema_tokens(schemas: &[ToolSchema], options: &TokenCountOpti
         schemas.len()
     );
     tokens
+}
+
+/// Serialised size, in bytes, of the tool declarations as they go on the
+/// wire: `{name, description, parameters}` per tool, compact JSON.
+///
+/// This is the number a prompt-budget ratchet wants — exact bytes, not a
+/// tokenizer guess — and the one [`crate::events::AgentEvent::ToolsAdvertised`]
+/// reports at the start of every run.
+pub fn tool_schema_bytes(schemas: &[ToolSchema]) -> usize {
+    schemas
+        .iter()
+        .map(|schema| {
+            let rendered = serde_json::json!({
+                "name": schema.name,
+                "description": schema.description,
+                "parameters": schema.parameters,
+            });
+            serde_json::to_vec(&rendered).map_or(0, |bytes| bytes.len())
+        })
+        .sum()
 }
 
 /// The crate's legacy `floor(chars / 4)` heuristic for a single message,

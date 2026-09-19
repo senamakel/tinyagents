@@ -9,7 +9,7 @@
 //! each boundary is what lets a run be paused on an interrupt, resumed later,
 //! forked, or replayed for time-travel debugging.
 //!
-//! See [`types`] for the checkpoint record definitions. Checkpoints are written
+//! See `types` for the checkpoint record definitions. Checkpoints are written
 //! at superstep boundaries only — never mid-node — so resuming always reruns a
 //! node from its start.
 

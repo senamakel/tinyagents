@@ -12,6 +12,17 @@ where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
 {
+    /// Resolves the next superstep's activation set from a completed step's
+    /// results: routes each completed activation (`self.route`), applies
+    /// barrier gating for waiting/fan-in nodes, and runs the mixed-fan-in
+    /// barrier-relief pass so a barrier fed by a conditional predecessor
+    /// doesn't deadlock when that branch wasn't taken.
+    ///
+    /// `goto_map` carries per-activation-index [`Command::goto`] targets
+    /// (see [`Self::route`]); `barrier_arrivals` is mutated in place as
+    /// waiting-node predecessors arrive, so a barrier can still be pending
+    /// across supersteps.
+    ///
     /// `completed` pairs each branch with its *original* active-set index
     /// (not necessarily `0..completed.len()` in order — see
     /// [`crate::compiled::step::StepRun::completed`] and
@@ -255,6 +266,9 @@ where
         Ok(())
     }
 
+    /// Checks the precondition for emitting an [`Interrupt`]: a checkpointer
+    /// and a thread id must both be present, since an interrupt is only
+    /// resumable if it can be persisted and later addressed by thread.
     pub(super) fn require_interrupt_durability(&self, thread_id: &Option<ThreadId>) -> Result<()> {
         if self.checkpointer.is_none() {
             return Err(TinyAgentsError::Resume(

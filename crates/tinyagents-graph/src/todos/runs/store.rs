@@ -1,5 +1,5 @@
 //! Persistence and lifecycle for [`TaskRun`]s, on the harness
-//! [`Store`](tinyagents_harness::store::Store).
+//! [`Store`].
 //!
 //! Each thread's runs are a single serialized `Vec<TaskRun>` under the
 //! [`RUNS_NAMESPACE`] namespace, keyed by the hex-encoded thread id — the same

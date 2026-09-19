@@ -222,77 +222,11 @@ Feature ownership:
 - `workspace`: per-agent filesystem/sandbox isolation, allowed-root descriptors,
   and fail-closed path enforcement for tools that touch real files.
 
-### Host-authorized invocations
+### Host-authorized invocations and tool timeouts
 
-`AgentHarness` is reusable process infrastructure: it owns durable model and
-tool registries, middleware, policy, and caches. A host capability bundle is
-instead supplied for each root through `runtime::AgentInvocation`:
-
-```rust,no_run
-use tinyagents_harness::{
-    context::{RunConfig, RunContext},
-    runtime::{AgentHarness, AgentInvocation, AgentTurnRequest},
-};
-
-# async fn example<State: Send + Sync + 'static>(
-#     harness: &AgentHarness<State>,
-#     host: tinyagents_harness::host::HostCapabilities<State>,
-#     state: &State,
-# ) -> tinyagents_harness::Result<()> {
-let invocation = AgentInvocation::new(
-    host,
-    AgentTurnRequest::new("assistant", vec![]),
-    RunContext::new(RunConfig::new("run-42"), ()),
-);
-let _run = harness.invoke_agent(invocation, state).await?;
-# Ok(())
-# }
-```
-
-This prevents concurrent roots from replacing one another's progress,
-security, approval, or other host authority. The harness never stores a live
-capability bundle (not even in a run-id map): it lives only in the
-non-serializable `RunContext`, is never checkpointed, and is dropped with that
-invocation. Recursive children inherit the exact parent bundle through their
-live context and cannot select a bundle from their own harness. The lower-level
-explicit-model `invoke*` APIs remain separate for SDK callers that intentionally
-assemble a run without host capabilities.
-
-`invoke_agent` (and its streaming counterpart) return
-`Result<AgentRun, runtime::HostedError>`, not `TinyAgentsError`: a hosted
-failure carries a closed `runtime::HostedErrorKind` (`Cancelled | Timeout |
-LimitExceeded | Policy | Provider | Internal`) a host can match on directly,
-plus the partial `AgentRun` accumulated before the failure. `HostedError`'s
-own `message` is a fixed, sanitized string per `kind` — never raw provider,
-middleware, or budget error text — so distinguishing failure modes never
-requires attaching a private event listener to the run. `HostedError`
-implements `From<HostedError> for TinyAgentsError` for callers (recursive
-hosted delegation) that need to keep propagating through the crate-wide
-`Result` alias with `?`, which is why the `?` in the example above still
-compiles.
-
-Hosted invocations require `State: 'static` because their live capability
-authority must be retained in the recursive context. The explicit-model
-`invoke*`, streaming, and direct `SubAgent` paths do not install or inspect
-that authority and continue to support borrowed state.
-
-For a child of a hosted parent, call
-`SubAgent::invoke_hosted_in_parent`; it rechecks the parent's delegate
-allowlist and inherits the exact bundle. The borrowed-state-compatible
-`SubAgent::invoke_in_parent` is explicit-only and rejects a hosted parent
-context before it can start a child.
-
-### Tool timeout policy
-
-Hosts enable per-tool deadlines with
-`AgentHarness::with_tool_timeout_settings(ToolTimeoutSettings)`. The setting is
-shared and dynamically updateable. Each tool supplies `ToolTimeout::Inherit`
-(the default), `Millis(budget)`, or `Unbounded`; resolution happens at the
-innermost tool call after wrap middleware has had a chance to rewrite its
-arguments. On expiry the loop appends a recoverable tool-error result and keeps
-running, allowing model repair. The independent run wall-clock limit remains a
-hard error. See [`tool.md`](tool.md) for the tool contract and
-[`runtime.md`](runtime.md) for harness assembly.
+Split into a focused doc: how a host capability bundle is bound to one
+invocation, and how per-tool timeouts are resolved. See
+[hosting.md](hosting.md).
 
 Continued specification: [runtime.md](runtime.md) (tool registry, agent loop,
 middleware, memory/stores) and
@@ -308,6 +242,7 @@ Feature details:
 - [State graph runtime feature](state-graph.md)
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
+- [Tool exposure, discovery, and schema budgets](tool-discovery.md)
 - [Tool dialects](tool-dialect.md)
 - [Workspace isolation feature](workspace.md)
 - [Middleware feature](middleware.md)
@@ -322,12 +257,14 @@ Feature details:
 - [Store feature](store.md)
 - [Observability and events](observability.md)
 - [Testkit feature](testkit.md)
-- [Design notes: LangChain parity map and core-type sketch](design-notes.md)
+- [Host authorization and tool timeouts](hosting.md)
+- [LangChain feature parity map](langchain-parity.md)
+- [Design notes: harness core-type sketch](design-notes.md)
 
-## LangChain Feature Parity Map (moved)
+## Core Types (moved)
 
-See [`design-notes.md`](design-notes.md) for the LangChain feature-parity
-checklist and the harness core-type sketch — moved out of this file to keep
+See [`design-notes.md`](design-notes.md) for the harness core-type sketch
+(`AgentHarness`, `RunConfig`, `RunContext`) — moved out of this file to keep
 it under the repo's 500-line Markdown limit.
 
 ## Messages

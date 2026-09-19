@@ -21,7 +21,7 @@
 //! | `ToolCall`              | An artificial tool call carries the arguments as JSON         |
 //!
 //! Use [`response_format_for_strategy`] to obtain the correct
-//! [`ResponseFormat`] to include in a [`ModelRequest`], then call
+//! [`ResponseFormat`] to include in a [`ModelRequest`](tinyinference_llm::model::ModelRequest), then call
 //! [`StructuredExtractor::extract`] on the completed [`ModelResponse`].
 //!
 //! # Repair, validation, and non-fatal extraction
@@ -29,11 +29,11 @@
 //! Extraction is not a bare `serde_json::from_str` any more. Three things
 //! happen around it, each in its own submodule:
 //!
-//! * [`repair`] climbs a conservative ladder — code fence, prose slice,
+//! * `repair` climbs a conservative ladder — code fence, prose slice,
 //!   relaxed JSON, truncation close — so a fenced, chatty, or cut-off answer is
 //!   recovered instead of ending a run. It never invents structure: a rung is
 //!   accepted only when the repaired text parses strictly.
-//! * [`validate`] checks the parsed value against the declared schema, so
+//! * `validate` checks the parsed value against the declared schema, so
 //!   `{"wrong_key": 1}` against a `score` schema is a reported error naming the
 //!   failing instance path — not a silent success.
 //! * [`StructuredExtractor::extract_outcome`] returns a [`StructuredOutcome`]
@@ -94,7 +94,7 @@ impl StructuredStrategy {
     /// forced choice is dropped — leaving a request that asks for nothing in
     /// particular and an extractor waiting for a tool call that can never
     /// arrive. Provider-schema mode at least asks for JSON and, with the repair
-    /// ladder in [`super::structured::repair`], parses what a JSON-mode model
+    /// ladder in `repair`, parses what a JSON-mode model
     /// actually returns.
     ///
     /// [tc]: tinyinference_llm::model::ToolChoice::Tool
@@ -181,7 +181,7 @@ impl StructuredExtractor {
     /// * `schema_name` – the schema's logical name; used as the tool name when
     ///   matching tool calls in [`StructuredStrategy::ToolCall`] mode.
     /// * `schema` – the JSON Schema document. Enforced: every extracted value
-    ///   is validated against it (see [`validate`]).
+    ///   is validated against it (see `validate`).
     pub fn new(
         strategy: StructuredStrategy,
         schema_name: impl Into<String>,
@@ -213,14 +213,14 @@ impl StructuredExtractor {
     ///
     /// * **[`StructuredStrategy::ToolCall`]** – scans the response's tool
     ///   calls for the first one whose `name` matches
-    ///   [`StructuredExtractor::schema_name`] and returns its `arguments` as
+    ///   `schema_name` and returns its `arguments` as
     ///   the structured value.  Returns [`TinyAgentsError::Validation`] when no
     ///   matching call is found.
     ///
     /// # Validation
     ///
     /// Both strategies validate the extracted value against this extractor's
-    /// schema before returning it (see [`validate`]). A value that parses but
+    /// schema before returning it (see `validate`). A value that parses but
     /// does not conform is an error naming the failing instance path — not a
     /// success carrying the wrong shape.
     ///
@@ -277,6 +277,9 @@ impl StructuredExtractor {
         format!("schema '{}'", self.schema_name)
     }
 
+    /// [`StructuredStrategy::ProviderSchema`] extraction: parses the
+    /// response's text as JSON (via the repair ladder), after special-casing
+    /// an empty response caused by hitting the output-token limit.
     fn extract_provider_schema(&self, response: &ModelResponse) -> Result<StructuredOutput> {
         let raw = response.text();
 
@@ -332,6 +335,10 @@ impl StructuredExtractor {
         })
     }
 
+    /// [`StructuredStrategy::ToolCall`] extraction: finds the tool call named
+    /// `schema_name` and takes its arguments as the structured value,
+    /// running the repair ladder over a preserved raw string when the
+    /// provider itself could not parse the call's arguments.
     fn extract_tool_call(&self, response: &ModelResponse) -> Result<StructuredOutput> {
         let call = response
             .tool_calls()
@@ -386,7 +393,7 @@ impl StructuredExtractor {
 /// [`StructuredExtractor::extract`] after the model responds.
 ///
 /// For `ToolCall` the caller is responsible for registering an artificial
-/// tool with the given `name` and `schema` in the [`ModelRequest`]; the
+/// tool with the given `name` and `schema` in the [`ModelRequest`](tinyinference_llm::model::ModelRequest); the
 /// response format is plain text because the structure arrives via tool
 /// arguments.
 pub fn response_format_for_strategy(

@@ -53,6 +53,10 @@ pub fn read_transcript(path: &Path) -> Result<SessionTranscript> {
     }
 }
 
+/// Replays a `.jsonl` transcript into the model-context [`SessionTranscript`]:
+/// message lines accumulate, a `compaction` record replaces the accumulator
+/// wholesale, and `interrupted` partials are skipped since they never entered
+/// the model's context.
 fn read_transcript_jsonl(path: &Path) -> Result<SessionTranscript> {
     let raw = fs::read_to_string(path)
         .with_context(|| format!("read transcript jsonl {}", path.display()))?;

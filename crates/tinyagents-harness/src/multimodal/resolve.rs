@@ -119,6 +119,8 @@ pub async fn resolve_image(
     resolve_local_image(source, max_bytes).await
 }
 
+/// Resolve a `data:` source: decompresses a gzip-wrapped payload when present,
+/// then validates MIME and size before re-encoding.
 fn resolve_image_data_uri(source: &str, max_bytes: usize) -> Result<String> {
     let parsed = parse_data_uri(source).map_err(|reason| MultimodalError::InvalidMarker {
         input: source.to_string(),
@@ -148,6 +150,8 @@ fn resolve_image_data_uri(source: &str, max_bytes: usize) -> Result<String> {
     Ok(encode_data_uri(&mime, &decoded))
 }
 
+/// Fetches an `http(s)` image, checking size against both the `Content-Length`
+/// header and the measured body before detecting MIME and re-encoding.
 async fn resolve_remote_image(
     source: &str,
     max_bytes: usize,
@@ -204,6 +208,8 @@ async fn resolve_remote_image(
     Ok(encode_data_uri(&mime, bytes.as_ref()))
 }
 
+/// Reads a local image path, checking size (against metadata, then the
+/// measured read) before detecting MIME and re-encoding.
 async fn resolve_local_image(source: &str, max_bytes: usize) -> Result<String> {
     let path = Path::new(source);
     if !path.exists() || !path.is_file() {
@@ -243,6 +249,7 @@ async fn resolve_local_image(source: &str, max_bytes: usize) -> Result<String> {
     Ok(encode_data_uri(&mime, &bytes))
 }
 
+/// Rejects `size_bytes` over `max_bytes` as [`MultimodalError::ImageTooLarge`].
 fn check_image_size(source: &str, size_bytes: usize, max_bytes: usize) -> Result<()> {
     if size_bytes > max_bytes {
         return Err(MultimodalError::ImageTooLarge {
@@ -254,6 +261,7 @@ fn check_image_size(source: &str, size_bytes: usize, max_bytes: usize) -> Result
     Ok(())
 }
 
+/// Rejects `mime` not on the image allowlist as [`MultimodalError::UnsupportedMime`].
 fn check_image_mime(source: &str, mime: &str) -> Result<()> {
     if is_allowed_image_mime(mime) {
         return Ok(());
@@ -327,6 +335,9 @@ pub async fn resolve_file(
     .await
 }
 
+/// Resolve a `data:` file source: decompresses a gzip-wrapped payload when
+/// present, extracts the `name` parameter, and checks size. MIME allowlisting
+/// happens later in [`build_file_payload`].
 fn resolve_file_data_uri(source: &str, max_bytes: usize) -> Result<(Vec<u8>, String, String)> {
     let parsed = parse_data_uri(source).map_err(|reason| MultimodalError::InvalidFileMarker {
         input: source.to_string(),
@@ -357,6 +368,9 @@ fn resolve_file_data_uri(source: &str, max_bytes: usize) -> Result<(Vec<u8>, Str
     Ok((bytes, name, mime))
 }
 
+/// Enforces the MIME allowlist, then extracts text (via `extractor`) for a
+/// non-plaintext format that offers to handle it, degrading to a metadata
+/// reference on refusal, and builds the resulting [`FilePayload`].
 async fn build_file_payload(
     source: &str,
     bytes: Vec<u8>,
@@ -427,6 +441,8 @@ async fn build_file_payload(
     Ok(payload)
 }
 
+/// Reads a local file path, checking size (against metadata, then the
+/// measured read) and returning its bytes, path, and file-name.
 async fn read_local_file(source: &str, max_bytes: usize) -> Result<(Vec<u8>, PathBuf, String)> {
     let path = Path::new(source).to_path_buf();
     if !path.exists() || !path.is_file() {
@@ -464,6 +480,10 @@ async fn read_local_file(source: &str, max_bytes: usize) -> Result<(Vec<u8>, Pat
     Ok((bytes, path, name))
 }
 
+/// Fetches an `http(s)` file, checking size against both the `Content-Length`
+/// header and the measured body, and deriving a display name from the URL's
+/// last path segment (not `Content-Disposition`, which is attacker-controlled
+/// on a fetched URL).
 async fn fetch_remote_file(
     source: &str,
     max_bytes: usize,
@@ -517,6 +537,7 @@ async fn fetch_remote_file(
     Ok((bytes.to_vec(), name, content_type))
 }
 
+/// Rejects `size_bytes` over `max_bytes` as [`MultimodalError::FileTooLarge`].
 fn check_file_size(source: &str, size_bytes: usize, max_bytes: usize) -> Result<()> {
     if size_bytes > max_bytes {
         return Err(MultimodalError::FileTooLarge {

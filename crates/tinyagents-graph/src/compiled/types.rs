@@ -1,4 +1,12 @@
 //! Compiled graph and execution-result types.
+//!
+//! [`CompiledGraph`] is the frozen, runnable output of
+//! [`GraphBuilder::compile`](crate::builder::GraphBuilder::compile); its
+//! behavior (the superstep loop, routing, state-inspection API) lives in the
+//! sibling `executor.rs`, `routing.rs`, and `state_api.rs` files, which all
+//! `impl` against the type defined here. [`GraphExecution`] and
+//! [`StateSnapshot`] are the two result shapes those entry points return —
+//! a finished/paused run and a point-in-time checkpoint view, respectively.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -291,7 +299,8 @@ pub struct GraphInput {
     /// Target node for this input. `__start__` is accepted as the virtual entry
     /// target and is resolved to the graph's compiled entry node at run time.
     pub node: NodeId,
-    /// Optional per-input payload delivered as [`NodeContext::send_arg`].
+    /// Optional per-input payload delivered as
+    /// [`NodeContext::send_arg`](crate::NodeContext::send_arg).
     pub payload: Option<serde_json::Value>,
 }
 

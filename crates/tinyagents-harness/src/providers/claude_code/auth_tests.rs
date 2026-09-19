@@ -1,3 +1,5 @@
+//! Unit tests for `ANTHROPIC_API_KEY` resolution precedence.
+
 use super::*;
 
 #[test]

@@ -356,6 +356,10 @@ fn sanitize_hosted_stream_item(mut item: AgentStreamItem) -> AgentStreamItem {
     item
 }
 
+/// Replaces every error message on an [`AgentEvent`] with a fixed, family-
+/// specific string before it reaches a hosted caller, mirroring
+/// [`sanitize_hosted_stream_item`] for the individual event variants that
+/// carry raw provider/tool/middleware diagnostics.
 fn sanitize_hosted_event(record: &mut EventRecord) {
     match &mut record.event {
         AgentEvent::ToolCompleted {
@@ -408,14 +412,34 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, St
     }
 }
 
+/// Everything a hosted turn needs to run, assembled by
+/// [`AgentHarness::prepare_agent_turn`] before the loop starts.
+///
+/// Bundles the per-invocation host binding with the composed transcript so the
+/// unary and streaming entry points can share one preparation path and one
+/// terminal-observer closure.
 struct PreparedAgentTurn<State: Send + Sync, Ctx: Send + Sync> {
+    /// Host capability bundle and definition-derived routing facts for this run.
     binding: HostInvocationBinding<State, Ctx>,
+    /// Thread the prepared turn belongs to (derived from the run id when the
+    /// caller supplied none).
     thread_id: ThreadId,
+    /// Run id of the invocation this turn was prepared for.
     run_id: crate::ids::RunId,
+    /// Screened user-visible text, used for memory recall and later stamped
+    /// onto the turn summary and experience record.
     input_text: String,
+    /// The fully composed transcript (system prompt, preamble, user messages)
+    /// handed to the agent loop.
     messages: Vec<tinyinference_llm::message::Message>,
 }
 
+/// Bounded, best-effort fan-out from the agent loop to a host's
+/// [`crate::host::ProgressSink`].
+///
+/// Backed by a bounded channel plus a semaphore so a slow or absent consumer
+/// cannot retain unbounded memory for a long-running turn; see
+/// [`start_progress_dispatcher`] for the slot accounting this coordinates with.
 #[derive(Clone)]
 pub(crate) struct ProgressSender {
     tx: tokio::sync::mpsc::Sender<ProgressEvent>,
@@ -423,6 +447,13 @@ pub(crate) struct ProgressSender {
 }
 
 impl ProgressSender {
+    /// Sends a non-terminal progress event, dropping it if no nonterminal slot
+    /// is free.
+    ///
+    /// Never blocks: `try_acquire_owned` and `try_send` both fail fast rather
+    /// than stalling the turn on a slow sink. The permit is intentionally
+    /// forgotten on success — it is returned later when the dispatcher observes
+    /// the event was consumed, not when this call returns.
     fn send_nonterminal(&self, event: ProgressEvent) {
         let Ok(permit) = self.nonterminal_slots.clone().try_acquire_owned() else {
             return;
@@ -432,6 +463,12 @@ impl ProgressSender {
         }
     }
 
+    /// Sends the one terminal event for this turn (`Finished` or `Error`).
+    ///
+    /// Bypasses the nonterminal-slot semaphore: the channel reserves a slot
+    /// specifically for this so a saturated stream of progress updates can
+    /// never suppress the outcome. Still best-effort — a full channel drops it
+    /// rather than blocking the finalizer.
     fn send_terminal(&self, event: ProgressEvent) {
         let _ = self.tx.try_send(event);
     }
@@ -709,6 +746,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         }
     }
 
+    /// The wall-clock time left for host I/O (definition lookup, security
+    /// screening, context composition) before this turn must give up.
+    ///
+    /// Takes the smaller of the context's own remaining budget and what
+    /// `RunPolicy::limits.max_wall_clock_ms` still allows, so host preparation
+    /// never outlives either the caller's deadline or the harness's own cap.
+    /// `None` means neither source imposes a limit.
     fn host_io_budget(&self, context: &RunContext<Ctx>) -> Option<Duration> {
         let config = context.remaining_wall_clock();
         let policy = self.policy.limits.max_wall_clock_ms.map(|milliseconds| {
@@ -724,6 +768,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         }
     }
 
+    /// Resolves the host agent definition, screens the caller's messages,
+    /// composes the system prompt/preamble, and folds in memory and experience
+    /// recall to produce a [`PreparedAgentTurn`].
+    ///
+    /// Order matters: the definition must resolve and validate before any host
+    /// I/O runs, user messages are screened before their text is used as a
+    /// memory/experience recall query, and recalled/stored text is screened a
+    /// second time (as [`ContentOrigin::Stored`]) before it is appended to the
+    /// transcript — a host's own stored content is not exempt from screening.
     async fn prepare_agent_turn(
         &self,
         host: std::sync::Arc<crate::host::HostCapabilities<State>>,
@@ -839,6 +892,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         })
     }
 
+    /// Wires a terminal observer that hands the finished (or cancelled)
+    /// `AgentRun` off to [`spawn_host_finalizer`] exactly once.
+    ///
+    /// Returns the shared `Option` slot so a caller (`AgentStream::drop`) can
+    /// also fire the observer if the stream is abandoned before a terminal
+    /// item is produced — the `Option::take` inside both closures is what
+    /// keeps "run finished" and "stream dropped early" from double-firing.
     fn install_host_terminal_observer(
         &self,
         context: &mut RunContext<Ctx>,
@@ -943,6 +1003,12 @@ pub(crate) fn emit_host_progress<State: Send + Sync, Ctx: Send + Sync>(
     progress.send_nonterminal(event);
 }
 
+/// Collapses any preparation failure into a caller-safe message, preserving
+/// only [`TinyAgentsError::Cancelled`] and [`TinyAgentsError::Timeout`] — the
+/// two variants a caller needs to distinguish to react correctly (do not
+/// retry vs. may retry with a longer budget). Everything else (a definition
+/// lookup failure, a security block, a malformed definition) collapses to the
+/// same generic message so internal detail never reaches a hosted caller.
 fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError {
     match error {
         TinyAgentsError::Cancelled
@@ -952,6 +1018,13 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
     }
 }
 
+/// Runs [`finish_host_turn`] on a Tokio task, tolerating the case where the
+/// terminal observer fires from a context with no ambient runtime (for
+/// example, a `Drop` impl running during unwind).
+///
+/// Falls back to a dedicated current-thread runtime rather than dropping the
+/// finalization work, since memory/learning/experience recording must still
+/// happen even when the turn ends off the normal async call path.
 fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
     prepared: PreparedAgentTurn<State, Ctx>,
     run: crate::context::TerminalRunSummary,
@@ -975,6 +1048,14 @@ fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static
     }
 }
 
+/// The hosted turn's epilogue: emits the terminal progress event, then feeds
+/// the finished run into whichever optional host capabilities are configured
+/// (memory, learning, experience). Runs once per turn, after the caller-facing
+/// result has already been produced.
+///
+/// Each optional sink's failure is logged and does not affect the others or
+/// propagate anywhere — by the time this runs the turn is already over, so
+/// there is nothing left to fail.
 async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
     prepared: PreparedAgentTurn<State, Ctx>,
     run: crate::context::TerminalRunSummary,
@@ -1033,6 +1114,13 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
     }
 }
 
+/// Spawns the background task that drains a [`ProgressSender`]'s channel into
+/// `sink`, and returns the sender half — or `None` when there is no sink or no
+/// ambient Tokio runtime to spawn onto.
+///
+/// See the field comment below for the 128 nonterminal + 1 terminal slot
+/// accounting this pairs with in [`ProgressSender::send_nonterminal`] /
+/// [`ProgressSender::send_terminal`].
 fn start_progress_dispatcher(
     sink: Option<std::sync::Arc<dyn crate::host::ProgressSink>>,
 ) -> Option<ProgressSender> {
@@ -1060,6 +1148,13 @@ fn start_progress_dispatcher(
     })
 }
 
+/// Screens every text/JSON block of every user message through the host's
+/// [`crate::host::SecurityGate`], rewriting redacted blocks in place, and
+/// returns the visible text joined by newlines for use as the turn's
+/// memory/experience recall query.
+///
+/// A [`ScreenOutcome::Block`] on any block aborts the whole turn — there is no
+/// partial admission of a user message once one piece of it is deemed unsafe.
 async fn screen_user_messages<State: Send + Sync>(
     host: &crate::host::HostCapabilities<State>,
     messages: &mut [tinyinference_llm::message::Message],
@@ -1112,6 +1207,13 @@ async fn screen_user_messages<State: Send + Sync>(
     Ok(visible.join("\n"))
 }
 
+/// Screens one piece of host-stored text (a thread summary, a recalled
+/// memory, a recalled experience) as [`ContentOrigin::Stored`] before it is
+/// injected into the transcript.
+///
+/// Applies to content the host itself produced or persisted earlier — it is
+/// screened anyway because a memory or experience record can still carry text
+/// that originated from an untrusted source further upstream.
 async fn screen_stored<State: Send + Sync>(
     host: &crate::host::HostCapabilities<State>,
     text: &str,
@@ -1127,6 +1229,9 @@ async fn screen_stored<State: Send + Sync>(
     }
 }
 
+/// Covers the [`ProgressSender`] / [`start_progress_dispatcher`] backpressure
+/// contract: a saturated stream of nonterminal progress events must never
+/// crowd out the one reserved terminal slot.
 #[cfg(test)]
 mod progress_dispatcher_tests {
     use std::sync::{Arc, Mutex};

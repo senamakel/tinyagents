@@ -1,4 +1,7 @@
-//! Unit tests for the task-board domain types.
+//! Unit tests for the task board: domain-type serialization/markdown/
+//! normalisation, `store` CRUD and the single-`InProgress` / approval-flow
+//! invariants (`store_tests`), and the `todo` multiplexer tool's dispatch and
+//! argument validation (`tool_tests`).
 
 use super::types::*;
 

@@ -72,10 +72,6 @@ pub fn save(workspace_dir: &Path, settings: &ClaudeCodeSettings) -> std::io::Res
     Ok(())
 }
 
-/// Load settings for the directory implied by `config` — the parent of
-/// `config.config_path`, resolved via [`super::workspace_dir_from_config`].
-/// Keeps path resolution + file IO out of the RPC handler so `schemas.rs` stays
-/// a thin delegator.
 #[cfg(test)]
 #[path = "settings_tests.rs"]
 mod tests;

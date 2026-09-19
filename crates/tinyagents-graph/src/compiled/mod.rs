@@ -66,7 +66,7 @@
 //!   [retryable][tinyagents_harness::retry::is_retryable] error (a model or tool
 //!   error — the transient class) is re-run from its start up to the policy's
 //!   attempt cap, emitting
-//!   [`GraphEvent::NodeRetryScheduled`](crate::stream::GraphEvent::NodeRetryScheduled)
+//!   [`GraphEvent::NodeRetryScheduled`]
 //!   and sleeping the opt-in backoff between attempts. A single network blip is
 //!   absorbed without touching the run.
 //! - **Resumable failure.** When a handler fails beyond the retry budget (or the
@@ -390,7 +390,7 @@ impl<State, Update> CompiledGraph<State, Update> {
         self
     }
 
-    /// Sets the per-node [`RetryPolicy`] applied around every node handler.
+    /// Sets the per-node [`RetryPolicy`](tinyagents_harness::retry::RetryPolicy) applied around every node handler.
     ///
     /// Opt-in network resilience for the graph: when a node handler fails with a
     /// [retryable][tinyagents_harness::retry::is_retryable] error (a model or tool

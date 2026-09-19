@@ -49,7 +49,7 @@ pub(crate) fn code_for(class: ReferenceClass) -> &'static str {
 /// [`bind_capabilities_with_registry`] (or any resolver built with
 /// [`CapabilityResolver::from_registry`]); an unknown kind is a
 /// [`TinyAgentsError::Compile`] error. The set deliberately includes `model`,
-/// because [`compile`] defaults an unspecified kind to `model`.
+/// because [`crate::compile`] defaults an unspecified kind to `model`.
 ///
 /// The kinds carry the following capability-reference conventions, applied by
 /// the strict binding path:
@@ -202,7 +202,7 @@ impl CapabilityResolver {
         }
     }
 
-    /// Builds a fully populated resolver from a live [`CapabilityRegistry`].
+    /// Builds a fully populated resolver from a live `CapabilityRegistry`.
     ///
     /// Every registered model, tool, graph blueprint, router, and reducer name
     /// — including their aliases — is added to the corresponding allowlist, and
@@ -612,7 +612,7 @@ pub fn bind_capabilities(blueprint: &Blueprint, allow: &CapabilityResolver) -> R
     Ok(())
 }
 
-/// Validates `blueprint` against a live [`CapabilityRegistry`].
+/// Validates `blueprint` against a live `CapabilityRegistry`.
 ///
 /// This is the registry → language binding gate. It builds a fully populated
 /// [`CapabilityResolver`] from `registry` (models, tools, subgraphs, routers,

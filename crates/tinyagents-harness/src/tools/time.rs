@@ -1,4 +1,12 @@
-//! Builtin time/date tools.
+//! Builtin time/date tools: [`CurrentTimeTool`] and [`ResolveTimeTool`].
+//!
+//! Both implement `tinytools::Tool` directly (no recursive dispatch) and are
+//! registered via [`register_time_tools`] or collected with [`time_tools`].
+//! They exist so a model can ground relative expressions ("in 10 minutes",
+//! "tomorrow") in an exact timestamp instead of hand-computing one, which
+//! models are unreliable at. Parsing (`resolve_expr`, `parse_relative_duration`)
+//! and timezone handling (`ResolveZone`) are kept free of any `Tool` plumbing
+//! so they are unit-testable on their own.
 
 use std::sync::Arc;
 
@@ -10,7 +18,9 @@ use serde_json::json;
 use crate::tool::ToolRegistry;
 use tinytools::{Tool, ToolPolicy, ToolResult};
 
+/// Declared name of [`CurrentTimeTool`].
 const CURRENT_TIME_NAME: &str = "current_time";
+/// Declared name of [`ResolveTimeTool`].
 const RESOLVE_TIME_NAME: &str = "resolve_time";
 
 /// Tool that returns the current time in UTC and local time, optionally
@@ -65,6 +75,9 @@ impl Tool for CurrentTimeTool {
     }
 }
 
+/// Builds the JSON payload for [`CurrentTimeTool`]: always UTC + local time,
+/// plus a `requested_timezone` (or `requested_timezone_error`) entry when
+/// `args.timezone` names a valid (or invalid) IANA zone.
 fn current_time_payload(args: &serde_json::Value) -> serde_json::Value {
     let now_utc = Utc::now();
     let now_local = Local::now();
@@ -191,6 +204,10 @@ impl Tool for ResolveTimeTool {
     }
 }
 
+/// Builds the JSON payload for [`ResolveTimeTool`]: the resolved instant
+/// rendered in every supported representation (`unix_s`/`unix_ms`/
+/// `slack_ts`/`rfc3339`), with `args.format` (default `unix_s`) selecting
+/// which one is duplicated into the top-level `value` field.
 fn resolve_time_payload(
     expr: &str,
     args: &serde_json::Value,
@@ -224,6 +241,11 @@ fn resolve_time_payload(
     })
 }
 
+/// Parses a relative-time expression (`"24h ago"`, `"in 10 minutes"`,
+/// `"next 2 weeks"`, `"-30m"`, ...) into a signed [`Duration`] to add to now.
+/// Returns `None` when `raw` is not a recognised relative form (e.g. `"now"`,
+/// an absolute date, or garbage), leaving [`resolve_expr`] to try the other
+/// parse strategies.
 pub(crate) fn parse_relative_duration(raw: &str) -> Option<Duration> {
     let mut text = raw.trim().to_ascii_lowercase();
     let mut future = false;
@@ -276,6 +298,13 @@ pub(crate) fn parse_relative_duration(raw: &str) -> Option<Duration> {
     Some(if future { magnitude } else { -magnitude })
 }
 
+/// Resolves a free-form time expression to a UTC instant, trying each
+/// recognised form in order: `"now"`, a relative duration
+/// ([`parse_relative_duration`]), `"today"`/`"yesterday"`/`"tomorrow"`
+/// (civil midnight in `zone`), RFC-3339, a handful of naive datetime formats,
+/// then a bare `YYYY-MM-DD` date. Returns an error string (not
+/// `TinyAgentsError`) so `ResolveTimeTool::execute` can surface it directly
+/// as a tool-error result without wrapping.
 pub(crate) fn resolve_expr(
     expr: &str,
     zone: ResolveZone,
@@ -320,13 +349,19 @@ pub(crate) fn resolve_expr(
     Err(format!("could not parse time expression {trimmed:?}"))
 }
 
+/// Timezone an offset-less expression (`"today"`, a naive datetime, a bare
+/// date) is interpreted in, when [`ResolveTimeTool`]'s optional `timezone`
+/// argument was not given or was invalid.
 #[derive(Clone, Copy)]
 pub(crate) enum ResolveZone {
+    /// The machine's local timezone.
     Local,
+    /// An explicit IANA timezone.
     Iana(Tz),
 }
 
 impl ResolveZone {
+    /// Today's civil (wall-clock) date in this zone.
     fn now_civil_date(&self) -> NaiveDate {
         match self {
             ResolveZone::Local => Local::now().date_naive(),
@@ -334,6 +369,7 @@ impl ResolveZone {
         }
     }
 
+    /// Converts a civil date's midnight in this zone to a UTC instant.
     fn civil_midnight_to_utc(&self, date: NaiveDate) -> std::result::Result<DateTime<Utc>, String> {
         let naive = date
             .and_hms_opt(0, 0, 0)
@@ -341,6 +377,9 @@ impl ResolveZone {
         self.naive_to_utc(naive)
     }
 
+    /// Converts a naive (offset-less) datetime, interpreted in this zone, to
+    /// a UTC instant. Errors on an ambiguous or nonexistent local time (a DST
+    /// fold or gap), where a single unambiguous mapping does not exist.
     fn naive_to_utc(&self, naive: NaiveDateTime) -> std::result::Result<DateTime<Utc>, String> {
         use chrono::TimeZone;
         match self {

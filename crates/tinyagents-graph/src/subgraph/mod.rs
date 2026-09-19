@@ -9,7 +9,7 @@
 //! nested run durable and collision-free, and the executor's recursion limit
 //! bounds how deep that nesting can go.
 //!
-//! See [`types`] for the conceptual overview of the two embedding modes. The
+//! See `types` for the conceptual overview of the two embedding modes. The
 //! functions here wrap a [`CompiledGraph`] into a node handler usable with
 //! [`crate::GraphBuilder::add_node`]:
 //!

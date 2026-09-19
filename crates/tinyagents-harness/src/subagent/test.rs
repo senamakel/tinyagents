@@ -1,4 +1,11 @@
 //! Typed-parent sub-agent contracts.
+//!
+//! Covers `ChildDataPolicy` as an explicit transform, `SubAgentTool` dispatch
+//! (child-data inheritance, a stricter child depth cap surfacing as a
+//! recoverable tool result rather than an error, cancellation inheritance),
+//! `SubAgent::invoke_in_parent` event/cancellation/lifecycle propagation, the
+//! depth cap being enforced before any model call, and `SubAgentSession`
+//! reusing its harness while retaining the transcript across sends.
 
 use std::sync::{Arc, Mutex};
 

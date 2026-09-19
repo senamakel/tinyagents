@@ -68,7 +68,7 @@
 //! timeline row that nothing could ever close. `Started`/`Finished` bracket a
 //! run; tool calls now bracket the same way. The asymmetry was an oversight
 //! rather than a boundary, and the payload concern is answered by policy on the
-//! field (see [`ToolCallFinished::output`](Self::ToolCallFinished)) instead of
+//! field (see the `output` field on [`ProgressEvent::ToolCallFinished`]) instead of
 //! by withholding the outcome.
 
 use std::sync::{Arc, Mutex};

@@ -8,7 +8,7 @@
 //! hardcoded — while the registry's allowlist guarantees those references can
 //! only resolve to capabilities a human actually registered.
 //!
-//! See [`types`] for the data definitions. This module provides registration,
+//! See `types` for the data definitions. This module provides registration,
 //! lookup, aliasing, duplicate validation, and conveniences for handing the
 //! catalog's models and tools to a harness ([`to_model_registry`] /
 //! [`to_tool_registry`]) or to the `.rag` capability resolver
@@ -496,7 +496,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// This is the set of names declarative `.rag` source may reference
     /// for `kind`: both the canonical registration and any alias resolve to a
     /// real component, so both are valid references. It backs
-    /// [`CapabilityResolver::from_registry`](tinyagents_language::compiler::CapabilityResolver::from_registry).
+    /// [`CapabilityResolver::from_registry`].
     pub fn names_including_aliases(&self, kind: ComponentKind) -> Vec<String> {
         let mut names = self.names(kind);
         for (k, alias) in self.aliases.keys() {
@@ -593,7 +593,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// is equivalent to [`CapabilityResolver::from_registry`] and enables the
     /// strict checks (subgraph/router/reducer references and node kinds) when
     /// used with [`CapabilityResolver::bind_blueprint`] or
-    /// [`bind_capabilities_with_registry`](tinyagents_language::compiler::bind_capabilities_with_registry).
+    /// [`bind_capabilities_with_registry`](tinyagents_language::bind_capabilities_with_registry).
     pub fn capability_resolver(&self) -> CapabilityResolver {
         CapabilityResolver::from_registry(self)
     }
@@ -602,7 +602,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     // Introspection / diagnostics
     // -----------------------------------------------------------------------
 
-    /// Exports a serializable [`RegistrySnapshot`] of every registered
+    /// Exports a serializable [`RegistrySnapshot`](crate::RegistrySnapshot) of every registered
     /// component's metadata, sorted by `(kind, name)`.
     ///
     /// This is the machine-readable view a CLI or UI renders to show exactly

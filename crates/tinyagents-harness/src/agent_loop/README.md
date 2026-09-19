@@ -117,8 +117,24 @@ it applies identically to the unary and streaming paths.
   also returns a compact `HarnessRunStatus` snapshot (phase, counters, timing,
   error summary) alongside the `AgentRun`.
 - `AgentLoopResult { run: AgentRun, status: HarnessRunStatus }` — the richer
-  return type; the only public type this module owns beyond the
-  `AgentHarness` methods themselves.
+  return type; also returned by `AgentHarness::invoke_in_context_with_status`.
+- `AgentHarness::invoke_collecting_partial(..) -> PartialRunOutcome` (and its
+  `invoke_in_context_collecting_partial` / streaming counterparts) — like
+  `invoke`, but never discards the accumulated `AgentRun` on error; useful for
+  inspecting, repairing, or resuming a run that hit a limit or a tool failure.
+- `AgentHarness::invoke_streaming` / `invoke_streaming_default` /
+  `invoke_streaming_in_context[_with_status]` — the streaming counterparts of
+  the `invoke*` family: each model call goes through
+  `ChatModel::stream` instead of `ChatModel::invoke`, threading deltas through
+  every middleware's `on_model_delta` hook, but the loop still only returns
+  once the run is over.
+- `AgentHarness::invoke_stream` / `invoke_stream_in_context` — a caller-facing
+  event stream (`stream.rs`): yields every `AgentEvent` emitted during the run
+  as `AgentStreamItem::Event`, then a single terminal
+  `AgentStreamItem::Completed`/`Failed`. Driving the loop and consuming the
+  stream are the same task, so a caller that stops polling pauses the run.
+- `AgentStreamItem { Event(EventRecord), Completed(Box<AgentRun>), Failed { error, run } }`
+  — the item type yielded by `invoke_stream`.
 
 ## Errors
 
@@ -133,11 +149,12 @@ error surfaced by a model, tool, middleware, or structured-output extraction.
 | File | Role |
 | --- | --- |
 | `mod.rs` | Module wiring: shared imports and the module-level doc comment. |
-| `entry.rs` | Public entry points (`invoke`/`invoke_with_status`/`invoke_streaming*`) and the shared `drive` lifecycle wrapper. |
-| `run_loop.rs` | The core loop body (`run_loop`) and response-cache decision logic. |
+| `entry.rs` | Public entry points (`invoke`/`invoke_with_status`/`invoke_streaming*`/`invoke_collecting_partial`) and the shared `drive`/`drive_collecting` lifecycle wrapper. |
+| `run_loop.rs` | The core loop body (`run_loop`), response-cache decision logic, and host budget/prompt-cache helpers. |
 | `tools.rs` | Tool execution for one turn: serial admission, serial or concurrent execution, ordered fold. |
-| `model_call.rs` | Cache-aware retry/fallback model dispatch, the streaming variant, and the innermost `ModelBaseCall`/`ToolBaseCall` impls the middleware wrap-onion terminates into. |
-| `types.rs` | `AgentLoopResult`. |
+| `model_call.rs` | Cache-aware retry/fallback model dispatch, the streaming variant, host model resolution, and the innermost `ModelBaseCall`/`ToolBaseCall` impls the middleware wrap-onion terminates into. |
+| `stream.rs` | Caller-consumable streaming entry point (`invoke_stream`/`invoke_stream_in_context`) that projects the run's `EventSink` into an `AgentStreamItem` stream. |
+| `types.rs` | `AgentLoopResult`, `PartialRunOutcome`, and the private `LoopExit`. |
 | `test.rs` | Unit tests (limits, retry/fallback, tool execution, structured extraction). |
 
 ## Operational constraints

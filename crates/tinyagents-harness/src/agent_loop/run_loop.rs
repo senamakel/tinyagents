@@ -156,24 +156,75 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // The tool set is fixed for the duration of a run, so build the sorted
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
+        //
+        // Only *direct* tools go on the wire. Deferred tools are indexed into
+        // the run's catalogue and reached through the `tool_search` /
+        // `tool_call` bridge, whose two schemas are appended *after* the
+        // name-sorted direct set so the cached prefix is unchanged by them.
+        // The same host allow-list gates both halves: deferral only ever
+        // subtracts from what the host admitted. `resolve_tool_allowlist`
+        // (not a raw read of `binding.allowed_tools`) is what applies I-9's
+        // fail-closed default, so an empty declared list denies every tool
+        // here exactly as it does for the direct set below.
         let allowed_tools = self.resolve_tool_allowlist(ctx)?;
-        let tool_schemas = self
+        let host_allows = |name: &str| {
+            allowed_tools
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(name))
+        };
+        let mut tool_schemas = self
             .tools
             .schemas()
             .into_iter()
-            .filter(|schema| {
-                allowed_tools
-                    .as_ref()
-                    .is_none_or(|allowed| allowed.contains(&schema.name))
-            })
+            .filter(|schema| host_allows(&schema.name))
             .collect::<Vec<_>>();
-
+        if let Some(preparation) = &self.policy.tool_schemas {
+            tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
+        }
+        let deferred_catalog = self.deferred_catalog(&host_allows);
+        if !deferred_catalog.is_empty() {
+            // A host-registered `tool_search`/`tool_call` keeps its slot: the
+            // intrinsic bridge only fills a name nobody registered. Check the
+            // full registry (`self.tools.dispatch`), not just the direct set
+            // collected into `tool_schemas` above — a `Hidden` or `Deferred`
+            // registration under either name must also suppress the intrinsic
+            // schema, because admission's own collision rule
+            // (`self.tools.dispatch(&call.name).is_none()` in
+            // `answer_discovery_bridge`) checks the same full registry. Using
+            // a narrower rule here than admission uses would let this loop
+            // advertise an intrinsic schema that admission then treats as
+            // owned by the registered tool (or, for `Hidden`, refuses).
+            let mut bridge: Vec<_> =
+                crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery)
+                    .into_iter()
+                    .collect();
+            if let Some(preparation) = &self.policy.tool_schemas {
+                // The bridge schemas are generated here, after the direct set
+                // was prepared above, so they need the same provider
+                // projection (for example Gemini's `minimum`/`maximum`
+                // removal) applied individually or they reach the wire raw.
+                bridge = bridge
+                    .into_iter()
+                    .map(|schema| crate::tool::prepare_tool_schema(&schema, preparation))
+                    .collect();
+            }
+            for schema in bridge {
+                if self.tools.dispatch(&schema.name).is_none() {
+                    tool_schemas.push(schema);
+                }
+            }
+        }
         // Fail closed on a structured-output schema whose name collides with a
-        // registered tool. Under the tool-call strategy the schema is sent as an
-        // extra `function` entry, so a collision puts two identically-named
-        // functions in one request — which OpenAI rejects outright — and makes
-        // "was this the schema or the real tool?" unanswerable for every
-        // returned call.
+        // registered tool *or* the intrinsic discovery bridge. Under the
+        // tool-call strategy the schema is sent as an extra `function` entry,
+        // so a collision puts two identically-named functions in one request
+        // — which OpenAI rejects outright — and makes "was this the schema or
+        // the real tool?" unanswerable for every returned call. Two checks,
+        // because neither alone covers every name that ends up on the wire:
+        // `self.tools.names()` covers every registered tool (Direct, Deferred,
+        // Hidden), but not the intrinsic `tool_search`/`tool_call` bridge,
+        // which has no registry entry; `tool_schemas` covers the bridge (and
+        // the Direct set) but never contains a Deferred tool's own name.
         if let Some(name) = self
             .policy
             .default_response_format
@@ -184,20 +235,34 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 _ => None,
             })
-            && self
+            && (self
                 .tools
                 .names()
                 .iter()
                 .any(|registered| registered == name)
+                || tool_schemas.iter().any(|schema| &schema.name == name))
         {
             return Err(TinyAgentsError::Validation(format!(
-                "structured-output schema name `{name}` collides with a registered tool of the \
-                 same name; rename one of them"
+                "structured-output schema name `{name}` collides with a registered tool (or the \
+                 intrinsic discovery bridge) of the same name; rename one of them"
             )));
         }
 
         status.mark_running(HarnessPhase::Middleware);
         self.middleware.run_before_agent(ctx, state).await?;
+
+        // Announced after `before_agent` so a listener that subscribes there
+        // (the usual place) sees the run's tool surface. This is deliberately
+        // the pre-middleware/pre-request baseline (see the event's doc
+        // comment): per-turn `before_model` middleware and a structured-
+        // output tool-call fallback can still narrow or grow what an
+        // individual request actually sends.
+        let record = ctx.emit(AgentEvent::ToolsAdvertised {
+            direct: tool_schemas.len(),
+            deferred: deferred_catalog.len(),
+            schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
+        });
+        status.set_last_event(record.id);
 
         // Truncated-empty recovery state (see `RunPolicy::truncated_empty_retries`).
         // These persist across the retry `continue` within a single logical turn:
@@ -410,11 +475,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             }
                             StructuredStrategy::ToolCall => {
                                 request.response_format = Some(ResponseFormat::Text);
-                                request.tools.push(ToolSchema {
+                                let fallback_schema = ToolSchema {
                                     name: name.clone(),
                                     description: format!("Return the result as `{name}`."),
                                     parameters: schema.clone(),
                                     format: tinyinference_llm::tool::ToolFormat::Json,
+                                };
+                                // This schema is generated here, after the
+                                // direct and bridge schemas above were
+                                // prepared for the target provider, so it
+                                // needs the same projection or it reaches the
+                                // wire raw (see the `tool_schemas` and bridge
+                                // preparation above).
+                                request.tools.push(match &self.policy.tool_schemas {
+                                    Some(preparation) => crate::tool::prepare_tool_schema(
+                                        &fallback_schema,
+                                        preparation,
+                                    ),
+                                    None => fallback_schema,
                                 });
                                 // Force the schema tool **only** when it is the
                                 // sole tool available. Forcing it inside a

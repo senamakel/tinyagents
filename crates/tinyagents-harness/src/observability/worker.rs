@@ -105,7 +105,7 @@ enum Msg<T> {
 
 /// A background worker that drains submitted payloads into an async append sink.
 ///
-/// See the [module docs](self) for the backpressure, error, and durability
+/// See the module-level docs in this file for the backpressure, error, and durability
 /// semantics.
 pub struct AppendWorker<T: Send + 'static> {
     /// Bounded submit channel. Wrapped in `Option` only so [`Drop`] can drop the

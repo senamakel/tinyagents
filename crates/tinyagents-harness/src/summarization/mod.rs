@@ -131,7 +131,7 @@ impl Summarizer for ConcatSummarizer {
 // ---------------------------------------------------------------------------
 
 impl SummarizationPolicy {
-    /// Builds a policy from a model [`ModelProfile`], reading its
+    /// Builds a policy from a model [`ModelProfile`](tinyinference_llm::model::ModelProfile), reading its
     /// [`max_input_tokens`][tinyinference_llm::model::ModelProfile::max_input_tokens]
     /// as the context window and using `threshold` as the trigger fraction.
     ///
@@ -185,7 +185,25 @@ impl SummarizationPolicy {
     ///   returns `true` when the estimate **exceeds**
     ///   [`trigger_tokens`][Self::trigger_tokens].
     pub fn should_summarize(&self, messages: &[Message]) -> bool {
-        let tokens = estimate_slice_tokens(messages);
+        self.should_summarize_with_tools(messages, &[])
+    }
+
+    /// [`Self::should_summarize`], charging the tool declarations too.
+    ///
+    /// Tool schemas are re-sent with every request, so a run offering thirty
+    /// verbose tools is tens of thousands of tokens into its window before the
+    /// first user message. Ignoring them makes the threshold fire late by
+    /// exactly that much; this is the check the compression middleware uses.
+    pub fn should_summarize_with_tools(
+        &self,
+        messages: &[Message],
+        tools: &[tinyinference_llm::tool::ToolSchema],
+    ) -> bool {
+        let tokens = estimate_slice_tokens(messages)
+            + crate::token_estimation::count_tool_schema_tokens(
+                tools,
+                &crate::token_estimation::TokenCountOptions::default(),
+            );
         match self.context_window {
             Some(_) => tokens >= self.trigger_budget(),
             None => tokens > self.trigger_tokens,

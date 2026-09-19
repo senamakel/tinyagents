@@ -1,3 +1,6 @@
+//! Unit tests for `build_stdin`: new-session vs. resume piping, pending-user
+//! coalescing, preamble replay, and image-marker splitting.
+
 use super::*;
 
 fn msg(role: &str, content: &str) -> ChatMessage {

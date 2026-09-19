@@ -1,3 +1,7 @@
+//! Unit tests for provider construction, CLI argument/stdin building,
+//! transcript rendering, system-prompt coalescing, and NDJSON response
+//! assembly (including the timeout and error-propagation paths).
+
 use super::*;
 use tinyinference_llm::tool::ToolCall;
 

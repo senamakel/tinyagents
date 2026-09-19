@@ -28,10 +28,16 @@ pub struct RunQueue<T> {
     inner: Mutex<RunQueueInner<T>>,
 }
 
+/// The three lanes behind [`RunQueue`]'s lock, each an append-only FIFO until
+/// drained.
 #[derive(Debug)]
 struct RunQueueInner<T> {
+    /// Immediate steering messages, consumed as soon as the loop reaches a
+    /// safe iteration boundary.
     steers: Vec<T>,
+    /// Deferred follow-up work, consumed once the current run settles.
     followups: Vec<T>,
+    /// Collected context (e.g. observations) accumulated for later use.
     collects: Vec<T>,
 }
 

@@ -96,6 +96,53 @@ pub enum AgentEvent {
         output: Option<serde_json::Value>,
     },
 
+    /// The agent loop fixed the run's **pre-middleware** tool surface: how
+    /// many schemas were assembled from the registry (direct tools plus the
+    /// bridge tools when any tool is deferred), how many are deferred behind
+    /// `tool_search`, and what that base set costs in bytes. Emitted once per
+    /// run, before the first model call and before `before_agent`/
+    /// `before_model` middleware runs.
+    ///
+    /// This is a fixed run-start baseline, not a live per-request wire
+    /// metric: exposure-narrowing middleware
+    /// (`ToolPolicyMiddleware::before_model`, dynamic/contextual tool
+    /// selection) can still shrink `request.tools` on any given turn, and a
+    /// structured-output tool-call fallback can still grow it. Track this
+    /// event for the ceiling the run started with, not for what a specific
+    /// request actually sent.
+    ToolsAdvertised {
+        /// Schemas assembled before per-turn middleware runs (direct tools
+        /// plus the bridge tools when any tool is deferred).
+        direct: usize,
+        /// Tools reachable only through `tool_search` / `tool_call`.
+        deferred: usize,
+        /// Compact-JSON size of the pre-middleware schemas above, not of
+        /// whatever a specific request's `before_model` pass narrows or grows
+        /// it to.
+        schema_bytes: usize,
+    },
+
+    /// The model searched the deferred-tool catalogue through the intrinsic
+    /// `tool_search` bridge.
+    ToolSearched {
+        /// Identifier of the `tool_search` call.
+        call_id: CallId,
+        /// The model's query, verbatim.
+        query: String,
+        /// Number of deferred tools returned.
+        matched: usize,
+    },
+
+    /// The model invoked a deferred tool through the intrinsic `tool_call`
+    /// bridge; the call was unwrapped to `tool_name` before admission, so the
+    /// following `ToolStarted` names the real tool.
+    DeferredToolCall {
+        /// Identifier of the bridge call (shared with the unwrapped call).
+        call_id: CallId,
+        /// The real tool the call was unwrapped to.
+        tool_name: String,
+    },
+
     /// A tool-selection middleware filtered the model-visible tool set before a
     /// model call. Makes exposure decisions auditable: a UI or log can see
     /// which tools were withheld from the model and by which policy.
@@ -143,13 +190,13 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
         /// Wall-clock duration of the call in milliseconds (completion minus
-        /// [`started_at_ms`]). Present regardless of payload capture, so an
+        /// `started_at_ms`). Present regardless of payload capture, so an
         /// exporter renders a real duration without a side-channel. `None` for
         /// events serialized before this field existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
         /// Size, in bytes, of the tool's textual result content. Present even in
-        /// payload-free mode (unlike [`output`]), so an exporter can show result
+        /// payload-free mode (unlike `output`), so an exporter can show result
         /// size without capturing the body. `None` for older events.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_bytes: Option<u64>,
@@ -640,6 +687,9 @@ impl AgentEvent {
             AgentEvent::ModelDelta { .. } => "model.delta",
             AgentEvent::ModelCompleted { .. } => "model.completed",
             AgentEvent::ControlApplied { .. } => "control.applied",
+            AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
+            AgentEvent::ToolSearched { .. } => "tool.searched",
+            AgentEvent::DeferredToolCall { .. } => "tool.deferred_call",
             AgentEvent::ToolsFiltered { .. } => "tool.filtered",
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",

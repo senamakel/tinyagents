@@ -5,6 +5,11 @@
 //! seam needed to inject ranked context into a prompt.  Embedding callers use
 //! the direct `tinyinference_embeddings` 0.3 types; no local embedding facade
 //! is introduced here.
+//!
+//! [`compose_retrieval_context`] is the only entry point most callers need: it
+//! drives a caller-supplied [`Retriever`] and renders the result as a
+//! [`crate::prompt::PromptSection`] ready to insert into an agent's composed
+//! prompt (see [`crate::prompt`]).
 
 mod types;
 

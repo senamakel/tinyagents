@@ -252,7 +252,7 @@ pub struct BudgetSpend {
 ///   [`TinyAgentsError::LimitExceeded`][crate::error::TinyAgentsError::LimitExceeded],
 ///   so a recursive run stops once a root budget is exhausted.
 /// - `after_model` (spend + reconcile): folds the response usage into the
-///   tracker, prices it via the configured per-model [`ModelPricing`] table
+///   tracker, prices it via the configured per-model [`ModelPricing`](crate::cost::ModelPricing) table
 ///   (wiring cost into the loop, emitting
 ///   [`AgentEvent::UsageRecorded`][crate::events::AgentEvent::UsageRecorded]
 ///   and [`AgentEvent::CostRecorded`][crate::events::AgentEvent::CostRecorded]),
@@ -290,7 +290,7 @@ pub struct BudgetMiddleware {
 /// Unlike [`ToolAllowlistMiddleware`] (name lists) and
 /// [`DynamicToolSelectionMiddleware`] (schema-only predicates), this middleware
 /// reads the structured [`ToolPolicy`] each tool advertises via
-/// [`Tool::policy`][crate::tool::Tool::policy]. Build it from a
+/// [`Tool::policy`](tinytools::Tool::policy). Build it from a
 /// registry snapshot with
 /// [`ToolRegistry::policies`][crate::tool::ToolRegistry::policies].
 ///
@@ -300,7 +300,7 @@ pub struct BudgetMiddleware {
 ///   default via [`strict`](Self::strict)), a tool whose policy is *unclassified*
 ///   (`ToolPolicy::classified == false`) — or has no snapshot entry at all — is
 ///   hidden from the model and rejected if called.
-/// - Tools declaring any side effect in the [`deny`](Self::deny) mask are hidden
+/// - Tools declaring any side effect in the `deny` mask are hidden
 ///   and rejected.
 /// - When [`require_background_safe`](Self::require_background_safe) is set, tools
 ///   that are not `access.background_safe` are hidden and rejected.
@@ -451,7 +451,7 @@ pub type PromptFn<State> = Arc<dyn Fn(&State, &RunConfig) -> Option<String> + Se
 /// Implements [`Middleware`][crate::middleware::Middleware]'s
 /// `before_model` hook: it calls the configured [`PromptFn`] with the shared
 /// `&State` and the run's [`RunConfig`]; when it returns `Some(text)` a
-/// [`Message::system`] is inserted at the front of
+/// [`Message::system`](tinyinference_llm::message::Message::system) is inserted at the front of
 /// [`ModelRequest::messages`][tinyinference_llm::model::ModelRequest::messages].
 ///
 /// Generic over `State`/`Ctx` because the closure reads application state.

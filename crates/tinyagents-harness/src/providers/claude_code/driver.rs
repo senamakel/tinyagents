@@ -214,17 +214,31 @@ fn openhuman_internal_root(workspace_dir: &std::path::Path) -> std::path::PathBu
 
 /// One CC chat turn.
 pub(crate) struct TurnContext<'a> {
+    /// Resolved path to the `claude` CLI binary to spawn.
     pub bin_path: PathBuf,
+    /// Directory holding this provider's session store and settings
+    /// (`claude-code-sessions.json`, `claude_code_settings.json`); also the
+    /// root the macOS Seatbelt jail walls off from the CLI's own tools.
     pub workspace_dir: PathBuf,
-    /// The user's project root (`config.action_dir`). Claude Code runs here
+    /// The user's project root. Claude Code runs here
     /// (cwd + `--add-dir`) so its file tools act on the user's code, not the
-    /// internal OpenHuman workspace.
+    /// internal workspace.
     pub project_dir: PathBuf,
+    /// Caller-provided logical conversation id, used to look up or create a
+    /// CC session UUID in `session_store`.
     pub thread_id: String,
+    /// Model name passed to `--model`.
     pub model: String,
+    /// Combined system prompt (all `system` messages joined), written to a
+    /// scratch file and passed via `--append-system-prompt-file`.
     pub append_system_prompt: Option<String>,
+    /// Full conversation for a new session, or just the trailing user turn
+    /// when resuming (see `input_builder::build_stdin`).
     pub messages: &'a [ChatMessage],
+    /// Thread-key → CC session UUID persistence, shared across turns.
     pub session_store: Arc<SessionStore>,
+    /// Channel to forward streaming deltas on, when the caller wants a
+    /// streamed response rather than only the final aggregate.
     pub stream: Option<&'a mpsc::Sender<ProviderDelta>>,
     /// Optional explicit `ANTHROPIC_API_KEY` to set on the child. When
     /// `None`, the CLI falls back to its own `~/.claude/.credentials.json`.

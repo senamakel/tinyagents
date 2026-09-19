@@ -39,7 +39,7 @@ use serde_json::Value;
 
 /// Which rung of the ladder produced a value.
 ///
-/// Carried out of [`parse_lenient`] so the caller can log — and a
+/// Carried out of `parse_lenient` so the caller can log — and a
 /// [`super::StructuredOutcome`] can record — that the model's text needed
 /// repairing, instead of a repair silently masking a degrading model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

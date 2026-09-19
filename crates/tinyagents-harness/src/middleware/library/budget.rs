@@ -155,7 +155,7 @@ impl BudgetMiddleware {
         self
     }
 
-    /// Supplies a per-model-name [`ModelPricing`] table so `after_model` can
+    /// Supplies a per-model-name [`ModelPricing`](crate::cost::ModelPricing) table so `after_model` can
     /// price usage and enforce the money budget.
     pub fn with_pricing(
         mut self,

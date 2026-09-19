@@ -2,7 +2,7 @@
 //!
 //! Autonomous card runs are detached tasks, not turns a chat channel knows
 //! about, so a "stop" arriving through the normal path has nothing to cancel.
-//! Registering each run's [`AbortHandle`](tokio::task::AbortHandle) here gives
+//! Registering each run's [`AbortHandle`] here gives
 //! that path a handle to pull.
 //!
 //! The registry's real job is **deciding who cleans up**. A run that finishes

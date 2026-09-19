@@ -1,3 +1,10 @@
+//! Workflow scheduler DAG: phase scheduling, dependency resolution, and
+//! topological ordering.
+//!
+//! Builds a directed acyclic graph representing the workflow's phase
+//! dependencies, computes runnable phases, and projects the schedule into
+//! the graph layer for topology introspection.
+
 use anyhow::{Result, anyhow};
 use tinyagents_graph::export::GraphTopology;
 use tinyagents_graph::recursion::RecursionPolicy;

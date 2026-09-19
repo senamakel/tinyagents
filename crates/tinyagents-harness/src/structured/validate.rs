@@ -41,6 +41,10 @@ pub fn validate_value(schema: &Value, value: &Value, root: &str) -> Result<()> {
     validate_at(schema, value, root)
 }
 
+/// Recursive validation worker behind [`validate_value`]: checks `enum`,
+/// `type`, `required`, `properties` (+ `additionalProperties: false`), and
+/// `items` at one schema node, then recurses into matched properties/items
+/// with `path` extended to name them.
 fn validate_at(schema: &Value, value: &Value, path: &str) -> Result<()> {
     if schema.is_null() || schema.as_object().is_some_and(|map| map.is_empty()) {
         return Ok(());
@@ -109,6 +113,8 @@ fn validate_at(schema: &Value, value: &Value, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Checks `value` against a `type` keyword, which may be a single type name
+/// or an array of alternatives (a union), matching any one.
 fn validate_type(type_spec: &Value, value: &Value, path: &str) -> Result<()> {
     if let Some(kind) = type_spec.as_str() {
         if matches_type(value, kind) {
@@ -135,6 +141,9 @@ fn validate_type(type_spec: &Value, value: &Value, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether `value`'s runtime JSON kind satisfies the named schema `kind`.
+/// An unrecognised `kind` always matches (see the module doc's "supported
+/// subset" note).
 fn matches_type(value: &Value, kind: &str) -> bool {
     match kind {
         "null" => value.is_null(),
@@ -150,6 +159,9 @@ fn matches_type(value: &Value, kind: &str) -> bool {
     }
 }
 
+/// Names a JSON value's kind for error messages, distinguishing `integer`
+/// from `number` (a schema `type` vocabulary distinction JSON itself does not
+/// make).
 fn kind_of(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -164,6 +176,8 @@ fn kind_of(value: &Value) -> &'static str {
     }
 }
 
+/// Wraps a validation failure message as the error variant used throughout
+/// this module.
 fn invalid(message: String) -> TinyAgentsError {
     TinyAgentsError::StructuredOutput(message)
 }

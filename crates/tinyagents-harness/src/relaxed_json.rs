@@ -342,6 +342,10 @@ fn quote_bare_keys(s: &str) -> String {
     out
 }
 
+/// Tests for the relaxed-JSON repair pipeline: leaked quote-token
+/// substitution, redundant brace peeling, bare-key quoting (including
+/// single/mismatched-quoted keys), and end-to-end recovery of real malformed
+/// tool-call payloads captured from local models.
 #[cfg(test)]
 mod tests {
     use super::*;

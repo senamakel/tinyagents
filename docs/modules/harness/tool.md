@@ -105,6 +105,15 @@ for fail-closed tool dispatch:
 
 Richer provider-facing JSON Schema keywords may still be present; the harness
 passes them through to providers but only enforces the subset above locally.
+`RunPolicy::tool_schemas` can opt a run into a provider projection and byte
+budgets (see [tool-discovery.md](tool-discovery.md#schema-budgets)).
+
+## Exposure and Discovery
+
+Only `ToolExposure::Direct` tools go on the wire. `Deferred` tools are indexed
+into a per-run catalogue and reached through the intrinsic `tool_search` /
+`tool_call` bridge, which keeps the `tools` array byte-stable across the run;
+`Hidden` tools are host-only. See [tool-discovery.md](tool-discovery.md).
 
 ## Tool Call Formats
 

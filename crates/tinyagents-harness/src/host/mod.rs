@@ -10,7 +10,7 @@
 //!
 //! This is the same extension-trait pattern the crate already uses for
 //! [`ChatModel`](tinyinference_llm::model::ChatModel),
-//! [`Tool`](crate::tool::Tool),
+//! [`Tool`](tinytools::Tool),
 //! [`ChatHistory`](crate::memory::ChatHistory) and a dozen others —
 //! not a new architecture. See `docs/spec/host-capability-traits-rfc.md`.
 //!
