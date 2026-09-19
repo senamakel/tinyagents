@@ -406,22 +406,52 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Builds a harness [`ModelRegistry`] from the registered models, including
     /// alias names bound to the same model handle.
     ///
-    /// The harness registry's default-model selection follows its own first-
-    /// registered rule; since registration order here is unspecified, callers
-    /// who need a specific default should set it explicitly on the result.
+    /// Models are registered onto the result in [`Self::model_order`] — the
+    /// order `register_model`/`replace_model` first saw each name in — so the
+    /// harness registry's "first-registered model becomes the default" rule
+    /// ([`ModelRegistry::register`]) is deterministic and reproducible across
+    /// runs, rather than following `HashMap` iteration order. That default is
+    /// still whichever model happened to be registered first; callers who
+    /// need a specific default regardless of registration order should use
+    /// [`Self::to_model_registry_with_default`] or call `set_default`
+    /// explicitly on the result.
     pub fn to_model_registry(&self) -> ModelRegistry<State> {
         let mut registry = ModelRegistry::new();
-        for (name, model) in &self.models {
-            registry.register(name.clone(), model.clone());
+        for name in &self.model_order {
+            if let Some(model) = self.models.get(name) {
+                registry.register(name.clone(), model.clone());
+            }
         }
-        for ((kind, alias), target) in &self.aliases {
-            if *kind == ComponentKind::Model
-                && let Some(model) = self.models.get(target)
-            {
+        let mut aliases: Vec<(&String, &String)> = self
+            .aliases
+            .iter()
+            .filter(|((kind, _), _)| *kind == ComponentKind::Model)
+            .map(|((_, alias), target)| (alias, target))
+            .collect();
+        aliases.sort();
+        for (alias, target) in aliases {
+            if let Some(model) = self.models.get(target) {
                 registry.register(alias.clone(), model.clone());
             }
         }
         registry
+    }
+
+    /// Builds a harness [`ModelRegistry`] exactly like [`Self::to_model_registry`],
+    /// but with the default model explicitly set to `name` instead of
+    /// whichever model was registered first.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::ModelNotFound`] if `name` (or an alias of
+    /// it) is not a registered model.
+    pub fn to_model_registry_with_default(&self, name: &str) -> Result<ModelRegistry<State>> {
+        if self.model(name).is_none() {
+            return Err(TinyAgentsError::ModelNotFound(name.to_string()));
+        }
+        let mut registry = self.to_model_registry();
+        registry.set_default(name);
+        Ok(registry)
     }
 
     /// Builds a harness [`ToolRegistry`] from the registered tools.
