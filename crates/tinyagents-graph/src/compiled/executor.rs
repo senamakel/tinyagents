@@ -726,6 +726,7 @@ where
         ctx: &mut RunCtx<'_, State, Update>,
         state: State,
     ) -> GraphExecution<State> {
+        ctx.disarm_drop_guard();
         let mut status = ctx.base_status();
         status.status = ExecutionStatus::Completed;
         status.current_step = ctx.steps;
