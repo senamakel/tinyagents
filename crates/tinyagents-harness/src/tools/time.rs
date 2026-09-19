@@ -1,4 +1,12 @@
-//! Builtin time/date tools.
+//! Builtin time/date tools: [`CurrentTimeTool`] and [`ResolveTimeTool`].
+//!
+//! Both implement `tinytools::Tool` directly (no recursive dispatch) and are
+//! registered via [`register_time_tools`] or collected with [`time_tools`].
+//! They exist so a model can ground relative expressions ("in 10 minutes",
+//! "tomorrow") in an exact timestamp instead of hand-computing one, which
+//! models are unreliable at. Parsing (`resolve_expr`, `parse_relative_duration`)
+//! and timezone handling (`ResolveZone`) are kept free of any `Tool` plumbing
+//! so they are unit-testable on their own.
 
 use std::sync::Arc;
 
@@ -10,7 +18,9 @@ use serde_json::json;
 use crate::tool::ToolRegistry;
 use tinytools::{Tool, ToolPolicy, ToolResult};
 
+/// Declared name of [`CurrentTimeTool`].
 const CURRENT_TIME_NAME: &str = "current_time";
+/// Declared name of [`ResolveTimeTool`].
 const RESOLVE_TIME_NAME: &str = "resolve_time";
 
 /// Tool that returns the current time in UTC and local time, optionally
