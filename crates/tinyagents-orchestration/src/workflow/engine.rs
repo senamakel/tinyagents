@@ -680,7 +680,14 @@ where
             tokio::select! {
                 outcomes = &mut outcomes => break outcomes,
                 _ = heartbeat.tick() => {
-                    if !self.store.renew(&run.id, owner, self.lease_for)? {
+                    let renewed = {
+                        let renew_run_id = run.id.clone();
+                        let renew_owner = owner.to_owned();
+                        let lease_for = self.lease_for;
+                        self.store_op(move |store| store.renew(&renew_run_id, &renew_owner, lease_for))
+                            .await?
+                    };
+                    if !renewed {
                         cancel.cancel();
                         let children = registration.current().child_run_ids;
                         self.executor.cancel_children(&children).await;
