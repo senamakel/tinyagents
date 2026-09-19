@@ -2219,6 +2219,44 @@ impl Middleware<(), ()> for SuppressToolDelta {
     }
 }
 
+/// Rewrites a streamed tool call and stops after dispatch so the regression can
+/// inspect exactly which canonical call reached the executor.
+struct RewriteToolDelta;
+
+#[async_trait]
+impl Middleware<(), ()> for RewriteToolDelta {
+    fn name(&self) -> &str {
+        "rewrite-tool-delta"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut tinyinference_llm::model::ModelDelta,
+    ) -> Result<()> {
+        if let Some(tool_call) = &mut delta.tool_call {
+            tool_call.call_id = "rewritten-call".to_string();
+            tool_call.tool_name = Some("safe".to_string());
+            tool_call.content = r#"{"source":"middleware"}"#.to_string();
+        }
+        Ok(())
+    }
+
+    async fn after_tool(
+        &self,
+        ctx: &mut RunContext<()>,
+        _state: &(),
+        _invocation: &ToolInvocationIdentity,
+        _result: &mut ToolResult,
+    ) -> Result<()> {
+        ctx.request_control(crate::context::MiddlewareControl::StopWithFinal(
+            "rewritten tool executed".to_string(),
+        ));
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn invoke_streaming_fires_on_model_delta_per_delta_and_accumulates() {
     use crate::testkit::StreamingMock;
@@ -2360,6 +2398,49 @@ async fn streaming_middleware_can_suppress_a_standalone_tool_delta() {
         0,
         "suppressed call must not run"
     );
+}
+
+#[tokio::test]
+async fn streaming_tool_delta_transform_controls_terminal_dispatch() {
+    use crate::testkit::StreamingMock;
+
+    let blocked = Arc::new(FakeTool::new("blocked", "blocked"));
+    let safe = Arc::new(FakeTool::new("safe", "safe"));
+    let mut terminal = ModelResponse::assistant("");
+    terminal
+        .message
+        .tool_calls
+        .push(ToolCall::new("raw-call", "blocked", json!({"raw": true})));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "stream",
+        Arc::new(StreamingMock::new(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
+                call_id: "raw-call".to_string(),
+                content: r#"{"raw":true}"#.to_string(),
+                tool_name: Some("blocked".to_string()),
+            }),
+            ModelStreamItem::Completed(terminal),
+        ])),
+    );
+    harness.register_tool(blocked.clone());
+    harness.register_tool(safe.clone());
+    harness.push_middleware(Arc::new(RewriteToolDelta));
+
+    let run = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("rewritten-tool-delta"),
+            vec![Message::user("go")],
+        )
+        .await
+        .expect("rewritten call remains executable");
+
+    assert_eq!(run.text().as_deref(), Some("rewritten tool executed"));
+    assert_eq!(*safe.calls.lock().unwrap(), 1);
+    assert_eq!(*blocked.calls.lock().unwrap(), 0);
 }
 
 #[tokio::test]

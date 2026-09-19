@@ -43,11 +43,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             resolve = resolve.with_required_capabilities(capabilities);
         }
         let resolution = host_run.host.models.resolve(&resolve);
-        let model = match self.call_budget(ctx) {
+        let (budget, bound) = self.model_call_budget(ctx);
+        let model = match budget {
             Some(remaining) => tokio::select! {
                 biased;
                 _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its remaining wall-clock budget", ctx.run_id())))?,
+                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its {bound}", ctx.run_id())))?,
             },
             None => tokio::select! {
                 biased;
@@ -384,8 +385,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut streamed_text = String::new();
         let mut streamed_reasoning = String::new();
         let mut saw_streamed_content = false;
-        let mut suppressed_tool_call_ids = Vec::new();
+        let mut transformed_tools = StreamAccumulator::new();
+        let mut saw_tool_delta = false;
         for delta in deltas {
+            saw_tool_delta |= delta.tool_call.is_some();
             let mut model_delta = ModelDelta {
                 call_id: call_id.as_str().to_string(),
                 content: delta.text.clone(),
@@ -395,10 +398,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             self.middleware
                 .run_on_model_delta(ctx, state, &mut model_delta)
                 .await?;
-            if model_delta.tool_call.is_none()
-                && let Some(tool_call) = &delta.tool_call
-            {
-                suppressed_tool_call_ids.push(tool_call.call_id.clone());
+            if let Some(tool_call) = model_delta.tool_call.clone() {
+                transformed_tools.push(&ModelStreamItem::ToolCallDelta(tool_call));
             }
             saw_streamed_content |= !delta.text.is_empty()
                 || !delta.reasoning.is_empty()
@@ -445,11 +446,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }));
             cached.message.content = transformed_content;
         }
-        if !suppressed_tool_call_ids.is_empty() {
-            cached
-                .message
-                .tool_calls
-                .retain(|call| !suppressed_tool_call_ids.contains(&call.id));
+        if saw_tool_delta {
+            cached.message.tool_calls = transformed_tools.finish()?.message.tool_calls;
         }
         Ok(cached)
     }
@@ -830,7 +828,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut streamed_text = String::new();
         let mut streamed_reasoning = String::new();
         let mut saw_streamed_content = false;
-        let mut suppressed_tool_call_ids = Vec::new();
+        let mut transformed_tools = StreamAccumulator::new();
+        let mut saw_tool_delta = false;
 
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
@@ -865,6 +864,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
 
             if let Some(message_delta) = message_delta {
+                saw_tool_delta |= message_delta.tool_call.is_some();
                 // Build the middleware-facing delta first (it needs owned
                 // copies of the fields), then move `message_delta` into the
                 // event so the hot path clones the payload once instead of
@@ -878,11 +878,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)
                     .await?;
-                if model_delta.tool_call.is_none()
-                    && let Some(tool_call) = &message_delta.tool_call
-                {
-                    suppressed_tool_call_ids.push(tool_call.call_id.clone());
-                }
                 saw_streamed_content |= !message_delta.text.is_empty()
                     || !message_delta.reasoning.is_empty()
                     || !model_delta.content.is_empty()
@@ -925,6 +920,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ),
                     _ => item,
                 };
+                if matches!(
+                    item,
+                    ModelStreamItem::ToolCallDelta(_)
+                        | ModelStreamItem::MessageDelta(MessageDelta {
+                            tool_call: Some(_),
+                            ..
+                        })
+                ) {
+                    transformed_tools.push(&item);
+                }
                 *deltas_emitted += 1;
             }
 
@@ -958,12 +963,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 response.message.content = content;
             }
             if let ModelStreamItem::Completed(response) = &mut item
-                && !suppressed_tool_call_ids.is_empty()
+                && saw_tool_delta
             {
-                response
-                    .message
-                    .tool_calls
-                    .retain(|call| !suppressed_tool_call_ids.contains(&call.id));
+                // The terminal response carries richer metadata, but its raw
+                // tool calls are not authoritative after delta middleware has
+                // transformed them. Reconstruct from the exact forwarded
+                // fragments so a changed name, id, or argument payload cannot
+                // be restored just before dispatch.
+                response.message.tool_calls =
+                    transformed_tools.clone().finish()?.message.tool_calls;
             }
 
             accumulator.push(&item);
@@ -1030,10 +1038,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
             return Ok(captured());
         }
         let requested = request.model.as_deref();
-        if requested.is_some_and(|requested| {
-            self.resolved.source == ModelResolutionSource::RequestOverride
-                && self.resolved.requested.as_deref() == Some(requested)
-        }) {
+        if request.required_capabilities.is_none()
+            && requested.is_some_and(|requested| {
+                self.resolved.source == ModelResolutionSource::RequestOverride
+                    && self.resolved.requested.as_deref() == Some(requested)
+            })
+        {
             return Ok(captured());
         }
         if let Some(binding) = self.harness.resolve_host_model(ctx, request).await? {

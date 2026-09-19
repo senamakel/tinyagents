@@ -806,6 +806,42 @@ async fn policy_only_deadline_bounds_initial_host_resolution_with_a_timeout_erro
     );
 }
 
+#[tokio::test]
+async fn per_model_call_limit_bounds_initial_host_resolution() {
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(PendingResolver {
+            started: Arc::new(tokio::sync::Notify::new()),
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_model_call_ms(Some(5)),
+        ..RunPolicy::default()
+    });
+    harness.with_host_capabilities(host);
+
+    let error = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("per-call-host-resolve-timeout"), ()),
+            &(),
+        )
+        .await
+        .expect_err("per-model-call cap must bound host resolution");
+    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)));
+    assert!(error.to_string().contains("per-model-call ceiling"));
+}
+
 async fn assert_rebound_host_resolution_stops(
     token: Option<crate::CancellationToken>,
     policy_timeout: Option<u64>,
@@ -1212,10 +1248,11 @@ async fn hosted_definition_tool_allowlist_filters_schemas_and_rejects_fabricated
 }
 
 #[tokio::test]
-async fn hosted_allowlist_ignores_hidden_tool_when_structured_schema_name_collides() {
+async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
     // `answer` is registered globally but deliberately not allowed for this
-    // hosted definition.  The structured-output schema may use that name: it
-    // only collides if it is actually present in this run's advertised tools.
+    // hosted definition. It still cannot be used as a synthetic structured
+    // tool name: a provider response would make the schema/tool attribution
+    // ambiguous before the allowlist reaches dispatch.
     let model = Arc::new(ScriptedModel::replies(vec![r#"{"ok":true}"#]));
     let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]);
     let host = crate::host::HostCapabilities::new(
@@ -1236,7 +1273,7 @@ async fn hosted_allowlist_ignores_hidden_tool_when_structured_schema_name_collid
     });
     harness.with_host_capabilities(host);
 
-    let run = harness
+    let error = harness
         .invoke_agent(
             AgentTurnRequest::new(
                 "helper",
@@ -1246,19 +1283,14 @@ async fn hosted_allowlist_ignores_hidden_tool_when_structured_schema_name_collid
             &(),
         )
         .await
-        .expect("the hidden global tool must not collide with the schema");
+        .expect_err("a hidden registered tool still collides with the schema");
 
-    assert_eq!(run.structured, Some(json!({"ok": true})));
-    let request = model.requests().pop().expect("model request");
-    assert_eq!(
-        request
-            .tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>(),
-        ["noop"],
-        "only definition-allowed tools participate in collision detection"
+    assert!(
+        error
+            .to_string()
+            .contains("collides with a registered tool")
     );
+    assert!(model.requests().is_empty(), "provider was not contacted");
 }
 
 #[tokio::test]
