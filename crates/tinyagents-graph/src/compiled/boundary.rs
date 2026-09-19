@@ -64,6 +64,28 @@ where
         Ok(state)
     }
 
+    /// The channel-bookkeeping trio (`channel_versions`, `channel_deltas`,
+    /// `versions_seen`) to embed in a checkpoint built at this boundary —
+    /// I5/R3, via the single [`crate::channel::channel_bookkeeping`]
+    /// dispatch point shared with `compiled::state_api`. `state` is this
+    /// boundary's freshly-committed state (already folded through
+    /// [`Self::apply_updates`]); `ctx.steps` is the fallback per-checkpoint
+    /// version for a plain whole-state graph.
+    fn channel_checkpoint_fields(
+        &self,
+        ctx: &RunCtx<'_, State, Update>,
+        state: &State,
+    ) -> (
+        BTreeMap<String, u64>,
+        BTreeMap<String, Vec<serde_json::Value>>,
+        BTreeMap<String, BTreeMap<String, u64>>,
+    ) {
+        let (channel_versions, channel_deltas) =
+            crate::channel::channel_bookkeeping(state, ctx.steps as u64);
+        let versions_seen = ctx.versions_seen.clone().into_iter().collect();
+        (channel_versions, channel_deltas, versions_seen)
+    }
+
     /// The normal (non-interrupt/non-failure) step boundary: routes the
     /// completed active set into the next superstep's activations and
     /// persists a boundary checkpoint per the configured
