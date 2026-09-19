@@ -177,6 +177,14 @@ fn to_entry(catalog_provider: &str, model_id: &str, model: &Value) -> Option<Mod
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
+    // This is a chat-model catalog: an image/audio/video-only-output model
+    // (text-to-speech, image generation, video generation) has no text
+    // completion to serve as a `ChatModel` and often has an output-token
+    // limit that legitimately exceeds its input limit (an audio-duration
+    // budget, not a context overflow) — the wrong shape for this catalog.
+    if !modalities_out.contains(&"text") {
+        return None;
+    }
 
     let cost = model.get("cost");
     let per_token = |value: Option<&Value>| value.and_then(Value::as_f64).map(|v| v / 1_000_000.0);
