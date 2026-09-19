@@ -1439,6 +1439,40 @@ fn tool_message_from_result(
 /// on retry. Flattening `SubAgentDepth`/`LimitExceeded` into `Tool` made a
 /// `RetryMiddleware` around tools re-run a permanently failing sub-agent call
 /// until its attempt budget was exhausted (M-3).
+/// Runs a dispatch call, folding a [`TinyAgentsError::ModelRetry`]/
+/// [`TinyAgentsError::ToolFailed`] the tool raised as `Err` into a
+/// recoverable [`tinytools::ToolResult`] instead of aborting the run.
+///
+/// This is A3's unified retry/failure vocabulary for tool errors: a tool that
+/// wants "ask the model to try again" (the common case — a transient or
+/// correctable failure) returns `Err(TinyAgentsError::ModelRetry(..).into())`
+/// instead of `Ok(ToolResult::error(..))`, so it reads the same as any other
+/// `?`-propagated failure in the tool's implementation while the harness
+/// still folds it into the ordinary "tool ran, told the model to fix it"
+/// transcript path (via [`tinytools::ToolResult::retry`]) rather than ending
+/// the run. `ToolFailed` is the permanent counterpart
+/// ([`tinytools::ToolResult::failed`]); every other error still maps through
+/// [`map_tool_dispatch_error`] unchanged, preserving TinyTools' "`Err` aborts
+/// the run" contract for genuine dispatch failures.
+pub(super) async fn execute_tool_recovering_model_retry<Fut>(
+    fut: Fut,
+) -> Result<tinytools::ToolResult>
+where
+    Fut: std::future::Future<Output = anyhow::Result<tinytools::ToolResult>>,
+{
+    match fut.await {
+        Ok(result) => Ok(result),
+        Err(error) => match error.downcast::<TinyAgentsError>() {
+            Ok(TinyAgentsError::ModelRetry(message)) => Ok(tinytools::ToolResult::retry(message)),
+            Ok(TinyAgentsError::ToolFailed(message)) => {
+                Ok(tinytools::ToolResult::failed(message))
+            }
+            Ok(other) => Err(map_tool_dispatch_error(anyhow::Error::from(other))),
+            Err(error) => Err(map_tool_dispatch_error(error)),
+        },
+    }
+}
+
 pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
     match error.downcast::<TinyAgentsError>() {
         Ok(TinyAgentsError::Cancelled) => TinyAgentsError::Cancelled,
