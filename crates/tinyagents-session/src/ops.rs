@@ -232,6 +232,13 @@ pub fn record_message_with_reasoning(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Records a tool call, bounding its output to [`MAX_TOOL_OUTPUT_BYTES`],
+/// and returns the new row's id.
+///
+/// Row insert and FTS index are written in one transaction — see the module
+/// docs for why. The row id is captured before indexing because
+/// `index_fts_tool` inserts into the `sessions_fts` virtual table, which
+/// would otherwise move `last_insert_rowid()` off the tool-call row.
 #[allow(clippy::too_many_arguments)]
 pub fn record_tool_call(
     workspace_dir: &Path,
