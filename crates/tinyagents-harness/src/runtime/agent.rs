@@ -400,7 +400,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, St
             && let Some(observer) = observer.take()
         {
             observer(
-                AgentRun::new(),
+                crate::context::TerminalRunSummary::default(),
                 false,
                 Some("hosted stream cancelled before execution began".to_string()),
             );
