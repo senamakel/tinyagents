@@ -1232,8 +1232,6 @@ async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patc
     );
 
     let advanced_tool: Arc<dyn Tool> = Arc::new(FakeTool::new("advanced-tool", "advanced-output"));
-    let capability_toolset: Arc<dyn crate::tool::toolset::ToolSet<(), ()>> =
-        Arc::new(crate::tool::toolset::CombinedToolSet::new(vec![]));
     // A minimal single-tool toolset behind the capability, independent of
     // `defer_loading` gating (that gating is `CapabilityToolSet`'s job, one
     // layer up).
