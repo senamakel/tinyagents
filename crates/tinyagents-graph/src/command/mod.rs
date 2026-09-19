@@ -117,7 +117,12 @@ impl Interrupt {
             tinyagents_harness::ids::process_nonce(),
             tinyagents_harness::ids::next_seq()
         );
-        Self { id, node, payload }
+        Self {
+            id,
+            node,
+            payload,
+            task_id: None,
+        }
     }
 
     /// Creates an interrupt with a caller-supplied id.
@@ -130,7 +135,19 @@ impl Interrupt {
             id: id.into(),
             node: node.into(),
             payload,
+            task_id: None,
         }
+    }
+
+    /// Returns this interrupt with its scheduled task id set (R5/I1).
+    ///
+    /// The interrupt boundary calls this on the emitted interrupt before
+    /// persisting/returning it, so a `Send` fan-out of the same node (or a
+    /// re-emitted subgraph interrupt) is resumable by its own task rather
+    /// than sharing the node's identity with its siblings.
+    pub fn with_task_id(mut self, task_id: tinyagents_harness::ids::TaskId) -> Self {
+        self.task_id = Some(task_id);
+        self
     }
 }
 
