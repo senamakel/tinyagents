@@ -325,7 +325,7 @@ async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resum
             response(Vec::new(), "clicked"),
         ])),
     );
-    harness.tools_mut().register_external(tinyinference_llm::tool::ToolSchema {
+    harness.register_external_tool(tinyinference_llm::tool::ToolSchema {
         name: "browser_click".into(),
         description: "Click at a screen coordinate (runs in the client).".into(),
         parameters: json!({"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}}),

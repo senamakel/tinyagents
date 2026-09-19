@@ -85,6 +85,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self
     }
 
+    /// Registers a schema-only external tool the host executes out of band
+    /// (A2). See [`ToolRegistry::register_external`].
+    pub fn register_external_tool(
+        &mut self,
+        schema: tinyinference_llm::tool::ToolSchema,
+    ) -> &mut Self {
+        self.tools.register_external(schema);
+        self
+    }
+
     /// Registers a tool whose execution needs the typed parent run.
     pub fn register_tool_dispatch(
         &mut self,
