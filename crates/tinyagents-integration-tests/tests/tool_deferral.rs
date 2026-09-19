@@ -313,7 +313,10 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
     let events: Vec<AgentEvent> = listener.events().into_iter().map(|r| r.event).collect();
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::ToolsAdvertised { direct: 3, deferred: 1, schema_bytes } if *schema_bytes > 0
+        // `direct` counts only the `read_file` Direct-exposure tool: the two
+        // intrinsic bridge schemas are implied by `deferred: 1`, not
+        // double-counted into `direct` (see `ToolsAdvertised`'s doc comment).
+        AgentEvent::ToolsAdvertised { direct: 1, deferred: 1, schema_bytes } if *schema_bytes > 0
     )));
     assert!(events.iter().any(|event| matches!(
         event,
