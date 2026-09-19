@@ -501,3 +501,91 @@ async fn tool_raising_approval_required_defers_with_its_metadata() {
     assert!(!events.iter().any(|e| matches!(e, AgentEvent::ToolFailed { .. })));
     assert_eq!(run.tool_calls, 0);
 }
+
+// ── HumanApprovalMiddleware ─────────────────────────────────────────────────
+
+#[tokio::test]
+async fn human_approval_middleware_defer_outcome_produces_the_deferred_exit() {
+    use crate::middleware::library::{ApprovalOutcome, HumanApprovalMiddleware};
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            mixed_batch(),
+            response(Vec::new(), "all done"),
+        ])),
+    );
+    // Neither tool declares approval in its policy; the middleware decides.
+    let delete = RecordingTool::plain("delete", "deleted");
+    let lookup = RecordingTool::plain("lookup", "found");
+    harness.register_tool(delete.clone());
+    harness.register_tool(lookup.clone());
+    harness.push_middleware(Arc::new(
+        HumanApprovalMiddleware::new(["delete"]).with_approval_outcome(Arc::new(
+            |call: &ToolCall| {
+                if call.arguments["path"] == "/tmp/x" {
+                    ApprovalOutcome::Defer
+                } else {
+                    ApprovalOutcome::Allow
+                }
+            },
+        )),
+    ));
+
+    let first = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("defer is not an error");
+    let pending = first.deferred.clone().expect("the flagged call is pending");
+    assert_eq!(pending.approvals[0].id, "call-delete");
+    assert!(delete.calls().is_empty());
+    assert_eq!(lookup.calls().len(), 1);
+
+    // On resume the same middleware sees the approval and lets it through.
+    let run = harness
+        .resume_deferred(
+            &(),
+            RunContext::new(RunConfig::new("second"), ()),
+            first.messages.clone(),
+            DeferredToolResults::new().approve("call-delete"),
+        )
+        .await
+        .expect("resume completes");
+    assert_eq!(delete.calls().len(), 1);
+    assert_eq!(run.text().as_deref(), Some("all done"));
+}
+
+#[tokio::test]
+async fn human_approval_middleware_deny_outcome_answers_the_model_without_running() {
+    use crate::middleware::library::{ApprovalOutcome, HumanApprovalMiddleware};
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            mixed_batch(),
+            response(Vec::new(), "understood"),
+        ])),
+    );
+    let delete = RecordingTool::plain("delete", "deleted");
+    harness.register_tool(delete.clone());
+    harness.register_tool(RecordingTool::plain("lookup", "found"));
+    harness.push_middleware(Arc::new(
+        HumanApprovalMiddleware::new(["delete"]).with_approval_outcome(Arc::new(
+            |_call: &ToolCall| ApprovalOutcome::Deny("policy forbids deletes".into()),
+        )),
+    ));
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("a denial is answered, not raised");
+    assert!(delete.calls().is_empty());
+    assert!(run.deferred.is_none());
+    assert_eq!(
+        tool_result_text(&run.messages, "call-delete").as_deref(),
+        Some("policy forbids deletes")
+    );
+    assert_eq!(run.text().as_deref(), Some("understood"));
+}
