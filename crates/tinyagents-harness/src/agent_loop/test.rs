@@ -3753,11 +3753,17 @@ async fn middleware_control_stops_loop_with_final_response() {
     // user, assistant(1 tool call), tool(synthetic).
     assert_eq!(run.messages.len(), 3);
     let Message::Assistant(assistant) = &run.messages[1] else {
-        panic!("expected assistant message at index 1, got {:?}", run.messages[1]);
+        panic!(
+            "expected assistant message at index 1, got {:?}",
+            run.messages[1]
+        );
     };
     assert_eq!(assistant.tool_calls.len(), 1);
     let Message::Tool(tool_message) = &run.messages[2] else {
-        panic!("expected synthetic tool message at index 2, got {:?}", run.messages[2]);
+        panic!(
+            "expected synthetic tool message at index 2, got {:?}",
+            run.messages[2]
+        );
     };
     assert_eq!(tool_message.tool_call_id, assistant.tool_calls[0].id);
 }

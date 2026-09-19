@@ -359,11 +359,7 @@ async fn child_run_ids_are_deterministic_from_the_parent_run_id_and_call_order()
 /// the *same* declaration `Arc` across calls.
 #[test]
 fn tool_declaration_is_cached_across_calls() {
-    let child = SubAgent::new(
-        "worker",
-        "works",
-        Arc::new(child_harness::<()>("unused")),
-    );
+    let child = SubAgent::new("worker", "works", Arc::new(child_harness::<()>("unused")));
     let dispatch: SubAgentTool<(), ()> =
         SubAgentTool::new(Arc::new(child), ChildDataPolicy::new(|_: &()| ()));
 
