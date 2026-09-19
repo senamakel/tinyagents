@@ -4229,7 +4229,10 @@ fn slow_node_graph() -> CompiledGraph<i32, i32> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dropping_the_run_future_marks_status_cancelled_not_running() {
     let store = Arc::new(crate::observability::InMemoryGraphStatusStore::default());
-    let graph = slow_node_graph().with_status_store(store.clone());
+    let sink = Arc::new(CollectingSink::new());
+    let graph = slow_node_graph()
+        .with_status_store(store.clone())
+        .with_event_sink(sink.clone());
 
     let outcome = tokio::time::timeout(Duration::from_millis(20), graph.run(0)).await;
     assert!(
@@ -4237,21 +4240,30 @@ async fn dropping_the_run_future_marks_status_cancelled_not_running() {
         "the 5s sleep must outlast the 20ms timeout, dropping the run future"
     );
 
+    // `RunStarted` is emitted synchronously before the node runs, so the run
+    // id is known even though the run itself never returned.
+    let run_id = sink
+        .events()
+        .into_iter()
+        .find_map(|e| match e {
+            GraphEvent::RunStarted { run_id } => Some(run_id),
+            _ => None,
+        })
+        .expect("RunStarted was emitted before the timeout fired");
+
     // The drop guard's write happens on a detached background task; give it
     // a moment to land before asserting on the store.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let statuses = store.list_by_thread("").await.unwrap();
-    // Without a thread id the run has no thread-indexed status, but the
-    // per-run record is still keyed by run id; scan every recorded status
-    // instead (there is exactly one: this run).
-    let all: Vec<GraphRunStatus> = store.all_statuses();
-    assert_eq!(all.len(), 1, "exactly this one run was recorded");
+    let status = store
+        .get_status(run_id.as_str())
+        .await
+        .unwrap()
+        .expect("the drop guard persisted a status for this run");
     assert_ne!(
-        all[0].status,
+        status.status,
         ExecutionStatus::Running,
         "the drop guard must not leave the run stuck at Running"
     );
-    assert_eq!(all[0].status, ExecutionStatus::Cancelled);
-    assert!(statuses.is_empty(), "no thread id was used for this run");
+    assert_eq!(status.status, ExecutionStatus::Cancelled);
 }
