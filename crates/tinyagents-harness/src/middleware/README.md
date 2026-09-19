@@ -79,11 +79,13 @@ the loop itself) skips its own dispatch for that error.
   result enums wrap middleware resolve to; construct via `.into()` from a
   `ModelResponse` / `ToolResult`.
 
-### Middleware defined directly in this module (`types.rs`)
+### Middleware types defined directly in this module (`types.rs`)
 
-These ship in `middleware/types.rs` itself (not `library/`) because they are
-tightly coupled to context-window/prompt-cache machinery that already lives at
-this level of the crate:
+These structs are *defined* in `middleware/types.rs` (not `library/`) because
+their fields (records, layout cache, counters) are considered part of this
+module's core surface — but their constructors and trait impls actually live
+in `library/context.rs` and `library/observe.rs` alongside the rest of the
+built-in catalog:
 
 - `LoggingMiddleware` — observation-only; counts how often each lifecycle hook
   fires (`HookCounts`, readable via `.counts()`). Emits no events of its own —

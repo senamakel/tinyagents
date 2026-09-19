@@ -398,6 +398,9 @@ fn dirty_state(worktree_path: &Path) -> GitResult<(bool, Vec<PathBuf>)> {
     Ok((!changed.is_empty(), changed))
 }
 
+/// Maps `run_id` to a filesystem- and git-ref-safe slug: non-alphanumeric
+/// characters (other than `_`/`-`) become `-`, leading/trailing `-` is
+/// trimmed, and an empty result falls back to `"worker"`.
 fn sanitize_run_id(run_id: &str) -> String {
     let cleaned: String = run_id
         .chars()
