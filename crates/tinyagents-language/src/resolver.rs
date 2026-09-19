@@ -141,15 +141,20 @@ impl Resolver {
         // 2. The kind-specific primary reference, routed through the one shared
         //    classification policy so this path cannot drift from the blueprint
         //    gates.
-        let subgraph_target = node.graph.as_deref().or(node.model.as_deref());
-        let router_target = node.router.as_deref().or(node.model.as_deref());
+        // A dedicated `router "name"` item (M4) has no separate parameter in
+        // `classify_reference`: it folds into the effective `model` value
+        // here, the same way `crate::compiler::compile_graph` folds it into
+        // `NodeSpec.model` when the blueprint is compiled, so the spanned
+        // (AST-level) and spanless (blueprint-level) binding gates validate
+        // the same value.
+        let model = node.model.as_deref().or(node.router.as_deref());
+        let subgraph_target = node.graph.as_deref().or(model);
         if let Some(reference) = CapabilityResolver::classify_reference(
             kind,
-            node.model.as_deref(),
+            model,
             subgraph_target,
             node.agent.as_deref(),
             node.script.as_deref(),
-            router_target,
         ) {
             self.check_ref(
                 self.caps
