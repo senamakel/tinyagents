@@ -263,7 +263,16 @@ pub struct RunContext<Ctx = ()> {
     /// is deliberately not serializable or public: it keeps a hosted parent
     /// from accidentally delegating through a child's unrelated (or absent)
     /// capability bundle.
-    pub(crate) host_authority: Option<std::sync::Arc<dyn Any + Send + Sync>>,
+    ///
+    /// Erased through [`crate::runtime::ErasedHostAuthority`] rather than
+    /// `dyn Any`: the generic explicit-model loop must stay callable with a
+    /// borrowed (non-`'static`) `State`/`Ctx`, and `Any::downcast_ref`
+    /// requires `'static` at the *read* site, which such a caller can never
+    /// prove. The custom trait instead exposes a type-name check that needs
+    /// no `'static` bound on either side; see
+    /// [`crate::runtime::host_invocation_binding`] for how the read side
+    /// uses it to fail closed on a mismatch.
+    pub(crate) host_authority: Option<std::sync::Arc<dyn crate::runtime::ErasedHostAuthority>>,
     /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
     /// agent-loop guard even when the driving future is cancelled or dropped.
     pub(crate) terminal_observer: Option<TerminalObserver>,
