@@ -1094,16 +1094,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
 /// Decides whether a batch may leave the serial path.
 ///
-/// Lifecycle middleware runs during admission and can rewrite a call's name or
-/// arguments. Until that mutable admission phase is made a separate completed
-/// batch, any lifecycle middleware conservatively forces serial execution.
+/// Lifecycle middleware used to force serial execution unconditionally
+/// (`lifecycle_middleware == 0`), but that precondition never actually
+/// applied: lifecycle `before_tool` hooks that can rewrite a call's name or
+/// arguments run during **admission** (`admit_tool_call`, phase 1 of
+/// [`AgentHarness::execute_tools_concurrently`]), which is already serial and
+/// completes in full — for every call in the batch — before any concurrent
+/// future is built. By the time phase 3 runs the futures, every call has its
+/// final, lifecycle-rewritten name and arguments; there is nothing left for a
+/// lifecycle middleware to still mutate concurrently (I-8). Tool-*wrap*
+/// middleware (`tool_wrap_middleware`) is a separate concern: the concurrent
+/// path drives each tool directly, bypassing the wrap onion entirely (see
+/// that method's docs), so a registered `ToolMiddleware` still forces serial
+/// execution — dropping it silently would skip the middleware.
 fn should_execute_tools_concurrently(
     calls: usize,
     canonical_parallel_safe: bool,
-    lifecycle_middleware: usize,
     tool_wrap_middleware: usize,
 ) -> bool {
-    calls > 1 && canonical_parallel_safe && lifecycle_middleware == 0 && tool_wrap_middleware == 0
+    calls > 1 && canonical_parallel_safe && tool_wrap_middleware == 0
 }
 
 /// A batch may leave the serial path only when every registered declaration
