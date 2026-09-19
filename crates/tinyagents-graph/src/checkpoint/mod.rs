@@ -26,7 +26,8 @@ pub(crate) use sqlite::prepare_connection;
 pub use types::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, CompletedTask, DurabilityMode, PendingActivation,
-    PendingWrite, WRITES_IDX_ERROR, WRITES_IDX_INTERRUPT, WRITES_IDX_RESUME, merge_writes,
+    DURABLE_TASK_CHANNEL_PREFIX, INTERRUPT_AFTER_CHANNEL, PendingWrite, WRITES_IDX_ERROR,
+    WRITES_IDX_INTERRUPT, WRITES_IDX_INTERRUPT_AFTER, WRITES_IDX_RESUME, merge_writes,
 };
 
 use std::collections::{HashMap, HashSet};
