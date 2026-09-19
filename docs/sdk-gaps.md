@@ -479,49 +479,23 @@ Acceptance criteria:
 
 Status: shipped.
 
-Durable graphs, task stores, harness stores, and session persistence are hard
-to migrate safely without a shared contract test suite. Every layer now has
-one:
-
-- **Graph**: `tinyagents_graph::testkit::conformance` — `checkpointer_contract`,
-  `checkpointer_lineage_contract`, `checkpointer_writes_contract`,
-  `checkpointer_concurrent_contract`, `taskstore_contract`,
-  `taskstore_replay_contract`, `taskstore_concurrent_contract`. Run against
-  the in-memory, file, and (feature-gated) SQLite checkpointers, plus the
-  in-memory and JSONL task stores, in
-  `crates/tinyagents-integration-tests/tests/conformance.rs` and
-  `tests/persistence_conformance.rs`.
-- **Harness store**: `tinyagents_harness::store::conformance` —
-  `run_store_conformance` (the flat `Store` trait: put/get/overwrite/delete/
-  list/namespace isolation) and `run_namespaced_store_conformance` (the
-  hierarchical `NamespacedStore` trait: the same plus search, namespace
-  listing, TTL expiry, and `batch`'s positional-alignment guarantee). Run
-  against `InMemoryStore`, `FileStore`, and `InMemoryNamespacedStore` in
-  `crates/tinyagents-integration-tests/tests/store_conformance.rs`. No
-  SQLite-backed `Store`/`NamespacedStore` exists in-tree yet (only a SQLite
-  `ResponseCache`), so that backend is not yet covered — the suite is ready
-  for it the moment one lands.
-- **Session**: `tinyagents_session::testkit::conformance` —
-  `run_ledger_conformance` (the SQLite-backed run ledger, run against two
-  independent workspaces to pin per-workspace connection-cache keying) and
-  `transcript_history_conformance` (`FileTranscriptHistory` and the
-  in-memory `InMemoryTranscriptHistory` double). Run in
-  `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
-
-Any downstream backend author certifies a new implementation by calling the
-matching contract function from their own `#[tokio::test]` / `#[test]`.
-
-Acceptance criteria:
-
-- Storage adapters can be swapped without changing graph or harness behavior. ✅
-- Durable interrupt/resume semantics are proven across backends (graph
-  checkpointer lineage/writes contracts). ✅
-- A downstream `Store`/`NamespacedStore`/checkpointer/task-store/run-ledger/
-  transcript-history implementation can be certified without duplicating the
-  assertions. ✅
-- Parallel-agent helpers have regression tests for order, failure, timeout,
-  and cancellation — still open; not covered by this suite (see the fuzz/e2e
-  graph-agent orchestration tests instead).
+Every persistence layer now has a shared contract-test suite, so a backend
+swap or a new caller-supplied implementation can be certified rather than
+trusted: `tinyagents_graph::testkit::conformance` (checkpointer + task-store,
+run against memory/file/SQLite and JSONL in
+`crates/tinyagents-integration-tests/tests/conformance.rs` and
+`tests/persistence_conformance.rs`), `tinyagents_harness::store::conformance`
+(`run_store_conformance` for the flat `Store` trait,
+`run_namespaced_store_conformance` for `NamespacedStore` — search, TTL,
+`batch` alignment — run against `InMemoryStore`, `FileStore`, and
+`InMemoryNamespacedStore` in `tests/store_conformance.rs`; no in-tree SQLite
+`Store` exists yet, only a SQLite `ResponseCache`, so that backend is not yet
+covered), and `tinyagents_session::testkit::conformance` (run ledger +
+transcript history, run against SQLite and the in-memory double in
+`tests/session_conformance.rs`). See each module's docs
+(`docs/modules/harness/store.md`, `crates/tinyagents-session/src/README.md`)
+for details. Parallel-agent order/failure/timeout/cancellation regression
+tests remain open (see the fuzz/e2e graph-agent orchestration tests instead).
 
 ## Implementation Order
 
