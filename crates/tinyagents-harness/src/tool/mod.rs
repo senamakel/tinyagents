@@ -10,6 +10,7 @@ mod schema;
 mod schema_compact;
 mod schema_prepare;
 pub mod select;
+mod signature;
 mod timeout;
 mod types;
 
@@ -24,6 +25,7 @@ pub use schema::*;
 pub use schema_compact::*;
 pub use schema_prepare::*;
 pub use select::*;
+pub use signature::*;
 pub use timeout::*;
 pub use types::ToolExecutionContext;
 
