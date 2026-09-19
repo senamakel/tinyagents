@@ -238,7 +238,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.middleware.run_before_agent(ctx, state).await?;
 
         // Announced after `before_agent` so a listener that subscribes there
-        // (the usual place) sees the run's tool surface.
+        // (the usual place) sees the run's tool surface. This is deliberately
+        // the pre-middleware/pre-request baseline (see the event's doc
+        // comment): per-turn `before_model` middleware and a structured-
+        // output tool-call fallback can still narrow or grow what an
+        // individual request actually sends.
         let record = ctx.emit(AgentEvent::ToolsAdvertised {
             direct: tool_schemas.len(),
             deferred: deferred_catalog.len(),
