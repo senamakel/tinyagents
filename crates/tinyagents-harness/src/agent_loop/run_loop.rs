@@ -491,11 +491,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 let target_origin = handoff_transform::target_origin_for(profile);
                 let outcome =
                     handoff_transform::prepare_for_model(&request.messages, profile, &target_origin);
-                if outcome.changes > 0 {
+                let changes = outcome.changes;
+                if changes > 0 {
                     request.messages = outcome.messages.into_owned();
-                    ctx.emit(AgentEvent::HandoffTransformApplied {
-                        changes: outcome.changes,
-                    });
+                    ctx.emit(AgentEvent::HandoffTransformApplied { changes });
                 }
             }
 
