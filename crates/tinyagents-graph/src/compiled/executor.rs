@@ -15,6 +15,39 @@ use super::*;
 use crate::compiled::boundary::StepBoundary;
 use crate::compiled::run_ctx::{ResumeSeed, RunCtx};
 use crate::compiled::step::StepRunner;
+use crate::thread_locks::ThreadLockMap;
+use std::sync::OnceLock;
+
+/// Default TTL for the durable execution lease claimed in [`CompiledGraph::execute`]
+/// (C3/R4). Renewal is not wired up (a single run is expected to complete, or at
+/// least reach its next boundary, well inside this window); a lease that
+/// outlives its owning process by more than this is reclaimable by the next
+/// claimant.
+const THREAD_LEASE_TTL: Duration = Duration::from_secs(300);
+
+/// Process-wide map of per-`(thread, namespace)` in-process execution locks
+/// (C3/R4). Distinct from `delegation::run::thread_lock`'s map: that one
+/// serializes delegation's own pre-`execute` checkpoint classification, this
+/// one serializes the executor's run/resume/retry entry points themselves —
+/// the gap the review's C3 finding describes (`executor.rs` took no lock of
+/// its own). Keyed on `thread_id` *and* namespace so a parent run and a
+/// subgraph run sharing a thread id never contend on each other's lock.
+fn execution_lock_map() -> &'static ThreadLockMap {
+    static LOCKS: OnceLock<ThreadLockMap> = OnceLock::new();
+    LOCKS.get_or_init(|| ThreadLockMap::new("graph executor per-thread run lock"))
+}
+
+/// Builds the in-process lock map key for `thread_id` scoped to `namespace`.
+/// `\u{1}` is not a legal thread-id or namespace-segment character in
+/// practice and is used only as an internal separator, never persisted.
+fn execution_lock_key(thread_id: &str, namespace: &[String]) -> String {
+    let mut key = thread_id.to_string();
+    for segment in namespace {
+        key.push('\u{1}');
+        key.push_str(segment);
+    }
+    key
+}
 
 /// Everything a fresh or resumed run is seeded with, bundled so
 /// [`CompiledGraph::execute`]/[`CompiledGraph::execute_run`] take one
