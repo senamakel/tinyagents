@@ -109,6 +109,23 @@ impl AgentRun {
     pub fn text(&self) -> Option<String> {
         self.final_response.as_ref().map(|r| r.text())
     }
+
+    /// Deserializes [`Self::structured`] into `T`, when the run produced a
+    /// structured output.
+    ///
+    /// A typed convenience over `run.structured`, mirroring Pydantic AI's
+    /// `result.output` (A3). Returns
+    /// [`TinyAgentsError::StructuredOutput`][crate::error::TinyAgentsError::StructuredOutput]
+    /// when the run produced no structured value, or when the value does not
+    /// deserialize into `T`.
+    pub fn structured_as<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
+        let value = self.structured.clone().ok_or_else(|| {
+            TinyAgentsError::StructuredOutput("run produced no structured output".to_string())
+        })?;
+        serde_json::from_value(value).map_err(|error| {
+            TinyAgentsError::StructuredOutput(format!("deserialization failed: {error}"))
+        })
+    }
 }
 
 // ── MiddlewareStack ───────────────────────────────────────────────────────────
