@@ -218,7 +218,8 @@ pub fn drop_definitions(schema: Value) -> Value {
                 // the original (unreachable) definition, and a
                 // schema-conformant call fails. Drop the reference and leave
                 // the schema unconstrained instead — no `type` means "any
-                // JSON value", which is safe advertised widened.
+                // JSON value", which only widens what is advertised, never
+                // narrows it.
                 return json!({});
             }
             let rebuilt: Map<String, Value> = object
