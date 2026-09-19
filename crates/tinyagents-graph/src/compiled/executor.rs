@@ -487,10 +487,11 @@ where
                 active: activation_nodes(&active),
             });
 
+            let step = ctx.steps;
             let outcome = if self.parallel && active.len() > 1 {
-                runner.run_parallel(&mut ctx, &active, &state, ctx.steps).await
+                runner.run_parallel(&mut ctx, &active, &state, step).await
             } else {
-                runner.run_sequential(&mut ctx, &active, &state, ctx.steps).await
+                runner.run_sequential(&mut ctx, &active, &state, step).await
             };
             let outcome = match outcome {
                 Ok(outcome) => outcome,
