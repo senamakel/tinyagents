@@ -596,31 +596,35 @@ where
         let mut phase_states = run.phase_states.clone();
         let mut child_ids = run.child_run_ids.clone();
         set_phase_status(&mut phase_states, &phase.name, PhaseStatus::Running, None);
-        let running = self.persist(
-            run,
-            PersistRequest {
-                phase_states: phase_states.clone(),
-                child_run_ids: child_ids.clone(),
-                status: WorkflowRunStatus::Running,
-                summary: None,
-                terminal: false,
-            },
-            owner,
-        )?;
+        let running = self
+            .persist(
+                run,
+                PersistRequest {
+                    phase_states: phase_states.clone(),
+                    child_run_ids: child_ids.clone(),
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    terminal: false,
+                },
+                owner,
+            )
+            .await?;
 
         let budget = definition.max_children.saturating_sub(total_spawned) as usize;
         if budget == 0 {
-            return self.fail_phase(
-                &running,
-                &mut phase_states,
-                child_ids,
-                phase,
-                format!(
-                    "max_children cap ({}) reached before phase '{}' completed",
-                    definition.max_children, phase.name
-                ),
-                owner,
-            );
+            return self
+                .fail_phase(
+                    &running,
+                    &mut phase_states,
+                    child_ids,
+                    phase,
+                    format!(
+                        "max_children cap ({}) reached before phase '{}' completed",
+                        definition.max_children, phase.name
+                    ),
+                    owner,
+                )
+                .await;
         }
         let capacity = phase.agent_ids.len().min(budget);
         let capped = capacity != phase.agent_ids.len();
