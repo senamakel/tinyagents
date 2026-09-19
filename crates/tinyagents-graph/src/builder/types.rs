@@ -289,6 +289,13 @@ pub struct GraphBuilder<State, Update> {
     /// (fan-out): every target in the list activates, not just one.
     pub(crate) edges: HashMap<NodeId, Vec<NodeId>>,
     pub(crate) branches: HashMap<NodeId, Branch<State>>,
+    /// Exhaustive route-label declarations registered via
+    /// [`super::GraphBuilder::add_conditional_edges_checked`]: node -> every
+    /// label its router may produce. [`super::GraphBuilder::validate_routes`]
+    /// cross-checks these against the node's actual route table at build
+    /// time, catching a typo'd label before it can fail a run with
+    /// [`crate::TinyAgentsError::MissingRoute`].
+    pub(crate) route_label_checks: HashMap<NodeId, Vec<String>>,
     pub(crate) command_nodes: HashSet<NodeId>,
     /// Barrier/waiting edges: target node -> set of predecessor nodes that must
     /// all have completed (across steps) before the target activates.

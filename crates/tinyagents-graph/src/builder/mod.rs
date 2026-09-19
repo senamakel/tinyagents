@@ -79,6 +79,7 @@ where
             nodes: HashMap::new(),
             edges: HashMap::new(),
             branches: HashMap::new(),
+            route_label_checks: HashMap::new(),
             command_nodes: HashSet::new(),
             waiting: HashMap::new(),
             barrier_reliefs: Vec::new(),
@@ -190,8 +191,14 @@ where
 
     /// Adds a direct edge `from -> to`. Use [`START`]/[`END`] for the virtual
     /// entry/terminal nodes.
+    ///
+    /// Calling this more than once for the same `from` accumulates a static
+    /// **fan-out**: every registered `to` activates (not just the last one
+    /// registered), matching the documented "one or more node names" routing
+    /// contract. Adding the exact same `(from, to)` edge twice is a no-op —
+    /// the target is not scheduled twice.
     pub fn add_edge(mut self, from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
-        self.edges.insert(from.into(), to.into());
+        Self::push_edge(&mut self.edges, from.into(), to.into());
         self
     }
 
@@ -206,9 +213,18 @@ where
     {
         let nodes: Vec<NodeId> = nodes.into_iter().map(Into::into).collect();
         for pair in nodes.windows(2) {
-            self.edges.insert(pair[0].clone(), pair[1].clone());
+            Self::push_edge(&mut self.edges, pair[0].clone(), pair[1].clone());
         }
         self
+    }
+
+    /// Appends `to` to `from`'s static successor list, deduplicating so the
+    /// same target is never scheduled twice from one static fan-out.
+    fn push_edge(edges: &mut HashMap<NodeId, Vec<NodeId>>, from: NodeId, to: NodeId) {
+        let targets = edges.entry(from).or_default();
+        if !targets.contains(&to) {
+            targets.push(to);
+        }
     }
 
     /// Adds a barrier/waiting edge `from -> to`: like [`Self::add_edge`] but `to`

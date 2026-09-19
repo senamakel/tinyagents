@@ -589,6 +589,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // `RunLimits::max_retries_per_call` is a hard ceiling
                         // that a looser `RetryPolicy::max_attempts` cannot
                         // exceed; whichever is stricter wins.
+                        // A registered `RetryMiddleware` (or any other
+                        // `ModelMiddleware::overrides_retry`) already retries
+                        // the whole wrap onion around this base call. Retrying
+                        // again here would multiply attempts
+                        // (`mw.max_attempts × policy.retry.max_attempts ×
+                        // |fallback|` for one logical failure) and emit
+                        // `RetryScheduled` for attempts the middleware cannot
+                        // see, so the base call skips its own retry loop and
+                        // defers entirely to the middleware (I-7); the
+                        // fallback chain below is unaffected.
+                        let retry_overridden = self.middleware.has_retry_override();
                         let max_attempts = self
                             .policy
                             .retry
@@ -599,7 +610,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // uses), applying the harness ceiling by capping a
                         // cloned policy first so the two sites cannot drift.
                         let capped = self.policy.retry.clone().with_max_attempts(max_attempts);
-                        if capped.should_retry_error(attempt, &error) {
+                        if !retry_overridden && capped.should_retry_error(attempt, &error) {
                             // Compute the backoff from the *pre-increment*
                             // attempt number: `attempt == 0` is the first
                             // retry and must sleep `initial_backoff_ms`
