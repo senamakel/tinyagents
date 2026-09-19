@@ -1097,6 +1097,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
+            let mut request = request;
+            super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
             let binding = self.rebind(ctx, &request).await?;
             self.harness
                 .invoke_model_with_retry(

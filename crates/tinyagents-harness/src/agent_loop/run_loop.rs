@@ -298,9 +298,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
 
             // Build the request from the working transcript, tool schemas, and
-            // policy response format.
+            // policy response format.  Go through `PromptBuilder` rather than
+            // constructing `ModelRequest` directly: a provider KV cache needs
+            // an explicit stable prefix, and the system instructions plus the
+            // name-sorted tool schemas are stable for this whole run.
             status.mark_running(HarnessPhase::BuildingRequest);
-            let mut request = ModelRequest::new(messages.clone()).with_tools(tool_schemas.clone());
+            let system_end = messages
+                .iter()
+                .take_while(|message| matches!(message, Message::System(_)))
+                .count();
+            let mut prompt = crate::prompt::PromptBuilder::new();
+            if system_end > 0 {
+                prompt.push_system("system", messages[..system_end].to_vec());
+            }
+            if !tool_schemas.is_empty() {
+                prompt.push_tools_segment("tools", tool_schemas.clone());
+            }
+            let mut request = prompt.build(messages[system_end..].to_vec());
             // Provider adapters that maintain an external conversation (for
             // example Claude Code's resumable CLI session) need the caller's
             // logical thread id, not a hash of prompt text. Carry the harness
@@ -924,6 +938,76 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
         }
     }
+}
+
+/// Refreshes the harness-owned stable-prefix annotation at model-call dispatch.
+///
+/// Lifecycle and wrap middleware may add or rewrite leading system messages.
+/// The request builder initially fingerprints those messages together with the
+/// tool schemas, but the provider prompt-cache key is derived only after every
+/// middleware layer has delegated to the innermost call. Rebuilding that
+/// annotation there keeps cache routing tied to the bytes sent to the provider.
+pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
+    let system_end = request
+        .messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    let harness_layout = request.cache_segments.is_empty()
+        || request.cache_segments.iter().all(|segment| {
+            segment.cacheable
+                && ((segment.id == "system" && segment.role == SegmentRole::System)
+                    || (segment.id == "tools" && segment.role == SegmentRole::Tools))
+        });
+
+    if harness_layout {
+        request.cache_segments.clear();
+        if system_end > 0 {
+            request.cache_segments.push(PromptSegment {
+                id: "system".to_string(),
+                role: SegmentRole::System,
+                cacheable: true,
+            });
+        }
+        if !request.tools.is_empty() {
+            request.cache_segments.push(PromptSegment {
+                id: "tools".to_string(),
+                role: SegmentRole::Tools,
+                cacheable: true,
+            });
+        }
+        if request.cache_segments.is_empty() {
+            request.prompt_fingerprint = None;
+            return;
+        }
+
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        if system_end > 0 {
+            prompt.push_system("system", request.messages[..system_end].to_vec());
+        }
+        if !request.tools.is_empty() {
+            prompt.push_tools_segment("tools", request.tools.clone());
+        }
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+        return;
+    }
+
+    // Custom segment annotations do not carry message boundaries, so the
+    // harness cannot safely rebuild their stable-prefix projection. Preserve
+    // middleware ownership and use a conservative digest over the full
+    // request instead: it sacrifices tail-only reuse but prevents distinct
+    // prefixes from sharing a provider routing key.
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(crate::cache::cache_key(request));
+    hasher.update(serde_json::to_vec(&request.cache_segments).unwrap_or_default());
+    let fingerprint = hasher.finalize();
+    request.prompt_fingerprint = Some(
+        fingerprint
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    );
 }
 
 /// Applies a host budget hint before the provider sees the request.
