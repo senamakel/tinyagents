@@ -249,6 +249,7 @@ async fn resolve_local_image(source: &str, max_bytes: usize) -> Result<String> {
     Ok(encode_data_uri(&mime, &bytes))
 }
 
+/// Rejects `size_bytes` over `max_bytes` as [`MultimodalError::ImageTooLarge`].
 fn check_image_size(source: &str, size_bytes: usize, max_bytes: usize) -> Result<()> {
     if size_bytes > max_bytes {
         return Err(MultimodalError::ImageTooLarge {
