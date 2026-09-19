@@ -3745,6 +3745,21 @@ async fn middleware_control_stops_loop_with_final_response() {
     assert_eq!(run.final_response.unwrap().text(), "stopped early");
     // The tool was never executed because the loop stopped first.
     assert_eq!(run.tool_calls, 0);
+
+    // M-1 regression: the assistant row still carries the `tool_calls` the
+    // model requested, but the loop must synthesize a tool result for each
+    // one so `run.messages` stays replayable (a provider rejects a transcript
+    // whose assistant `tool_calls` have no matching tool message).
+    // user, assistant(1 tool call), tool(synthetic).
+    assert_eq!(run.messages.len(), 3);
+    let Message::Assistant(assistant) = &run.messages[1] else {
+        panic!("expected assistant message at index 1, got {:?}", run.messages[1]);
+    };
+    assert_eq!(assistant.tool_calls.len(), 1);
+    let Message::Tool(tool_message) = &run.messages[2] else {
+        panic!("expected synthetic tool message at index 2, got {:?}", run.messages[2]);
+    };
+    assert_eq!(tool_message.tool_call_id, assistant.tool_calls[0].id);
 }
 
 /// Middleware that requests an interrupt after the first model response.
