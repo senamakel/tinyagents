@@ -675,6 +675,112 @@ async fn a_pure_tool_call_stream_leaves_no_raw_markup_in_the_terminal_response()
 }
 
 #[tokio::test]
+async fn a_native_call_and_a_narrated_text_call_are_both_dispatched_non_streaming() {
+    // A provider can legitimately return one native structured call *and*
+    // narrate a second one as text in the same response. `recover_text_calls`
+    // used to return immediately whenever `tool_calls` was already
+    // non-empty, silently dropping the narrated call — never authorized,
+    // never executed. It must now parse the text regardless and append the
+    // recovered call(s) to the native one(s).
+    let markup = "<tool_call>{\"name\":\"second\",\"arguments\":{\"q\":\"y\"}}</tool_call>";
+    let mut mixed = ModelResponse::assistant(markup);
+    mixed
+        .message
+        .tool_calls
+        .push(ToolCall::new("native-1", "lookup", json!({"q": "x"})));
+    let model = Arc::new(ScriptedModel::new(vec![
+        mixed,
+        ModelResponse::assistant("done"),
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
+        .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }));
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.tool_calls, 2, "{:?}", run.messages);
+    let started: Vec<String> = listener
+        .events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+            AgentEvent::ToolStarted { tool_name, .. } => Some(tool_name),
+            _ => None,
+        })
+        .collect();
+    assert!(started.contains(&"lookup".to_string()), "{started:?}");
+    assert!(started.contains(&"second".to_string()), "{started:?}");
+}
+
+#[tokio::test]
+async fn a_native_call_and_a_narrated_text_call_are_both_dispatched_when_streamed() {
+    // The streaming counterpart of the non-streaming test above: the
+    // `DeltaScrubber`-recovered call attach point in `model_call.rs` had the
+    // identical bug (gated on `tool_calls.is_empty()`), and fixing only
+    // `recover_text_calls` would not cover it — by the time the terminal
+    // response reaches `recover_text_calls`, the streaming reconciliation
+    // path has already scrubbed the narrated markup out of the visible
+    // text, so there is nothing left in `response.text()` for
+    // `recover_text_calls` to recover a second time.
+    let markup = "<tool_call>{\"name\":\"second\",\"arguments\":{\"q\":\"y\"}}</tool_call>";
+    let mut completed = ModelResponse::assistant(markup);
+    completed
+        .message
+        .tool_calls
+        .push(ToolCall::new("native-1", "lookup", json!({"q": "x"})));
+    let items = vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::MessageDelta(MessageDelta::text(markup)),
+        ModelStreamItem::Completed(completed),
+    ];
+    let model = Arc::new(StreamingMock::new(items));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("lookup", "lookup-output")))
+        .register_tool(Arc::new(FakeTool::returning("second", "second-output")))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                behavior: tinyagents_harness::limits::LimitBehavior::StopWithPartial,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run stops cleanly");
+
+    assert_eq!(run.tool_calls, 2, "{:?}", run.messages);
+    let started: Vec<String> = listener
+        .events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+            AgentEvent::ToolStarted { tool_name, .. } => Some(tool_name),
+            _ => None,
+        })
+        .collect();
+    assert!(started.contains(&"lookup".to_string()), "{started:?}");
+    assert!(started.contains(&"second".to_string()), "{started:?}");
+}
+
+#[tokio::test]
 async fn a_signalled_but_missing_tool_call_is_re_prompted_then_recovered() {
     let mut promised = ModelResponse::assistant("");
     promised.finish_reason = Some("tool_calls".into());
