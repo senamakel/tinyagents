@@ -999,6 +999,7 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
         node: tinyagents_harness::ids::NodeId::from("approval"),
         payload: json!({}),
         task_id: None,
+        response_schema: None,
     }])
     .with_metadata(json!({}));
     seed.put(checkpoint)
