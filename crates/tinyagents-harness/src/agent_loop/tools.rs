@@ -920,6 +920,40 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
 
+        // A tool's own `ToolControl` (`return_direct`/`terminate`/`goto`/
+        // `state_update`) is the tool-vocabulary half of A1: it is *data* the
+        // tool returned, not a middleware decision, so it is translated into
+        // the same `MiddlewareControl` request a `Middleware` would make
+        // rather than a separate mechanism. `return_direct` and `terminate`
+        // both mean "the model never gets another turn": this call's own
+        // output becomes the run's final response, which — unlike
+        // `MiddlewareControl::StopWithFinal` — `JumpTo(End)` alone cannot
+        // express (it falls back to the *last assistant message*, which is
+        // one turn too early here), so the final response is set directly.
+        if let Some(control) = result.control.clone() {
+            if control.return_direct || control.terminate {
+                run.final_response = Some(ModelResponse::assistant(
+                    result.output_for_llm(prepared.options.prefer_markdown),
+                ));
+                ctx.request_control(MiddlewareControl::JumpTo(LoopTarget::End));
+            } else if let Some(goto) = &control.goto {
+                match goto.as_str() {
+                    "model" => ctx.request_control(MiddlewareControl::JumpTo(LoopTarget::Model)),
+                    "tools" => ctx.request_control(MiddlewareControl::JumpTo(LoopTarget::Tools)),
+                    "end" => ctx.request_control(MiddlewareControl::JumpTo(LoopTarget::End)),
+                    other => tracing::debug!(
+                        target: "tinyagents::agent_loop",
+                        tool = %prepared.tool_name,
+                        goto = other,
+                        "[agent_loop] tool requested an unrecognized `goto` target; ignoring"
+                    ),
+                }
+            }
+            if let Some(update) = control.state_update.clone() {
+                ctx.push_tool_state_update(update);
+            }
+        }
+
         run.tool_calls += 1;
         if prepared.executed {
             run.executed_tools.push(prepared.tool_name.clone());
