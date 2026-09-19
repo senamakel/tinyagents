@@ -28,12 +28,13 @@ stops, pauses, and deferrals leave the queue untouched. Details:
 
 - [`RunQueue<T>`] — the queue itself. `new`/`Default` create an empty queue;
   `push(lane, item)` appends; `drain(lane)` empties one lane in FIFO order and
-  returns its contents; `take(lane, mode)` is the `QueueMode`-aware form; `status()` snapshots per-lane depth; `clear()` empties
-  every lane and returns how many items were dropped.
+  returns its contents; `take(lane, mode)` is the `QueueMode`-aware form;
+  `status()` snapshots per-lane depth; `clear()` empties every lane and
+  returns how many items were dropped.
 - [`QueueLane`] — which lane an item belongs to: `Steer` (inject at the next
   safe boundary as an instruction), `Followup` (dispatch as a fresh turn once
-  the active run completes), `Collect` (inject at the next safe boundary as
-  additional context).
+  the active run completes), `Collect` (handed back to the host at run end as
+  collected context, never injected).
 - [`QueueMode`] — how many items `take` (and the loop) consume per call:
   `OneAtATime` or `All` (default).
 - [`RunQueueHandle`] — `Arc<RunQueue<Message>>`, the loop-consumable form.

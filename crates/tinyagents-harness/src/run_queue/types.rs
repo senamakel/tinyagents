@@ -23,7 +23,9 @@ pub enum QueueLane {
     Steer,
     /// Dispatch as a fresh turn after the active run completes.
     Followup,
-    /// Inject at the next safe boundary as additional context.
+    /// Collected context handed back to the host on
+    /// [`AgentRun::collected`][crate::middleware::AgentRun::collected] at
+    /// run end; never injected into the transcript.
     Collect,
 }
 
