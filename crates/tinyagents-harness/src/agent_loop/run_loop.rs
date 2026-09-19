@@ -176,14 +176,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let deferred_catalog = self.deferred_catalog(&host_allows);
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
-            // intrinsic bridge only fills a name nobody registered.
-            let bridge =
+            // intrinsic bridge only fills a name nobody registered. Check the
+            // full registry (`self.tools.dispatch`), not just the direct set
+            // collected into `tool_schemas` above — a `Hidden` or `Deferred`
+            // registration under either name must also suppress the intrinsic
+            // schema, because admission's own collision rule
+            // (`self.tools.dispatch(&call.name).is_none()` in
+            // `answer_discovery_bridge`) checks the same full registry. Using
+            // a narrower rule here than admission uses would let this loop
+            // advertise an intrinsic schema that admission then treats as
+            // owned by the registered tool (or, for `Hidden`, refuses).
+            let mut bridge =
                 crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery);
+            if let Some(preparation) = &self.policy.tool_schemas {
+                // The bridge schemas are generated here, after the direct set
+                // was prepared above, so they need the same provider
+                // projection (for example Gemini's `minimum`/`maximum`
+                // removal) applied individually or they reach the wire raw.
+                bridge = bridge
+                    .into_iter()
+                    .map(|schema| crate::tool::prepare_tool_schema(&schema, preparation))
+                    .collect();
+            }
             for schema in bridge {
-                if !tool_schemas
-                    .iter()
-                    .any(|existing| existing.name == schema.name)
-                {
+                if self.tools.dispatch(&schema.name).is_none() {
                     tool_schemas.push(schema);
                 }
             }
