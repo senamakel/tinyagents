@@ -19,11 +19,16 @@
 //! All policy decisions are explicit data types, never hidden behaviour. Callers
 //! choose when to call, what to pass, and how to handle the result.
 
+pub mod compaction;
 pub mod pairing;
 mod render;
 mod trim;
 mod types;
 
+pub use compaction::{
+    CompactionContext, CompactionDecision, CutPoint, OverflowClassifier, OverflowInfo,
+    OverflowProbe, find_cut_point, summarize_with_split,
+};
 pub use pairing::{
     advance_past_orphan_tools, find_safe_cutoff_point, is_tool_calling_assistant,
     retract_orphan_tool_calls, tool_pairing_is_intact,
