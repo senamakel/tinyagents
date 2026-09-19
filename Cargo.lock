@@ -1547,13 +1547,17 @@ dependencies = [
 name = "tinyagents-session"
 version = "2.1.2"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "chrono",
+ "log",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "tinyagents-harness",
  "tinyagents-tracing",
+ "tinyinference-llm",
 ]
 
 [[package]]
