@@ -239,6 +239,8 @@ impl GraphEvent {
             GraphEvent::StepStarted { step, .. }
             | GraphEvent::StepCompleted { step }
             | GraphEvent::TaskScheduled { step, .. }
+            | GraphEvent::TaskStarted { step, .. }
+            | GraphEvent::TaskCompleted { step, .. }
             | GraphEvent::NodeStarted { step, .. }
             | GraphEvent::NodeCompleted { step, .. }
             | GraphEvent::NodeFailed { step, .. }
