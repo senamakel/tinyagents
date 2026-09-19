@@ -345,7 +345,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let tool_calls = cached.tool_calls().to_vec();
         tinyagents_tracing::debug!(
             call_id = %call_id.as_str(),
-            text_len = text.len(),
+            text_len = cached.text().len(),
             tool_calls = tool_calls.len(),
             "[cache] replaying a cache hit as synthetic stream deltas"
         );
