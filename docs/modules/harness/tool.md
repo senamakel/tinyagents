@@ -273,9 +273,10 @@ Two distinct failures can affect a provider-supplied call's arguments, and they
 are handled separately:
 
 - **Schema-invalid** (well-formed JSON that violates the tool's input schema) is
-  governed by `RunPolicy::invalid_args: InvalidArgsPolicy`. `Fail` (default,
-  historical) aborts the turn; `ReturnToolError` injects a repairable tool-error
-  message (carrying the validation detail and the expected schema) and continues.
+  governed by `RunPolicy::invalid_args: InvalidArgsPolicy`. `ReturnToolError`
+  (the default) injects a repairable tool-error message (carrying the
+  validation detail and the expected schema) and continues; `Fail` aborts the
+  turn and is no longer the default.
   `NormalizeThenReturnToolError` first repairs common object-schema transport
   shapes (a JSON object encoded as a string, including markdown fences, or a
   non-object for an object schema with no required fields), then returns any
