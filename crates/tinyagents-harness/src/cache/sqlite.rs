@@ -61,8 +61,9 @@ fn sqlite_err(context: &str, err: impl std::fmt::Display) -> TinyAgentsError {
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+        .unwrap_or(i64::MAX)
 }
 
 impl SqliteResponseCache {
