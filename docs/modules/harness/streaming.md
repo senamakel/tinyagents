@@ -89,13 +89,23 @@ index, kind: BlockKind::{Text, Thinking, ToolCall { id, name }} }`,
 (`model::block_delta_to_message_delta` is the shared derivation), so nothing
 that only understood the old shape breaks. `ToolDelta::content_index` carries
 the wire block index on the flat channel too. The Anthropic adapter maps
-`content_block_start`/`_delta`/`_stop` 1:1 onto the new items; the OpenAI
-chat-completions adapter stamps `content_index` but does not yet derive
-block boundaries from its delta shape (tracked in `docs/sdk-gaps.md` §3).
-`ModelStreamItem::{Failed, ProviderFailed}` — specifically `ProviderError` —
-now carries `partial_message: Option<AssistantMessage>` and
-`stop_reason: Option<String>`, so a mid-stream failure does not discard
-whatever content had already arrived.
+`content_block_start`/`_delta`/`_stop` 1:1 onto the new items. The OpenAI
+chat-completions adapter derives the same items from its delta shape: it
+tracks which block (text, reasoning, or a given tool call's wire index) is
+currently open, emits `BlockStart` the first time a new one is seen (a tool
+call opens as soon as its id or name arrives, even before its first argument
+fragment), `BlockDelta` per fragment, and `BlockEnd` when the open block
+switches or `finish_reason` arrives — all sharing one dense index space, so
+`ToolDelta::content_index` lines up with the terminal message's `content`
+ordering the same way it does for Anthropic. The OpenAI Responses API has no
+true incremental SSE path in this crate yet (`stream()` simulates one with a
+single unary call replayed as `Started`/one `MessageDelta`/`Completed`), so
+there are no block boundaries to derive there (tracked in
+`docs/sdk-gaps.md` §3). `ModelStreamItem::{Failed, ProviderFailed}` —
+specifically `ProviderError` — now carries `partial_message:
+Option<AssistantMessage>` and `stop_reason: Option<String>` on both
+adapters, so a mid-stream failure does not discard whatever content had
+already arrived.
 
 **Frame codec (C2, `crates/tinyagents-harness/src/stream/frame.rs`).**
 `AssistantFrame` is the durable, journal-friendly encoding of a block-aware
