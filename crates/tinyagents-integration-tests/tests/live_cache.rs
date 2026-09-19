@@ -13,8 +13,11 @@
 //!
 //! # Skips gracefully
 //!
-//! The whole test returns early (after an `eprintln!`) when `OPENAI_API_KEY`
-//! is unset, so the default `cargo test` passes with no key configured.
+//! This test is `#[ignore]`d and only runs opted in via
+//! `tests/common/live.rs::require_live`, so the default `cargo test` passes
+//! with no key configured and never dials a real provider by accident.
+
+mod common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
