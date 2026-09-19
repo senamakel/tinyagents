@@ -492,17 +492,19 @@ impl CapabilityResolver {
                 // reference the node otherwise carries instead of skipping it.
             }
 
-            // Prefer the dedicated `graph "name"`/`router "name"` reference,
-            // falling back to the legacy `model` field for back-compatibility.
+            // Prefer the dedicated `graph "name"` reference, falling back to
+            // the legacy `model` field for back-compatibility. (A `router`
+            // node has no dedicated field at the `NodeSpec` level; a
+            // source-level `router "name"` item is already folded into
+            // `model` by `crate::compiler::compile_graph` — see
+            // `classify_reference`'s docs.)
             let subgraph_target = node.subgraph.as_deref().or(node.model.as_deref());
-            let router_target = node.router.as_deref().or(node.model.as_deref());
             if let Some(reference) = Self::classify_reference(
                 &node.kind,
                 node.model.as_deref(),
                 subgraph_target,
                 node.agent.as_deref(),
                 node.script.as_deref(),
-                router_target,
             ) && !self.reference_allowed(reference.class, reference.target)
             {
                 out.push(
