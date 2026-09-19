@@ -1303,7 +1303,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ///
     /// [err]: crate::tool::ToolResult::error
     #[allow(clippy::too_many_arguments)]
-    async fn recover_tool_call(
+    pub(super) async fn recover_tool_call(
         &self,
         state: &State,
         ctx: &mut RunContext<Ctx>,
