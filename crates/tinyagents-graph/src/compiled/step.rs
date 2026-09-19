@@ -269,6 +269,7 @@ where
                 step,
                 None,
                 siblings.get(node_id).copied().unwrap_or(1),
+                state,
             );
             let result = self
                 .run_node_with_retry(node_id, &node.handler, state, node_ctx, step)
@@ -337,6 +338,7 @@ where
                 step,
                 fork,
                 siblings.get(node_id).copied().unwrap_or(1),
+                state,
             );
             let handler = node.handler.clone();
             let owned_node = node_id.clone();
