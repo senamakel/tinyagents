@@ -12,7 +12,9 @@ use crate::middleware::{
     PromptCacheGuardMiddleware,
 };
 use crate::summarization::{
-    ConcatSummarizer, SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy, trim_messages,
+    CompactionContext, CompactionDecision, CompactionReason, CompactionRecord, ConcatSummarizer,
+    OverflowClassifier, SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy,
+    find_cut_point, summarize_with_split, trim_messages,
 };
 
 // ── MessageTrimMiddleware ─────────────────────────────────────────────────────
