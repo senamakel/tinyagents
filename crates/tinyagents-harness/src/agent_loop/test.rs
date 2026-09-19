@@ -1601,6 +1601,52 @@ async fn normalized_non_object_executes_tool_without_required_fields() {
 }
 
 #[tokio::test]
+async fn normalization_preserves_a_decoded_but_schema_invalid_scalar() {
+    // Regression: a stringified JSON scalar (the string `"true"`) decodes
+    // successfully to `Value::Bool(true)`, which is schema-invalid for an
+    // object schema. That decoded value used to fall through past decode
+    // preservation into the has-no-required-fields fallback below — which
+    // exists for values that never decoded at all — and get silently
+    // replaced with `{}`, letting the tool execute with fabricated empty
+    // arguments instead of surfacing the model's real type mismatch.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("call-1", "permissive", json!("true")),
+            text_response("recovered", 1, 1),
+        ])),
+    );
+    let tool = Arc::new(FakeTool::new("permissive", "ok"));
+    harness.register_tool(tool.clone());
+    harness.with_policy(RunPolicy {
+        invalid_args: InvalidArgsPolicy::NormalizeThenReturnToolError,
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("run")])
+        .await
+        .expect("a decoded-but-invalid scalar is recoverable under ReturnToolError");
+
+    assert_eq!(run.final_response.unwrap().text(), "recovered");
+    assert_eq!(
+        *tool.calls.lock().unwrap(),
+        0,
+        "the tool must not run on a schema-invalid decoded scalar"
+    );
+    let injected = run
+        .messages
+        .iter()
+        .any(|m| format!("{m:?}").contains("invalid arguments for tool `permissive`"));
+    assert!(
+        injected,
+        "the injected message should report the real validation failure, not a fabricated success: {:?}",
+        run.messages
+    );
+}
+
+#[tokio::test]
 async fn normalization_preserves_valid_primitive_arguments() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
