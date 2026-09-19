@@ -72,14 +72,12 @@ impl<T: Serialize> SerializedPayload for Wrap<'_, T> {
 /// caller falls back to a `null` completion marker, preserving the
 /// pre-existing behavior for non-serializable `Update` types).
 pub(super) fn durable_payload<T>(value: &T) -> Option<serde_json::Value> {
-    // `(&Wrap(value)).durable_payload()`: method lookup tries the receiver
-    // type `&Wrap<T>` first without further autoref (matching
-    // `SerializedPayload for Wrap<'_, T>` when `T: Serialize`, since `&self`
-    // adjusts the receiver automatically), and only autorefs again to
-    // `&&Wrap<T>` — matching the unconditional `FallbackPayload for
-    // &Wrap<'_, T>` impl — when that specialized impl does not exist for
-    // `T`.
-    (&Wrap(value)).durable_payload()
+    // `Wrap(value).durable_payload()`: method lookup tries the receiver's
+    // by-value type `Wrap<T>` first (matching `SerializedPayload for
+    // Wrap<'_, T>` when `T: Serialize`), and only autorefs to `&Wrap<T>` —
+    // matching the unconditional `FallbackPayload for &Wrap<'_, T>` impl —
+    // when the specialized impl does not exist for `T`.
+    Wrap(value).durable_payload()
 }
 
 #[cfg(test)]
