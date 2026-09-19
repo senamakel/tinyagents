@@ -228,7 +228,7 @@ where
 
     loop_state.pending_request = Some(request);
     loop_state.pending_structured = structured;
-    Ok(NodeResult::Update(loop_state))
+    Ok(goto(loop_state, node::MODEL))
 }
 
 /// The `model` node body: dispatches the request [`plan_node`] built,
