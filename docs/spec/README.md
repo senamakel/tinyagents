@@ -77,6 +77,7 @@ observability, or test contracts.
   - [Design](../modules/registry/design.md)
   - [Model catalog and local snapshots](../modules/registry/model-catalog.md)
 - [Expressive language module](../modules/expressive-language/README.md)
+- [Runtime comparison and execution plan](../runtime-comparison/README.md)
 
 Docs should follow the module layout. Do not place standalone specification
 files directly in `docs/` or `docs/modules/`; each high-level topic should have
