@@ -2099,7 +2099,10 @@ async fn native_tool_dispatcher_requires_tool_calling_capability() {
         .invoke_default(&(), vec![Message::user("go")])
         .await
         .expect_err("no model satisfies the forced-native capability requirement");
-    assert!(matches!(err, TinyAgentsError::ModelNotFound(_)), "got {err:?}");
+    assert!(
+        matches!(err, TinyAgentsError::ModelNotFound(_)),
+        "got {err:?}"
+    );
     assert_eq!(
         *incapable.attempts.lock().unwrap(),
         0,

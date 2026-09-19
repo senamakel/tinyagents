@@ -419,8 +419,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // supported" provider response is a separate, adapter-internal
             // reliability behavior this host-side dialect selection has no
             // visibility into or control over.
-            if matches!(self.policy.tool_dialect, crate::config::ToolDispatcher::Native)
-                && !tool_schemas.is_empty()
+            if matches!(
+                self.policy.tool_dialect,
+                crate::config::ToolDispatcher::Native
+            ) && !tool_schemas.is_empty()
             {
                 let mut required = request.required_capabilities.clone().unwrap_or_default();
                 required.tool_calling = true;
