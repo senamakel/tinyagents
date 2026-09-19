@@ -1069,27 +1069,74 @@ fn apply_host_budget_compression<Ctx>(
     Ok(())
 }
 
+/// Whether `recover_text_dialect_calls` should even attempt to parse `text`.
+///
+/// Fenced code blocks are always skipped regardless of
+/// [`crate::runtime::TextDialectRecovery`]: a model demonstrating
+/// `<tool_call>` syntax inside a ``` fence — explaining the format, echoing a
+/// worked example — is manifestly not making a call, and recovering it would
+/// silently execute quoted documentation as a real action.
+fn text_dialect_markup_only_in_fenced_code(text: &str) -> bool {
+    let mut in_fence = false;
+    let mut saw_marker_outside_fence = false;
+    let mut saw_marker_anywhere = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if line.contains("<tool_call") {
+            saw_marker_anywhere = true;
+            if !in_fence {
+                saw_marker_outside_fence = true;
+            }
+        }
+    }
+    saw_marker_anywhere && !saw_marker_outside_fence
+}
+
 /// Recovers XML/text-dialect calls through `tinytools-agent` while preserving
 /// every non-text provider content block (notably reasoning blocks).
-fn recover_text_dialect_calls(
+///
+/// Gated by [`crate::runtime::RunPolicy::text_dialect_recovery`] (`enabled`
+/// is the caller's resolved decision from that policy — see the call site in
+/// `run_loop_body`) and always skips markup that appears only inside a fenced
+/// code block. Emits [`AgentEvent::ControlApplied`] when it actually rewrites
+/// the response, so the recovery is auditable rather than a silent transform.
+fn recover_text_dialect_calls<Ctx>(
+    ctx: &RunContext<Ctx>,
     response: &mut tinyinference_llm::model::ModelResponse,
     model_call_id: &CallId,
     has_tools: bool,
+    enabled: bool,
 ) {
-    if !has_tools || !response.message.tool_calls.is_empty() {
+    if !enabled || !has_tools || !response.message.tool_calls.is_empty() {
         return;
     }
 
     use tinytools_agent::dialect::{DialectResponse, ToolDialect, XmlDialect};
 
+    let text = response.text();
+    if text_dialect_markup_only_in_fenced_code(&text) {
+        return;
+    }
+
     let dialect_response = DialectResponse {
-        text: Some(response.text()),
+        text: Some(text),
         tool_calls: Vec::new(),
     };
     let (cleaned, parsed) = XmlDialect.parse_response(&dialect_response);
     if parsed.is_empty() {
         return;
     }
+
+    ctx.emit(AgentEvent::ControlApplied {
+        control: "text_dialect_recovered".to_string(),
+        detail: format!(
+            "recovered {} text-dialect tool call(s) from model call `{model_call_id}`",
+            parsed.len()
+        ),
+    });
 
     response.message.tool_calls = parsed
         .into_iter()
