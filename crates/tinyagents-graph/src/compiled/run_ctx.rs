@@ -59,6 +59,33 @@ pub(super) struct RunCtx<'a, State, Update> {
     pub(super) carried_completed: Option<Vec<NodeId>>,
 }
 
+/// Everything a resumed run seeds `RunCtx` with beyond a fresh run's
+/// defaults, bundled into one optional parameter so [`RunCtx::start`] does
+/// not grow a positional argument per resume-only field.
+///
+/// A fresh run (`resume_from_inner` was never called) passes `None`, which
+/// is equivalent to `ResumeSeed::default()`.
+#[derive(Default)]
+pub(super) struct ResumeSeed {
+    /// The loaded checkpoint's own step number (`to_metadata().step`), so
+    /// this run's `ctx.steps` continues counting up from it instead of
+    /// restarting at `0` — see the I3 finding in
+    /// `docs/runtime-comparison/code-review-graph.md`: without this,
+    /// `metadata.step` (and so `get_state_history`) goes non-monotonic
+    /// across a resume, and per-node visit caps
+    /// (`RecursionPolicy::max_visits_per_node`) reset every resume rather
+    /// than bounding the whole thread's lifetime.
+    pub(super) initial_steps: usize,
+    /// The loaded checkpoint's persisted `node_visits` metadata (see
+    /// [`super::boundary`]'s checkpoint builders), so per-node visit counts
+    /// accumulate across a resume instead of resetting.
+    pub(super) initial_node_visits: HashMap<NodeId, usize>,
+    /// Node ids carried forward from a mid-step (interrupt/failure)
+    /// checkpoint whose completed siblings were never routed — see
+    /// [`RunCtx::carried_completed`].
+    pub(super) carried_completed: Option<Vec<NodeId>>,
+}
+
 impl<'a, State, Update> RunCtx<'a, State, Update>
 where
     State: Clone + Send + Sync + 'static,
@@ -95,7 +122,13 @@ where
         initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
         initial_parent: Option<String>,
         binding: Option<crate::subagent_node::AgentInvocationBinding>,
+        resume_seed: ResumeSeed,
     ) -> Result<Self> {
+        let ResumeSeed {
+            initial_steps,
+            initial_node_visits,
+            carried_completed,
+        } = resume_seed;
         let started_at = SystemTime::now();
         // Graph-call depth (the stack) is tracked separately from node-loop
         // visits (`node_visits`, below).
