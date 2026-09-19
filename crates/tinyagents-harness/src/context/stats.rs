@@ -79,11 +79,13 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
     messages
         .iter()
         .map(|message| {
-            let content = match message {
+            let content: &[ContentBlock] = match message {
                 Message::System(message) => &message.content,
                 Message::User(message) => &message.content,
                 Message::Assistant(message) => &message.content,
                 Message::Tool(message) => &message.content,
+                // Host-side out-of-band record; carries no content blocks.
+                Message::Custom(_) => &[],
             };
             let mut visible = content
                 .iter()
