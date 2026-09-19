@@ -200,7 +200,7 @@ pub(crate) fn invoke_stream_with_runner<'a, State, Ctx>(
     input: Vec<Message>,
 ) -> impl futures::Stream<Item = AgentStreamItem> + Send + 'a
 where
-    State: Send + Sync + 'static,
+    State: Send + Sync,
     Ctx: Send + Sync + 'static,
 {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
