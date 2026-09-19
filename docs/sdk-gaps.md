@@ -332,13 +332,12 @@ early-exit handling, and parent-child progress aggregation. The generic
 cooperative-cancel-before-abort, steering lookup, and bounded terminal cleanup.
 
 A4 (`docs/runtime-comparison/plan.md` Phase 2) put `RunQueue<Message>` on the
-loop path: `RunContext::with_run_queue(RunQueueHandle)`; `Steer` drained after
-each tool batch and at a natural finish, `Followup` at a natural finish (one
-more turn), `Collect` onto `AgentRun::collected`; `RunPolicy::queue_mode`
-(`All` | `OneAtATime`); `AgentEvent::QueuedMessageApplied { lane, count }`.
-`SteeringHandle` is unchanged. OpenHuman's `agent/harness/run_queue/` can be
-deleted in favour of the SDK's. See
-[`docs/modules/harness/runtime.md`](modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
+loop path: `RunContext::with_run_queue`; `Steer` drained after each tool batch
+and at a natural finish, `Followup` at a natural finish (one more turn),
+`Collect` onto `AgentRun::collected`; `RunPolicy::queue_mode` (`All` |
+`OneAtATime`); `AgentEvent::QueuedMessageApplied`. `SteeringHandle` is
+unchanged; OpenHuman's `agent/harness/run_queue/` can go. See
+[`runtime.md`](modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
 
 Implement:
 
