@@ -294,13 +294,16 @@ declarative steering lowering lands.",
             )));
         }
 
-        // Determine routing. The `routing_sources` check above already
-        // rejected any node declaring more than one of `routes`/`next`/
-        // `command { goto … }`/a top-level edge, so at most one of the
-        // conditions below is ever true for a given node — this `if`/`else`
-        // chain's order is just which single source it checks first, not a
-        // precedence that resolves a real conflict (M13: no such conflict
-        // can reach here any more).
+        // Determine routing. The checks above (the "mixes static routing"
+        // check and the `routing_sources` conflict check) already rejected
+        // any node declaring more than one of `routes`/`next`/`command {
+        // goto … }`/a top-level edge, so at most one of the conditions below
+        // is ever true for a given node — this `if`/`else` chain's order is
+        // just which single source it checks first, not a precedence that
+        // resolves a real conflict. (An earlier version of this comment
+        // described an actual precedence; that stopped being accurate once
+        // conflicts became compile errors — M13 in
+        // `docs/runtime-comparison/code-review-workspace.md`.)
         let routing = if has_routes {
             Routing::Conditional(
                 node.routes
