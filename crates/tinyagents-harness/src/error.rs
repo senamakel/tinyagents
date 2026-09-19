@@ -164,8 +164,25 @@ pub enum TinyAgentsError {
     EmptyResponse,
 
     /// The run exceeded its wall-clock deadline.
+    ///
+    /// Terminal: the run itself is out of time, so retrying or falling back
+    /// to another model would just spin until the next deadline check fails
+    /// identically. See [`TinyAgentsError::CallTimeout`] for the per-call
+    /// counterpart, which *is* retryable.
     #[error("run timed out: {0}")]
     Timeout(String),
+
+    /// A single call (currently: a model call bounded by
+    /// [`crate::limits::RunLimits::max_model_call_ms`]) ran past its own
+    /// ceiling while the run still has wall-clock budget left.
+    ///
+    /// Unlike [`TinyAgentsError::Timeout`], this does not mean the run is out
+    /// of time — it means *this one call* wedged. [`crate::retry::is_retryable`]
+    /// treats it as transient, and the model-resolution retry/fallback loop
+    /// (`invoke_model_resolving`) does not treat it as a reason to skip the
+    /// fallback chain the way it does a run-deadline `Timeout`.
+    #[error("call timed out: {0}")]
+    CallTimeout(String),
 
     /// The run was cancelled before completion.
     #[error("run cancelled")]
