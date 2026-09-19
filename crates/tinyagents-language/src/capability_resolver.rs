@@ -132,6 +132,12 @@ pub struct CapabilityResolver {
     /// Registered REPL script names (and aliases) a `repl_agent` node may
     /// reference.
     scripts: HashSet<String>,
+    /// Registered capability bundle names (and aliases, gap G3) any node may
+    /// reference via `capability "name"`. Checked unconditionally per node
+    /// (like [`Self::tools`]), not through [`Self::classify_reference`]: a
+    /// capability reference is an attribute any node kind may carry, not a
+    /// node-kind-defining reference like `agent`/`subgraph`/`router`.
+    capabilities: HashSet<String>,
     /// Allowed node kinds. When empty, node-kind validation is skipped (the
     /// legacy, manual behaviour); when non-empty, the strict binding path
     /// rejects any node whose kind is not listed.
