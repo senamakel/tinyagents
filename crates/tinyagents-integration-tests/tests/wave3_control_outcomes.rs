@@ -136,14 +136,18 @@ async fn jump_to_model_skips_the_turns_tool_calls() {
         .await
         .expect("bounded run completes (with a limit stop) rather than looping forever");
 
-    // Exactly one model call was skipped past without a tool ever executing;
-    // the second call's tool request either ran or the cap stopped the run
-    // first — either way `spin` must not have run on the *first* turn.
+    // The skipped turn burned a model call without ever running `spin`, so
+    // strictly fewer tools executed than model calls were made — if
+    // `JumpTo(Model)` were a no-op, every model call would have a matching
+    // executed tool and the two counts would be equal.
     assert!(
-        result.run.executed_tools.len() <= 1,
-        "the skipped turn's tool call must not have executed: {:?}",
-        result.run.executed_tools
+        result.run.executed_tools.len() < result.run.model_calls,
+        "expected at least one model call with no matching tool execution \
+         (executed={}, model_calls={})",
+        result.run.executed_tools.len(),
+        result.run.model_calls
     );
+    let _ = tool;
 }
 
 // ── after_tool_control: Interrupt ───────────────────────────────────────────
