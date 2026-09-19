@@ -250,6 +250,114 @@ async fn a_forced_pformat_dialect_parses_positional_calls() {
     assert!(system.contains("lookup[0|<q>]"), "{system}");
 }
 
+/// Middleware that forces `tool_choice` before the dialect rewrite runs, the
+/// same shape a caller or another middleware forcing a specific tool would
+/// produce.
+struct ForceToolChoice(ToolChoice);
+
+#[async_trait]
+impl Middleware<(), ()> for ForceToolChoice {
+    fn name(&self) -> &str {
+        "force-tool-choice"
+    }
+
+    async fn before_model(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        request: &mut ModelRequest,
+    ) -> tinyagents_harness::Result<()> {
+        request.tool_choice = self.0.clone();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_forced_pformat_dialect_preserves_a_forced_required_tool_choice() {
+    // Unlike the XML branch (`prompt_tools::with_tool_instructions`, which
+    // renders `tool_choice` into its instructions), P-Format has no schema on
+    // the wire either — a forced choice has to survive as plain English in
+    // the rendered prompt or it silently loses its meaning once the wire
+    // `tool_choice` is reset to `Auto`.
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup[0|needle]</tool_call>",
+        "done",
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .push_middleware(Arc::new(ForceToolChoice(ToolChoice::Required)))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Pformat,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+
+    let system = model.requests()[0]
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(
+        system.contains("You must emit at least one tool call."),
+        "{system}"
+    );
+    // The wire choice is reset to `Auto` (no schema is on the wire for a
+    // text dialect), so this asserts the prompt carries the constraint
+    // instead, not that the wire field kept it.
+    assert_eq!(model.requests()[0].tool_choice, ToolChoice::Auto);
+}
+
+#[tokio::test]
+async fn a_forced_pformat_dialect_preserves_a_forced_named_tool_choice() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup[0|needle]</tool_call>",
+        "done",
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .push_middleware(Arc::new(ForceToolChoice(ToolChoice::Tool(
+            "lookup".to_string(),
+        ))))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Pformat,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+
+    let system = model.requests()[0]
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(system.contains("You must call the `lookup` tool."), "{system}");
+}
+
 /// Middleware recording every visible text delta the harness emits.
 struct DeltaRecorder {
     seen: Arc<Mutex<Vec<String>>>,
