@@ -2252,11 +2252,9 @@ async fn concurrent_roots_keep_every_invocation_capability_bundle_isolated() {
             }),
             Arc::new(TaggedDefinitions {
                 trace: trace.clone(),
-                inner: InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-                    "helper",
-                    "Helper",
-                    "test helper",
-                )]),
+                inner: InMemoryDefinitionRegistry::new(vec![
+                    AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]),
+                ]),
             }),
             Arc::new(TaggedSecurity {
                 trace: trace.clone(),
