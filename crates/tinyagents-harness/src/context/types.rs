@@ -199,9 +199,12 @@ pub enum LoopTarget {
 /// requested update instead; a host that owns `&mut State` between runs (or
 /// between turns, via its own checkpoint) drains and applies them. See
 /// `docs/modules/harness/middleware.md` for the full contract.
+/// The type-erased closure a [`StateUpdate`] wraps.
+type ErasedStateUpdateFn = std::sync::Arc<dyn Fn(&mut dyn std::any::Any) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct StateUpdate {
-    apply: std::sync::Arc<dyn Fn(&mut dyn std::any::Any) + Send + Sync>,
+    apply: ErasedStateUpdateFn,
 }
 
 impl StateUpdate {
