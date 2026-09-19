@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use crate::builder::START;
 use crate::builder::{BarrierRelief, Branch, BuilderNode, NodeMeta};
