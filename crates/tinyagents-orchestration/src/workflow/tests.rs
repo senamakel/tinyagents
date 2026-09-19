@@ -2,13 +2,16 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::json;
 use tinyagents_harness::CancellationToken;
-use tinyagents_session::run_ledger::{WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert};
+use tinyagents_session::run_ledger::{
+    WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
+};
 
 use super::state::set_phase_status;
 use super::*;
@@ -72,10 +75,81 @@ impl WorkflowStore for MemoryStore {
             updated_at: now,
             completed_at: update
                 .completed_at
-                .or_else(|| prior.and_then(|row| row.completed_at)),
+                .or_else(|| prior.as_ref().and_then(|row| row.completed_at)),
+            revision: prior.as_ref().map_or(0, |row| row.revision + 1),
+            lease_owner: prior.as_ref().and_then(|row| row.lease_owner.clone()),
+            lease_expires_at: prior.as_ref().and_then(|row| row.lease_expires_at),
         };
         self.0.lock().insert(row.id.clone(), row.clone());
         Ok(row)
+    }
+
+    fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<WorkflowLeaseClaim, OrchestrationError> {
+        let mut rows = self.0.lock();
+        let Some(row) = rows.get_mut(id) else {
+            return Ok(WorkflowLeaseClaim::Missing);
+        };
+        let now = Utc::now();
+        if row
+            .lease_owner
+            .as_deref()
+            .is_some_and(|current| current != owner)
+            && row.lease_expires_at.is_some_and(|until| until > now)
+        {
+            return Ok(WorkflowLeaseClaim::Busy(row.clone()));
+        }
+        row.lease_owner = Some(owner.to_owned());
+        row.lease_expires_at = chrono::Duration::from_std(lease_for)
+            .ok()
+            .map(|duration| now + duration);
+        row.revision += 1;
+        Ok(WorkflowLeaseClaim::Acquired(row.clone()))
+    }
+
+    fn compare_and_swap(
+        &self,
+        update: WorkflowRunUpsert,
+        expected_revision: u64,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<Option<WorkflowRun>, OrchestrationError> {
+        let mut rows = self.0.lock();
+        let Some(prior) = rows.get(&update.id).cloned() else {
+            return Ok(None);
+        };
+        if prior.revision != expected_revision || prior.lease_owner.as_deref() != Some(owner) {
+            return Ok(None);
+        }
+        let now = Utc::now();
+        let row = WorkflowRun {
+            id: update.id,
+            definition_id: update.definition_id,
+            parent_thread_id: update.parent_thread_id,
+            input: update.input,
+            phase_states: update.phase_states,
+            child_run_ids: update.child_run_ids,
+            status: update.status,
+            summary: update.summary.or(prior.summary),
+            started_at: update.started_at.unwrap_or(prior.started_at),
+            updated_at: now,
+            completed_at: update.completed_at.or(prior.completed_at),
+            revision: prior.revision + 1,
+            lease_owner: (!update.status.is_terminal()).then(|| owner.to_owned()),
+            lease_expires_at: (!update.status.is_terminal())
+                .then(|| {
+                    chrono::Duration::from_std(lease_for)
+                        .ok()
+                        .map(|duration| now + duration)
+                })
+                .flatten(),
+        };
+        rows.insert(row.id.clone(), row.clone());
+        Ok(Some(row))
     }
 }
 
@@ -88,12 +162,41 @@ struct FakeExecutor {
     cancelled: AtomicUsize,
 }
 
+#[derive(Default)]
+struct BlockingExecutor {
+    started: tokio::sync::Notify,
+    cancelled: Mutex<Vec<String>>,
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl WorkflowExecutor for BlockingExecutor {
+    async fn execute(
+        &self,
+        request: WorkflowChildRequest,
+        cancel: CancellationToken,
+        registration: Arc<dyn WorkflowChildRegistration>,
+    ) -> Result<WorkflowChildResult, OrchestrationError> {
+        let id = format!("live-{}-{}", request.phase, request.index_in_phase);
+        registration.register(id.clone())?;
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.started.notify_one();
+        cancel.cancelled().await;
+        Err(OrchestrationError("cancelled while child was live".into()))
+    }
+
+    async fn cancel_children(&self, child_ids: &[String]) {
+        self.cancelled.lock().extend(child_ids.iter().cloned());
+    }
+}
+
 #[async_trait]
 impl WorkflowExecutor for FakeExecutor {
     async fn execute(
         &self,
         request: WorkflowChildRequest,
         cancel: CancellationToken,
+        registration: Arc<dyn WorkflowChildRegistration>,
     ) -> Result<WorkflowChildResult, OrchestrationError> {
         if cancel.is_cancelled() {
             return Err(OrchestrationError("cancelled".into()));
@@ -101,6 +204,7 @@ impl WorkflowExecutor for FakeExecutor {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(active, Ordering::SeqCst);
         self.calls.lock().push(request.clone());
+        registration.register(format!("{}-{}", request.phase, request.index_in_phase))?;
         tokio::task::yield_now().await;
         self.active.fetch_sub(1, Ordering::SeqCst);
         if self.fail_agent.lock().as_deref() == Some(request.agent_id.as_str()) {
@@ -292,5 +396,98 @@ async fn cancellation_and_resume_do_not_repeat_completed_phases() {
     assert_eq!(
         store.load("run").unwrap().unwrap().status,
         WorkflowRunStatus::Completed
+    );
+}
+
+#[tokio::test]
+async fn cancellation_after_workers_start_cancels_durably_registered_children() {
+    let store = Arc::new(MemoryStore::default());
+    let executor = Arc::new(BlockingExecutor::default());
+    let engine = Arc::new(WorkflowEngine::new(store.clone(), executor.clone()));
+    let mut def = definition();
+    def.phases = vec![WorkflowPhase {
+        name: "live".into(),
+        description: "live".into(),
+        agent_ids: vec!["one".into(), "two".into()],
+        depends_on: vec![],
+    }];
+    def.default_concurrency = 2;
+    engine
+        .initialise("run".into(), &def, json!("q"), None)
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let drive = {
+        let engine = engine.clone();
+        let def = def.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move { engine.drive("run", &def, cancel).await })
+    };
+    executor.started.notified().await;
+    // The notification occurs only after register(), so this races precisely
+    // the old orphan window between real child spawn and ledger persistence.
+    cancel.cancel();
+    drive.await.unwrap().unwrap();
+    let run = store.load("run").unwrap().unwrap();
+    assert_eq!(run.status, WorkflowRunStatus::Interrupted);
+    assert!(!run.child_run_ids.is_empty());
+    let cancelled = executor.cancelled.lock().clone();
+    for id in &run.child_run_ids {
+        assert!(cancelled.contains(id), "missing cancellation for {id}");
+    }
+}
+
+#[tokio::test]
+async fn concurrent_drives_acquire_one_lease_and_do_not_duplicate_children() {
+    let (store, executor, engine) = engine();
+    let def = definition();
+    engine
+        .initialise("run".into(), &def, json!("q"), None)
+        .unwrap();
+    let engine = Arc::new(engine);
+    let first = {
+        let engine = engine.clone();
+        let def = def.clone();
+        tokio::spawn(async move { engine.drive("run", &def, CancellationToken::new()).await })
+    };
+    let second = {
+        let engine = engine.clone();
+        let def = def.clone();
+        tokio::spawn(async move { engine.drive("run", &def, CancellationToken::new()).await })
+    };
+    first.await.unwrap().unwrap();
+    second.await.unwrap().unwrap();
+    assert_eq!(
+        store.load("run").unwrap().unwrap().status,
+        WorkflowRunStatus::Completed
+    );
+    assert_eq!(executor.calls.lock().len(), 4, "one driver owns all phases");
+}
+
+#[test]
+fn structured_outputs_are_preserved_in_context_and_summary() {
+    let def = definition();
+    let mut states = init_phase_states(&def);
+    set_phase_status(
+        &mut states,
+        "plan",
+        PhaseStatus::Completed,
+        Some(json!([{
+            "output": { "claims": ["a", "b"], "score": 7 }
+        }])),
+    );
+    let upstream = upstream_outputs(&def.phases[1], &states);
+    let prompt = phase_prompt(&json!("q"), &def.phases[1], 0, &upstream);
+    assert!(prompt.contains(r#"{"claims":["a","b"],"score":7}"#));
+    set_phase_status(
+        &mut states,
+        "synthesize",
+        PhaseStatus::Completed,
+        Some(json!([{
+            "output": { "answer": "kept" }
+        }])),
+    );
+    assert_eq!(
+        synthesize_summary(&def, &states).as_deref(),
+        Some(r#"{"answer":"kept"}"#)
     );
 }

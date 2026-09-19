@@ -12,8 +12,8 @@ mod types;
 mod validate;
 
 pub use engine::{
-    OrchestrationError, SessionWorkflowStore, WorkflowChildRequest, WorkflowChildResult,
-    WorkflowEngine, WorkflowExecutor, WorkflowStore,
+    OrchestrationError, SessionWorkflowStore, WorkflowChildRegistration, WorkflowChildRequest,
+    WorkflowChildResult, WorkflowEngine, WorkflowExecutor, WorkflowStore,
 };
 pub use graph::scheduler_graph;
 pub use state::{

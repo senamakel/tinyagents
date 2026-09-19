@@ -102,8 +102,12 @@ pub fn upstream_outputs(phase: &WorkflowPhase, phase_states: &Value) -> Vec<Valu
                 .flatten()
                 .filter_map(move |item| {
                     item.get("output")
-                        .and_then(Value::as_str)
-                        .filter(|output| !output.trim().is_empty())
+                        .cloned()
+                        .filter(|output| match output {
+                            Value::Null => false,
+                            Value::String(text) => !text.trim().is_empty(),
+                            _ => true,
+                        })
                         .map(|output| json!({ "phase": dependency, "output": output }))
                 })
         })
@@ -137,9 +141,9 @@ pub fn phase_prompt(
         for item in upstream {
             if let (Some(source), Some(output)) = (
                 item.get("phase").and_then(Value::as_str),
-                item.get("output").and_then(Value::as_str),
+                item.get("output"),
             ) {
-                prompt.push_str(&format!("- [{source}] {output}\n"));
+                prompt.push_str(&format!("- [{source}] {}\n", render_output(output)));
             }
         }
     }
@@ -155,8 +159,8 @@ pub fn synthesize_summary(definition: &WorkflowDefinition, phase_states: &Value)
             .map(|outputs| {
                 outputs
                     .iter()
-                    .filter_map(|output| output.get("output").and_then(Value::as_str))
-                    .filter(|output| !output.trim().is_empty())
+                    .filter_map(|output| output.get("output").map(render_output))
+                    .filter(|output| !output.trim().is_empty() && output != "null")
                     .collect::<Vec<_>>()
                     .join("\n")
             })
@@ -169,4 +173,15 @@ pub fn synthesize_summary(definition: &WorkflowDefinition, phase_states: &Value)
             .rev()
             .find_map(|phase| outputs_for(&phase.name))
     })
+}
+
+/// Preserve every JSON output in prompt context and summaries.  JSON object's
+/// map ordering is canonical under serde_json's default map implementation,
+/// so repeated resume/synthesis renders the same bytes rather than silently
+/// discarding structured child results.
+fn render_output(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "<unserializable output>".to_owned()),
+    }
 }

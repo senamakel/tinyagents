@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -9,7 +10,8 @@ use tinyagents_graph::GraphEventSink;
 use tinyagents_graph::parallel::{FailurePolicy, ParallelOptions, map_reduce};
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{
-    WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert, get_workflow_run, upsert_workflow_run,
+    WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
+    compare_and_swap_workflow_run, get_workflow_run, try_claim_workflow_run, upsert_workflow_run,
 };
 
 use super::state::{
@@ -46,6 +48,19 @@ impl From<tinyagents_harness::TinyAgentsError> for OrchestrationError {
 pub trait WorkflowStore: Send + Sync {
     fn load(&self, id: &str) -> Result<Option<WorkflowRun>, OrchestrationError>;
     fn upsert(&self, row: WorkflowRunUpsert) -> Result<WorkflowRun, OrchestrationError>;
+    fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<WorkflowLeaseClaim, OrchestrationError>;
+    fn compare_and_swap(
+        &self,
+        row: WorkflowRunUpsert,
+        expected_revision: u64,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<Option<WorkflowRun>, OrchestrationError>;
 }
 
 /// `tinyagents-session` run-ledger adapter with a caller-selected workspace.
@@ -74,6 +89,40 @@ impl WorkflowStore for SessionWorkflowStore {
     fn upsert(&self, row: WorkflowRunUpsert) -> Result<WorkflowRun, OrchestrationError> {
         upsert_workflow_run(&self.workspace_dir, row).map_err(OrchestrationError::from)
     }
+
+    fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<WorkflowLeaseClaim, OrchestrationError> {
+        try_claim_workflow_run(
+            &self.workspace_dir,
+            id,
+            owner,
+            chrono::Duration::from_std(lease_for)
+                .map_err(|error| OrchestrationError(error.to_string()))?,
+        )
+        .map_err(OrchestrationError::from)
+    }
+
+    fn compare_and_swap(
+        &self,
+        row: WorkflowRunUpsert,
+        expected_revision: u64,
+        owner: &str,
+        lease_for: Duration,
+    ) -> Result<Option<WorkflowRun>, OrchestrationError> {
+        compare_and_swap_workflow_run(
+            &self.workspace_dir,
+            row,
+            expected_revision,
+            owner,
+            chrono::Duration::from_std(lease_for)
+                .map_err(|error| OrchestrationError(error.to_string()))?,
+        )
+        .map_err(OrchestrationError::from)
+    }
 }
 
 /// One host-authorized child invocation.
@@ -93,6 +142,13 @@ pub struct WorkflowChildResult {
     pub output: Value,
 }
 
+/// Called by a host immediately after it has created a real child.  Registering
+/// before waiting makes the child visible to a concurrent cancellation request
+/// even when the worker is still in flight.
+pub trait WorkflowChildRegistration: Send + Sync {
+    fn register(&self, child_id: String) -> Result<(), OrchestrationError>;
+}
+
 /// Host-owned execution and cancellation mechanism.
 #[async_trait]
 pub trait WorkflowExecutor: Send + Sync {
@@ -100,6 +156,7 @@ pub trait WorkflowExecutor: Send + Sync {
         &self,
         request: WorkflowChildRequest,
         cancel: CancellationToken,
+        registration: Arc<dyn WorkflowChildRegistration>,
     ) -> Result<WorkflowChildResult, OrchestrationError>;
 
     async fn cancel_children(&self, child_ids: &[String]);
@@ -111,6 +168,56 @@ pub struct WorkflowEngine<S, E> {
     store: Arc<S>,
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
+}
+
+const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
+
+struct PhaseRegistration<S: WorkflowStore> {
+    store: Arc<S>,
+    owner: String,
+    run: parking_lot::Mutex<WorkflowRun>,
+    phase_states: Value,
+}
+
+impl<S: WorkflowStore> PhaseRegistration<S> {
+    fn current(&self) -> WorkflowRun {
+        self.run.lock().clone()
+    }
+}
+
+impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration<S> {
+    fn register(&self, child_id: String) -> Result<(), OrchestrationError> {
+        let mut run = self.run.lock();
+        if run.child_run_ids.iter().any(|known| known == &child_id) {
+            return Ok(());
+        }
+        let mut children = run.child_run_ids.clone();
+        children.push(child_id);
+        let Some(updated) = self.store.compare_and_swap(
+            WorkflowRunUpsert {
+                id: run.id.clone(),
+                definition_id: run.definition_id.clone(),
+                parent_thread_id: run.parent_thread_id.clone(),
+                input: run.input.clone(),
+                phase_states: self.phase_states.clone(),
+                child_run_ids: children,
+                status: WorkflowRunStatus::Running,
+                summary: None,
+                started_at: Some(run.started_at),
+                completed_at: None,
+            },
+            run.revision,
+            &self.owner,
+            WORKFLOW_LEASE,
+        )?
+        else {
+            return Err(OrchestrationError(
+                "workflow lease lost while registering child".into(),
+            ));
+        };
+        *run = updated;
+        Ok(())
+    }
 }
 
 impl<S, E> WorkflowEngine<S, E>
@@ -162,22 +269,26 @@ where
         definition: &WorkflowDefinition,
         cancel: CancellationToken,
     ) -> Result<(), OrchestrationError> {
-        // The graph package owns the scheduling primitive used within every
-        // phase. This bounded dispatcher preserves input order while avoiding a
-        // second task registry or map/reduce implementation here.
-        let _sink = &self.event_sink;
-        let mut total_spawned = self
-            .store
-            .load(run_id)?
-            .map(|run| run.child_run_ids.len() as u32)
-            .ok_or_else(|| {
-                OrchestrationError(format!("workflow run {run_id} vanished before start"))
-            })?;
+        // A driver lease is acquired before looking for runnable work.  This
+        // is deliberately separate from the in-process cancellation token:
+        // resume can race in another process, and only the durable lease
+        // prevents both drivers from spawning the same phase.
+        let owner = uuid::Uuid::new_v4().to_string();
+        let mut run = match self.store.claim(run_id, &owner, WORKFLOW_LEASE)? {
+            WorkflowLeaseClaim::Acquired(run) => run,
+            WorkflowLeaseClaim::Busy(_) => return Ok(()),
+            WorkflowLeaseClaim::Missing => {
+                return Err(OrchestrationError(format!(
+                    "workflow run {run_id} vanished before start"
+                )));
+            }
+        };
+        self.emit(tinyagents_graph::GraphEvent::RunStarted {
+            run_id: tinyagents_harness::ids::RunId::new(run_id),
+        });
+        let mut total_spawned = run.child_run_ids.len() as u32;
 
         loop {
-            let run = self.store.load(run_id)?.ok_or_else(|| {
-                OrchestrationError(format!("workflow run {run_id} vanished mid-loop"))
-            })?;
             if cancel.is_cancelled() {
                 self.executor.cancel_children(&run.child_run_ids).await;
                 self.persist(
@@ -187,7 +298,12 @@ where
                     WorkflowRunStatus::Interrupted,
                     None,
                     false,
+                    &owner,
                 )?;
+                self.emit(tinyagents_graph::GraphEvent::RunCompleted {
+                    run_id: tinyagents_harness::ids::RunId::new(run_id),
+                    steps: 0,
+                });
                 return Ok(());
             }
             let Some(phase) = next_runnable_phase(definition, &run.phase_states).cloned() else {
@@ -199,6 +315,7 @@ where
                         WorkflowRunStatus::Completed,
                         synthesize_summary(definition, &run.phase_states),
                         true,
+                        &owner,
                     )?;
                 } else {
                     self.persist(
@@ -208,19 +325,36 @@ where
                         WorkflowRunStatus::Failed,
                         Some("no runnable phase (dependency deadlock)".to_owned()),
                         true,
+                        &owner,
                     )?;
                 }
+                self.emit(tinyagents_graph::GraphEvent::RunCompleted {
+                    run_id: tinyagents_harness::ids::RunId::new(run_id),
+                    steps: 0,
+                });
                 return Ok(());
             };
-            let spawned = self
-                .run_phase(&run, definition, &phase, total_spawned, cancel.clone())
+            self.emit(tinyagents_graph::GraphEvent::NodeStarted {
+                node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                step: total_spawned as usize + 1,
+            });
+            let (updated, spawned) = self
+                .run_phase(
+                    &run,
+                    definition,
+                    &phase,
+                    total_spawned,
+                    cancel.clone(),
+                    &owner,
+                )
                 .await?;
+            run = updated;
+            self.emit(tinyagents_graph::GraphEvent::NodeCompleted {
+                node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                step: total_spawned as usize + 1,
+            });
             total_spawned += spawned;
-            if self
-                .store
-                .load(run_id)?
-                .is_some_and(|current| current.status != WorkflowRunStatus::Running)
-            {
+            if run.status != WorkflowRunStatus::Running {
                 return Ok(());
             }
         }
@@ -233,23 +367,25 @@ where
         phase: &WorkflowPhase,
         total_spawned: u32,
         cancel: CancellationToken,
-    ) -> Result<u32, OrchestrationError> {
+        owner: &str,
+    ) -> Result<(WorkflowRun, u32), OrchestrationError> {
         let mut phase_states = run.phase_states.clone();
         let mut child_ids = run.child_run_ids.clone();
         set_phase_status(&mut phase_states, &phase.name, PhaseStatus::Running, None);
-        self.persist(
+        let running = self.persist(
             run,
             phase_states.clone(),
             child_ids.clone(),
             WorkflowRunStatus::Running,
             None,
             false,
+            owner,
         )?;
 
         let budget = definition.max_children.saturating_sub(total_spawned) as usize;
         if budget == 0 {
             return self.fail_phase(
-                run,
+                &running,
                 &mut phase_states,
                 child_ids,
                 phase,
@@ -257,6 +393,7 @@ where
                     "max_children cap ({}) reached before phase '{}' completed",
                     definition.max_children, phase.name
                 ),
+                owner,
             );
         }
         let capacity = phase.agent_ids.len().min(budget);
@@ -273,8 +410,15 @@ where
                 prompt: phase_prompt(&run.input, phase, index_in_phase, &upstream),
             })
             .collect::<Vec<_>>();
+        let registration = Arc::new(PhaseRegistration {
+            store: self.store.clone(),
+            owner: owner.to_owned(),
+            run: parking_lot::Mutex::new(running.clone()),
+            phase_states: phase_states.clone(),
+        });
         let executor = self.executor.clone();
         let worker_cancel = cancel.clone();
+        let worker_registration = registration.clone();
         let outcomes = map_reduce(
             requests,
             ParallelOptions::default()
@@ -284,10 +428,14 @@ where
             move |_index, request| {
                 let executor = executor.clone();
                 let cancel = worker_cancel.clone();
+                let registration = worker_registration.clone();
                 async move {
-                    executor.execute(request, cancel).await.map_err(|error| {
-                        tinyagents_harness::TinyAgentsError::Graph(error.to_string())
-                    })
+                    executor
+                        .execute(request, cancel, registration)
+                        .await
+                        .map_err(|error| {
+                            tinyagents_harness::TinyAgentsError::Graph(error.to_string())
+                        })
                 }
             },
         )
@@ -295,19 +443,22 @@ where
         let outcomes = match outcomes {
             Ok(outcomes) => outcomes,
             Err(tinyagents_harness::TinyAgentsError::Cancelled) => {
-                self.executor.cancel_children(&child_ids).await;
-                self.persist(
-                    run,
+                let children = registration.current().child_run_ids;
+                self.executor.cancel_children(&children).await;
+                let updated = self.persist(
+                    &registration.current(),
                     phase_states,
-                    child_ids,
+                    children,
                     WorkflowRunStatus::Interrupted,
                     None,
                     false,
+                    owner,
                 )?;
-                return Ok(0);
+                return Ok((updated, 0));
             }
             Err(error) => return Err(OrchestrationError(error.to_string())),
         };
+        child_ids = registration.current().child_run_ids;
         let mut outputs = Vec::new();
         let mut failure = None;
         let mut spawned = 0_u32;
@@ -315,7 +466,12 @@ where
             match outcome.result {
                 Ok(result) => {
                     spawned += 1;
-                    child_ids.push(result.child_id.clone());
+                    // The executor registered the real id before it could
+                    // await completion. Keep older executors harmlessly
+                    // compatible by accepting an already-present id only.
+                    if !child_ids.iter().any(|id| id == &result.child_id) {
+                        child_ids.push(result.child_id.clone());
+                    }
                     outputs.push(
                         json!({ "orchestrationId": result.child_id, "output": result.output }),
                     );
@@ -325,16 +481,18 @@ where
             }
         }
         if cancel.is_cancelled() {
-            self.executor.cancel_children(&child_ids).await;
-            self.persist(
-                run,
+            let children = registration.current().child_run_ids;
+            self.executor.cancel_children(&children).await;
+            let updated = self.persist(
+                &registration.current(),
                 phase_states,
-                child_ids,
+                children,
                 WorkflowRunStatus::Interrupted,
                 None,
                 false,
+                owner,
             )?;
-            return Ok(0);
+            return Ok((updated, 0));
         }
         if let Some(reason) = failure.or_else(|| {
             capped.then(|| {
@@ -344,7 +502,14 @@ where
                 )
             })
         }) {
-            return self.fail_phase(run, &mut phase_states, child_ids, phase, reason);
+            return self.fail_phase(
+                &registration.current(),
+                &mut phase_states,
+                child_ids,
+                phase,
+                reason,
+                owner,
+            );
         }
         set_phase_status(
             &mut phase_states,
@@ -352,15 +517,16 @@ where
             PhaseStatus::Completed,
             Some(Value::Array(outputs)),
         );
-        self.persist(
-            run,
+        let updated = self.persist(
+            &registration.current(),
             phase_states,
             child_ids,
             WorkflowRunStatus::Running,
             None,
             false,
+            owner,
         )?;
-        Ok(spawned)
+        Ok((updated, spawned))
     }
 
     fn fail_phase(
@@ -370,7 +536,8 @@ where
         child_ids: Vec<String>,
         phase: &WorkflowPhase,
         reason: String,
-    ) -> Result<u32, OrchestrationError> {
+        owner: &str,
+    ) -> Result<(WorkflowRun, u32), OrchestrationError> {
         set_phase_status(
             phase_states,
             &phase.name,
@@ -378,15 +545,16 @@ where
             Some(json!([])),
         );
         set_phase_reason(phase_states, &phase.name, &reason);
-        self.persist(
+        let updated = self.persist(
             run,
             phase_states.clone(),
             child_ids,
             WorkflowRunStatus::Failed,
             Some(reason),
             true,
+            owner,
         )?;
-        Ok(0)
+        Ok((updated, 0))
     }
 
     fn persist(
@@ -397,18 +565,34 @@ where
         status: WorkflowRunStatus,
         summary: Option<String>,
         terminal: bool,
+        owner: &str,
     ) -> Result<WorkflowRun, OrchestrationError> {
-        self.store.upsert(WorkflowRunUpsert {
-            id: run.id.clone(),
-            definition_id: run.definition_id.clone(),
-            parent_thread_id: run.parent_thread_id.clone(),
-            input: run.input.clone(),
-            phase_states,
-            child_run_ids,
-            status,
-            summary,
-            started_at: Some(run.started_at),
-            completed_at: terminal.then(Utc::now),
-        })
+        self.store
+            .compare_and_swap(
+                WorkflowRunUpsert {
+                    id: run.id.clone(),
+                    definition_id: run.definition_id.clone(),
+                    parent_thread_id: run.parent_thread_id.clone(),
+                    input: run.input.clone(),
+                    phase_states,
+                    child_run_ids,
+                    status,
+                    summary,
+                    started_at: Some(run.started_at),
+                    completed_at: terminal.then(Utc::now),
+                },
+                run.revision,
+                owner,
+                WORKFLOW_LEASE,
+            )?
+            .ok_or_else(|| {
+                OrchestrationError("workflow lease lost before durable state transition".to_owned())
+            })
+    }
+
+    fn emit(&self, event: tinyagents_graph::GraphEvent) {
+        if let Some(sink) = &self.event_sink {
+            sink.emit(event);
+        }
     }
 }

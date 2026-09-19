@@ -11,6 +11,7 @@ description = "Host-neutral composition primitives for TinyAgents work."
 anyhow = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tinyagents-graph = { path = "../tinyagents-graph", version = "2.1.2", default-features = false }
@@ -28,7 +29,6 @@ tracing = [
 ]
 
 [dev-dependencies]
-parking_lot = "0.12"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

@@ -7,12 +7,115 @@ use super::types::*;
 use chrono::Utc;
 use serde_json::json;
 use std::path::Path;
+use std::sync::{Arc, Barrier};
 use tempfile::TempDir;
 
 /// Workspace root for a test: the ledger derives its database path from
 /// this, so a fresh `TempDir` per test gives a fresh database.
 fn test_workspace(dir: &TempDir) -> &Path {
     dir.path()
+}
+
+fn seed_workflow(workspace_dir: &Path, id: &str) {
+    upsert_workflow_run(
+        workspace_dir,
+        WorkflowRunUpsert {
+            id: id.into(),
+            definition_id: "definition".into(),
+            parent_thread_id: None,
+            input: json!({}),
+            phase_states: json!({}),
+            child_run_ids: vec![],
+            status: WorkflowRunStatus::Running,
+            summary: None,
+            started_at: None,
+            completed_at: None,
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn workflow_driver_lease_is_atomic_and_cas_rejects_a_stale_writer() {
+    let dir = TempDir::new().unwrap();
+    seed_workflow(test_workspace(&dir), "workflow-race");
+    let workspace = Arc::new(dir.path().to_path_buf());
+    let barrier = Arc::new(Barrier::new(2));
+    let mut workers = Vec::new();
+    for owner in ["first", "second"] {
+        let workspace = workspace.clone();
+        let barrier = barrier.clone();
+        workers.push(std::thread::spawn(move || {
+            barrier.wait();
+            try_claim_workflow_run(
+                workspace.as_path(),
+                "workflow-race",
+                owner,
+                chrono::Duration::minutes(1),
+            )
+            .unwrap()
+        }));
+    }
+    let claims = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect::<Vec<_>>();
+    let acquired = claims
+        .iter()
+        .find_map(|claim| match claim {
+            WorkflowLeaseClaim::Acquired(run) => Some(run.clone()),
+            _ => None,
+        })
+        .expect("one driver acquires the lease");
+    assert_eq!(
+        claims
+            .iter()
+            .filter(|claim| matches!(claim, WorkflowLeaseClaim::Acquired(_)))
+            .count(),
+        1
+    );
+    assert!(
+        claims
+            .iter()
+            .any(|claim| matches!(claim, WorkflowLeaseClaim::Busy(_)))
+    );
+
+    let row = WorkflowRunUpsert {
+        id: acquired.id.clone(),
+        definition_id: acquired.definition_id.clone(),
+        parent_thread_id: acquired.parent_thread_id.clone(),
+        input: acquired.input.clone(),
+        phase_states: json!({"phase": {"status": "running"}}),
+        child_run_ids: vec![],
+        status: WorkflowRunStatus::Running,
+        summary: None,
+        started_at: Some(acquired.started_at),
+        completed_at: None,
+    };
+    let owner = acquired.lease_owner.as_deref().unwrap();
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace.as_path(),
+            row.clone(),
+            acquired.revision,
+            owner,
+            chrono::Duration::minutes(1)
+        )
+        .unwrap()
+        .is_some()
+    );
+    assert!(
+        compare_and_swap_workflow_run(
+            workspace.as_path(),
+            row,
+            acquired.revision,
+            owner,
+            chrono::Duration::minutes(1)
+        )
+        .unwrap()
+        .is_none(),
+        "stale revision must not overwrite the winner"
+    );
 }
 
 // ── Regressions for the review findings on PR #90 ─────────────────────

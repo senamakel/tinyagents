@@ -14,7 +14,8 @@ use super::types::{
     AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskStatus,
     AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome, RunEvent,
     RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry, RunTelemetryUpsert,
-    WorkflowRun, WorkflowRunListRequest, WorkflowRunListResponse, WorkflowRunUpsert,
+    WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest, WorkflowRunListResponse,
+    WorkflowRunUpsert,
 };
 
 const LOG_PREFIX: &str = "[session_db:run_ledger]";
@@ -133,7 +134,8 @@ pub fn upsert_workflow_run(workspace_dir: &Path, upsert: WorkflowRunUpsert) -> R
                 status = excluded.status,
                 summary = COALESCE(excluded.summary, workflow_runs.summary),
                 updated_at = excluded.updated_at,
-                completed_at = COALESCE(excluded.completed_at, workflow_runs.completed_at)",
+                completed_at = COALESCE(excluded.completed_at, workflow_runs.completed_at),
+                revision = workflow_runs.revision + 1",
             params![
                 upsert.id,
                 upsert.definition_id,
@@ -151,6 +153,83 @@ pub fn upsert_workflow_run(workspace_dir: &Path, upsert: WorkflowRunUpsert) -> R
         .storage_context("upsert workflow run")?;
         get_workflow_run_inner(conn, &upsert.id)?
             .storage_context("workflow run missing after upsert")
+    })
+}
+
+/// Atomically lease a workflow run to one driver.  A second live driver gets
+/// the authoritative row as `Busy`; it must not schedule a duplicate phase.
+pub fn try_claim_workflow_run(
+    workspace_dir: &Path,
+    id: &str,
+    owner: &str,
+    lease_for: chrono::Duration,
+) -> Result<WorkflowLeaseClaim> {
+    let now = Utc::now();
+    let expires = now + lease_for;
+    crate::store::with_transaction(workspace_dir, |conn| {
+        init_run_ledger_schema(conn)?;
+        let changed = conn.execute(
+            "UPDATE workflow_runs
+             SET lease_owner = ?1, lease_expires_at = ?2,
+                 revision = revision + 1, updated_at = ?3
+             WHERE id = ?4
+               AND (lease_owner IS NULL OR lease_owner = ?1 OR lease_expires_at IS NULL OR lease_expires_at <= ?3)",
+            params![owner, expires.to_rfc3339(), now.to_rfc3339(), id],
+        )?;
+        let Some(run) = get_workflow_run_inner(conn, id)? else {
+            return Ok(WorkflowLeaseClaim::Missing);
+        };
+        Ok(if changed == 1 {
+            WorkflowLeaseClaim::Acquired(run)
+        } else {
+            WorkflowLeaseClaim::Busy(run)
+        })
+    })
+}
+
+/// Compare-and-swap a workflow transition while renewing its driver's lease.
+/// `None` means another driver or an out-of-band lifecycle operation changed
+/// the row; callers must reload rather than overwrite that state.
+pub fn compare_and_swap_workflow_run(
+    workspace_dir: &Path,
+    upsert: WorkflowRunUpsert,
+    expected_revision: u64,
+    owner: &str,
+    lease_for: chrono::Duration,
+) -> Result<Option<WorkflowRun>> {
+    let now = Utc::now();
+    let expires = now + lease_for;
+    let input_json =
+        serde_json::to_string(&upsert.input).storage_context("serialize workflow input")?;
+    let phase_states_json = serde_json::to_string(&upsert.phase_states)
+        .storage_context("serialize workflow phase states")?;
+    let child_run_ids_json =
+        serde_json::to_string(&upsert.child_run_ids).storage_context("serialize child run ids")?;
+    crate::store::with_transaction(workspace_dir, |conn| {
+        init_run_ledger_schema(conn)?;
+        let changed = conn.execute(
+            "UPDATE workflow_runs SET
+                definition_id = ?1, parent_thread_id = COALESCE(?2, parent_thread_id),
+                input_json = ?3, phase_states_json = ?4, child_run_ids_json = ?5,
+                status = ?6, summary = COALESCE(?7, summary), updated_at = ?8,
+                completed_at = COALESCE(?9, completed_at),
+                lease_owner = CASE WHEN ?6 IN ('completed', 'failed', 'cancelled', 'interrupted') THEN NULL ELSE lease_owner END,
+                lease_expires_at = CASE WHEN ?6 IN ('completed', 'failed', 'cancelled', 'interrupted') THEN NULL ELSE ?10 END,
+                revision = revision + 1
+             WHERE id = ?11 AND revision = ?12 AND lease_owner = ?13
+               AND lease_expires_at > ?8",
+            params![
+                upsert.definition_id, upsert.parent_thread_id, input_json, phase_states_json,
+                child_run_ids_json, upsert.status.as_str(), upsert.summary,
+                now.to_rfc3339(), upsert.completed_at.map(|dt| dt.to_rfc3339()),
+                expires.to_rfc3339(), upsert.id, expected_revision as i64, owner,
+            ],
+        )?;
+        if changed == 0 {
+            Ok(None)
+        } else {
+            Ok(get_workflow_run_inner(conn, &upsert.id)?)
+        }
     })
 }
 
@@ -451,7 +530,8 @@ pub fn list_recent_run_events(
 fn get_workflow_run_inner(conn: &Connection, id: &str) -> Result<Option<WorkflowRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, definition_id, parent_thread_id, input_json, phase_states_json,
-                child_run_ids_json, status, summary, started_at, updated_at, completed_at
+                child_run_ids_json, status, summary, started_at, updated_at, completed_at,
+                revision, lease_owner, lease_expires_at
          FROM workflow_runs WHERE id = ?1",
     )?;
     Ok(stmt
@@ -537,7 +617,8 @@ pub fn list_workflow_runs(
 
         let query_sql = format!(
             "SELECT id, definition_id, parent_thread_id, input_json, phase_states_json,
-                    child_run_ids_json, status, summary, started_at, updated_at, completed_at
+                    child_run_ids_json, status, summary, started_at, updated_at, completed_at,
+                    revision, lease_owner, lease_expires_at
              FROM workflow_runs {where_sql}
              ORDER BY updated_at DESC
              LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
@@ -1531,6 +1612,9 @@ fn map_workflow_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRun
         started_at: parse_rfc3339(&row.get::<_, String>(8)?)?,
         updated_at: parse_rfc3339(&row.get::<_, String>(9)?)?,
         completed_at: parse_rfc3339_opt(row.get(10)?)?,
+        revision: row.get::<_, i64>(11)? as u64,
+        lease_owner: row.get(12)?,
+        lease_expires_at: parse_rfc3339_opt(row.get(13)?)?,
     })
 }
 
