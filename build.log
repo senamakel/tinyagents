@@ -1,0 +1,1243 @@
+   Compiling tinyagents-harness v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-harness)
+error[E0310]: the parameter type `State` may not live long enough
+  --> crates/tinyagents-harness/src/agent_loop/model_call.rs:29:30
+   |
+29 |         let Some(host_run) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                              |
+   |                              the parameter type `State` must be valid for the static lifetime...
+   |                              ...so that the type `State` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+23 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+   |                         +++++++++
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+  --> crates/tinyagents-harness/src/agent_loop/model_call.rs:29:30
+   |
+29 |         let Some(host_run) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
+   |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |                              |
+   |                              the parameter type `Ctx` must be valid for the static lifetime...
+   |                              ...so that the type `Ctx` will meet its required lifetime bounds
+   |
+help: consider adding an explicit lifetime bound
+   |
+23 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+   |                                           +++++++++
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:419:13
+    |
+419 |             crate::runtime::emit_host_progress::<State, Ctx>(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             the parameter type `State` must be valid for the static lifetime...
+    |             ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 23 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:419:13
+    |
+340 |         ctx: &mut RunContext<Ctx>,
+    |              -------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+419 |             crate::runtime::emit_host_progress::<State, Ctx>(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+337 ~     async fn replay_cached_response_as_deltas<'a>(
+338 |         &self,
+339 |         state: &State,
+340 ~         ctx: &'a mut RunContext<Ctx>,
+341 |         call_id: &CallId,
+342 |         mut cached: ModelResponse,
+343 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:419:13
+    |
+341 |         call_id: &CallId,
+    |                  ------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+419 |             crate::runtime::emit_host_progress::<State, Ctx>(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+337 ~     async fn replay_cached_response_as_deltas<'a>(
+338 |         &self,
+339 |         state: &State,
+340 |         ctx: &mut RunContext<Ctx>,
+341 ~         call_id: &'a CallId,
+342 |         mut cached: ModelResponse,
+343 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:419:13
+    |
+419 |             crate::runtime::emit_host_progress::<State, Ctx>(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |             |
+    |             the parameter type `Ctx` must be valid for the static lifetime...
+    |             ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 23 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:419:13
+    |
+339 |         state: &State,
+    |                ------ the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+419 |             crate::runtime::emit_host_progress::<State, Ctx>(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+337 ~     async fn replay_cached_response_as_deltas<'a>(
+338 |         &self,
+339 ~         state: &'a State,
+340 |         ctx: &mut RunContext<Ctx>,
+341 |         call_id: &CallId,
+342 |         mut cached: ModelResponse,
+343 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:419:13
+    |
+341 |         call_id: &CallId,
+    |                  ------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+419 |             crate::runtime::emit_host_progress::<State, Ctx>(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+337 ~     async fn replay_cached_response_as_deltas<'a>(
+338 |         &self,
+339 |         state: &State,
+340 |         ctx: &mut RunContext<Ctx>,
+341 ~         call_id: &'a CallId,
+342 |         mut cached: ModelResponse,
+343 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                        |
+    |                        the parameter type `State` must be valid for the static lifetime...
+    |                        ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 23 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+467 |         ctx: &mut RunContext<Ctx>,
+    |              -------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+464 ~     async fn invoke_model_resolving<'a>(
+465 |         &self,
+466 |         state: &State,
+467 ~         ctx: &'a mut RunContext<Ctx>,
+468 |         request: &ModelRequest,
+...
+471 |         streaming: bool,
+472 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+468 |         request: &ModelRequest,
+    |                  ------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+464 ~     async fn invoke_model_resolving<'a>(
+465 |         &self,
+466 |         state: &State,
+467 |         ctx: &mut RunContext<Ctx>,
+468 ~         request: &'a ModelRequest,
+469 |         call_id: &CallId,
+470 |         binding: ResolvedModelBinding<State>,
+471 |         streaming: bool,
+472 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+469 |         call_id: &CallId,
+    |                  ------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+464 ~     async fn invoke_model_resolving<'a>(
+465 |         &self,
+...
+468 |         request: &ModelRequest,
+469 ~         call_id: &'a CallId,
+470 |         binding: ResolvedModelBinding<State>,
+471 |         streaming: bool,
+472 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                        |
+    |                        the parameter type `Ctx` must be valid for the static lifetime...
+    |                        ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 23 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+466 |         state: &State,
+    |                ------ the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+464 ~     async fn invoke_model_resolving<'a>(
+465 |         &self,
+466 ~         state: &'a State,
+467 |         ctx: &mut RunContext<Ctx>,
+...
+471 |         streaming: bool,
+472 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+468 |         request: &ModelRequest,
+    |                  ------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+464 ~     async fn invoke_model_resolving<'a>(
+465 |         &self,
+466 |         state: &State,
+467 |         ctx: &mut RunContext<Ctx>,
+468 ~         request: &'a ModelRequest,
+469 |         call_id: &CallId,
+470 |         binding: ResolvedModelBinding<State>,
+471 |         streaming: bool,
+472 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:632:24
+    |
+469 |         call_id: &CallId,
+    |                  ------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+632 |                     if crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_some() {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+464 ~     async fn invoke_model_resolving<'a>(
+465 |         &self,
+...
+468 |         request: &ModelRequest,
+469 ~         call_id: &'a CallId,
+470 |         binding: ResolvedModelBinding<State>,
+471 |         streaming: bool,
+472 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                 |
+    |                 the parameter type `State` must be valid for the static lifetime...
+    |                 ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 23 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+814 |         ctx: &mut RunContext<Ctx>,
+    |              -------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+813 |         state: &State,
+814 ~         ctx: &'a mut RunContext<Ctx>,
+815 |         model: &Arc<dyn ChatModel<State>>,
+...
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+816 |         request: &ModelRequest,
+    |                  ------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+...
+815 |         model: &Arc<dyn ChatModel<State>>,
+816 ~         request: &'a ModelRequest,
+817 |         call_id: &CallId,
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+817 |         call_id: &CallId,
+    |                  ------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+...
+816 |         request: &ModelRequest,
+817 ~         call_id: &'a CallId,
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+818 |         deltas_emitted: &mut usize,
+    |                         ---------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+...
+817 |         call_id: &CallId,
+818 ~         deltas_emitted: &'a mut usize,
+819 ~     ) -> Result<ModelResponse> where State: 'a {
+    |
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                 |
+    |                 the parameter type `Ctx` must be valid for the static lifetime...
+    |                 ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 23 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+813 |         state: &State,
+    |                ------ the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+813 ~         state: &'a State,
+814 |         ctx: &mut RunContext<Ctx>,
+...
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+815 |         model: &Arc<dyn ChatModel<State>>,
+    |                -------------------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+813 |         state: &State,
+814 |         ctx: &mut RunContext<Ctx>,
+815 ~         model: &'a Arc<dyn ChatModel<State>>,
+816 |         request: &ModelRequest,
+817 |         call_id: &CallId,
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+816 |         request: &ModelRequest,
+    |                  ------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+...
+815 |         model: &Arc<dyn ChatModel<State>>,
+816 ~         request: &'a ModelRequest,
+817 |         call_id: &CallId,
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+817 |         call_id: &CallId,
+    |                  ------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+...
+816 |         request: &ModelRequest,
+817 ~         call_id: &'a CallId,
+818 |         deltas_emitted: &mut usize,
+819 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/model_call.rs:897:17
+    |
+818 |         deltas_emitted: &mut usize,
+    |                         ---------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+897 |                 crate::runtime::emit_host_progress::<State, Ctx>(
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+811 ~     async fn invoke_model_streaming_once<'a>(
+812 |         &self,
+...
+817 |         call_id: &CallId,
+818 ~         deltas_emitted: &'a mut usize,
+819 ~     ) -> Result<ModelResponse> where Ctx: 'a {
+    |
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/run_loop.rs:153:29
+    |
+153 |         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                             |
+    |                             the parameter type `State` must be valid for the static lifetime...
+    |                             ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 11 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/run_loop.rs:153:29
+    |
+153 |         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                             |
+    |                             the parameter type `Ctx` must be valid for the static lifetime...
+    |                             ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 11 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/run_loop.rs:453:17
+    |
+453 |                 crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                 |
+    |                 the parameter type `State` must be valid for the static lifetime...
+    |                 ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 11 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/run_loop.rs:453:17
+    |
+453 |                 crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                 |
+    |                 the parameter type `Ctx` must be valid for the static lifetime...
+    |                 ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+ 11 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:292:29
+    |
+292 |         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                             |
+    |                             the parameter type `State` must be valid for the static lifetime...
+    |                             ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:292:29
+    |
+292 |         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                             |
+    |                             the parameter type `Ctx` must be valid for the static lifetime...
+    |                             ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:468:32
+    |
+468 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                                |
+    |                                the parameter type `State` must be valid for the static lifetime...
+    |                                ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:468:32
+    |
+468 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                                |
+    |                                the parameter type `Ctx` must be valid for the static lifetime...
+    |                                ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                                |
+    |                                the parameter type `State` must be valid for the static lifetime...
+    |                                ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+594 |         ctx: &mut RunContext<Ctx>,
+    |              -------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 ~         ctx: &'a mut RunContext<Ctx>,
+595 |         run: &mut AgentRun,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+595 |         run: &mut AgentRun,
+    |              ------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 |         ctx: &mut RunContext<Ctx>,
+595 ~         run: &'a mut AgentRun,
+596 |         status: &mut HarnessRunStatus,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+596 |         status: &mut HarnessRunStatus,
+    |                 --------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+595 |         run: &mut AgentRun,
+596 ~         status: &'a mut HarnessRunStatus,
+597 |         messages: &mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+597 |         messages: &mut Vec<Message>,
+    |                   ----------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+596 |         status: &mut HarnessRunStatus,
+597 ~         messages: &'a mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                                |
+    |                                the parameter type `Ctx` must be valid for the static lifetime...
+    |                                ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+593 |         state: &State,
+    |                ------ the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 ~         state: &'a State,
+594 |         ctx: &mut RunContext<Ctx>,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+595 |         run: &mut AgentRun,
+    |              ------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 |         ctx: &mut RunContext<Ctx>,
+595 ~         run: &'a mut AgentRun,
+596 |         status: &mut HarnessRunStatus,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+596 |         status: &mut HarnessRunStatus,
+    |                 --------------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+595 |         run: &mut AgentRun,
+596 ~         status: &'a mut HarnessRunStatus,
+597 |         messages: &mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:633:32
+    |
+597 |         messages: &mut Vec<Message>,
+    |                   ----------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+633 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+596 |         status: &mut HarnessRunStatus,
+597 ~         messages: &'a mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                                |
+    |                                the parameter type `State` must be valid for the static lifetime...
+    |                                ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+594 |         ctx: &mut RunContext<Ctx>,
+    |              -------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 ~         ctx: &'a mut RunContext<Ctx>,
+595 |         run: &mut AgentRun,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+595 |         run: &mut AgentRun,
+    |              ------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 |         ctx: &mut RunContext<Ctx>,
+595 ~         run: &'a mut AgentRun,
+596 |         status: &mut HarnessRunStatus,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+596 |         status: &mut HarnessRunStatus,
+    |                 --------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+595 |         run: &mut AgentRun,
+596 ~         status: &'a mut HarnessRunStatus,
+597 |         messages: &mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+597 |         messages: &mut Vec<Message>,
+    |                   ----------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+596 |         status: &mut HarnessRunStatus,
+597 ~         messages: &'a mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |                                |
+    |                                the parameter type `Ctx` must be valid for the static lifetime...
+    |                                ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+593 |         state: &State,
+    |                ------ the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 ~         state: &'a State,
+594 |         ctx: &mut RunContext<Ctx>,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+595 |         run: &mut AgentRun,
+    |              ------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 |         ctx: &mut RunContext<Ctx>,
+595 ~         run: &'a mut AgentRun,
+596 |         status: &mut HarnessRunStatus,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+596 |         status: &mut HarnessRunStatus,
+    |                 --------------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+595 |         run: &mut AgentRun,
+596 ~         status: &'a mut HarnessRunStatus,
+597 |         messages: &mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:677:32
+    |
+597 |         messages: &mut Vec<Message>,
+    |                   ----------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+677 |         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+596 |         status: &mut HarnessRunStatus,
+597 ~         messages: &'a mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         the parameter type `State` must be valid for the static lifetime...
+    |         ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+594 |         ctx: &mut RunContext<Ctx>,
+    |              -------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 ~         ctx: &'a mut RunContext<Ctx>,
+595 |         run: &mut AgentRun,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+595 |         run: &mut AgentRun,
+    |              ------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 |         ctx: &mut RunContext<Ctx>,
+595 ~         run: &'a mut AgentRun,
+596 |         status: &mut HarnessRunStatus,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+596 |         status: &mut HarnessRunStatus,
+    |                 --------------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+595 |         run: &mut AgentRun,
+596 ~         status: &'a mut HarnessRunStatus,
+597 |         messages: &mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0311]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+597 |         messages: &mut Vec<Message>,
+    |                   ----------------- the parameter type `State` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+596 |         status: &mut HarnessRunStatus,
+597 ~         messages: &'a mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where State: 'a {
+    |
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         the parameter type `Ctx` must be valid for the static lifetime...
+    |         ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+593 |         state: &State,
+    |                ------ the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 ~         state: &'a State,
+594 |         ctx: &mut RunContext<Ctx>,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+595 |         run: &mut AgentRun,
+    |              ------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+593 |         state: &State,
+594 |         ctx: &mut RunContext<Ctx>,
+595 ~         run: &'a mut AgentRun,
+596 |         status: &mut HarnessRunStatus,
+...
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+596 |         status: &mut HarnessRunStatus,
+    |                 --------------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+595 |         run: &mut AgentRun,
+596 ~         status: &'a mut HarnessRunStatus,
+597 |         messages: &mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0311]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:736:9
+    |
+597 |         messages: &mut Vec<Message>,
+    |                   ----------------- the parameter type `Ctx` must be valid for the anonymous lifetime defined here...
+...
+736 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+591 ~     async fn finish_tool_call<'a>(
+592 |         &self,
+...
+596 |         status: &mut HarnessRunStatus,
+597 ~         messages: &'a mut Vec<Message>,
+598 |         prepared: PreparedToolCall,
+599 |         mut result: tinytools::ToolResult,
+600 ~     ) -> Result<()> where Ctx: 'a {
+    |
+
+error[E0310]: the parameter type `State` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:530:9
+    |
+530 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         the parameter type `State` must be valid for the static lifetime...
+    |         ...so that the type `State` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    |                         +++++++++
+
+error[E0310]: the parameter type `Ctx` may not live long enough
+   --> crates/tinyagents-harness/src/agent_loop/tools.rs:530:9
+    |
+530 |         crate::runtime::emit_host_progress::<State, Ctx>(
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         the parameter type `Ctx` must be valid for the static lifetime...
+    |         ...so that the type `Ctx` will meet its required lifetime bounds
+    |
+help: consider adding an explicit lifetime bound
+    |
+137 | impl<State: Send + Sync, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    |                                           +++++++++
+
+Some errors have detailed explanations: E0310, E0311.
+For more information about an error, try `rustc --explain E0310`.
+error: could not compile `tinyagents-harness` (lib) due to 67 previous errors
