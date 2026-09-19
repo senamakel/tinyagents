@@ -761,6 +761,7 @@ impl AgentEvent {
             AgentEvent::MemorySaved => "memory.saved",
             AgentEvent::ToolProgress { .. } => "tool.progress",
             AgentEvent::MiddlewareFailed { .. } => "middleware.failed",
+            AgentEvent::HandoffTransformApplied { .. } => "handoff.transform_applied",
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",
