@@ -141,6 +141,7 @@ impl Interrupt {
             node,
             payload,
             task_id: None,
+            response_schema: None,
         }
     }
 
@@ -155,7 +156,15 @@ impl Interrupt {
             node: node.into(),
             payload,
             task_id: None,
+            response_schema: None,
         }
+    }
+
+    /// Attaches the JSON schema a resume value for this interrupt must
+    /// satisfy (see [`Interrupt::response_schema`]).
+    pub fn with_response_schema(mut self, schema: serde_json::Value) -> Self {
+        self.response_schema = Some(schema);
+        self
     }
 
     /// Returns this interrupt with its scheduled task id set (R5/I1).
