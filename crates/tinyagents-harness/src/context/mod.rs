@@ -704,6 +704,48 @@ impl<Ctx> RunContext<Ctx> {
         self.config.depth()
     }
 
+    /// Races `fut` against this run's cooperative cancellation and, when
+    /// `deadline` is `Some`, a wall-clock timeout — the one home for the
+    /// `tokio::select! { biased; _ = cancelled() => .., _ = timeout(remaining,
+    /// fut) => .. }` pattern that used to be copied at every host/provider I-O
+    /// boundary in the agent loop (R-1).
+    ///
+    /// `timeout_message` is only invoked when the timeout branch actually
+    /// fires, so callers can build a call-specific message (which fields it
+    /// names, which deadline it blames) without paying for the `format!` on
+    /// the hot, non-timeout path. `fut`'s own error type must convert from
+    /// [`TinyAgentsError`] so `Cancelled`/`Timeout` can be returned through
+    /// the same `Result` the callee already returns.
+    pub(crate) async fn bounded<T, E>(
+        &self,
+        deadline: Option<std::time::Duration>,
+        fut: impl std::future::Future<Output = std::result::Result<T, E>>,
+        timeout_message: impl FnOnce() -> String,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<crate::error::TinyAgentsError>,
+    {
+        match deadline {
+            Some(remaining) => tokio::select! {
+                biased;
+                _ = self.cancellation.cancelled() => {
+                    Err(crate::error::TinyAgentsError::Cancelled.into())
+                }
+                result = tokio::time::timeout(remaining, fut) => match result {
+                    Ok(inner) => inner,
+                    Err(_) => Err(crate::error::TinyAgentsError::Timeout(timeout_message()).into()),
+                },
+            },
+            None => tokio::select! {
+                biased;
+                _ = self.cancellation.cancelled() => {
+                    Err(crate::error::TinyAgentsError::Cancelled.into())
+                }
+                result = fut => result,
+            },
+        }
+    }
+
     /// Returns the maximum sub-agent / recursion depth permitted for this run
     /// tree.
     pub fn max_depth(&self) -> usize {
