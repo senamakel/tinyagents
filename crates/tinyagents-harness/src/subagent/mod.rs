@@ -141,6 +141,23 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// enforcing the depth cap and deriving an isolated child thread from a
     /// parent thread when one is available.
     ///
+    /// `parent` is `Some((parent_run_id, ordinal))` for every entry point that
+    /// has a live parent [`RunContext`] to derive from — `ordinal` is that
+    /// context's [`crate::limits::LimitTracker::tool_calls`] count, a
+    /// monotonically increasing, run-local number with no process-global
+    /// state. The child run id is then a pure function of the parent's run id
+    /// and that ordinal (`{name}-d{depth}-{parent_run_id}-{ordinal}`), so two
+    /// processes replaying the identical parent run derive the identical
+    /// child run ids (M-2) — unlike the historical `ids::next_seq()` suffix,
+    /// which restarts at a different value every process and made replayed
+    /// journals of nested runs diverge across processes.
+    ///
+    /// `parent` is `None` only for the standalone entry points
+    /// ([`Self::invoke`]/[`Self::invoke_with_events`]) that are not called
+    /// with a live parent context at all; those fall back to
+    /// [`crate::ids::next_seq`] since there is no parent run to derive
+    /// determinism from.
+    ///
     /// Returns [`TinyAgentsError::SubAgentDepth`] when the child depth
     /// (`parent_depth + 1`) would exceed the harness policy's `max_depth`.
     fn child_config(
@@ -148,14 +165,20 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         parent_depth: usize,
         thread_id: Option<&ThreadId>,
         max_turn_output_tokens: Option<u32>,
+        parent: Option<(&str, u64)>,
     ) -> Result<RunConfig> {
         let max_depth = self.harness.policy().limits.max_depth;
         let child_depth = RunConfig::checked_child_depth(parent_depth, max_depth)?;
-        // Suffix a process-unique sequence so each invocation gets its own run
-        // id: a bare `{name}-d{depth}` was reused across invocations, which
-        // interleaved journals and status stores keyed by run id. The prefix
-        // stays stable and readable for log grepping.
-        let child_run_id = format!("{}-d{child_depth}-{}", self.name, next_seq());
+        let child_run_id = match parent {
+            Some((parent_run_id, ordinal)) => {
+                format!("{}-d{child_depth}-{parent_run_id}-{ordinal}", self.name)
+            }
+            // No parent context to derive determinism from: suffix a
+            // process-unique sequence so each invocation still gets its own
+            // run id (a bare `{name}-d{depth}` was reused across invocations,
+            // which interleaved journals and status stores keyed by run id).
+            None => format!("{}-d{child_depth}-{}", self.name, next_seq()),
+        };
         let mut config = RunConfig::new(child_run_id.clone())
             .with_depth(child_depth)
             .with_max_depth(max_depth);
