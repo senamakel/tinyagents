@@ -220,3 +220,55 @@ tree is unaffected until the first `EntryTree` call.
   entries is best-effort (see above) — a host that needs exact round-trip of
   tool calls should model them as `EntryKind::Custom` from the start rather
   than relying on the `TranscriptMessage` conversion.
+
+## The tool-effect ledger (`run_ledger::tool_effects`, B5)
+
+A third, independent piece of durable state lives in this crate alongside
+the entry tree and the run ledger's `agent_runs`/`workflow_runs` tables:
+`run_ledger::tool_effects` gives `tinyagents-harness` a crash-safe record of
+tool-call side effects, backing
+`tinyagents_harness::tool::ToolEffectLedger`. See
+`docs/modules/harness/tool-effects.md` for the full design and the
+`reconcile_tool_effects` resume logic this exists to support; this section
+covers only the session-side storage.
+
+Migration 7 adds one table, additive to everything above:
+
+```
+tool_effects(run_id, call_id, tool, status, idempotency_key,
+             effect_summary, started_at, settled_at)
+PRIMARY KEY (run_id, call_id)
+```
+
+`status` is one of `started` / `completed` / `failed` / `interrupted`. The
+plain, synchronous operations mirror every other function in `run_ledger::ops`:
+
+- `record_tool_started(workspace_dir, ToolEffectStart) -> Result<ToolEffectRow>`
+  — upserts a `started` row, idempotent on `(run_id, call_id)`.
+- `settle_tool_effect(workspace_dir, ToolEffectSettle) -> Result<Option<ToolEffectRow>>`
+  — transitions to a terminal status; inserts a row even without a prior
+  `started` write, so a ledger attached mid-run never wedges on an unseen
+  call id.
+- `list_unresolved_tool_effects(workspace_dir, run_id) -> Result<Vec<ToolEffectRow>>`
+  — every row for `run_id` still `started`: the signature of a crash between
+  admission and settlement.
+- `mark_interrupted(workspace_dir, run_id, call_id) -> Result<Option<ToolEffectRow>>`
+  — settles one row `interrupted`, the resume-time verdict for a call whose
+  tool is not safe to blindly re-execute.
+
+`RunLedgerToolEffects` (also in `run_ledger::tool_effects`) wraps these
+behind the `async` `ToolEffectLedger` trait so a harness run can attach
+durable tool-effect bookkeeping without either crate depending on the
+other's concrete storage type:
+
+```rust
+use tinyagents_session::run_ledger::tool_effects::RunLedgerToolEffects;
+
+let ledger = std::sync::Arc::new(RunLedgerToolEffects::new(workspace_dir));
+let ctx = RunContext::new(config, ()).with_tool_effect_ledger(ledger);
+```
+
+Like every other bridge method in this crate, each trait method is a single
+bounded synchronous SQLite statement — no `spawn_blocking`, matching the
+tradeoff `store::with_connection`/`with_transaction` already make
+throughout.
