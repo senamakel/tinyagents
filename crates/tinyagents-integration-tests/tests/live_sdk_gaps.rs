@@ -2,13 +2,16 @@
 //! OpenAI model: budget preflight gating, tool-policy exposure of a classified
 //! read-only tool, and the streaming reasoning side channel.
 //!
-//! Every test here talks to the real OpenAI API, so each one is an early no-op
-//! `return` (after an `eprintln!`) when `OPENAI_API_KEY` is unset, so the
-//! default `cargo test` passes with no key configured.
+//! Every test here talks to the real OpenAI API, so every test is `#[ignore]`d
+//! and only runs opted in via `tests/common/live.rs::require_live`, so the
+//! default `cargo test` passes with no key configured and never dials a real
+//! provider by accident.
 //!
 //! Prompts are tiny and `max_tokens` is small to keep cost negligible. Asserts
 //! target structural facts (an event fired, the run succeeded, text is
 //! non-empty) rather than exact model prose.
+
+mod common;
 
 /// Budget preflight blocks a real harness run *before* any provider call.
 ///
@@ -18,6 +21,7 @@
 /// preflight check and fails the run with [`TinyAgentsError::LimitExceeded`]
 /// deterministically — without ever contacting OpenAI on the gated call.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn live_budget_blocks_second_call() {
     use std::sync::Arc;
 
@@ -30,9 +34,7 @@ async fn live_budget_blocks_second_call() {
     use tinyinference_llm::providers::openai::OpenAiModel;
     use tinyinference_llm::usage::Usage;
 
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("skipping live_budget_blocks_second_call: OPENAI_API_KEY is not set");
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 

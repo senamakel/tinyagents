@@ -199,7 +199,7 @@ Feature ownership:
 - `events`: typed harness events, sinks, streams, redaction adapters.
 - `graph_runtime`: explicit state graphs, node commands, reducers,
   checkpointing, HITL, run records, and graph execution blueprints.
-- `limits`: model-call, tool-call, concurrency, timeout, and recursion policy.
+- `limits`: model-call, tool-call, timeout, retry, and recursion policy.
 - `memory`: short-term thread memory and long-term stores.
 - `message`: structured messages, content blocks, tool call correlation.
 - `middleware`: before/after/wrap hooks and middleware stack ordering.
@@ -365,7 +365,6 @@ pub struct RunConfig {
     pub timeout: Option<Duration>,
     pub max_model_calls: usize,
     pub max_tool_calls: usize,
-    pub max_concurrency: usize,
 }
 
 pub struct RunContext<Ctx = ()> {
