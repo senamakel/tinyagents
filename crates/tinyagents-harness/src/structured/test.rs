@@ -107,6 +107,7 @@ fn structured_output_parse_deserialises() {
     let output = StructuredOutput {
         value: json!({"value": "hello"}),
         raw_text: None,
+        variant: None,
     };
     let parsed: Answer = output.parse().unwrap();
     assert_eq!(parsed.value, "hello");
