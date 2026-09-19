@@ -436,7 +436,7 @@ async fn hidden_registration_suppresses_the_matching_bridge_schema() {
         tool_call(
             "c1",
             TOOL_CALL_NAME,
-            json!({"name": "stock_quote", "arguments": {}}),
+            json!({"name": "stock_quote", "arguments": {"symbol": "ACME"}}),
         ),
         text("done"),
     ]);
