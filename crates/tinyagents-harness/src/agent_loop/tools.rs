@@ -1145,8 +1145,9 @@ fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
         return;
     }
 
+    let template = ToolCall::new(call.id.clone(), call.name.clone(), Value::Null);
     let validates = |arguments: &Value| {
-        let mut candidate = call.clone();
+        let mut candidate = template.clone();
         candidate.arguments = arguments.clone();
         schema.validate_call(&candidate).is_ok()
     };
