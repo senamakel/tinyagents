@@ -304,9 +304,15 @@ impl std::fmt::Debug for OverflowPattern {
 /// assert_eq!(info.limit, Some(8192));
 /// assert_eq!(info.requested, Some(9000));
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OverflowClassifier {
     patterns: Vec<OverflowPattern>,
+}
+
+impl Default for OverflowClassifier {
+    fn default() -> Self {
+        Self::with_builtins()
+    }
 }
 
 impl OverflowClassifier {
