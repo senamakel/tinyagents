@@ -194,51 +194,114 @@ registry-validated. That is stale — `CapabilityResolver::agent_allowed`
 references against the registered agents, matching the "Validation" section
 above.
 
-## `build_graph`: lowered vs rejected fields (Phase 1c)
+## `build_graph`: lowered vs rejected fields (Phase 5, W-I2)
 
-`build_graph` (`crates/tinyagents-graph/src/language.rs`) still lowers only
+`build_graph` (`crates/tinyagents-graph/src/language.rs`) lowers
 `blueprint.start`, node names, each node's Rust-side handler (via
 `NodeFactory`), and each node's `Routing` (`Next` → a static edge,
 `Conditional` → `mark_command_routing` plus `with_command_destinations` for
-the declared route table, `Terminal` → `set_finish`). As of Phase 1c it now
-**fails loudly** instead of silently ignoring every other populated field: it
-inspects the blueprint before touching the factory or the builder and returns
-`TinyAgentsError::Compile` naming every populated field it does not honour.
+the declared route table, `Terminal` → `set_finish`) exactly as before. As of
+Phase 5 (W-I2) it also lowers every field that Phase 1c had turned into a hard
+`TinyAgentsError::Compile` rejection — there is no longer a static
+"ignored/rejected field" pre-check. Each field gets one of three treatments,
+depending on how faithfully it can be expressed against the *generic*,
+host-owned `State` type `build_graph` is generic over:
 
-**Rejected until full lowering lands (Phase 5):**
+**Real runtime behavior** (changes what the compiled graph does):
 
-- graph-level: `input`, `output`, `checkpoint`, `interrupt`, `joins`
-- per node: `sends`, `join_sources`, `command.update`, `options`, `timeout`,
-  `retry`, `metadata`
+- graph-level `joins` and node-level `join_sources` lower onto
+  `GraphBuilder::add_waiting_edge` — the same barrier/fan-in primitive
+  hand-written graphs use. A `sources`/`target` naming an undeclared node is
+  `TinyAgentsError::Compile` (defense in depth: `Blueprint` is `Deserialize`,
+  so a stored/tampered blueprint can reference a node the language compiler
+  never checked).
+- node-level `timeout` lowers onto `GraphBuilder::with_node_timeout` and
+  node-level `retry` onto `CompiledGraph::with_node_retry` — but only
+  **graph-wide**: this builder has no per-node timeout/retry policy API, only
+  a graph-wide one applied to every node. `build_graph` therefore requires
+  every node that declares a `timeout` (or a `retry`) to declare the *same*
+  one, and fails closed with `TinyAgentsError::Compile` naming the
+  disagreeing nodes instead of silently picking one (first-registered,
+  last-registered, …) or dropping the rest. `retry { key value … }` accepts
+  `max_attempts`, `initial_backoff_ms`, `max_backoff_ms`, `multiplier`,
+  `jitter`, `backoff_sleep`, `max_retry_after_ms` (the
+  `tinyagents_harness::retry::RetryPolicy` fields); an unsupported key or a
+  wrong-typed value is `TinyAgentsError::Compile` naming it. `timeout` accepts
+  a bare number (seconds) or a `"<number><unit>"` string/identifier with unit
+  `ms`/`s`/`m`/`h` — the lexer does not tokenize a bare `30s` as one literal
+  (see "Duration literals" above), so only `timeout 30` or `timeout "30s"`
+  reach `build_graph` as a single literal.
 
-**Deliberately still accepted (not rejected), with a documented gap:**
+**Inert, behavior-free export metadata** (never silently dropped, but not
+enforced at run time — visible via `CompiledGraph::topology`/`crate::export`):
+
+- node-level `sends` (fan-out targets, validated to exist, joined as
+  `target[:input]` pairs under the `sends` metadata key) — the actual dynamic
+  fan-out (`Command::goto` carrying `RouteTarget::Send`) is emitted by the
+  handler itself at run time; `build_graph` cannot force an opaque
+  `NodeFactory`-produced handler to emit anything, only validate and surface
+  the declaration.
+- node-level `command.update` (recorded as `command.update` metadata,
+  `key=value` pairs) — a `Command`'s `update` field is a typed `Update`
+  produced by the handler, not a bag of `(String, Literal)` pairs; there is no
+  generic way to turn declared literals into an opaque `State`'s partial
+  update without the caller committing to a concrete shape (see
+  `crate::channel::ChannelState` for that opt-in typed path).
+- node-level `options` (choices for an `interrupt`-kind node) marks the node
+  as an interrupt point via `GraphBuilder::mark_interrupt` — the same marker a
+  hand-built graph would set — and records the choices under the `options`
+  metadata key.
+- node-level `metadata` maps directly onto `GraphBuilder::with_node_metadata`,
+  one entry per key.
+
+**Validated no-op** (accepted, checked for the one thing `build_graph` *can*
+verify generically, but does not attach any runtime behavior):
+
+- graph-level `input`/`output`: field names must be non-empty and unique
+  within each list (`TinyAgentsError::Compile` on a duplicate). There is no
+  runtime input/output projection in this crate's executor — a node handler
+  receives/returns the whole `State` — so there is nothing further to wire.
+- graph-level `checkpoint`/`interrupt` (a bare policy name, e.g.
+  `"inherit"`): accepted without inspecting the string. This crate's
+  checkpoint/interrupt support (`CompiledGraph::with_checkpointer`) takes a
+  materialized `Arc<dyn Checkpointer<State>>` *instance*, which a blueprint
+  cannot supply — there is no registry of checkpointer instances keyed by
+  policy name for `build_graph` to look one up in. A host that wants the
+  declared policy enforced attaches a checkpointer to the `CompiledGraph`
+  `build_graph` returns.
+
+**Deliberately still accepted (not rejected), with a documented gap —
+unchanged from Phase 1c:**
 
 - `channels` (state-channel reducers) and `defaults` (the `defaults { … }`
   block, e.g. `recursion_limit`/`backoff`/`checkpoint`). `build_graph` always
   builds the executable graph with `GraphBuilder::overwrite()` regardless of
   what a `channel … <reducer>` declares, so a non-`overwrite` reducer is still
-  silently not applied to the runtime state merge. These two are excluded
-  from the reject list because they are already read by
-  `crate::export::blueprint_to_topology` for introspection (so they are not
-  *entirely* inert) and, more importantly, because rejecting them would break
-  existing fixtures (`crates/tinyagents-integration-tests/tests/language_pipeline.rs`,
-  `e2e_rag_pipeline.rs`, and their `.rag` source) that this change's file
-  boundary did not permit editing. A future pass that either lowers channel
-  reducers into real per-channel state merge or extends the reject list to
-  `channels`/`defaults` will need to touch those fixtures too.
+  silently not applied to the runtime state merge. Real per-channel reducer
+  wiring is only meaningful once `State` is a concrete shape (see
+  `crate::channel::ChannelState`); `build_graph`'s `State` type parameter is
+  fully generic, so there is nothing to bind a named reducer to. These two
+  remain excluded from the "validated no-op" treatment above (no duplicate-
+  or unknown-reducer-name check) for the same reason Phase 1c gave: they are
+  already read by `crate::export::blueprint_to_topology` for introspection,
+  and existing fixtures (`crates/tinyagents-integration-tests/tests/language_pipeline.rs`,
+  `e2e_rag_pipeline.rs`, and their `.rag` source) depend on today's inert
+  behavior.
 
 **Conditional route tables are not enforced against a handler's `Command::goto`
 at compile time.** `GraphBuilder::with_command_destinations` — which
-`build_graph` now calls for every `Routing::Conditional` node — is advisory
-only (used by `crate::export` to draw/validate the declared destinations in a
+`build_graph` calls for every `Routing::Conditional` node — is advisory only
+(used by `crate::export` to draw/validate the declared destinations in a
 topology view); the runtime always resolves the real successor from the
 `Command` a node handler emits, so a handler that `goto`s a label the source
 never declared is not rejected at graph-build time. Making that a real
 compile-time check would require `GraphBuilder`/`CompiledGraph` to validate
 emitted commands against the declared table at run time (or a stricter
-builder API), which is out of scope for Phase 1c.
+builder API), which remains out of scope.
 
-See `crates/tinyagents-graph/src/language.rs` for the exact field list
-(`ignored_populated_fields`) and its tests
-(`build_graph_rejects_a_populated_ignored_field`,
-`build_graph_accepts_a_blueprint_with_no_ignored_fields`).
+See `crates/tinyagents-graph/src/language.rs` (and its `test` submodule) for
+the exact lowering and one test per lowered feature, e.g.
+`build_graph_lowers_graph_level_joins_to_waiting_edges`,
+`build_graph_lowers_uniform_node_retry_and_recovers_transient_failure`,
+`build_graph_rejects_disagreeing_per_node_timeouts`,
+`build_graph_lowers_options_to_interrupt_marker_and_metadata`.
