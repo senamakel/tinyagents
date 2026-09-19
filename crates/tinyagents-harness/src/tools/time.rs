@@ -75,6 +75,9 @@ impl Tool for CurrentTimeTool {
     }
 }
 
+/// Builds the JSON payload for [`CurrentTimeTool`]: always UTC + local time,
+/// plus a `requested_timezone` (or `requested_timezone_error`) entry when
+/// `args.timezone` names a valid (or invalid) IANA zone.
 fn current_time_payload(args: &serde_json::Value) -> serde_json::Value {
     let now_utc = Utc::now();
     let now_local = Local::now();
