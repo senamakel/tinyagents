@@ -222,6 +222,7 @@ impl NodeDecl {
             agent: None,
             graph: None,
             script: None,
+            router: None,
             input: None,
             command: None,
             sends: Vec::new(),
