@@ -186,9 +186,3 @@ impl<State: Send + Sync, Ctx: Send + Sync> Capability<State, Ctx> {
         serde_json::to_value(spec).expect("CapabilitySpec always serializes")
     }
 }
-
-// `ToolExposure` and `Tool` are re-imported above for `types.rs`'s doc links
-// to resolve; `#[allow]` would hide a genuine unused-import regression, so
-// touch them in a doc-only marker instead.
-#[allow(unused_imports)]
-use {Tool as _, ToolExposure as _};
