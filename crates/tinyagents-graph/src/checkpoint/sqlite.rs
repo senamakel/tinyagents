@@ -284,6 +284,45 @@ chain(seq, checkpoint_id, parent_checkpoint_id, record, depth) AS (
 SELECT record FROM chain ORDER BY depth ASC LIMIT ?3;
 ";
 
+/// Adds the checkpoint format v2 columns (`format_version`, `created_at`) to
+/// an existing `checkpoints` table that predates them, guarded by
+/// `PRAGMA table_info` so it is a no-op on a database that already has them
+/// (a fresh database gets them for free from [`SCHEMA`] once that DDL is
+/// updated to declare them directly — this migration exists for a database
+/// opened by an older build, whose `checkpoints` table was created without
+/// these columns).
+///
+/// `format_version` defaults to `1`: an existing row predates this migration
+/// by construction, so it was written by a build that only ever produced
+/// checkpoint format v1 records. `created_at` defaults to `0`, the same
+/// visibly-unset sentinel [`Checkpoint::created_at`] uses for a v1 record
+/// decoded from JSON with no `created_at` field.
+fn migrate_checkpoint_format_columns(conn: &Connection) -> Result<()> {
+    let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(checkpoints)")
+            .map_err(|e| sqlite_err("inspect checkpoints schema", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| sqlite_err("query checkpoints schema", e))?;
+        for row in rows {
+            existing.insert(row.map_err(|e| sqlite_err("read schema column", e))?);
+        }
+    }
+    if !existing.contains("format_version") {
+        conn.execute_batch(
+            "ALTER TABLE checkpoints ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1;",
+        )
+        .map_err(|e| sqlite_err("add format_version column", e))?;
+    }
+    if !existing.contains("created_at") {
+        conn.execute_batch("ALTER TABLE checkpoints ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;")
+            .map_err(|e| sqlite_err("add created_at column", e))?;
+    }
+    Ok(())
+}
+
 /// The projected listing columns read from one `checkpoints` row.
 struct MetaRow {
     thread_id: String,
