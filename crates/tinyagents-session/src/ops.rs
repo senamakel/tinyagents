@@ -659,6 +659,7 @@ pub fn mark_interrupted(workspace_dir: &Path) -> Result<usize> {
     })
 }
 
+/// Inserts a session's FTS entry (content and tool_name columns empty).
 pub(super) fn index_fts_session(
     conn: &Connection,
     session_id: &str,
