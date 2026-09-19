@@ -237,15 +237,15 @@ async fn live_streaming_reasoning_channel_smoke() {
 /// includes the configured chat model.
 ///
 /// Hits `GET {base_url}/models` on the real provider via
-/// [`OpenAiModel::list_models`]. Skips (early return) when `OPENAI_API_KEY` is
-/// unset, so the default `cargo test` passes with no key configured.
+/// [`OpenAiModel::list_models`]. `#[ignore]`d and only runs opted in via
+/// `tests/common/live.rs::require_live`, so the default `cargo test` passes
+/// with no key configured.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn live_list_models_returns_catalog() {
     use tinyinference_llm::providers::openai::OpenAiModel;
 
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("skipping live_list_models_returns_catalog: OPENAI_API_KEY is not set");
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 
