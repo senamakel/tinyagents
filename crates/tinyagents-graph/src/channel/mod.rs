@@ -611,6 +611,74 @@ impl ChannelSet {
     }
 }
 
+/// One channel's wire representation: `{ kind, config, value }` (the
+/// counterpart of [`Channel::config`]/[`channel_from_config`]).
+#[derive(Serialize, Deserialize)]
+struct ChannelEntry {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    config: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
+}
+
+/// [`ChannelSet`]'s full wire representation: its channel schema/values plus
+/// the [`ChannelSet::with_delta`] registrations, so a decoded set round-trips
+/// which channels are delta-tracked (not just their current values).
+#[derive(Serialize, Deserialize)]
+struct ChannelSetWire {
+    channels: BTreeMap<String, ChannelEntry>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    delta: HashMap<String, u32>,
+}
+
+impl serde::Serialize for ChannelSet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let channels: BTreeMap<String, ChannelEntry> = self
+            .channels
+            .iter()
+            .map(|(name, channel)| {
+                (
+                    name.clone(),
+                    ChannelEntry {
+                        kind: channel.kind().to_string(),
+                        config: channel.config(),
+                        value: self.values.get(name).cloned(),
+                    },
+                )
+            })
+            .collect();
+        ChannelSetWire {
+            channels,
+            delta: self.delta_channels.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChannelSet {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let wire = ChannelSetWire::deserialize(deserializer)?;
+        let mut channels: HashMap<String, Box<dyn Channel>> = HashMap::new();
+        let mut values: HashMap<String, Value> = HashMap::new();
+        for (name, entry) in wire.channels {
+            let channel =
+                channel_from_config(&entry.kind, &entry.config).map_err(serde::de::Error::custom)?;
+            channels.insert(name.clone(), channel);
+            if let Some(value) = entry.value {
+                values.insert(name, value);
+            }
+        }
+        Ok(ChannelSet {
+            channels,
+            values,
+            delta_channels: wire.delta,
+        })
+    }
+}
+
 // --- ChannelUpdate ---
 
 impl ChannelUpdate {
