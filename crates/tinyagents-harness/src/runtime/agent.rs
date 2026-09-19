@@ -649,13 +649,20 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         messages.append(&mut preamble);
         messages.append(&mut request.messages);
         let progress = start_progress_dispatcher(host.progress.clone());
+        // An empty declared list and "declared nothing" are indistinguishable
+        // on `AgentDefinition::tools` (`Vec<String>`), so both collapse to
+        // `None` here — `resolve_tool_allowlist` in `agent_loop::tools`
+        // treats that as fail-closed by default (I-9), not as "unrestricted".
+        let declared_tools: std::collections::HashSet<String> =
+            definition.tools.into_iter().collect();
+        let allowed_tools = (!declared_tools.is_empty()).then_some(declared_tools);
         Ok(PreparedAgentTurn {
             binding: HostInvocationBinding {
                 host: host.clone(),
                 agent_id: request.agent_id.clone(),
                 model_pin: definition.model,
                 role: definition.role,
-                allowed_tools: definition.tools.into_iter().collect(),
+                allowed_tools,
                 progress: progress.clone(),
                 runtime: None,
             },
