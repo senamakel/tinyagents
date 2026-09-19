@@ -1020,8 +1020,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // TinyTools distinguishes a fatal execution `Err` from a
             // recoverable `ToolResult::error`; no harness error-policy facade
             // rewrites that canonical distinction.
-            let guarded =
-                futures::FutureExt::map(fut, |result| result.map(|wrapped| wrapped.into_result()));
+            let guarded = futures::FutureExt::map(fut, |result| {
+                result.map(|wrapped| wrapped.into_result_with_control())
+            });
             let outcome = Self::with_call_budget(
                 run_budget,
                 &run_id,
@@ -1030,8 +1031,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 guarded,
             )
             .await;
-            let result = match outcome {
-                Ok(result) => result,
+            let (result, wrap_control) = match outcome {
+                Ok(pair) => pair,
                 Err(err) => {
                     self.fail_tool_call(
                         ctx,
@@ -1044,6 +1045,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     return Err(err);
                 }
             };
+            // A `ToolMiddleware::wrap_tool` that short-circuited with
+            // `MiddlewareToolOutcome::Command` carries no real result; queue
+            // its control the same way `run_wrapped_model`'s call site does
+            // (see the comment there).
+            if let Some(control) = wrap_control {
+                ctx.request_control(control);
+            }
 
             self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
                 .await?;
