@@ -1,6 +1,6 @@
-//! Capability bundles (gap G3, `docs/runtime-comparison/plan.md`): instructions
-//! + toolset + middleware + model defaults + exposure + `defer_loading`,
-//! composed as one named unit instead of wired separately.
+//! Capability bundles (gap G3, `docs/runtime-comparison/plan.md`):
+//! instructions, toolset, middleware, model defaults, exposure, and
+//! `defer_loading` composed as one named unit instead of wired separately.
 //!
 //! `docs/runtime-comparison/pydantic-ai.md` §4 "Capabilities as the unit of
 //! composition" is the design source: Pydantic AI's v2 `AbstractCapability` is
