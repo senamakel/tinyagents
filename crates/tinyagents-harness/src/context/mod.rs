@@ -360,11 +360,20 @@ impl<Ctx> RunContext<Ctx> {
     ) -> Result<RunContext<ChildCtx>> {
         let mut config = self.config.child(child_config)?;
         config.metadata = shallow_merge_metadata(&self.config.metadata, config.metadata);
+        let child_run_id = config.run_id.clone();
+        // Derive a per-child handle (not a bare clone): it shares the parent's
+        // queue/policy but only drains commands addressed to *this* child's
+        // run id, `SteeringTarget::Root`-addressed commands stay with the
+        // parent, and its pause/checkpoint state is its own (I-5).
+        let steering = self
+            .steering
+            .as_ref()
+            .map(|handle| handle.for_child(child_run_id));
         let mut child = RunContext::new(config, data)
             .with_stores(self.stores.clone())
             .with_events(self.events.clone())
             .with_cancellation(self.cancellation.clone())
-            .with_optional_steering(self.steering.clone())
+            .with_optional_steering(steering)
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
         child.host_agent_id = self.host_agent_id.clone();
