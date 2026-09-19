@@ -620,9 +620,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             .as_deref()
             .map(InvocationRuntime::harness)
             .unwrap_or(self);
+        // Unlike `prepare_hosted_turn` (used by the unary/streaming-collecting
+        // drivers, which classify the raw error into a `HostedError` and do
+        // their own, kind-scoped sanitization), this public-stream setup
+        // returns a plain `TinyAgentsError` directly to the caller — so it
+        // still needs `sanitize_hosted_preparation_error` applied here.
         let mut prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
-            .await?;
+            .await
+            .map_err(sanitize_hosted_preparation_error)?;
         prepared.binding.runtime = runtime.clone();
         let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
