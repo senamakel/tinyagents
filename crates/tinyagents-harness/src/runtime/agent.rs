@@ -60,7 +60,9 @@ pub(crate) trait ErasedHostAuthority: Send + Sync {
     fn type_name(&self) -> &'static str;
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> ErasedHostAuthority for HostInvocationAuthority<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> ErasedHostAuthority
+    for HostInvocationAuthority<State, Ctx>
+{
     fn type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }

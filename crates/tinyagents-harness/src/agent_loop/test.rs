@@ -1864,8 +1864,8 @@ async fn provider_invalid_arguments_recoverable_by_relaxed_json_are_repaired_and
     harness.register_tool(tool.clone());
 
     let recorder = EventRecorder::new();
-    let ctx = RunContext::new(RunConfig::new("relaxed-json-repair"), ())
-        .with_events(recorder.sink());
+    let ctx =
+        RunContext::new(RunConfig::new("relaxed-json-repair"), ()).with_events(recorder.sink());
     let run = harness
         .invoke_in_context(&(), ctx, vec![Message::user("lookup the weather")])
         .await
@@ -2373,9 +2373,17 @@ async fn native_tool_calling_model_does_not_execute_quoted_text_dialect_markup()
         .await
         .expect("run succeeds with a plain text final answer");
 
-    assert_eq!(*tool.calls.lock().unwrap(), 0, "the quoted call must not run");
+    assert_eq!(
+        *tool.calls.lock().unwrap(),
+        0,
+        "the quoted call must not run"
+    );
     assert!(run.text().unwrap_or_default().contains("<tool_call>"));
-    assert_eq!(*model.attempts.lock().unwrap(), 1, "no retry/fallback needed");
+    assert_eq!(
+        *model.attempts.lock().unwrap(),
+        1,
+        "no retry/fallback needed"
+    );
 }
 
 #[tokio::test]
@@ -2659,7 +2667,10 @@ async fn streaming_turn_keeps_a_signed_thinking_signature_ahead_of_a_tool_call()
     // scripted tool call, so a second turn would just repeat it forever.
     // Only the first turn's assistant message (the one under test) is
     // needed.
-    let ctx = RunContext::new(RunConfig::new("thinking-signature").with_max_model_calls(1), ());
+    let ctx = RunContext::new(
+        RunConfig::new("thinking-signature").with_max_model_calls(1),
+        (),
+    );
     let outcome = harness
         .invoke_streaming_in_context_collecting_partial(&(), ctx, vec![Message::user("go")])
         .await;

@@ -1016,12 +1016,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
                 let mut content = Vec::new();
                 if reasoning_untransformed {
-                    content.extend(response.message.content.iter().filter(|block| {
-                        matches!(
-                            block,
-                            tinyinference_llm::message::ContentBlock::Thinking { .. }
-                        )
-                    }).cloned());
+                    content.extend(
+                        response
+                            .message
+                            .content
+                            .iter()
+                            .filter(|block| {
+                                matches!(
+                                    block,
+                                    tinyinference_llm::message::ContentBlock::Thinking { .. }
+                                )
+                            })
+                            .cloned(),
+                    );
                     streamed_reasoning.clear();
                 } else if !streamed_reasoning.is_empty() {
                     content.push(tinyinference_llm::message::ContentBlock::Thinking {

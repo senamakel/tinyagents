@@ -232,92 +232,92 @@ where
                 .await
         });
 
-        futures::stream::unfold(
-            (
+    futures::stream::unfold(
+        (
+            Phase::Running {
+                run_fut,
+                listener_guard,
+            },
+            rx,
+        ),
+        |(phase, mut rx)| async move {
+            match phase {
                 Phase::Running {
-                    run_fut,
+                    mut run_fut,
                     listener_guard,
-                },
-                rx,
-            ),
-            |(phase, mut rx)| async move {
-                match phase {
-                    Phase::Running {
-                        mut run_fut,
-                        listener_guard,
-                    } => {
-                        tokio::select! {
-                            biased;
-                            // Prefer draining ready events so the consumer sees
-                            // fine-grained progress rather than a late burst.
-                            maybe = rx.recv() => match maybe {
-                                Some(record) => {
-                                    Some((
-                                        AgentStreamItem::Event(record),
-                                        (
-                                            Phase::Running {
-                                                run_fut,
-                                                listener_guard,
-                                            },
-                                            rx,
-                                        ),
-                                    ))
-                                }
-                                None => {
-                                    // All senders dropped (the run's context —
-                                    // and every sub-agent clone of the sink —
-                                    // is gone): the run is finishing. Await it
-                                    // for the terminal item.
-                                    let terminal = terminal_item(run_fut.await);
+                } => {
+                    tokio::select! {
+                        biased;
+                        // Prefer draining ready events so the consumer sees
+                        // fine-grained progress rather than a late burst.
+                        maybe = rx.recv() => match maybe {
+                            Some(record) => {
+                                Some((
+                                    AgentStreamItem::Event(record),
+                                    (
+                                        Phase::Running {
+                                            run_fut,
+                                            listener_guard,
+                                        },
+                                        rx,
+                                    ),
+                                ))
+                            }
+                            None => {
+                                // All senders dropped (the run's context —
+                                // and every sub-agent clone of the sink —
+                                // is gone): the run is finishing. Await it
+                                // for the terminal item.
+                                let terminal = terminal_item(run_fut.await);
+                                drop(listener_guard);
+                                Some((terminal, (Phase::Done, rx)))
+                            }
+                        },
+                        result = &mut run_fut => {
+                            // The run finished. Events emitted during this
+                            // final poll may still be buffered; drain them
+                            // ahead of the terminal item.
+                            let terminal = terminal_item(result);
+                            match rx.try_recv() {
+                                Ok(record) => Some((
+                                    AgentStreamItem::Event(record),
+                                    (
+                                        Phase::Draining {
+                                            terminal: Box::new(terminal),
+                                            listener_guard,
+                                        },
+                                        rx,
+                                    ),
+                                )),
+                                Err(_) => {
                                     drop(listener_guard);
                                     Some((terminal, (Phase::Done, rx)))
-                                }
-                            },
-                            result = &mut run_fut => {
-                                // The run finished. Events emitted during this
-                                // final poll may still be buffered; drain them
-                                // ahead of the terminal item.
-                                let terminal = terminal_item(result);
-                                match rx.try_recv() {
-                                    Ok(record) => Some((
-                                        AgentStreamItem::Event(record),
-                                        (
-                                            Phase::Draining {
-                                                terminal: Box::new(terminal),
-                                                listener_guard,
-                                            },
-                                            rx,
-                                        ),
-                                    )),
-                                    Err(_) => {
-                                        drop(listener_guard);
-                                        Some((terminal, (Phase::Done, rx)))
-                                    }
                                 }
                             }
                         }
                     }
-                    Phase::Draining {
-                        terminal,
-                        listener_guard,
-                    } => match rx.try_recv() {
-                        Ok(record) => Some((
-                            AgentStreamItem::Event(record),
-                            (
-                                Phase::Draining {
-                                    terminal,
-                                    listener_guard,
-                                },
-                                rx,
-                            ),
-                        )),
-                        Err(_) => {
-                            drop(listener_guard);
-                            Some((*terminal, (Phase::Done, rx)))
-                        }
-                    },
-                    Phase::Done => None,
                 }
-            },
-        )
-    }
+                Phase::Draining {
+                    terminal,
+                    listener_guard,
+                } => match rx.try_recv() {
+                    Ok(record) => Some((
+                        AgentStreamItem::Event(record),
+                        (
+                            Phase::Draining {
+                                terminal,
+                                listener_guard,
+                            },
+                            rx,
+                        ),
+                    )),
+                    Err(_) => {
+                        drop(listener_guard);
+                        Some((*terminal, (Phase::Done, rx)))
+                    }
+                },
+                Phase::Done => None,
+            }
+        },
+    )
+}

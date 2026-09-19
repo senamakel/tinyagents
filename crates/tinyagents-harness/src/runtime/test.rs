@@ -1501,18 +1501,22 @@ async fn hosted_model_resolution_marks_only_root_contexts_as_team_leads() {
 async fn hosted_limit_exceeded_is_distinguishable_from_other_hosted_errors() {
     // A model that always requests the same tool call, so the run never
     // finishes on its own and must hit `max_model_calls`.
-    let looping_model = Arc::new(ScriptedModel::new(std::iter::repeat_with(|| {
-        let mut response = ModelResponse::assistant("");
-        response
-            .message
-            .tool_calls
-            .push(tinyinference_llm::tool::ToolCall::new(
-                "call", "noop", json!({}),
-            ));
-        response
-    })
-    .take(8)
-    .collect()));
+    let looping_model = Arc::new(ScriptedModel::new(
+        std::iter::repeat_with(|| {
+            let mut response = ModelResponse::assistant("");
+            response
+                .message
+                .tool_calls
+                .push(tinyinference_llm::tool::ToolCall::new(
+                    "call",
+                    "noop",
+                    json!({}),
+                ));
+            response
+        })
+        .take(8)
+        .collect(),
+    ));
     let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]);
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
@@ -1660,7 +1664,9 @@ async fn hosted_definition_with_no_declared_tools_denies_every_tool() {
         .message
         .tool_calls
         .push(tinyinference_llm::tool::ToolCall::new(
-            "call-1", "noop", json!({}),
+            "call-1",
+            "noop",
+            json!({}),
         ));
     let model = Arc::new(ScriptedModel::new(vec![
         fabricated_call,
@@ -3195,9 +3201,7 @@ fn host_invocation_binding_fails_closed_on_a_state_mismatch() {
     let host = Arc::new(crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "parent",
-            "Parent",
-            "hosted",
+            "parent", "Parent", "hosted",
         )])),
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::replies(
@@ -3233,7 +3237,10 @@ fn host_invocation_binding_fails_closed_on_a_state_mismatch() {
     // erased authority.
     let mismatched = crate::runtime::host_invocation_binding::<OtherState, ()>(&context);
     assert!(
-        matches!(mismatched, Err(crate::error::TinyAgentsError::Validation(_))),
+        matches!(
+            mismatched,
+            Err(crate::error::TinyAgentsError::Validation(_))
+        ),
         "expected a fail-closed Validation error"
     );
 }
@@ -3247,9 +3254,7 @@ fn child_with_data_never_propagates_host_authority() {
     let host = Arc::new(crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "parent",
-            "Parent",
-            "hosted",
+            "parent", "Parent", "hosted",
         )])),
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::replies(
@@ -3433,10 +3438,7 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_childs_local_harness() {
         .await
         .expect_err("parent policy denies the child before its host can run");
     assert_eq!(error.kind, crate::runtime::HostedErrorKind::Internal);
-    assert_eq!(
-        error.to_string(),
-        "hosted agent invocation failed"
-    );
+    assert_eq!(error.to_string(), "hosted agent invocation failed");
     assert!(
         child_model.requests().is_empty(),
         "the child harness's local model was never allowed to select its own policy"
