@@ -539,6 +539,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         outcome.map_err(sanitize_hosted_preparation_error)
     }
 
+    /// The wall-clock time left for host I/O (definition lookup, security
+    /// screening, context composition) before this turn must give up.
+    ///
+    /// Takes the smaller of the context's own remaining budget and what
+    /// `RunPolicy::limits.max_wall_clock_ms` still allows, so host preparation
+    /// never outlives either the caller's deadline or the harness's own cap.
+    /// `None` means neither source imposes a limit.
     fn host_io_budget(&self, context: &RunContext<Ctx>) -> Option<Duration> {
         let config = context.remaining_wall_clock();
         let policy = self.policy.limits.max_wall_clock_ms.map(|milliseconds| {

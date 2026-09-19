@@ -1,8 +1,11 @@
-//! Tests added in a later pass.
+//! Unit tests for the cache module.
 //!
 //! Smoke tests confirming that [`super::InMemoryResponseCache`] round-trips a
 //! response, that [`super::cache_key`] is deterministic, and that
 //! [`super::PromptCacheLayout`] correctly detects stable vs. changed prefixes.
+//! Also covers LRU eviction, TTL expiry, `SingleFlight` stampede collapsing,
+//! and (behind the `sqlite` feature) the SQLite-backed cache's persistence and
+//! namespace isolation.
 
 use super::*;
 use serde_json::json;
