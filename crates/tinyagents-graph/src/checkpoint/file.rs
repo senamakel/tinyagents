@@ -619,116 +619,134 @@ where
         namespace: &[String],
         limit: Option<usize>,
     ) -> Result<Vec<CheckpointTuple<State>>> {
-        // Read the whole thread once, then walk the parent lineage in memory
-        // (O(H)), instead of re-reading and re-parsing the file per hop (O(H²)).
-        let records = self.read_records(thread_id)?;
-        if records.is_empty() {
-            return Ok(Vec::new());
-        }
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        let namespace = namespace.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<Vec<CheckpointTuple<State>>> {
+            // Read the whole thread once, then walk the parent lineage in memory
+            // (O(H)), instead of re-reading and re-parsing the file per hop (O(H²)).
+            let records = this.read_records(&thread_id)?;
+            if records.is_empty() {
+                return Ok(Vec::new());
+            }
 
-        // id -> checkpoint, last write wins for duplicate ids (matching `get`,
-        // which takes the last matching record). Track the latest checkpoint in
-        // the target namespace as the walk's starting point.
-        let mut by_id: std::collections::HashMap<String, Checkpoint<State>> =
-            std::collections::HashMap::with_capacity(records.len());
-        let mut cursor: Option<String> = None;
-        for record in records {
-            if record.namespace.as_slice() == namespace {
-                cursor = Some(record.checkpoint_id.clone());
+            // id -> checkpoint, last write wins for duplicate ids (matching `get`,
+            // which takes the last matching record). Track the latest checkpoint in
+            // the target namespace as the walk's starting point.
+            let mut by_id: std::collections::HashMap<String, Checkpoint<State>> =
+                std::collections::HashMap::with_capacity(records.len());
+            let mut cursor: Option<String> = None;
+            for record in records {
+                if record.namespace == namespace {
+                    cursor = Some(record.checkpoint_id.clone());
+                }
+                by_id.insert(record.checkpoint_id.clone(), record);
             }
-            by_id.insert(record.checkpoint_id.clone(), record);
-        }
 
-        let mut out = Vec::new();
-        while let Some(id) = cursor {
-            if let Some(limit) = limit
-                && out.len() >= limit
-            {
-                break;
+            let mut out = Vec::new();
+            while let Some(id) = cursor {
+                if let Some(limit) = limit
+                    && out.len() >= limit
+                {
+                    break;
+                }
+                // `remove` doubles as a cycle guard: each id is visited at most once.
+                let Some(checkpoint) = by_id.remove(&id) else {
+                    break;
+                };
+                // A checkpoint outside the target namespace is not visible under
+                // namespace-scoped lookup, so the lineage walk stops (matching the
+                // `get_scoped`-based default).
+                if checkpoint.namespace != namespace {
+                    break;
+                }
+                cursor = checkpoint.parent_checkpoint_id.clone();
+                out.push(tuple_from_checkpoint(checkpoint));
             }
-            // `remove` doubles as a cycle guard: each id is visited at most once.
-            let Some(checkpoint) = by_id.remove(&id) else {
-                break;
-            };
-            // A checkpoint outside the target namespace is not visible under
-            // namespace-scoped lookup, so the lineage walk stops (matching the
-            // `get_scoped`-based default).
-            if checkpoint.namespace.as_slice() != namespace {
-                break;
-            }
-            cursor = checkpoint.parent_checkpoint_id.clone();
-            out.push(tuple_from_checkpoint(checkpoint));
-        }
-        Ok(out)
+            Ok(out)
+        })
+        .await
+        .map_err(|e| io_err("join blocking state_history task", e))?
     }
 
     async fn list_threads(&self) -> Result<Vec<String>> {
-        let entries = match fs::read_dir(&self.base_dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(io_err("read base dir", e)),
-        };
-        let mut threads = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| io_err("read dir entry", e))?;
-            let path = entry.path();
-            // Match on the filename suffix rather than `Path::extension()`.
-            // The empty thread id escapes to the empty string, so its file is
-            // literally `.jsonl` — a dotfile whose `extension()` is `None`,
-            // which made that thread invisible to listing (and to everything
-            // built on listing) while `get`/`put` addressed it perfectly well.
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
+        let base_dir = self.base_dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let entries = match fs::read_dir(&base_dir) {
+                Ok(e) => e,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+                Err(e) => return Err(io_err("read base dir", e)),
             };
-            if !name.ends_with(&format!(".{THREAD_EXT}")) || name.ends_with(WRITES_SUFFIX) {
-                continue;
-            }
-            // Recover the canonical thread id from the first record rather than
-            // un-escaping the filename, so the value always matches what was
-            // persisted.
-            let file = File::open(&path).map_err(|e| io_err("open thread file", e))?;
-            let mut reader = BufReader::new(file);
-            let mut first = String::new();
-            loop {
-                first.clear();
-                let read = reader
-                    .read_line(&mut first)
-                    .map_err(|e| io_err("read line", e))?;
-                if read == 0 {
-                    break; // empty file — skip
-                }
-                if first.trim().is_empty() {
+            let mut threads = Vec::new();
+            for entry in entries {
+                let entry = entry.map_err(|e| io_err("read dir entry", e))?;
+                let path = entry.path();
+                // Match on the filename suffix rather than `Path::extension()`.
+                // The empty thread id escapes to the empty string, so its file is
+                // literally `.jsonl` — a dotfile whose `extension()` is `None`,
+                // which made that thread invisible to listing (and to everything
+                // built on listing) while `get`/`put` addressed it perfectly well.
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else {
+                    continue;
+                };
+                if !name.ends_with(&format!(".{THREAD_EXT}")) || name.ends_with(WRITES_SUFFIX) {
                     continue;
                 }
-                // One unreadable file must not take down the whole listing.
-                // `list_threads` decodes the first line of *every* file, so an
-                // error here made a single poisoned thread break listing —
-                // and therefore every operation built on it — globally.
-                match serde_json::from_str::<Checkpoint<serde::de::IgnoredAny>>(&first) {
-                    Ok(record) => threads.push(record.thread_id),
-                    Err(e) => tracing::warn!(
-                        "[checkpoint:file] list_threads: skipping unreadable thread file {}: {e}",
-                        path.display()
-                    ),
+                // Recover the canonical thread id from the first record rather than
+                // un-escaping the filename, so the value always matches what was
+                // persisted.
+                let file = File::open(&path).map_err(|e| io_err("open thread file", e))?;
+                let mut reader = BufReader::new(file);
+                let mut first = String::new();
+                loop {
+                    first.clear();
+                    let read = reader
+                        .read_line(&mut first)
+                        .map_err(|e| io_err("read line", e))?;
+                    if read == 0 {
+                        break; // empty file — skip
+                    }
+                    if first.trim().is_empty() {
+                        continue;
+                    }
+                    // One unreadable file must not take down the whole listing.
+                    // `list_threads` decodes the first line of *every* file, so an
+                    // error here made a single poisoned thread break listing —
+                    // and therefore every operation built on it — globally.
+                    match serde_json::from_str::<Checkpoint<serde::de::IgnoredAny>>(&first) {
+                        Ok(record) => threads.push(record.thread_id),
+                        Err(e) => tracing::warn!(
+                            "[checkpoint:file] list_threads: skipping unreadable thread file {}: {e}",
+                            path.display()
+                        ),
+                    }
+                    break;
                 }
-                break;
             }
-        }
-        Ok(threads)
+            Ok(threads)
+        })
+        .await
+        .map_err(|e| io_err("join blocking list_threads task", e))?
     }
 
     async fn delete_thread(&self, thread_id: &str) -> Result<()> {
         // The write sidecar goes with the thread: leaving it behind would let a
         // later thread of the same id inherit a dead ledger.
-        for path in [self.thread_path(thread_id), self.writes_path(thread_id)] {
-            match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(io_err("delete thread file", e)),
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            for path in [this.thread_path(&thread_id), this.writes_path(&thread_id)] {
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(io_err("delete thread file", e)),
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|e| io_err("join blocking delete_thread task", e))?
     }
 
     async fn delete_checkpoints(&self, thread_id: &str, ids: &[String]) -> Result<usize> {
