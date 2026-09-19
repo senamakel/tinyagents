@@ -345,6 +345,26 @@ pub struct RunContext<Ctx = ()> {
     pub data: Ctx,
     /// Registry of named long-term stores.
     pub stores: StoreRegistry,
+    /// Optional hierarchical long-term store handed to every tool this run
+    /// invokes as
+    /// [`ToolExecutionContext::store`][crate::tool::ToolExecutionContext::store]
+    /// (B1). Distinct from [`Self::stores`], the flat named registry: this
+    /// is the one [`NamespacedStore`][crate::store::namespaced::NamespacedStore]
+    /// a tool may read and write directly — memories, scratch state, a
+    /// per-user cache — without the harness minting a name for it. `None`
+    /// means tools get no store. Attach one with
+    /// [`RunContext::with_namespaced_store`]; shared with child contexts
+    /// exactly like `stores`.
+    pub namespaced_store: Option<std::sync::Arc<dyn crate::store::namespaced::NamespacedStore>>,
+    /// Optional type-erased, read-only view of the application state handed
+    /// to every tool this run invokes, recovered by
+    /// [`ToolExecutionContext::state`][crate::tool::ToolExecutionContext::state]
+    /// (B1). Erased because `RunContext` is not generic over `State` and the
+    /// agent loop only ever holds a borrowed `&State` it cannot lend to a
+    /// concurrent tool future; the host attaches an owned `Arc<S>` snapshot
+    /// with [`RunContext::with_state_view`] instead. Shared with child
+    /// contexts, which run against the same application state.
+    pub state_view: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
     /// Event fan-out bus for observability.
     pub events: EventSink,
     /// Live limit tracker derived from `config`.

@@ -295,6 +295,8 @@ impl<Ctx> RunContext<Ctx> {
             config,
             data,
             stores: StoreRegistry::new(),
+            namespaced_store: None,
+            state_view: None,
             events,
             limits,
             steering: None,
@@ -426,6 +428,8 @@ impl<Ctx> RunContext<Ctx> {
             .map(|handle| handle.for_child(child_run_id));
         let mut child = RunContext::new(config, data)
             .with_stores(self.stores.clone())
+            .with_optional_namespaced_store(self.namespaced_store.clone())
+            .with_optional_state_view(self.state_view.clone())
             .with_events(self.events.clone())
             .with_cancellation(self.cancellation.clone())
             .with_optional_steering(steering)
@@ -601,6 +605,48 @@ impl<Ctx> RunContext<Ctx> {
     /// Replaces the store registry with a (possibly shared) `stores`.
     pub fn with_stores(mut self, stores: StoreRegistry) -> Self {
         self.stores = stores;
+        self
+    }
+
+    /// Attaches the hierarchical store every tool in this run receives as
+    /// [`ToolExecutionContext::store`][crate::tool::ToolExecutionContext::store]
+    /// (B1). See [`RunContext::namespaced_store`].
+    #[must_use]
+    pub fn with_namespaced_store(
+        mut self,
+        store: std::sync::Arc<dyn crate::store::namespaced::NamespacedStore>,
+    ) -> Self {
+        self.namespaced_store = Some(store);
+        self
+    }
+
+    fn with_optional_namespaced_store(
+        mut self,
+        store: Option<std::sync::Arc<dyn crate::store::namespaced::NamespacedStore>>,
+    ) -> Self {
+        self.namespaced_store = store;
+        self
+    }
+
+    /// Attaches a read-only snapshot of the application state every tool in
+    /// this run can recover with
+    /// [`ToolExecutionContext::state::<S>()`][crate::tool::ToolExecutionContext::state]
+    /// (B1). See [`RunContext::state_view`] for why this is an owned `Arc`
+    /// the host supplies rather than the loop's own `&State`.
+    #[must_use]
+    pub fn with_state_view<S: std::any::Any + Send + Sync>(
+        mut self,
+        state: std::sync::Arc<S>,
+    ) -> Self {
+        self.state_view = Some(state);
+        self
+    }
+
+    fn with_optional_state_view(
+        mut self,
+        state: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    ) -> Self {
+        self.state_view = state;
         self
     }
 
