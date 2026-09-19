@@ -308,6 +308,10 @@ impl Channel for NamedBarrier {
         Ok(Value::Object(map))
     }
 
+    fn config(&self) -> Value {
+        serde_json::json!({ "expected": self.expected })
+    }
+
     fn allows_concurrent(&self) -> bool {
         true
     }
@@ -327,21 +331,50 @@ impl Channel for NamedBarrier {
 impl BinaryAggregate {
     /// Creates an aggregate channel from a binary fold closure. The first write
     /// becomes the value directly; later writes are `fold(current, incoming)`.
+    ///
+    /// Unnamed: [`Channel::config`] carries no reducer name, so a channel
+    /// built this way merges correctly at runtime but cannot round-trip
+    /// through a durable checkpointer. Use [`BinaryAggregate::named`] (backed
+    /// by [`ReducerRegistry`]) for a channel that must survive a checkpoint
+    /// decode.
     pub fn new<F>(fold: F) -> Self
     where
         F: Fn(Value, Value) -> Result<Value> + Send + Sync + 'static,
     {
         Self {
             fold: Arc::new(fold),
+            reducer_name: None,
         }
     }
 
-    /// Builds an aggregate channel from a [`crate::Reducer<Value>`].
+    /// Builds an aggregate channel from a [`crate::Reducer<Value>`]. Also
+    /// unnamed — see [`BinaryAggregate::new`].
     pub fn from_reducer<R>(reducer: R) -> Self
     where
         R: crate::Reducer<Value> + 'static,
     {
         Self::new(move |current, incoming| reducer.reduce(current, incoming))
+    }
+
+    /// Builds an aggregate channel from the reducer registered under `name`
+    /// in the process-wide [`ReducerRegistry`] (register it first with
+    /// [`crate::GraphBuilder::register_reducer`], or use one of the built-ins
+    /// — `"append"`, `"last"`, `"sum"`, `"max"`, `"min"`, `"set_union"`).
+    ///
+    /// Unlike [`BinaryAggregate::new`], this channel's [`Channel::config`]
+    /// persists `name`, so it round-trips through a durable checkpointer:
+    /// decoding looks `name` back up in the registry (present in the
+    /// resuming process — the same call site that ran this graph before must
+    /// have registered it) and fails with
+    /// `TinyAgentsError::Checkpoint("unknown reducer ...")` if it is not
+    /// there.
+    pub fn named(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        let fold = ReducerRegistry::require(&name)?;
+        Ok(Self {
+            fold,
+            reducer_name: Some(name),
+        })
     }
 }
 
@@ -357,12 +390,66 @@ impl Channel for BinaryAggregate {
         }
     }
 
+    fn config(&self) -> Value {
+        ReducerRegistry::config_for(self.reducer_name.as_deref())
+    }
+
     fn allows_concurrent(&self) -> bool {
         true
     }
 
     fn clone_box(&self) -> Box<dyn Channel> {
         Box::new(self.clone())
+    }
+}
+
+/// Reconstructs a boxed [`Channel`] from its persisted `{kind, config}` pair
+/// (the counterpart of [`Channel::config`]), used by [`ChannelSet`]'s
+/// [`serde::Deserialize`] impl to hydrate a checkpoint's channel schema with
+/// no external context — see `channel/registry.rs`'s module docs for why
+/// `binary_aggregate` alone needs the process-wide [`ReducerRegistry`] to do
+/// this.
+fn channel_from_config(kind: &str, config: &Value) -> Result<Box<dyn Channel>> {
+    match kind {
+        "last_value" => Ok(Box::new(LastValue)),
+        "topic" => Ok(Box::new(Topic)),
+        "delta" => Ok(Box::new(Delta)),
+        "messages" => Ok(Box::new(Messages)),
+        "ephemeral" => Ok(Box::new(Ephemeral)),
+        "untracked" => Ok(Box::new(Untracked)),
+        "barrier" => {
+            let expected = config
+                .get("expected")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            Ok(Box::new(Barrier::new(expected)))
+        }
+        "named_barrier" => {
+            let expected: Vec<String> = config
+                .get("expected")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(Box::new(NamedBarrier::new(expected)))
+        }
+        "binary_aggregate" => {
+            let name = config.get("reducer").and_then(Value::as_str).ok_or_else(|| {
+                TinyAgentsError::Checkpoint(
+                    "binary_aggregate channel requires a named reducer to decode; build it \
+                     with `BinaryAggregate::named` so its config persists a reducer name"
+                        .to_string(),
+                )
+            })?;
+            Ok(Box::new(BinaryAggregate::named(name)?))
+        }
+        other => Err(TinyAgentsError::Checkpoint(format!(
+            "unknown channel kind `{other}`"
+        ))),
     }
 }
 
