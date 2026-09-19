@@ -5,16 +5,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 description = "Durable TinyAgents session history and run ledger."
 
 [dependencies]
-chrono = { version = "0.4", features = ["serde"] }
-anyhow = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+chrono = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.2", default-features = false, features = ["sqlite"] }
-tracing = "0.1"
+tracing = { workspace = true }
 
 [features]
 default = []
