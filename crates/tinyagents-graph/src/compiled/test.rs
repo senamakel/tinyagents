@@ -2841,6 +2841,37 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
         .await
         .unwrap();
     assert!(paused.is_interrupted());
+    // C1: the two completed higher-index workers (args 2 and 3) are folded
+    // into state despite the lower-index (arg 1) worker interrupting.
+    assert_eq!(
+        paused.state.value, 5,
+        "arg-2 and arg-3 workers must complete despite arg-1 interrupting"
+    );
+
+    let before = cp.get("t-send-update", None).await.unwrap().unwrap();
+    let before_pending = before
+        .pending_activations
+        .clone()
+        .unwrap_or_default();
+    assert_eq!(
+        before_pending
+            .iter()
+            .filter(|a| a.node.as_str() == "worker")
+            .filter_map(|a| a.send_arg.as_ref().and_then(|v| v.as_i64()))
+            .collect::<Vec<_>>(),
+        vec![1],
+        "only the genuinely-interrupted arg-1 worker is pending, got {:?}",
+        before_pending
+    );
+    assert_eq!(
+        before
+            .completed_tasks
+            .iter()
+            .filter(|n| n.as_str() == "worker")
+            .count(),
+        2,
+        "the two completed workers are recorded as completed, not pending"
+    );
 
     graph
         .update_state("t-send-update", 0, Some(NodeId::from("side")))
@@ -2851,7 +2882,7 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
         .pending_activations
         .clone()
         .expect("an attributed write must persist the merged activations");
-    let mut args: Vec<i64> = pending
+    let args: Vec<i64> = pending
         .iter()
         .filter(|a| a.node.as_str() == "worker")
         .map(|a| {
@@ -2862,11 +2893,14 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
                 .unwrap()
         })
         .collect();
-    args.sort_unstable();
-    assert_eq!(args, vec![1, 2, 3], "every pending Send packet survives");
+    assert_eq!(
+        args,
+        vec![1],
+        "the still-pending Send packet survives with its arg, the completed ones are not resurrected"
+    );
     assert!(
         pending.iter().any(|a| a.node.as_str() == "tail"),
-        "the attributed node's successor is scheduled alongside them"
+        "the attributed node's successor is scheduled alongside it"
     );
     assert_eq!(
         pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
