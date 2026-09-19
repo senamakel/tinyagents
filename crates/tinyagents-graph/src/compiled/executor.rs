@@ -344,18 +344,21 @@ where
     /// ([`CompiledGraph::handle_failure_boundary`]), interrupt
     /// ([`CompiledGraph::handle_interrupt_boundary`]), or the normal boundary
     /// ([`CompiledGraph::advance`], which returns the next active set).
-    #[allow(clippy::too_many_arguments)]
     async fn execute_run(
         &self,
         run_id: RunId,
-        mut state: State,
-        initial_active: Vec<Activation>,
-        thread_id: Option<ThreadId>,
-        resume_map: HashMap<NodeId, serde_json::Value>,
-        initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
-        initial_parent: Option<String>,
-        binding: Option<crate::subagent_node::AgentInvocationBinding>,
+        seed: RunSeed<State, Update>,
     ) -> Result<GraphExecution<State>> {
+        let RunSeed {
+            mut state,
+            active: initial_active,
+            thread_id,
+            resume_map,
+            barriers: initial_barriers,
+            parent: initial_parent,
+            binding,
+            ..
+        } = seed;
         let started_at = SystemTime::now();
 
         // Build this run's recursion stack from the inherited parent frames and
