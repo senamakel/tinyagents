@@ -1545,6 +1545,63 @@ async fn hosted_definition_tool_allowlist_filters_schemas_and_rejects_fabricated
     );
 }
 
+/// I-9 regression: a definition that declares **no** tools (an empty list —
+/// `AgentDefinition::new` without `with_tools`) must deny every registered
+/// tool, not grant the whole catalogue. Before the fix, `HashSet::is_empty()`
+/// was read as "unrestricted" instead of "nothing authorized", so a
+/// definition whose author simply forgot to declare tools (or a host that
+/// failed to populate the field) silently ran with every tool available.
+#[tokio::test]
+async fn hosted_definition_with_no_declared_tools_denies_every_tool() {
+    let mut fabricated_call = ModelResponse::assistant("");
+    fabricated_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "call-1", "noop", json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        fabricated_call,
+        ModelResponse::assistant("recovered"),
+    ]));
+    // No `.with_tools(...)`: the definition declares nothing.
+    let definition = AgentDefinition::new("helper", "Helper", "test helper");
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("empty-allowlist"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the model recovers after its denied call");
+
+    assert_eq!(run.text().as_deref(), Some("recovered"));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("unknown tool `noop`")),
+        "a registered tool the definition never declared must be rejected, not silently run"
+    );
+    // No tool schema at all is offered to the provider — the registered
+    // catalogue is not leaked to a definition that declared nothing.
+    assert!(model.requests()[0].tools.is_empty());
+}
+
 #[tokio::test]
 async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
     // `answer` is registered globally but deliberately not allowed for this
