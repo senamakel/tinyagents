@@ -62,19 +62,42 @@ pub struct ModelCatalog {
 }
 
 impl ModelCatalog {
-    /// Wraps an already-parsed [`ModelCatalogSnapshot`].
+    /// Wraps an already-parsed, already-valid [`ModelCatalogSnapshot`].
+    ///
+    /// Does not itself validate `snapshot`; prefer
+    /// [`try_from_snapshot`](Self::try_from_snapshot) (or [`from_json`](Self::from_json),
+    /// which calls it) unless the snapshot is already known-good (for example,
+    /// round-tripped from an existing, already-validated [`ModelCatalog`]).
     pub fn from_snapshot(snapshot: ModelCatalogSnapshot) -> Self {
         Self { snapshot }
     }
 
-    /// Parses a catalog from a JSON snapshot string.
+    /// Wraps `snapshot` after validating it with
+    /// [`ModelCatalogSnapshot::validate`].
     ///
     /// # Errors
     ///
-    /// Returns an error if `source` is not a valid [`ModelCatalogSnapshot`].
-    pub fn from_json(source: &str) -> Result<Self> {
-        let snapshot = serde_json::from_str(source)?;
+    /// Returns [`TinyAgentsError::Validation`] describing the first validation
+    /// failure found. See [`ModelCatalogSnapshot::validate`] for the checks
+    /// performed.
+    pub fn try_from_snapshot(snapshot: ModelCatalogSnapshot) -> Result<Self> {
+        snapshot.validate()?;
         Ok(Self::from_snapshot(snapshot))
+    }
+
+    /// Parses and validates a catalog from a JSON snapshot string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `source` is not valid JSON, does not match the
+    /// [`ModelCatalogSnapshot`] shape, or fails
+    /// [`ModelCatalogSnapshot::validate`] (duplicate `(provider, model_id)`
+    /// pairs, negative prices, a missing `source`, an output limit exceeding
+    /// the input context, an alias collision, an invalid date, or an unknown
+    /// provider id).
+    pub fn from_json(source: &str) -> Result<Self> {
+        let snapshot: ModelCatalogSnapshot = serde_json::from_str(source)?;
+        Self::try_from_snapshot(snapshot)
     }
 
     /// Loads the catalog from the snapshot embedded in the crate at build time.
