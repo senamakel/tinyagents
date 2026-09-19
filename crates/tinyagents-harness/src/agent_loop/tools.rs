@@ -87,7 +87,7 @@
 //!
 use super::model_call::ToolCallBase;
 use super::*;
-use crate::tool::{ToolDispatch, provider_schema};
+use crate::tool::{DeferredToolRequests, ToolDispatch, provider_schema};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
@@ -103,6 +103,54 @@ enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
     /// tool, invalid arguments); a success result for an intrinsic answer
     /// (`tool_search`).
     Answered(tinytools::ToolResult),
+    /// No tool runs *yet*: the call needs a human decision or host-side
+    /// execution first (A2). The loop finishes the batch's other calls and
+    /// then hands every deferred request to the caller (or the inline
+    /// `DeferredToolHandler`).
+    Deferred(DeferredRequest),
+}
+
+/// Which [`DeferredToolRequests`] list a deferred call belongs to.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum DeferredKind {
+    /// Needs an [`crate::tool::ApprovalDecision`]; the harness runs the tool
+    /// on approval.
+    Approval,
+    /// Needs a [`crate::tool::DeferredCallResult`]; the host runs the tool.
+    External,
+}
+
+/// One call the loop is handing back instead of answering.
+#[derive(Clone, Debug)]
+pub(super) struct DeferredRequest {
+    /// The call as the model made it (original arguments, so an approver
+    /// sees — and may edit — exactly what the model asked for).
+    pub(super) call: ToolCall,
+    pub(super) kind: DeferredKind,
+    /// Stable label for the `ToolDeferred` event.
+    pub(super) reason: &'static str,
+    /// Host-only payload from `ApprovalRequired`/`CallDeferred`, if any.
+    pub(super) metadata: Option<Value>,
+}
+
+impl DeferredRequest {
+    fn approval(call: ToolCall, reason: &'static str, metadata: Option<Value>) -> Self {
+        Self {
+            call,
+            kind: DeferredKind::Approval,
+            reason,
+            metadata,
+        }
+    }
+
+    fn external(call: ToolCall, reason: &'static str, metadata: Option<Value>) -> Self {
+        Self {
+            call,
+            kind: DeferredKind::External,
+            reason,
+            metadata,
+        }
+    }
 }
 
 /// One requested call after admission, in original order.
@@ -124,6 +172,9 @@ enum AdmittedCall<State: Send + Sync, Ctx: Send + Sync> {
         call: ToolCall,
         result: tinytools::ToolResult,
     },
+    /// Deferred at admission: nothing runs, nothing is announced; folded into
+    /// the batch's [`DeferredToolRequests`] in original order.
+    Deferred(DeferredRequest),
 }
 
 /// One transcript slot per requested call, in original order, used by the
@@ -144,6 +195,8 @@ enum ToolSlot {
         call: ToolCall,
         result: tinytools::ToolResult,
     },
+    /// A call deferred at admission (see [`AdmittedCall::Deferred`]).
+    Deferred(DeferredRequest),
 }
 
 /// Admission metadata for one executable call, paired 1:1 (in order) with its
@@ -151,6 +204,10 @@ enum ToolSlot {
 struct PreparedToolCall {
     call_id: CallId,
     tool_name: String,
+    /// The admitted call, kept so an execution-time deferral
+    /// (`ApprovalRequired`/`CallDeferred` raised by the tool) can hand the
+    /// original request back through [`DeferredToolRequests`].
+    call: ToolCall,
     options: ToolCallOptions,
     captured_input: Option<Value>,
     started_at_ms: u64,
@@ -346,6 +403,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Dispatches to the concurrent path when it is safe (see the module docs
     /// for the exact conditions and preserved semantics); otherwise runs the
     /// historical serial path.
+    ///
+    /// Returns the calls the batch **deferred** (A2) — empty for the common
+    /// case. A deferred call gets no tool-result row; every other call in the
+    /// batch is still executed and answered, so the caller only has to decide
+    /// what to do with the pending ones (exit, or resolve inline).
     pub(super) async fn execute_tools(
         &self,
         state: &State,
@@ -354,7 +416,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
-    ) -> Result<()> {
+    ) -> Result<DeferredToolRequests> {
         // Injection and argument normalization change the model payload before
         // execution. Until admission has produced those authoritative values,
         // a declaration cannot safely make a parallel decision from raw model
@@ -453,7 +515,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 call.id
             );
             ctx.limits.rollback_tool_calls(1);
-            return Err(err);
+            // A2/A3 signals from a `before_tool` hook are decisions about
+            // *this call*, not failures of the run: a deferral hands the
+            // call back to the host, and the retry/failed vocabulary answers
+            // the model without running the tool (the `HumanApprovalMiddleware`
+            // `Deny` outcome, for one).
+            return match err {
+                TinyAgentsError::ApprovalRequired { metadata } => Ok(ResolvedToolCall::Deferred(
+                    DeferredRequest::approval(call.clone(), "approval_required", Some(metadata)),
+                )),
+                TinyAgentsError::CallDeferred { metadata } => Ok(ResolvedToolCall::Deferred(
+                    DeferredRequest::external(call.clone(), "call_deferred", Some(metadata)),
+                )),
+                TinyAgentsError::ToolFailed(message) => Ok(ResolvedToolCall::Answered(
+                    tinytools::ToolResult::failed(message),
+                )),
+                TinyAgentsError::ModelRetry(message) => Ok(ResolvedToolCall::Answered(
+                    tinytools::ToolResult::retry(message),
+                )),
+                other => Err(other),
+            };
         }
 
         // Before giving up on provider-unparseable arguments (below), try the
@@ -688,6 +769,32 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 message,
             )));
         }
+        // Deferral (A2), after validation so an approver only ever sees a
+        // call the tool would actually accept, and before host authorization
+        // so a host's own gate is not consulted for a call a human has not
+        // yet approved. A call the resume path already approved
+        // (`RunContext::is_call_approved`) goes straight through.
+        if !ctx.is_call_approved(&call.id) {
+            let original = ToolCall::new(call.id.clone(), call.name.clone(), model_arguments);
+            if crate::tool::is_external_tool(tool.as_ref()) {
+                ctx.limits.rollback_tool_calls(1);
+                return Ok(ResolvedToolCall::Deferred(DeferredRequest::external(
+                    original, "external", None,
+                )));
+            }
+            let policy = tool.policy();
+            if policy.access.approval_required {
+                ctx.limits.rollback_tool_calls(1);
+                let metadata = serde_json::to_value(&policy.display)
+                    .ok()
+                    .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+                return Ok(ResolvedToolCall::Deferred(DeferredRequest::approval(
+                    original,
+                    "approval_required",
+                    metadata,
+                )));
+            }
+        }
         // Host authorization is deliberately last in admission: the gate sees
         // the raw provider arguments (including any forged hidden fields),
         // while execution receives the prepared trusted arguments. A hosted
@@ -772,6 +879,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         PreparedToolCall {
             call_id,
             tool_name,
+            call: call.clone(),
             options,
             captured_input,
             started_at_ms,
@@ -1030,75 +1138,155 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
-    ) -> Result<()> {
-        for mut call in tool_calls {
-            let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
-                ResolvedToolCall::Tool { dispatch, .. } => dispatch,
-                ResolvedToolCall::Answered(result) => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
-                        .await?;
-                    continue;
-                }
-            };
-
-            let options = dispatch.call_options(&call.arguments);
-            let prepared =
-                self.start_tool_call(ctx, status, &call, options, true, dispatch.output_origin());
-
-            // The real tool call is the innermost base of the tool-wrap
-            // onion (same before -> wrap -> after ordering as the model
-            // path): lifecycle `before_tool` ran in admission, the wrap onion
-            // runs here, and lifecycle `after_tool` runs in the fold. The
-            // crate-owned tool policy returns a recoverable tool error; the
-            // outer run budget still aborts when the whole run is exhausted.
-            let run_budget = self.call_budget(ctx);
-            let base = ToolCallBase {
-                dispatch,
-                options,
-                timeout_settings: self.tool_timeouts.clone(),
-            };
-            let run_id = ctx.run_id().as_str().to_string();
-            let fut = self.middleware.run_wrapped_tool(ctx, state, call, &base);
-            // TinyTools distinguishes a fatal execution `Err` from a
-            // recoverable `ToolResult::error`; no harness error-policy facade
-            // rewrites that canonical distinction.
-            let guarded = futures::FutureExt::map(fut, |result| {
-                result.map(|wrapped| wrapped.into_result_with_control())
-            });
-            let outcome = Self::with_call_budget(
-                run_budget,
-                &run_id,
-                "tool call",
-                super::model_call::RUN_BOUND_LABEL,
-                guarded,
-            )
-            .await;
-            let (result, wrap_control) = match outcome {
-                Ok(pair) => pair,
-                Err(err) => {
-                    self.fail_tool_call(
-                        ctx,
-                        status,
-                        &prepared.call_id,
-                        &prepared.tool_name,
-                        prepared.started_at_ms,
-                        &err,
-                    );
-                    return Err(err);
-                }
-            };
-            // A `ToolMiddleware::wrap_tool` that short-circuited with
-            // `MiddlewareToolOutcome::Command` carries no real result; queue
-            // its control the same way `run_wrapped_model`'s call site does
-            // (see the comment there).
-            if let Some(control) = wrap_control {
-                ctx.request_control(control);
-            }
-
-            self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
+    ) -> Result<DeferredToolRequests> {
+        let mut deferred = DeferredToolRequests::default();
+        for call in tool_calls {
+            self.execute_tool_serially(state, ctx, run, status, messages, call, &mut deferred)
                 .await?;
         }
-        Ok(())
+        Ok(deferred)
+    }
+
+    /// Admits, executes, and folds **one** call on the serial path, recording
+    /// a deferral into `deferred` instead of answering it.
+    ///
+    /// Shared by [`Self::execute_tools_serially`] and the resume path
+    /// (`apply_deferred_results`), which re-runs an approved call through
+    /// exactly this pipeline so admission, the wrap onion, and the fold are
+    /// never duplicated.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn execute_tool_serially(
+        &self,
+        state: &State,
+        ctx: &mut RunContext<Ctx>,
+        run: &mut AgentRun,
+        status: &mut HarnessRunStatus,
+        messages: &mut Vec<Message>,
+        mut call: ToolCall,
+        deferred: &mut DeferredToolRequests,
+    ) -> Result<()> {
+        let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
+            ResolvedToolCall::Tool { dispatch, .. } => dispatch,
+            ResolvedToolCall::Answered(result) => {
+                return self
+                    .recover_tool_call(state, ctx, run, status, messages, &call, result)
+                    .await;
+            }
+            ResolvedToolCall::Deferred(request) => {
+                self.defer_tool_call(ctx, status, request, deferred);
+                return Ok(());
+            }
+        };
+
+        let options = dispatch.call_options(&call.arguments);
+        let prepared =
+            self.start_tool_call(ctx, status, &call, options, true, dispatch.output_origin());
+
+        // The real tool call is the innermost base of the tool-wrap
+        // onion (same before -> wrap -> after ordering as the model
+        // path): lifecycle `before_tool` ran in admission, the wrap onion
+        // runs here, and lifecycle `after_tool` runs in the fold. The
+        // crate-owned tool policy returns a recoverable tool error; the
+        // outer run budget still aborts when the whole run is exhausted.
+        let run_budget = self.call_budget(ctx);
+        let base = ToolCallBase {
+            dispatch,
+            options,
+            timeout_settings: self.tool_timeouts.clone(),
+        };
+        let run_id = ctx.run_id().as_str().to_string();
+        let fut = self.middleware.run_wrapped_tool(ctx, state, call, &base);
+        // TinyTools distinguishes a fatal execution `Err` from a
+        // recoverable `ToolResult::error`; no harness error-policy facade
+        // rewrites that canonical distinction.
+        let guarded = futures::FutureExt::map(fut, |result| {
+            result.map(|wrapped| wrapped.into_result_with_control())
+        });
+        let outcome = Self::with_call_budget(
+            run_budget,
+            &run_id,
+            "tool call",
+            super::model_call::RUN_BOUND_LABEL,
+            guarded,
+        )
+        .await;
+        let (result, wrap_control) = match outcome {
+            Ok(pair) => pair,
+            Err(err) => {
+                if let Some(request) = execution_deferral(&prepared.call, err.clone_deferral()) {
+                    self.defer_started_tool_call(ctx, status, &prepared, request, deferred);
+                    return Ok(());
+                }
+                self.fail_tool_call(
+                    ctx,
+                    status,
+                    &prepared.call_id,
+                    &prepared.tool_name,
+                    prepared.started_at_ms,
+                    &err,
+                );
+                return Err(err);
+            }
+        };
+        // A `ToolMiddleware::wrap_tool` that short-circuited with
+        // `MiddlewareToolOutcome::Command` carries no real result; queue
+        // its control the same way `run_wrapped_model`'s call site does
+        // (see the comment there).
+        if let Some(control) = wrap_control {
+            ctx.request_control(control);
+        }
+
+        self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
+            .await
+    }
+
+    /// Records a call deferred at admission (A2): emits `ToolDeferred` and
+    /// files the request under the right [`DeferredToolRequests`] list. The
+    /// admission slot was already released by `admit_tool_call`; the call is
+    /// re-admitted (and re-counted) if it is later approved.
+    fn defer_tool_call(
+        &self,
+        ctx: &RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        request: DeferredRequest,
+        deferred: &mut DeferredToolRequests,
+    ) {
+        let call_id = CallId::new(request.call.id.clone());
+        tracing::debug!(
+            "[agent_loop::tools] deferring call `{}` for `{}` ({})",
+            request.call.id,
+            request.call.name,
+            request.reason
+        );
+        let record = ctx.emit(AgentEvent::ToolDeferred {
+            call_id: call_id.clone(),
+            reason: request.reason.to_string(),
+        });
+        status.set_last_event(record.id);
+        if let Some(metadata) = request.metadata {
+            deferred.metadata.insert(call_id, metadata);
+        }
+        match request.kind {
+            DeferredKind::Approval => deferred.approvals.push(request.call),
+            DeferredKind::External => deferred.calls.push(request.call),
+        }
+    }
+
+    /// Terminal partner of [`AgentEvent::ToolStarted`] for a call the *tool
+    /// itself* deferred mid-execution by raising `ApprovalRequired` /
+    /// `CallDeferred`: closes the in-flight entry, releases the tool-call
+    /// slot (the call never produced a result), and files the request.
+    fn defer_started_tool_call(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        prepared: &PreparedToolCall,
+        request: DeferredRequest,
+        deferred: &mut DeferredToolRequests,
+    ) {
+        release_active_tool_call(status, &prepared.call_id);
+        ctx.limits.rollback_tool_calls(1);
+        self.defer_tool_call(ctx, status, request, deferred);
     }
 
     /// Answers a call that no tool ran — unknown tool, schema-invalid
@@ -1154,7 +1342,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
-    ) -> Result<()> {
+    ) -> Result<DeferredToolRequests> {
+        let mut deferred = DeferredToolRequests::default();
         // Phase 1 — admission, serial, in call order. Nothing is announced and
         // nothing is queued here: an admission failure at call *k* must not
         // leave calls `0..k` with a `ToolStarted` they will never answer, nor
@@ -1171,6 +1360,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }),
                 ResolvedToolCall::Answered(result) => {
                     admitted.push(AdmittedCall::Recovered { call, result })
+                }
+                ResolvedToolCall::Deferred(request) => {
+                    admitted.push(AdmittedCall::Deferred(request))
                 }
             }
         }
@@ -1192,6 +1384,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 } => (dispatch, tool, call),
                 AdmittedCall::Recovered { call, result } => {
                     slots.push(ToolSlot::Recovered { call, result });
+                    continue;
+                }
+                AdmittedCall::Deferred(request) => {
+                    slots.push(ToolSlot::Deferred(request));
                     continue;
                 }
             };
@@ -1262,6 +1458,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                 }
+                ToolSlot::Deferred(request) => {
+                    self.defer_tool_call(ctx, status, request, &mut deferred);
+                }
                 ToolSlot::Execute => {
                     let (prepared, result) = executed
                         .next()
@@ -1269,6 +1468,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let result = match result {
                         Ok(result) => result,
                         Err(err) => {
+                            if let Some(request) =
+                                execution_deferral(&prepared.call, err.clone_deferral())
+                            {
+                                self.defer_started_tool_call(
+                                    ctx,
+                                    status,
+                                    &prepared,
+                                    request,
+                                    &mut deferred,
+                                );
+                                continue;
+                            }
                             self.fail_tool_call(
                                 ctx,
                                 status,
@@ -1308,7 +1519,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             }
         }
-        Ok(())
+        Ok(deferred)
+    }
+}
+
+/// Turns an execution-time `ApprovalRequired`/`CallDeferred` (raised by the
+/// tool through `Err`, and passed through [`execute_tool_recovering_model_retry`]
+/// untouched) into the request the loop hands back, or `None` for any other
+/// error.
+fn execution_deferral(call: &ToolCall, deferral: Option<TinyAgentsError>) -> Option<DeferredRequest> {
+    match deferral? {
+        TinyAgentsError::ApprovalRequired { metadata } => Some(DeferredRequest::approval(
+            call.clone(),
+            "approval_required",
+            Some(metadata),
+        )),
+        TinyAgentsError::CallDeferred { metadata } => Some(DeferredRequest::external(
+            call.clone(),
+            "call_deferred",
+            Some(metadata),
+        )),
+        _ => None,
     }
 }
 
@@ -1465,6 +1696,11 @@ where
         Err(error) => match error.downcast::<TinyAgentsError>() {
             Ok(TinyAgentsError::ModelRetry(message)) => Ok(tinytools::ToolResult::retry(message)),
             Ok(TinyAgentsError::ToolFailed(message)) => Ok(tinytools::ToolResult::failed(message)),
+            // A2: a deferral is a typed signal for the loop, not a failure to
+            // redact. The metadata is host-only (never model-visible), so it
+            // is safe to carry through the wrap onion to the fold.
+            Ok(deferral @ (TinyAgentsError::ApprovalRequired { .. }
+            | TinyAgentsError::CallDeferred { .. })) => Err(deferral),
             Ok(other) => Err(map_tool_dispatch_error(anyhow::Error::from(other))),
             Err(error) => Err(map_tool_dispatch_error(error)),
         },
