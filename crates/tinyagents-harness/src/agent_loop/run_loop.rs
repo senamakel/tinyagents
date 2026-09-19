@@ -854,39 +854,105 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let structured_tool_hit = !structured_hits.is_empty();
 
             if structured_tool_hit && !real_tool_calls.is_empty() {
-                // Record the structured payload the model already produced,
-                // then run the real tools it asked for in the same turn and let
-                // the loop continue; the model finishes on a later turn.
-                if let Some((strategy, name, schema)) = &structured_plan {
-                    let extractor =
-                        StructuredExtractor::new(*strategy, name.clone(), schema.clone());
-                    match extractor.extract(&response) {
-                        Ok(output) => run.structured = Some(output.value),
-                        Err(error) => tracing::debug!(
-                            target: "tinyagents::agent_loop",
-                            run_id = %ctx.run_id(),
-                            %error,
-                            "[agent_loop] structured extraction failed on a mixed turn; \
-                             continuing with the real tool calls"
-                        ),
-                    }
-                }
+                // A6: one turn asked to both answer (the structured-output
+                // schema call) and run further tools. `RunPolicy::end_strategy`
+                // decides what happens to the two, replacing the old
+                // ad-hoc "record and keep going" behavior with three named,
+                // documented outcomes (`EndStrategy`).
                 let record = ctx.emit(AgentEvent::ControlApplied {
                     control: "structured_with_tool_calls".to_string(),
                     detail: format!(
-                        "structured output recorded alongside {} real tool call(s); \
-                         the run continues",
+                        "{:?} end_strategy handling {} real tool call(s) alongside a \
+                         structured-output call",
+                        self.policy.end_strategy,
                         real_tool_calls.len()
                     ),
                 });
                 status.set_last_event(record.id);
 
-                // Every requested `tool_call_id` must be answered or the
-                // transcript is malformed for the next provider call.
+                if matches!(self.policy.end_strategy, EndStrategy::Early) {
+                    // Finish immediately: the structured answer wins outright,
+                    // and the accompanying tool calls never run. Every
+                    // requested `tool_call_id` — structured hits and the
+                    // skipped real calls alike — still needs an answer or the
+                    // transcript is malformed for a future replay.
+                    if let Some((strategy, name, schema)) = &structured_plan {
+                        let extractor = self.build_structured_extractor(strategy, name, schema);
+                        match extractor.extract(&response) {
+                            Ok(output) => {
+                                run.structured = Some(output.value);
+                                run.structured_variant = output.variant;
+                            }
+                            Err(error) => tracing::debug!(
+                                target: "tinyagents::agent_loop",
+                                run_id = %ctx.run_id(),
+                                %error,
+                                "[agent_loop] structured extraction failed on a mixed turn \
+                                 under EndStrategy::Early"
+                            ),
+                        }
+                    }
+                    for call in &structured_hits {
+                        messages.push(Message::tool(call.id.clone(), "Structured output recorded."));
+                    }
+                    for call in &real_tool_calls {
+                        messages.push(Message::tool(
+                            call.id.clone(),
+                            "run stopped before this tool call was executed \
+                             (EndStrategy::Early: the structured answer ends the run first)",
+                        ));
+                    }
+                    run.final_response = Some(response);
+                    return Ok(LoopExit::Finished);
+                }
+
+                if matches!(self.policy.end_strategy, EndStrategy::Graceful) {
+                    // Record the answer now (it will not be asked for again),
+                    // but let the requested tools actually run before ending
+                    // the run — their side effects and results are not
+                    // silently dropped, unlike `Early`.
+                    if let Some((strategy, name, schema)) = &structured_plan {
+                        let extractor = self.build_structured_extractor(strategy, name, schema);
+                        match extractor.extract(&response) {
+                            Ok(output) => {
+                                run.structured = Some(output.value);
+                                run.structured_variant = output.variant;
+                            }
+                            Err(error) => tracing::debug!(
+                                target: "tinyagents::agent_loop",
+                                run_id = %ctx.run_id(),
+                                %error,
+                                "[agent_loop] structured extraction failed on a mixed turn \
+                                 under EndStrategy::Graceful"
+                            ),
+                        }
+                    }
+                    for call in &structured_hits {
+                        messages.push(Message::tool(call.id.clone(), "Structured output recorded."));
+                    }
+                    status.mark_running(HarnessPhase::Tools);
+                    self.execute_tools(state, ctx, run, status, messages, real_tool_calls)
+                        .await?;
+                    if let ControlEffect::Exit(exit) =
+                        self.apply_pending_control(ctx, run, status, messages)?
+                    {
+                        return Ok(exit);
+                    }
+                    run.final_response = Some(response);
+                    return Ok(LoopExit::Finished);
+                }
+
+                // `EndStrategy::Exhaustive`: the output tool this turn is
+                // ignored outright (never recorded) — the run keeps going
+                // exactly as if only the real tool calls had been requested.
+                // It only finishes once a later turn's output-tool call has
+                // no accompanying function-tool calls.
+                debug_assert!(matches!(self.policy.end_strategy, EndStrategy::Exhaustive));
                 for call in &structured_hits {
                     messages.push(Message::tool(
                         call.id.clone(),
-                        "Structured output recorded. Continue with the remaining tool calls.",
+                        "Structured output noted but not final yet; finish the remaining tool \
+                         calls first (EndStrategy::Exhaustive).",
                     ));
                 }
 
