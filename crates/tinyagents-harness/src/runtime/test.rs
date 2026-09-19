@@ -106,6 +106,41 @@ struct RecordingBudget {
     records: Mutex<Vec<Usage>>,
 }
 
+/// A permissive budget that records every `estimate.estimated_input_tokens`
+/// it is asked to admit, so a test can assert the preflight estimate saw the
+/// request the provider actually receives — not a smaller one taken before a
+/// later rewrite grew it.
+struct EstimateRecordingBudget {
+    estimates: Mutex<Vec<u64>>,
+}
+
+impl EstimateRecordingBudget {
+    fn new() -> Self {
+        Self {
+            estimates: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl BudgetGate for EstimateRecordingBudget {
+    async fn acquire(&self, estimate: &CallEstimate) -> crate::error::Result<Permit> {
+        self.estimates
+            .lock()
+            .expect("estimate budget lock")
+            .push(estimate.estimated_input_tokens);
+        Ok(Permit::unlimited())
+    }
+
+    async fn record(&self, _usage: &Usage) -> crate::error::Result<()> {
+        Ok(())
+    }
+
+    fn compression_hint(&self, _state: &ContextState) -> CompressionHint {
+        CompressionHint::None
+    }
+}
+
 /// Per-invocation trace used by the overlap test below.  Each adapter writes
 /// both its capability name and the identity-bearing value it received, so a
 /// capability bundle accidentally borrowed from the other root is observable
