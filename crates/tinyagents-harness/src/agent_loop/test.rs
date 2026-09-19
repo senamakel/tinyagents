@@ -2023,6 +2023,45 @@ async fn pformat_dialect_recovers_the_structured_output_fallback_tool() {
 }
 
 #[tokio::test]
+async fn native_tool_dispatcher_requires_tool_calling_capability() {
+    // `ToolDispatcher::Native` is documented as *forcing* provider-native
+    // tool calls, unlike `Auto`'s "native when available, else Xml". Without
+    // a capability requirement that promise was unenforceable at
+    // resolution: a model whose profile cannot do native tool calling could
+    // still be selected as the (only, default) model and silently receive
+    // whatever fallback its own adapter chooses, rather than the run
+    // failing closed the way the `Native` name implies.
+    let incapable = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        text: "should never be reached",
+        attempts: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", incapable.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::new("lookup", "tool-output")))
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Native,
+            ..RunPolicy::default()
+        });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("no model satisfies the forced-native capability requirement");
+    assert!(matches!(err, TinyAgentsError::ModelNotFound(_)), "got {err:?}");
+    assert_eq!(
+        *incapable.attempts.lock().unwrap(),
+        0,
+        "the capability-ineligible model must never be invoked"
+    );
+}
+
+#[tokio::test]
 async fn no_model_registered_errors() {
     let harness: AgentHarness<()> = AgentHarness::new();
     let err = harness
