@@ -10,8 +10,8 @@ surface; this spec captures the design contract.
 
 ## Model
 
-- `TaskBoardCard { id, title, status, objective, plan, assigned_agent,
-  allowed_tools, approval_mode, acceptance_criteria, evidence, notes, blocker,
+- `TaskBoardCard { id, title, status, objective, plan, allowed_tools,
+  approval_mode, acceptance_criteria, evidence, notes, blocker,
   session_thread_id, source_metadata, order, updated_at }`.
 - `TaskCardStatus`: `Todo`, `AwaitingApproval`, `Ready`, `InProgress`,
   `Blocked`, `Done`, `Rejected`. `TaskApprovalMode`: `Required`, `NotRequired`.
@@ -69,7 +69,7 @@ staleness policy itself is the pure, clock-injected `staleness_reason`. See
 [`crates/tinyagents-graph/src/todos/runs/README.md`](../../../crates/tinyagents-graph/src/todos/runs/README.md).
 
 `graph::todos::dispatch` is the scheduling policy: `pick_next_card` (urgency,
-then board order, optionally agent-assigned only), `requires_plan_approval`
+then board order), `requires_plan_approval`
 (the card's own mode outranks the global gate), `PollCadence` (idle backoff),
 `build_task_prompt` / `build_progress_instruction`, and `ActiveRunRegistry`
 (in-flight runs with race-free removal, so a terminal write-back happens once).
