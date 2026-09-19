@@ -535,6 +535,22 @@ where
             _ => futures::future::join_all(futures).await,
         };
 
+        // Cache-miss branches (not the already-replayed hits above) store
+        // their result now that every branch has settled.
+        for (index, activation) in active.iter().enumerate() {
+            if cache_hits[index] {
+                continue;
+            }
+            self.try_cache_put(
+                &activation.node,
+                state,
+                activation.send_arg.as_ref(),
+                &results[index],
+                step,
+            )
+            .await;
+        }
+
         let results = active.iter().cloned().zip(results).collect::<Vec<_>>();
         Ok(StepOutcome { results })
     }
