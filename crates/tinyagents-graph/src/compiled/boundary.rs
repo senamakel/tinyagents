@@ -532,6 +532,29 @@ where
         }
     }
 
+    /// Builds the `completed_tasks` activation list for a failure/interrupt
+    /// boundary checkpoint: this step's own completed branches
+    /// (`sb.completed`), prefixed by any node ids already carried forward
+    /// from an earlier interrupt/failure of this *same* logical step
+    /// (`ctx.carried_completed` — set once, at resume, from the loaded
+    /// checkpoint's `completed_tasks`, and left untouched here; only
+    /// [`Self::advance`] consumes it, once the step finally finishes
+    /// routing). This is what lets a step interrupt or fail more than once
+    /// across repeated resumes without losing track of which of its
+    /// branches have already completed.
+    fn merged_completed_tasks(
+        &self,
+        ctx: &RunCtx<'_, State, Update>,
+        completed: &[(usize, Activation)],
+    ) -> Vec<Activation> {
+        let mut tasks: Vec<Activation> = match &ctx.carried_completed {
+            Some(carried) => carried.iter().cloned().map(Activation::node).collect(),
+            None => Vec::new(),
+        };
+        tasks.extend(completed.iter().map(|(_, a)| a.clone()));
+        tasks
+    }
+
     /// Records completion markers for the tasks that finished in the step a
     /// boundary checkpoint closes.
     ///
