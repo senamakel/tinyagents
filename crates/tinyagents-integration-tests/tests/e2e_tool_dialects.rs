@@ -733,3 +733,30 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
          mixed turn reset the counter rather than leaving it spent"
     );
 }
+
+#[tokio::test]
+async fn probe_terminal_only_stream_with_no_preceding_deltas_still_recovers_the_call() {
+    let text = "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>";
+    let items = vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::Completed(ModelResponse::assistant(text)),
+    ];
+    let model = Arc::new(StreamingMock::new(items));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model, &listener);
+    harness.with_policy(RunPolicy {
+        limits: tinyagents_harness::limits::RunLimits {
+            max_model_calls: 1,
+            behavior: tinyagents_harness::limits::LimitBehavior::StopWithPartial,
+            ..tinyagents_harness::limits::RunLimits::default()
+        },
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run stops cleanly");
+
+    eprintln!("PROBE tool_calls={} messages={:?}", run.tool_calls, run.messages);
+}
