@@ -104,8 +104,12 @@ optional `SchemaCompaction`:
   drop `anyOf`/`oneOf`/`allOf`. Every rung keeps the top-level argument surface.
 
 `SchemaCompaction::THIRD_PARTY` (5,000 B / 1,000 B) is Codex's budget for MCP
-tools. Admission still validates arguments against the *declared* schema, which
-is never looser than the projected one.
+tools. Admission always validates arguments against the canonical *declared*
+schema, never the projected wire schema — the two can diverge in either
+direction: compaction only ever removes constraints from what is advertised
+(looser on the wire), while `SchemaPreparation::strict` can *add* constraints
+(`required` forced, `additionalProperties: false`), making the projected
+schema stricter than what admission actually enforces.
 
 ## Budgets that count schemas
 
