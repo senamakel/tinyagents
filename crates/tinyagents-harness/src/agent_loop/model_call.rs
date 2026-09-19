@@ -1117,8 +1117,78 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             accumulator.push(&item);
         }
 
-        Ok(accumulator.finish()?)
+        let mut response = accumulator.finish()?;
+        split_thinking_tags(&mut response, model.profile());
+        Ok(response)
     }
+}
+
+/// Splits a model's inline `<open>...</close>`-tagged reasoning span out of a
+/// `Text` content block into a dedicated [`ContentBlock::Thinking`] block,
+/// for a model whose [`ModelProfile::thinking_tags`] declares the tag pair it
+/// emits inline instead of on a distinct reasoning channel.
+///
+/// A no-op when the profile declares no tag pair, or the response carries no
+/// text block containing both tags. Only the first tagged span in each text
+/// block is extracted — every provider that uses this convention emits at
+/// most one reasoning span ahead of the visible answer — and any text before
+/// or after the span is preserved as ordinary `Text` blocks in the same
+/// position.
+///
+/// [`ContentBlock::Thinking`]: tinyinference_llm::message::ContentBlock::Thinking
+/// [`ModelProfile::thinking_tags`]: tinyinference_llm::model::ModelProfile::thinking_tags
+fn split_thinking_tags(
+    response: &mut tinyinference_llm::model::ModelResponse,
+    profile: Option<&tinyinference_llm::model::ModelProfile>,
+) {
+    let Some((open, close)) = profile.and_then(|p| p.thinking_tags.as_ref()) else {
+        return;
+    };
+    if open.is_empty() || close.is_empty() {
+        return;
+    }
+
+    let mut rebuilt = Vec::with_capacity(response.message.content.len());
+    for block in response.message.content.drain(..) {
+        match block {
+            tinyinference_llm::message::ContentBlock::Text(text) => match split_one(
+                &text, open, close,
+            ) {
+                Some((before, thinking, after)) => {
+                    if !before.is_empty() {
+                        rebuilt.push(tinyinference_llm::message::ContentBlock::Text(before));
+                    }
+                    if !thinking.is_empty() {
+                        rebuilt.push(tinyinference_llm::message::ContentBlock::Thinking {
+                            text: thinking,
+                            signature: None,
+                        });
+                    }
+                    if !after.is_empty() {
+                        rebuilt.push(tinyinference_llm::message::ContentBlock::Text(after));
+                    }
+                }
+                None => rebuilt.push(tinyinference_llm::message::ContentBlock::Text(text)),
+            },
+            other => rebuilt.push(other),
+        }
+    }
+    response.message.content = rebuilt;
+}
+
+/// Splits `text` on the first `open`/`close` tag pair, returning
+/// `(before, inside, after)` with the tags themselves removed and each
+/// segment trimmed of the whitespace/newlines the tags typically pad. `None`
+/// when the text does not contain a complete `open`...`close` span.
+fn split_one(text: &str, open: &str, close: &str) -> Option<(String, String, String)> {
+    let open_idx = text.find(open)?;
+    let after_open = open_idx + open.len();
+    let close_rel = text[after_open..].find(close)?;
+    let close_idx = after_open + close_rel;
+    let before = text[..open_idx].trim().to_string();
+    let inside = text[after_open..close_idx].trim().to_string();
+    let after = text[close_idx + close.len()..].trim().to_string();
+    Some((before, inside, after))
 }
 /// The innermost model call wrapped by the model-wrap onion.
 ///
