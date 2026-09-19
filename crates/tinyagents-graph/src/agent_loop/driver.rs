@@ -82,6 +82,17 @@ where
         let mut current: &str = node::PLAN;
 
         let outcome = loop {
+            // Keeps `run.messages` a running snapshot of the transcript as
+            // of the start of each node call, so a node that errors or
+            // interrupts mid-call (and so never hands `loop_state` back)
+            // still leaves `run.messages` close to current — mirroring
+            // `run_loop`'s "transcript survives every exit path" guarantee
+            // as closely as this driver's by-value node contract allows.
+            // The one gap: mutations a node makes to its *own* copy of
+            // `loop_state.messages` before erroring/interrupting (for
+            // example `plan_node`'s steering-injected message on a pause)
+            // are not reflected until that node returns successfully.
+            run.messages = loop_state.messages.clone();
             let result = match current {
                 node::PLAN => runtime::plan_node(harness, ctx, loop_state).await,
                 node::MODEL => runtime::model_node(harness, state, ctx, run, status, loop_state).await,
