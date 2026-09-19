@@ -1,4 +1,12 @@
 //! Compiled graph and execution-result types.
+//!
+//! [`CompiledGraph`] is the frozen, runnable output of
+//! [`GraphBuilder::compile`](crate::builder::GraphBuilder::compile); its
+//! behavior (the superstep loop, routing, state-inspection API) lives in the
+//! sibling `executor.rs`, `routing.rs`, and `state_api.rs` files, which all
+//! `impl` against the type defined here. [`GraphExecution`] and
+//! [`StateSnapshot`] are the two result shapes those entry points return —
+//! a finished/paused run and a point-in-time checkpoint view, respectively.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
