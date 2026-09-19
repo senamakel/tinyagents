@@ -333,16 +333,27 @@ pub fn reduce_frames(frames: &[AssistantFrame]) -> PartialAssistantMessage {
                 _ => {}
             },
             AssistantFrame::ToolArgsCheckpoint { index, json_so_far } => {
-                if let Some(OpenBlock::ToolCall {
-                    json_so_far: current,
-                    ..
-                }) = open.get_mut(index)
-                {
-                    // A checkpoint is a full snapshot, not a delta: it
-                    // replaces whatever was accumulated so far, so a reader
-                    // that only has frames from this checkpoint onward still
-                    // reduces to the correct partial string.
-                    current.clone_from(json_so_far);
+                // A checkpoint is a full snapshot, not a delta: it replaces
+                // whatever was accumulated so far. A reader that only has
+                // frames from this checkpoint onward (its matching
+                // `BlockStart` was pruned from the journal) still needs a
+                // consistent partial, so a missing entry is created here
+                // rather than the checkpoint being silently dropped.
+                match open.get_mut(index) {
+                    Some(OpenBlock::ToolCall {
+                        json_so_far: current,
+                        ..
+                    }) => current.clone_from(json_so_far),
+                    _ => {
+                        open.insert(
+                            *index,
+                            OpenBlock::ToolCall {
+                                id: None,
+                                name: None,
+                                json_so_far: json_so_far.clone(),
+                            },
+                        );
+                    }
                 }
             }
             AssistantFrame::BlockEnd { index, block } => {
