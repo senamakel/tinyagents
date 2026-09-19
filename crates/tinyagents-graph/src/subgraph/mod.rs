@@ -227,26 +227,24 @@ where
     S: Clone + Send + Sync + 'static,
     U: Send + 'static,
 {
-    if let Some(thread_id) = &thread_id {
-        if let Some(continuation) =
-            child_continuation(&child, thread_id, resume.as_ref()).await?
-        {
-            let thread_id = thread_id.clone();
-            return match (continuation, binding) {
-                (ChildContinuation::Retry, Some(binding)) => {
-                    child.retry_with_agent_binding(thread_id, binding).await
-                }
-                (ChildContinuation::Retry, None) => child.retry(thread_id).await,
-                (ChildContinuation::Resume(value), Some(binding)) => {
-                    child
-                        .resume_with_agent_binding(thread_id, Command::resume(value), binding)
-                        .await
-                }
-                (ChildContinuation::Resume(value), None) => {
-                    child.resume(thread_id, Command::resume(value)).await
-                }
-            };
-        }
+    if let Some(thread_id) = &thread_id
+        && let Some(continuation) = child_continuation(&child, thread_id, resume.as_ref()).await?
+    {
+        let thread_id = thread_id.clone();
+        return match (continuation, binding) {
+            (ChildContinuation::Retry, Some(binding)) => {
+                child.retry_with_agent_binding(thread_id, binding).await
+            }
+            (ChildContinuation::Retry, None) => child.retry(thread_id).await,
+            (ChildContinuation::Resume(value), Some(binding)) => {
+                child
+                    .resume_with_agent_binding(thread_id, Command::resume(value), binding)
+                    .await
+            }
+            (ChildContinuation::Resume(value), None) => {
+                child.resume(thread_id, Command::resume(value)).await
+            }
+        };
     }
     match (thread_id, resume, binding) {
         (Some(thread_id), None, Some(binding)) => {
