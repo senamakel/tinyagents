@@ -3,6 +3,7 @@
 //! Consolidated here per AGENTS.md: one `test.rs` per module directory.
 
 use super::ops::*;
+use super::tool_effects::*;
 use super::types::*;
 use chrono::Utc;
 use serde_json::json;
