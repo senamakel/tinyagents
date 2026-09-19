@@ -396,8 +396,11 @@ where
                 let result = self
                     .run_node_with_retry(node_id, &node.handler, state, node_ctx, step, &policy)
                     .await;
-                self.try_cache_put(node_id, state, send_arg.as_ref(), &result, step)
-                    .await;
+                if let Some((key, value, ttl)) =
+                    self.prepare_cache_put(node_id, state, send_arg.as_ref(), &result)
+                {
+                    self.store_cache_entry(key, value, ttl, node_id, step).await;
+                }
                 result
             };
             let stop = matches!(result, Err(_) | Ok(NodeResult::Interrupt(_)));
