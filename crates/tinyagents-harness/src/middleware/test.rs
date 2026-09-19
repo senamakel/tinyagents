@@ -265,7 +265,7 @@ async fn failing_hook_emits_middleware_failed() {
         failed,
         vec![AgentEvent::MiddlewareFailed {
             name: "failing".to_string(),
-            error: failed[0].to_owned_error_or_panic(),
+            error: TinyAgentsError::Middleware("boom".to_string()).to_string(),
         }],
     );
 }
