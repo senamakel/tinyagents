@@ -68,7 +68,15 @@ fn eviction_is_fifo_and_bounded() {
 #[test]
 fn a_small_result_passes_through_untouched_and_is_not_cached() {
     let c = cache();
-    let out = apply_handoff(&c, &HandoffConfig::default(), "search", "task-1", "agent-1", "small".to_string(), 10);
+    let out = apply_handoff(
+        &c,
+        &HandoffConfig::default(),
+        "search",
+        "task-1",
+        "agent-1",
+        "small".to_string(),
+        10,
+    );
     assert_eq!(out, "small");
     assert!(
         c.get("res_1").is_none(),
@@ -80,7 +88,15 @@ fn a_small_result_passes_through_untouched_and_is_not_cached() {
 fn an_oversized_result_is_stashed_and_replaced_by_a_placeholder() {
     let c = cache();
     let raw = big(4_000); // ~1000 tokens at the 4-chars/token heuristic
-    let out = apply_handoff(&c, &HandoffConfig::default(), "gmail_list", "task-1", "agent-1", raw.clone(), 10);
+    let out = apply_handoff(
+        &c,
+        &HandoffConfig::default(),
+        "gmail_list",
+        "task-1",
+        "agent-1",
+        raw.clone(),
+        10,
+    );
 
     assert_ne!(out, raw, "the raw payload must not reach history");
     assert!(out.contains("oversized tool output"));
@@ -105,8 +121,24 @@ fn the_threshold_is_honoured_in_both_directions() {
     // Same payload, two thresholds: this is the parameter that replaced the
     // env-var backdoor, so it has to actually decide the outcome.
     let raw = big(400); // ~100 tokens
-    let below = apply_handoff(&cache(), &HandoffConfig::default(), "t", "task", "agent", raw.clone(), 10);
-    let above = apply_handoff(&cache(), &HandoffConfig::default(), "t", "task", "agent", raw.clone(), 10_000);
+    let below = apply_handoff(
+        &cache(),
+        &HandoffConfig::default(),
+        "t",
+        "task",
+        "agent",
+        raw.clone(),
+        10,
+    );
+    let above = apply_handoff(
+        &cache(),
+        &HandoffConfig::default(),
+        "t",
+        "task",
+        "agent",
+        raw.clone(),
+        10_000,
+    );
     assert!(below.contains("oversized tool output"));
     assert_eq!(above, raw);
 }
@@ -117,7 +149,15 @@ fn an_error_result_passes_through_however_large() {
     // behind an extraction call would hide the failure it needs to react to.
     let c = cache();
     let err = format!("Error: {}", big(8_000));
-    let out = apply_handoff(&c, &HandoffConfig::default(), "gmail_list", "task", "agent", err.clone(), 1);
+    let out = apply_handoff(
+        &c,
+        &HandoffConfig::default(),
+        "gmail_list",
+        "task",
+        "agent",
+        err.clone(),
+        1,
+    );
     assert_eq!(out, err);
 }
 
@@ -183,7 +223,15 @@ fn an_extraction_result_is_never_re_stashed() {
     // model another placeholder — a loop that never converges.
     let c = cache();
     let raw = big(8_000);
-    let out = apply_handoff(&c, &HandoffConfig::default(), "extract_from_result", "task", "agent", raw.clone(), 1);
+    let out = apply_handoff(
+        &c,
+        &HandoffConfig::default(),
+        "extract_from_result",
+        "task",
+        "agent",
+        raw.clone(),
+        1,
+    );
     assert_eq!(out, raw);
 }
 
