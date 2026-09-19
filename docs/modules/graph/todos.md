@@ -69,7 +69,7 @@ staleness policy itself is the pure, clock-injected `staleness_reason`. See
 [`crates/tinyagents-graph/src/todos/runs/README.md`](../../../crates/tinyagents-graph/src/todos/runs/README.md).
 
 `graph::todos::dispatch` is the scheduling policy: `pick_next_card` (urgency,
-then board order, optionally agent-assigned only), `requires_plan_approval`
+then board order), `requires_plan_approval`
 (the card's own mode outranks the global gate), `PollCadence` (idle backoff),
 `build_task_prompt` / `build_progress_instruction`, and `ActiveRunRegistry`
 (in-flight runs with race-free removal, so a terminal write-back happens once).
