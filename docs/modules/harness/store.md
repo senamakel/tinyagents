@@ -256,6 +256,28 @@ Minimum indexes:
 - S3-compatible blob store for artifacts.
 - Vector store adapter for retrieval memory.
 
+## Conformance
+
+`tinyagents_harness::store::conformance` gives every backend of `Store` and
+`NamespacedStore` a shared contract test:
+
+- `run_store_conformance(&store)` — the flat `Store` trait: put/get
+  (including overwrite), delete (including deleting an absent key, which
+  must not error), list, and namespace isolation.
+- `run_namespaced_store_conformance(&store)` — the hierarchical
+  `NamespacedStore` trait: the same, plus namespace-prefix/field-filtered
+  `search`, `list_namespaces`, TTL expiry enforced on read, and `batch`'s
+  positional-alignment guarantee.
+
+Both are run against every in-tree backend in
+`crates/tinyagents-integration-tests/tests/store_conformance.rs`
+(`InMemoryStore`, `FileStore`, `InMemoryNamespacedStore`). There is no
+in-tree SQLite-backed `Store`/`NamespacedStore` yet — only the sqlite-feature
+`ResponseCache` in the cache module — so a future SQLite store backend can be
+added to that same file without writing new assertions. A downstream crate
+implementing either trait certifies its backend by calling the matching
+function from its own `#[tokio::test]`.
+
 ## Store Events
 
 Store operations that affect harness-visible state should emit events:
