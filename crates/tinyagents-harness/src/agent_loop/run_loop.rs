@@ -211,12 +211,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // tool-call strategy the schema is sent as an extra `function` entry,
         // so a collision puts two identically-named functions in one request
         // — which OpenAI rejects outright — and makes "was this the schema or
-        // the real tool?" unanswerable for every returned call. Checking
-        // against `tool_schemas` (the fully assembled set, direct plus
-        // bridge) rather than only `self.tools.names()` is required: a
-        // response format named `tool_search`/`tool_call` collides with the
-        // *intrinsic* bridge schema too, which has no registry entry to be
-        // found by a registered-names-only check.
+        // the real tool?" unanswerable for every returned call. Two checks,
+        // because neither alone covers every name that ends up on the wire:
+        // `self.tools.names()` covers every registered tool (Direct, Deferred,
+        // Hidden), but not the intrinsic `tool_search`/`tool_call` bridge,
+        // which has no registry entry; `tool_schemas` covers the bridge (and
+        // the Direct set) but never contains a Deferred tool's own name.
         if let Some(name) = self
             .policy
             .default_response_format
@@ -227,7 +227,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 _ => None,
             })
-            && tool_schemas.iter().any(|schema| &schema.name == name)
+            && (self.tools.names().iter().any(|registered| registered == name)
+                || tool_schemas.iter().any(|schema| &schema.name == name))
         {
             return Err(TinyAgentsError::Validation(format!(
                 "structured-output schema name `{name}` collides with a registered tool (or the \
