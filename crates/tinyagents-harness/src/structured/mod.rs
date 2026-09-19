@@ -29,11 +29,11 @@
 //! Extraction is not a bare `serde_json::from_str` any more. Three things
 //! happen around it, each in its own submodule:
 //!
-//! * [`repair`] climbs a conservative ladder — code fence, prose slice,
+//! * `repair` climbs a conservative ladder — code fence, prose slice,
 //!   relaxed JSON, truncation close — so a fenced, chatty, or cut-off answer is
 //!   recovered instead of ending a run. It never invents structure: a rung is
 //!   accepted only when the repaired text parses strictly.
-//! * [`validate`] checks the parsed value against the declared schema, so
+//! * `validate` checks the parsed value against the declared schema, so
 //!   `{"wrong_key": 1}` against a `score` schema is a reported error naming the
 //!   failing instance path — not a silent success.
 //! * [`StructuredExtractor::extract_outcome`] returns a [`StructuredOutcome`]
