@@ -25,7 +25,7 @@ default = []
 tracing = ["tinyagents-harness/tracing"]
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
