@@ -169,6 +169,21 @@ pub struct Checkpoint<State> {
     pub next_nodes: Vec<NodeId>,
     /// Nodes that completed in the step that produced this checkpoint.
     pub completed_tasks: Vec<NodeId>,
+    /// The explicit `Command::goto` routing each entry of
+    /// [`completed_tasks`](Self::completed_tasks) returned, positionally
+    /// aligned with it (index `i` here is `completed_tasks[i]`'s routing).
+    ///
+    /// A carried-forward completed sibling's routing is otherwise re-resolved
+    /// via static/conditional edges only once its step finally routes (see
+    /// `compiled::boundary::advance`'s `carried_completed` handling) — this
+    /// is what lets an explicit `goto` survive that round trip. An empty
+    /// inner `Vec` means "no explicit goto; use static/conditional edges",
+    /// matching a node that never returned a `Command::goto`.
+    /// `#[serde(default)]` keeps checkpoints written before this field
+    /// existed loadable: they decode to an empty `Vec`, which the resume
+    /// path pads with empty routing (the pre-field behavior).
+    #[serde(default)]
+    pub completed_routes: Vec<Vec<RouteTarget>>,
     /// Per-task partial writes preserved when a step partially completes.
     pub pending_writes: Vec<PendingWrite>,
     /// Interrupts that paused the run at this boundary.
