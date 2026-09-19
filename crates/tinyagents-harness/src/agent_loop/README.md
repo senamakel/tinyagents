@@ -134,11 +134,12 @@ error surfaced by a model, tool, middleware, or structured-output extraction.
 | File | Role |
 | --- | --- |
 | `mod.rs` | Module wiring: shared imports and the module-level doc comment. |
-| `entry.rs` | Public entry points (`invoke`/`invoke_with_status`/`invoke_streaming*`) and the shared `drive` lifecycle wrapper. |
-| `run_loop.rs` | The core loop body (`run_loop`) and response-cache decision logic. |
+| `entry.rs` | Public entry points (`invoke`/`invoke_with_status`/`invoke_streaming*`/`invoke_collecting_partial`) and the shared `drive`/`drive_collecting` lifecycle wrapper. |
+| `run_loop.rs` | The core loop body (`run_loop`), response-cache decision logic, and host budget/prompt-cache helpers. |
 | `tools.rs` | Tool execution for one turn: serial admission, serial or concurrent execution, ordered fold. |
-| `model_call.rs` | Cache-aware retry/fallback model dispatch, the streaming variant, and the innermost `ModelBaseCall`/`ToolBaseCall` impls the middleware wrap-onion terminates into. |
-| `types.rs` | `AgentLoopResult`. |
+| `model_call.rs` | Cache-aware retry/fallback model dispatch, the streaming variant, host model resolution, and the innermost `ModelBaseCall`/`ToolBaseCall` impls the middleware wrap-onion terminates into. |
+| `stream.rs` | Caller-consumable streaming entry point (`invoke_stream`/`invoke_stream_in_context`) that projects the run's `EventSink` into an `AgentStreamItem` stream. |
+| `types.rs` | `AgentLoopResult`, `PartialRunOutcome`, and the private `LoopExit`. |
 | `test.rs` | Unit tests (limits, retry/fallback, tool execution, structured extraction). |
 
 ## Operational constraints
