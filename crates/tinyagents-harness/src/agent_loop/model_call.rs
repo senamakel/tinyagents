@@ -896,13 +896,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             {
                 let tail = scrubber.flush();
                 if !tail.is_empty() {
-                    streamed_text.push_str(&tail);
-                    saw_streamed_content = true;
+                    // The held-back remainder is ordinary text after all.
+                    // Route it through the same delta middleware pipeline as
+                    // every other streamed delta (below): a naive direct
+                    // emit skipped `run_on_model_delta` and host progress, so
+                    // redaction/policy/transformation middleware could not
+                    // inspect or suppress this tail and consumers saw it
+                    // behave differently from every other delta.
+                    let mut model_delta = ModelDelta {
+                        call_id: call_id.as_str().to_string(),
+                        content: tail,
+                        reasoning: String::new(),
+                        tool_call: None,
+                    };
+                    self.middleware
+                        .run_on_model_delta(ctx, state, &mut model_delta)
+                        .await?;
+                    saw_streamed_content |= !model_delta.content.is_empty();
+                    streamed_text.push_str(&model_delta.content);
                     ctx.emit(AgentEvent::ModelDelta {
                         run_id: ctx.config.run_id.clone(),
                         call_id: call_id.clone(),
-                        delta: MessageDelta::text(tail),
+                        delta: MessageDelta::text(model_delta.content.clone()),
                     });
+                    crate::runtime::emit_host_progress::<State, Ctx>(
+                        ctx,
+                        crate::host::ProgressEvent::Token {
+                            run: ctx.run_id().clone(),
+                            text: model_delta.content,
+                        },
+                    );
                     *deltas_emitted += 1;
                 }
             }
