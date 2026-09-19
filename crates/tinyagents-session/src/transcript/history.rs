@@ -40,7 +40,7 @@ use crate::transcript::{
 /// the previously-persisted logical set in memory on `Agent`
 /// (`persisted_transcript_messages`) precisely so it never has to re-read a
 /// growing file, and a disk re-read is not a faithful substitute — see
-/// [`FileTranscriptHistory::write_logical_set`].
+/// `FileTranscriptHistory::write_logical_set`.
 pub struct TranscriptTurn<'a> {
     /// Logical message set already persisted, for the extension-vs-compaction diff.
     pub prev: &'a [TranscriptMessage],
