@@ -139,6 +139,26 @@ impl ToolPolicyMiddleware {
     /// of why it is blocked. Used by both the exposure and execution hooks so a
     /// hidden tool cannot be executed by a divergent decision.
     fn evaluate(&self, name: &str) -> std::result::Result<(), String> {
+        // The intrinsic `tool_search`/`tool_call` discovery bridge is never a
+        // registered tool (see `crate::tool::discover`), so it never has a
+        // policy entry. Under `strict()` that would make `require_classification`
+        // reject it here and `before_model` strip both bridge schemas from
+        // every request, making every deferred tool undiscoverable in a
+        // fail-closed deployment. It is safe to exempt unconditionally: the
+        // bridge itself has no side effects (search only reads the run's
+        // catalogue), and a `tool_call` payload is unwrapped to the real tool
+        // name/arguments *before* `before_tool` runs, so the real call is
+        // still evaluated against its own policy at execution time. A host
+        // that registers its own tool under either name still wins (the
+        // bridge only fills a name nobody registered), and that registration
+        // is evaluated normally since it hits the `self.policies.get` lookup
+        // below like any other name.
+        if !self.policies.contains_key(name)
+            && (name == crate::tool::discover::TOOL_SEARCH_NAME
+                || name == crate::tool::discover::TOOL_CALL_NAME)
+        {
+            return Ok(());
+        }
         let Some(policy) = self.policies.get(name) else {
             if self.require_classification {
                 return Err(format!("tool `{name}` has no declared policy"));
