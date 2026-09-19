@@ -186,7 +186,10 @@ impl ResponseCache for SqliteResponseCache {
         ttl: Option<Duration>,
     ) -> Result<()> {
         let encoded = serde_json::to_string(&value).map_err(|e| sqlite_err("encode entry", e))?;
-        let expiry = ttl.map(|ttl| now_ms().saturating_add(ttl.as_millis() as i64));
+        let expiry = ttl.map(|ttl| {
+            let millis = i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
+            now_ms().saturating_add(millis)
+        });
         let conn = Arc::clone(&self.conn);
         let namespace = self.namespace.clone();
         let key = key.to_string();
