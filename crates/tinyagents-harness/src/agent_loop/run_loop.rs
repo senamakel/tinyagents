@@ -273,6 +273,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut boosted_max_tokens: Option<u32> = None;
         let mut truncation_base: Option<u32> = None;
 
+        // Output-validation retry state (see `RunPolicy::output_retry`, A3).
+        // Scoped to the whole run rather than reset per turn: `max_attempts`
+        // is a run-wide ceiling on re-asks, matching `retries.output` in
+        // Pydantic AI rather than a per-turn allowance.
+        let mut output_retry_attempts: u8 = 0;
+
         loop {
             // Safe cancellation checkpoint: if an orchestrator requested
             // cooperative cancellation, stop before doing any further work
