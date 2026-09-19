@@ -342,18 +342,23 @@ fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
     }
     messages
         .iter()
+        // `Message::Custom` is a host-side out-of-band record; never sent to
+        // the provider.
+        .filter(|message| !matches!(message, Message::Custom(_)))
         .map(|message| {
             let role = match message {
                 Message::System(_) => "system",
                 Message::User(_) => "user",
                 Message::Assistant(_) => "assistant",
                 Message::Tool(_) => "tool",
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             let content = match message {
                 Message::System(value) => render_content(&value.content),
                 Message::User(value) => render_content(&value.content),
                 Message::Assistant(value) => render_content(&value.content),
                 Message::Tool(value) => render_content(&value.content),
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             ChatMessage::new(role, content)
         })
