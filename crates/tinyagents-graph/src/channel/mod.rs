@@ -770,12 +770,14 @@ impl ChannelState {
             Some(step) if step != self.current_step => {
                 self.current_step = step;
                 self.step_writes.clear();
+                self.step_deltas.clear();
                 self.set.clear_ephemeral();
             }
             Some(_) => {}
             None => {
                 // Unstamped updates are independent: no cross-update detection.
                 self.step_writes.clear();
+                self.step_deltas.clear();
             }
         }
 
@@ -801,13 +803,54 @@ impl ChannelState {
         }
 
         let touched: HashSet<String> = distinct.iter().map(|n| n.to_string()).collect();
-        for name in touched {
-            *self.step_writes.entry(name).or_insert(0) += 1;
+        for name in &touched {
+            *self.step_writes.entry(name.clone()).or_insert(0) += 1;
+            // Channel versions (I5/R3): bumped once per distinct channel
+            // name touched by this update, regardless of write kind
+            // (Merge/Overwrite) — see the module docs on
+            // `Checkpoint::channel_versions`.
+            *self.channel_versions.entry(name.clone()).or_insert(0) += 1;
         }
-        for (name, value) in update.writes {
-            self.set.apply_update(&name, value)?;
+        // `apply_channel_write` (on `ChannelSet`) is the single write-path
+        // dispatch point every channel-graph write funnels through — see its
+        // docs. This loop is that path's boundary-fold caller; `update_state`
+        // and `fork_state` reach the same dispatch point through
+        // `compiled::channel_bookkeeping`/direct `ChannelSet` access so
+        // replay and a manual write cannot diverge.
+        for (name, write) in update.writes {
+            let is_overwrite = write.is_overwrite();
+            let value = write.value().clone();
+            self.set.apply_channel_write(&name, &write)?;
+            if let Some(&snapshot_every) = self.set.delta_channels.get(&name) {
+                let entry = self.step_deltas.entry(name.clone()).or_default();
+                if is_overwrite {
+                    // Overwrite rebases the delta/append history: prior
+                    // accumulated deltas for this channel no longer describe
+                    // the current baseline.
+                    entry.clear();
+                }
+                entry.push(value);
+                let version = self.channel_versions.get(&name).copied().unwrap_or(0);
+                if snapshot_every > 0 && version % u64::from(snapshot_every) == 0 {
+                    let full = self.set.get(&name).cloned().unwrap_or(Value::Null);
+                    entry.push(serde_json::json!({ "$snapshot": full }));
+                }
+            }
         }
         Ok(self)
+    }
+
+    /// Cumulative per-channel version counters (I5/R3). See
+    /// [`crate::checkpoint::Checkpoint::channel_versions`].
+    pub fn channel_versions(&self) -> &BTreeMap<String, u64> {
+        &self.channel_versions
+    }
+
+    /// This step's accumulated raw write values for every
+    /// [`ChannelSet::with_delta`]-tracked channel, reset when the stamped
+    /// step advances. See [`crate::checkpoint::Checkpoint::channel_deltas`].
+    pub fn step_deltas(&self) -> &BTreeMap<String, Vec<Value>> {
+        &self.step_deltas
     }
 }
 
