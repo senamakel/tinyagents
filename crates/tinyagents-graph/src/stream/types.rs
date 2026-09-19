@@ -351,3 +351,19 @@ pub struct GraphEventEnvelope {
     /// The wrapped event.
     pub event: GraphEvent,
 }
+
+impl GraphEventEnvelope {
+    /// Wraps `event` in a minimal envelope (empty run id/namespace, `seq:
+    /// 0`, no task id) for tests that only care about the event payload
+    /// reaching a sink, not its attribution.
+    #[cfg(test)]
+    pub(crate) fn for_test(event: GraphEvent) -> Self {
+        Self {
+            run_id: RunId::from(String::new()),
+            task_id: None,
+            ns: Vec::new(),
+            seq: 0,
+            event,
+        }
+    }
+}
