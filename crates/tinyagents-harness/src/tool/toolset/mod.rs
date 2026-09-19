@@ -77,6 +77,8 @@ pub use prepared::PreparedToolSet;
 pub use renamed::RenamedToolSet;
 pub use types::ToolExposureExplanation;
 
+pub use ToolSetDispatchBridge as _ToolSetDispatchBridgeDocAnchor;
+
 /// A composable source of tools, generic over the harness's application
 /// `State` and run-context data `Ctx` — the same split
 /// [`crate::tool::ToolRegistry`] and [`crate::runtime::AgentHarness`] use.
