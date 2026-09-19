@@ -79,7 +79,39 @@ impl ContextCompressionMiddleware {
             records: std::sync::Mutex::new(std::collections::VecDeque::new()),
             max_records: DEFAULT_COMPRESSION_RECORD_CAP,
             on_failure: CompressionFailurePolicy::default(),
+            last_summary: std::sync::Mutex::new(None),
+            max_turn_tokens: None,
+            overflow_classifier: OverflowClassifier::default(),
+            before_compaction: None,
         }
+    }
+
+    /// Sets the token budget above which a single turn handed to the
+    /// summarizer is split into two halves and merged (see
+    /// [`summarize_with_split`]). Unset (the default) never splits.
+    pub fn with_max_turn_tokens(mut self, max_turn_tokens: u64) -> Self {
+        self.max_turn_tokens = Some(max_turn_tokens);
+        self
+    }
+
+    /// Replaces the [`OverflowClassifier`] consulted by the
+    /// overflow → compact → retry recovery path (this middleware's
+    /// [`ModelMiddleware::wrap_model`] implementation). Defaults to
+    /// [`OverflowClassifier::default`]'s built-in provider patterns.
+    pub fn with_overflow_classifier(mut self, classifier: OverflowClassifier) -> Self {
+        self.overflow_classifier = classifier;
+        self
+    }
+
+    /// Installs a `before_compaction` hook consulted before every compaction
+    /// this middleware runs (proactive threshold or reactive overflow
+    /// recovery). See [`CompactionDecision`].
+    pub fn with_before_compaction(
+        mut self,
+        hook: impl Fn(&CompactionContext) -> CompactionDecision + Send + Sync + 'static,
+    ) -> Self {
+        self.before_compaction = Some(std::sync::Arc::new(hook));
+        self
     }
 
     /// Sets the [`CompressionFailurePolicy`] applied when the [`Summarizer`]
