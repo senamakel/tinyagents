@@ -1056,14 +1056,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // same failure from the caller's perspective: the model needs
                 // another turn to fix it.
                 if let Some((strategy, name, schema)) = &structured_plan {
-                    let extractor =
-                        StructuredExtractor::new(strategy.clone(), name.clone(), schema.clone());
+                    let extractor = self.build_structured_extractor(strategy, name, schema);
                     let outcome = extractor.extract_outcome(&response);
+                    let variant = outcome.variant.clone();
                     let error = match outcome.value {
                         Some(value) => match &self.output_validator {
                             Some(validator) => match validator.validate(ctx, state, &value).await {
                                 Ok(()) => {
                                     run.structured = Some(value);
+                                    run.structured_variant = variant;
                                     None
                                 }
                                 Err(TinyAgentsError::ModelRetry(message)) => Some(message),
@@ -1071,6 +1072,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             },
                             None => {
                                 run.structured = Some(value);
+                                run.structured_variant = variant;
                                 None
                             }
                         },
