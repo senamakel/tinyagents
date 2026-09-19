@@ -477,25 +477,51 @@ Acceptance criteria:
 
 ### 17. Storage And Graph Conformance
 
-Status: missing as a standardized SDK suite.
+Status: shipped.
 
-Durable graphs and task stores are hard to migrate safely without a shared
-contract test suite.
+Durable graphs, task stores, harness stores, and session persistence are hard
+to migrate safely without a shared contract test suite. Every layer now has
+one:
 
-Implement:
+- **Graph**: `tinyagents_graph::testkit::conformance` — `checkpointer_contract`,
+  `checkpointer_lineage_contract`, `checkpointer_writes_contract`,
+  `checkpointer_concurrent_contract`, `taskstore_contract`,
+  `taskstore_replay_contract`, `taskstore_concurrent_contract`. Run against
+  the in-memory, file, and (feature-gated) SQLite checkpointers, plus the
+  in-memory and JSONL task stores, in
+  `crates/tinyagents-integration-tests/tests/conformance.rs` and
+  `tests/persistence_conformance.rs`.
+- **Harness store**: `tinyagents_harness::store::conformance` —
+  `run_store_conformance` (the flat `Store` trait: put/get/overwrite/delete/
+  list/namespace isolation) and `run_namespaced_store_conformance` (the
+  hierarchical `NamespacedStore` trait: the same plus search, namespace
+  listing, TTL expiry, and `batch`'s positional-alignment guarantee). Run
+  against `InMemoryStore`, `FileStore`, and `InMemoryNamespacedStore` in
+  `crates/tinyagents-integration-tests/tests/store_conformance.rs`. No
+  SQLite-backed `Store`/`NamespacedStore` exists in-tree yet (only a SQLite
+  `ResponseCache`), so that backend is not yet covered — the suite is ready
+  for it the moment one lands.
+- **Session**: `tinyagents_session::testkit::conformance` —
+  `run_ledger_conformance` (the SQLite-backed run ledger, run against two
+  independent workspaces to pin per-workspace connection-cache keying) and
+  `transcript_history_conformance` (`FileTranscriptHistory` and the
+  in-memory `InMemoryTranscriptHistory` double). Run in
+  `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
-- Checkpointer conformance for memory, file, SQLite, and caller-supplied stores.
-- TaskStore conformance for lifecycle transitions, filters, cancellation,
-  timeout, kill, restart/replay, and concurrent writes.
-- Graph conformance for `Send`, reducers, interrupts, resume, max concurrency,
-  dynamic routing, fanout failure policy, and deterministic result collection.
+Any downstream backend author certifies a new implementation by calling the
+matching contract function from their own `#[tokio::test]` / `#[test]`.
 
 Acceptance criteria:
 
-- Storage adapters can be swapped without changing graph behavior.
-- Durable interrupt/resume semantics are proven across backends.
-- Parallel-agent helpers have regression tests for order, failure, timeout, and
-  cancellation.
+- Storage adapters can be swapped without changing graph or harness behavior. ✅
+- Durable interrupt/resume semantics are proven across backends (graph
+  checkpointer lineage/writes contracts). ✅
+- A downstream `Store`/`NamespacedStore`/checkpointer/task-store/run-ledger/
+  transcript-history implementation can be certified without duplicating the
+  assertions. ✅
+- Parallel-agent helpers have regression tests for order, failure, timeout,
+  and cancellation — still open; not covered by this suite (see the fuzz/e2e
+  graph-agent orchestration tests instead).
 
 ## Implementation Order
 
