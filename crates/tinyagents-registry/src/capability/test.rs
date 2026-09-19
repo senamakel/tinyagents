@@ -245,6 +245,69 @@ async fn builds_harness_registries_with_model_aliases() {
     assert_eq!(tools.names(), vec!["lookup_user"]);
 }
 
+/// Builds a registry with `charlie`, `alpha`, `bravo` registered in that
+/// exact order (deliberately not alphabetical, so a name-sorted iteration
+/// would pick a different "first" model than registration order does).
+fn registry_with_three_models_in_order() -> CapabilityRegistry<()> {
+    let mut reg = CapabilityRegistry::<()>::new();
+    reg.register_model("charlie", Arc::new(FakeModel("c")))
+        .unwrap();
+    reg.register_model("alpha", Arc::new(FakeModel("a")))
+        .unwrap();
+    reg.register_model("bravo", Arc::new(FakeModel("b")))
+        .unwrap();
+    reg
+}
+
+#[test]
+fn to_model_registry_default_is_the_first_registered_model_every_time() {
+    // Build the same registry several times over; a `HashMap`-order default
+    // would vary run to run (or construction to construction within a
+    // process, depending on hash-seed timing), while first-registration
+    // order should not.
+    for _ in 0..5 {
+        let reg = registry_with_three_models_in_order();
+        let models = reg.to_model_registry();
+        assert_eq!(
+            models.default_name(),
+            Some("charlie"),
+            "default model should always be the first one registered"
+        );
+        assert!(models.get("charlie").is_some());
+        assert!(models.get("alpha").is_some());
+        assert!(models.get("bravo").is_some());
+    }
+}
+
+#[test]
+fn replace_model_does_not_move_an_existing_name_in_registration_order() {
+    let mut reg = registry_with_three_models_in_order();
+    // Re-registering "bravo" (already registered second) must not make it
+    // the new first-registered name.
+    reg.replace_model("bravo", Arc::new(FakeModel("b2")));
+    reg.register_model("delta", Arc::new(FakeModel("d")))
+        .unwrap();
+
+    let models = reg.to_model_registry();
+    assert_eq!(models.default_name(), Some("charlie"));
+}
+
+#[test]
+fn to_model_registry_with_default_overrides_first_registered() {
+    let reg = registry_with_three_models_in_order();
+
+    let models = reg
+        .to_model_registry_with_default("bravo")
+        .expect("bravo is registered");
+    assert_eq!(models.default_name(), Some("bravo"));
+    assert!(models.get("charlie").is_some());
+
+    let err = reg
+        .to_model_registry_with_default("not-registered")
+        .unwrap_err();
+    assert!(matches!(err, TinyAgentsError::ModelNotFound(name) if name == "not-registered"));
+}
+
 #[test]
 fn capability_resolver_includes_names_and_aliases() {
     let mut reg = CapabilityRegistry::<()>::new();
