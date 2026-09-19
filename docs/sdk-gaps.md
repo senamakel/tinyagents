@@ -117,13 +117,19 @@ Acceptance criteria:
 
 ### 3. Reasoning And Tool-Argument Streaming
 
-Status: partially present.
+Status: partial.
 
-TinyAgents has `MessageDelta { text, tool_call }`, and `ModelDelta` events carry
-that delta. OpenHuman providers also emit reasoning/thinking deltas and
-tool-call argument fragments. The current adapter uses an out-of-band
-`ThinkingForwarder` because those provider deltas do not round-trip through the
-TinyAgents stream in a UI-compatible way.
+`MessageDelta { text, reasoning, tool_call }`
+(`vendor/tinyinference/crates/tinyinference-llm/src/message/types.rs`) now
+carries a dedicated `reasoning` fragment alongside visible text, and
+`ModelDelta` events carry that delta — so reasoning streaming exists.
+What is still missing is explicit block start/end channels: there is no
+tool-call-start or tool-call-argument-delta / tool-call-completed signal
+separate from the accumulated `tool_call` fragment, so a consumer cannot tell
+when a tool-call block begins or ends without inferring it from delta
+content. OpenHuman providers also emit tool-call argument fragments that need
+that boundary information; the current adapter still uses an out-of-band
+`ThinkingForwarder` for parts of this.
 
 Implement:
 
