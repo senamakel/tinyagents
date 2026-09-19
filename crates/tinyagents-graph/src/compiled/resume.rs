@@ -136,16 +136,40 @@ where
         // interrupted set. A boundary that recorded no interrupt (a failure
         // boundary, resumed via `retry` with no value) keeps the old
         // fan-across-pending behaviour.
-        let mut resume_map = HashMap::new();
+        // I1/R5: keyed by task id (falling back to node id) so a `Send`
+        // fan-out of the same node — several live activations sharing one
+        // `NodeId` — each receive their own resume value instead of every
+        // same-node activation racing for a single node-keyed slot. Prefer
+        // the persisted interrupts' own `task_id` (stamped by the interrupt
+        // boundary, R5) when present; fall back to `interrupted_nodes` (node
+        // names only — a checkpoint written before task identity existed, or
+        // a re-emitted subgraph interrupt whose task id was not stamped),
+        // keying by every active activation of that node.
+        let mut resume_map: HashMap<String, serde_json::Value> = HashMap::new();
         if let Some(value) = command.resume {
-            let interrupted = interrupted_nodes(&checkpoint, &active);
-            if interrupted.is_empty() {
-                for activation in &active {
-                    resume_map.insert(activation.node.clone(), value.clone());
+            let task_targets: Vec<String> = checkpoint
+                .interrupts
+                .iter()
+                .filter_map(|i| i.task_id.as_ref())
+                .map(|t| t.as_str().to_string())
+                .filter(|t| active.iter().any(|a| a.task_id.as_str() == t))
+                .collect();
+            if !task_targets.is_empty() {
+                for task_id in task_targets {
+                    resume_map.insert(task_id, value.clone());
                 }
             } else {
-                for node in interrupted {
-                    resume_map.insert(node, value.clone());
+                let interrupted = interrupted_nodes(&checkpoint, &active);
+                if interrupted.is_empty() {
+                    for activation in &active {
+                        resume_map.insert(resume_key(activation), value.clone());
+                    }
+                } else {
+                    for node in interrupted {
+                        for activation in active.iter().filter(|a| a.node == node) {
+                            resume_map.insert(resume_key(activation), value.clone());
+                        }
+                    }
                 }
             }
         }
