@@ -141,6 +141,7 @@ impl<State, Update> Clone for CompiledGraph<State, Update> {
             run_deadline: self.run_deadline,
             durability: self.durability,
             node_retry: self.node_retry.clone(),
+            sequence: self.sequence.clone(),
         }
     }
 }
