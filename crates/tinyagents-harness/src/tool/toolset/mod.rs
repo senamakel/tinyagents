@@ -356,7 +356,7 @@ impl Tool for OverrideTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        self.inner.exposure()
+        self.exposure_override.unwrap_or_else(|| self.inner.exposure())
     }
 
     fn is_concurrency_safe(&self, args: &Value) -> bool {
