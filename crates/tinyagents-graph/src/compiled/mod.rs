@@ -525,7 +525,9 @@ impl<State, Update> CompiledGraph<State, Update> {
     /// envelope on the calling thread (to keep `seq` ordered) before handing
     /// the write off to a spawned task.
     pub(crate) fn envelope(&self, run_id: &RunId, event: GraphEvent) -> GraphEventEnvelope {
-        let seq = self.sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let seq = self
+            .sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GraphEventEnvelope {
             run_id: run_id.clone(),
             task_id: None,

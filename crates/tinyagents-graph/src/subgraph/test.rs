@@ -830,10 +830,7 @@ async fn nested_subgraph_run_yields_envelopes_with_correct_namespace_depth_and_s
         .filter(|e| e.ns == vec!["child".to_string()])
         .collect();
     assert!(!parent_ns.is_empty(), "some events at the top-level ns");
-    assert!(
-        !child_ns.is_empty(),
-        "some events at the child's deeper ns"
-    );
+    assert!(!child_ns.is_empty(), "some events at the child's deeper ns");
 
     // Every event belongs to one of exactly these two namespaces — there is
     // no third, unexpected depth.
