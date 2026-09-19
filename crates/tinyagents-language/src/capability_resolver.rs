@@ -413,16 +413,22 @@ impl CapabilityResolver {
     ///
     /// # Errors
     ///
-    /// Returns [`TinyAgentsError::Diagnostics`] carrying every unresolved
-    /// reference and unknown node kind (not just the first), rendered through
-    /// [`Blueprint::provenance`] spans when the blueprint was compiled with
-    /// provenance tracking, or a span-less position otherwise.
+    /// Returns [`TinyAgentsError::Compile`] for an unknown node kind, and
+    /// [`TinyAgentsError::Capability`] for the first unregistered model, tool,
+    /// subgraph, router, agent, script, or reducer reference — the same
+    /// variants and message text this method has always returned, folded from
+    /// the first entry of [`Self::bind_blueprint_diagnostics`]. Callers that
+    /// want every offending reference at once (not just the first) should call
+    /// [`Self::bind_blueprint_diagnostics`] directly, or fold the result
+    /// through [`crate::diagnostic::into_diagnostics_error`] themselves.
     pub fn bind_blueprint(&self, blueprint: &Blueprint) -> Result<()> {
         let diagnostics = self.bind_blueprint_diagnostics(blueprint);
-        if diagnostics.is_empty() {
-            Ok(())
-        } else {
-            Err(into_diagnostics_error(diagnostics, None))
+        match diagnostics.into_iter().next() {
+            None => Ok(()),
+            Some(first) if first.code.as_deref() == Some(CODE_INVALID_NODE_KIND) => {
+                Err(TinyAgentsError::Compile(first.message))
+            }
+            Some(first) => Err(TinyAgentsError::Capability(first.message)),
         }
     }
 
