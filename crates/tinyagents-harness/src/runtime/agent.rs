@@ -203,6 +203,10 @@ fn sanitize_hosted_stream_item(mut item: AgentStreamItem) -> AgentStreamItem {
     item
 }
 
+/// Replaces every error message on an [`AgentEvent`] with a fixed, family-
+/// specific string before it reaches a hosted caller, mirroring
+/// [`sanitize_hosted_stream_item`] for the individual event variants that
+/// carry raw provider/tool/middleware diagnostics.
 fn sanitize_hosted_event(record: &mut EventRecord) {
     match &mut record.event {
         AgentEvent::ToolCompleted {
