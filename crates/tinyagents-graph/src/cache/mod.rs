@@ -11,12 +11,12 @@
 //! Two backends ship here: [`InMemoryTaskCache`] (process-local, TTL-aware)
 //! and, behind the `sqlite` feature, [`SqliteTaskCache`].
 
-mod memory;
+
 #[cfg(feature = "sqlite")]
 mod sqlite;
 mod types;
 
-pub use memory::InMemoryTaskCache;
+
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteTaskCache;
 pub use types::{TaskCache, TaskCacheKey};

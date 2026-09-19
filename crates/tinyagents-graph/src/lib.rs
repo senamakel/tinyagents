@@ -50,9 +50,10 @@ pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 // --- Durable execution model ---
 pub use builder::{
-    END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
-    RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext,
+    NodeFuture, NodeHandler, NodePolicy, Route, RouterFn, START,
 };
+pub use cache::{TaskCache, TaskCacheKey};
 pub use channel::{
     Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
     Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
