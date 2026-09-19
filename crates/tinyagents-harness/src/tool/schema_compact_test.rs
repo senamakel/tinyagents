@@ -2,6 +2,7 @@ use serde_json::json;
 use tinyinference_llm::tool::ToolSchema;
 
 use super::*;
+use crate::tool::{SchemaPreparation, prepare_tool_schemas};
 
 fn nested(depth: usize) -> serde_json::Value {
     if depth == 0 {
