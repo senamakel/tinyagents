@@ -40,6 +40,10 @@ fn branch_fork_shares_parent_pointer_without_copying() {
     let main = tree
         .append(Some(&root), message_kind("assistant", "main reply"))
         .unwrap();
+    // An existing continuation off `main`, before any forking happens.
+    let original_continuation = tree
+        .append(Some(&main), message_kind("user", "continue original"))
+        .unwrap();
 
     let fork_point = tree
         .fork(
@@ -57,10 +61,11 @@ fn branch_fork_shares_parent_pointer_without_copying() {
         .append(Some(&fork_point), message_kind("assistant", "alt reply"))
         .unwrap();
 
-    // Both tips exist; the original main-line entry has two children now.
+    // `main` now has two children (`original_continuation` and
+    // `branch_tip`), both of which are tips; `main` itself is not.
     let mut tips = tree.tips().expect("tips");
     tips.sort();
-    let mut expected = vec![main.clone(), branch_tip.clone()];
+    let mut expected = vec![original_continuation.clone(), branch_tip.clone()];
     expected.sort();
     assert_eq!(tips, expected);
 
