@@ -106,10 +106,14 @@ this flag.
   `before_agent`: the run's pre-middleware tool surface (the registry-derived
   set before any `before_model` middleware narrows it and before a
   structured-output tool-call fallback, if any, is appended) and what that
-  baseline costs in compact-JSON bytes. Track it as the ceiling a run started
-  with, not as a live per-request wire metric — exposure-narrowing middleware
-  (`ToolPolicyMiddleware::before_model`, dynamic/contextual selection) can
-  still shrink an individual request below it.
+  baseline costs in compact-JSON bytes. `direct` counts only `Direct`-exposure
+  tool schemas — the two intrinsic bridge schemas are implied by `deferred`
+  being nonzero, not folded into `direct` — while `schema_bytes` covers the
+  actual wire set (direct schemas plus the bridge, when present). Track it as
+  the ceiling a run started with, not as a live per-request wire metric —
+  exposure-narrowing middleware (`ToolPolicyMiddleware::before_model`,
+  dynamic/contextual selection) can still shrink an individual request below
+  it.
 - `ToolSearched { call_id, query, matched }` and
   `DeferredToolCall { call_id, tool_name }` — every discovery, auditable.
 
