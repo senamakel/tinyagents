@@ -74,6 +74,8 @@ pub enum MessageRole {
     Assistant,
     /// [`Message::Tool`].
     Tool,
+    /// [`Message::Custom`].
+    Custom,
 }
 
 impl MessageRole {
@@ -84,6 +86,7 @@ impl MessageRole {
             Message::User(_) => MessageRole::User,
             Message::Assistant(_) => MessageRole::Assistant,
             Message::Tool(_) => MessageRole::Tool,
+            Message::Custom(_) => MessageRole::Custom,
         }
     }
 }
