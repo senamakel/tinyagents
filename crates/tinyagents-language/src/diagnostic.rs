@@ -263,6 +263,33 @@ impl Diagnostic {
     }
 }
 
+/// Folds one or more diagnostics into a single [`TinyAgentsError`].
+///
+/// An empty `diagnostics` panics in debug builds via `unwrap`-free defensive
+/// handling below is deliberately avoided: callers must not invoke this with
+/// no diagnostics to report. A single diagnostic still goes through
+/// [`TinyAgentsError::Diagnostics`] (not [`Diagnostic::into_parse_error`]) so
+/// every caller of this function gets one uniform error shape regardless of
+/// how many diagnostics were collected.
+///
+/// # Panics
+///
+/// Panics if `diagnostics` is empty.
+pub fn into_diagnostics_error(
+    diagnostics: Vec<Diagnostic>,
+    source: Option<&SourceFile>,
+) -> TinyAgentsError {
+    assert!(
+        !diagnostics.is_empty(),
+        "into_diagnostics_error requires at least one diagnostic"
+    );
+    let rendered = diagnostics
+        .iter()
+        .map(|d| d.to_rendered(source))
+        .collect();
+    TinyAgentsError::Diagnostics(rendered)
+}
+
 /// Renders one labelled span as a `-->`/source-line/caret block.
 fn render_span_block(
     out: &mut String,
