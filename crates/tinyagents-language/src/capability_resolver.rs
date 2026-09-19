@@ -278,6 +278,13 @@ impl CapabilityResolver {
         self
     }
 
+    /// Allows an additional capability bundle name (gap G3), for any node's
+    /// `capability "name"` reference. Returns `self` for chaining.
+    pub fn allow_capability(mut self, name: impl Into<String>) -> Self {
+        self.capabilities.insert(name.into());
+        self
+    }
+
     /// Replaces the set of allowed node kinds. Passing a non-empty set enables
     /// node-kind validation in the strict binding path. Returns `self`.
     pub fn with_node_kinds<I, S>(mut self, kinds: I) -> Self
