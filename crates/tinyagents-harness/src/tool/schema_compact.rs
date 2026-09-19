@@ -156,7 +156,15 @@ fn collect_refs(value: &Value, table: &str, out: &mut Vec<String>) {
             if let Some(Value::String(target)) = object.get("$ref")
                 && let Some(name) = target.strip_prefix(&format!("#/{table}/"))
             {
-                out.push(name.to_string());
+                // `$ref` fragments are RFC 6901 JSON Pointer tokens: `/` and
+                // `~` in the original definition name are escaped as `~1`
+                // and `~0`. Decoding here (order matters — `~1` before
+                // `~0`, matching the standard decode algorithm) keeps this
+                // reachability scan in the same key space as `$defs`'s own
+                // (unescaped) keys; skipping it would treat a definition
+                // named e.g. `"a/b"` as unreachable and prune it even though
+                // a `$ref: "#/$defs/a~1b"` still points at it.
+                out.push(name.replace("~1", "/").replace("~0", "~"));
             }
             for child in object.values() {
                 collect_refs(child, table, out);
