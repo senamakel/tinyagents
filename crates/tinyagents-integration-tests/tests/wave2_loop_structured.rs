@@ -247,6 +247,33 @@ async fn a_schema_name_colliding_with_a_registered_tool_fails_closed() {
     );
 }
 
+/// A minimal tool exposed as [`ToolExposure::Deferred`], used to put the
+/// discovery bridge on the wire without needing a full `ExposedTool` harness.
+struct DeferredStockQuote;
+
+#[async_trait]
+impl tinytools::Tool for DeferredStockQuote {
+    fn name(&self) -> &str {
+        "stock_quote"
+    }
+
+    fn description(&self) -> &str {
+        "Quote."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
+    }
+
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("quote"))
+    }
+}
+
 /// Regression: the collision check used to compare the structured-output
 /// schema name only against `self.tools.names()` (the registry), so a name
 /// colliding with the *intrinsic* `tool_search`/`tool_call` discovery bridge
@@ -256,15 +283,11 @@ async fn a_schema_name_colliding_with_a_registered_tool_fails_closed() {
 /// duplicate-function shape this guard exists to prevent.
 #[tokio::test]
 async fn a_schema_name_colliding_with_the_discovery_bridge_fails_closed() {
-    use tinytools::ToolExposure;
-
     let model = Arc::new(RecordingModel::new(vec![ModelResponse::assistant("hi")]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("rec", model);
-    harness.register_tool(Arc::new(
-        FakeTool::returning("stock_quote", "quote").with_exposure(ToolExposure::Deferred),
-    ));
+    harness.register_tool(Arc::new(DeferredStockQuote));
     harness.with_policy(RunPolicy {
         default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
             tinyagents_harness::tool::discover::TOOL_SEARCH_NAME,
