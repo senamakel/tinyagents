@@ -128,6 +128,14 @@ enum AdmittedCall<State: Send + Sync, Ctx: Send + Sync> {
 
 /// One transcript slot per requested call, in original order, used by the
 /// concurrent path to reassemble results deterministically.
+///
+/// `Recovered` carries a full `ToolResult` (now noticeably larger than
+/// `Execute`'s no-op payload since the vendor `tinytools::ToolControl`/
+/// `follow_up`/`metadata` fields landed); boxing it would touch every
+/// construction and pattern-match site in this file for a one-shot,
+/// short-lived per-call value, so the size difference is accepted here
+/// rather than threaded through as indirection.
+#[allow(clippy::large_enum_variant)]
 enum ToolSlot {
     /// An executed call: consumes the next prepared/result pair in order.
     Execute,
