@@ -441,6 +441,8 @@ async fn build_file_payload(
     Ok(payload)
 }
 
+/// Reads a local file path, checking size (against metadata, then the
+/// measured read) and returning its bytes, path, and file-name.
 async fn read_local_file(source: &str, max_bytes: usize) -> Result<(Vec<u8>, PathBuf, String)> {
     let path = Path::new(source).to_path_buf();
     if !path.exists() || !path.is_file() {
@@ -478,6 +480,10 @@ async fn read_local_file(source: &str, max_bytes: usize) -> Result<(Vec<u8>, Pat
     Ok((bytes, path, name))
 }
 
+/// Fetches an `http(s)` file, checking size against both the `Content-Length`
+/// header and the measured body, and deriving a display name from the URL's
+/// last path segment (not `Content-Disposition`, which is attacker-controlled
+/// on a fetched URL).
 async fn fetch_remote_file(
     source: &str,
     max_bytes: usize,
