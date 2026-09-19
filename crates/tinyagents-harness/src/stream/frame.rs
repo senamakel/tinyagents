@@ -364,7 +364,10 @@ pub fn reduce_frames(frames: &[AssistantFrame]) -> PartialAssistantMessage {
                         value.get("name").and_then(serde_json::Value::as_str),
                     )
                 {
-                    let arguments = value.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+                    let arguments = value
+                        .get("arguments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
                     tool_calls.push(ToolCall::new(id, name, arguments));
                 } else {
                     closed.insert(*index, block.clone());

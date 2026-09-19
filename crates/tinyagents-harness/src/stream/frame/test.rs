@@ -57,7 +57,9 @@ fn interleaved_stream_items() -> Vec<ModelStreamItem> {
         },
         ModelStreamItem::BlockEnd {
             index: 2,
-            block: ContentBlock::Json(json!({"id": "call-1", "name": "search", "arguments": {"q": 1}})),
+            block: ContentBlock::Json(
+                json!({"id": "call-1", "name": "search", "arguments": {"q": 1}}),
+            ),
         },
         ModelStreamItem::UsageDelta(Usage::new(5, 7)),
         ModelStreamItem::Completed(ModelResponse {
