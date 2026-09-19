@@ -100,6 +100,17 @@ pub struct NodeContext {
     /// Complete host-owned recursive-agent binding for this execution, if one
     /// was supplied at the graph entry point.
     pub agent_binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    /// Stable identity of this scheduled activation within its superstep
+    /// (R5). Distinguishes repeated `Send` fan-out activations of the same
+    /// node — a subgraph node consults this (with [`Self::siblings`]) to
+    /// namespace its child checkpoint per fan-out branch instead of sharing
+    /// one namespace across every concurrent activation of the node (I1).
+    pub task_id: TaskId,
+    /// The number of activations of [`Self::node_id`] in this same
+    /// superstep's active set (I1). `1` for an ordinary (non-fan-out)
+    /// activation; greater than `1` means a `Send` fan-out scheduled several
+    /// concurrent activations of this node this step.
+    pub siblings: usize,
 }
 
 impl std::fmt::Debug for NodeContext {
