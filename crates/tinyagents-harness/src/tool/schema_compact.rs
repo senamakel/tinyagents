@@ -102,16 +102,17 @@ pub fn compact_tool_schema(schema: &ToolSchema, compaction: &SchemaCompaction) -
 
 /// Runs the compaction ladder until `schema` serialises within `max_bytes`.
 ///
-/// This is deliberately best-effort, not a guarantee: a schema whose
-/// top-level property *surface* (names, types, `required`) alone exceeds
-/// `max_bytes` cannot shrink further without dropping arguments the model
-/// needs to see, which every rung refuses to do (see the module docs — each
-/// rung keeps the top-level argument surface intact). When the final rung
+/// This function itself is best-effort: a schema whose top-level property
+/// *surface* (names, types, `required`) alone exceeds `max_bytes` cannot
+/// shrink further without dropping arguments the model needs to see, which
+/// every rung refuses to do (see the module docs — each rung keeps the
+/// top-level argument surface intact). When the final rung
 /// (`drop_compositions`) still exceeds the budget, that maximally-compacted
-/// value is returned rather than an error, so a caller always gets a usable
-/// schema instead of a failed request; measure the result with
-/// `serialized_len`/[`ToolSchema`] byte-counting downstream if a hard cap is
-/// required.
+/// value is returned rather than an error. [`compact_tool_schema`] is the
+/// caller that turns this into a hard ceiling: it checks the result against
+/// `max_bytes` and falls back to an open object schema when this function
+/// could not get under budget, so `max_schema_bytes` is always actually
+/// enforced on the wire.
 #[must_use]
 pub fn compact_parameters(schema: Value, max_bytes: usize) -> Value {
     let rungs: [fn(Value) -> Value; 6] = [
