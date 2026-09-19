@@ -309,8 +309,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `after_tool`/`wrap_tool` was honored one full model call late —
             // an extra billable provider round trip after a guardrail, or a
             // human gate, had already said stop.
-            if let Some(exit) = self.apply_pending_control(ctx, run, status, messages)? {
-                return Ok(exit);
+            match self.apply_pending_control(ctx, run, status, messages)? {
+                ControlEffect::None => {}
+                ControlEffect::ContinueLoop => continue,
+                ControlEffect::Exit(exit) => return Ok(exit),
             }
 
             // Fail-closed limit and deadline checks before each model call.
@@ -742,8 +744,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Safe checkpoint: honor any control outcome a middleware requested
             // during this turn (for example an early-exit tool or a budget stop
             // hook), before executing further tools.
-            if let Some(exit) = self.apply_pending_control(ctx, run, status, messages)? {
-                return Ok(exit);
+            match self.apply_pending_control(ctx, run, status, messages)? {
+                ControlEffect::None => {}
+                ControlEffect::ContinueLoop => continue,
+                ControlEffect::Exit(exit) => return Ok(exit),
             }
 
             let tool_calls = response.tool_calls().to_vec();
@@ -818,8 +822,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
                 // Safe checkpoint: a control requested from `after_tool` /
                 // `wrap_tool` is honored here, at the edge it was raised on.
-                if let Some(exit) = self.apply_pending_control(ctx, run, status, messages)? {
-                    return Ok(exit);
+                match self.apply_pending_control(ctx, run, status, messages)? {
+                    ControlEffect::None => {}
+                    ControlEffect::ContinueLoop => continue,
+                    ControlEffect::Exit(exit) => return Ok(exit),
                 }
                 continue;
             }
@@ -938,8 +944,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Safe checkpoint: honor a control requested from `after_tool` /
             // `wrap_tool` at the edge it was raised on, rather than a model
             // call later.
-            if let Some(exit) = self.apply_pending_control(ctx, run, status, messages)? {
-                return Ok(exit);
+            match self.apply_pending_control(ctx, run, status, messages)? {
+                ControlEffect::None => {}
+                ControlEffect::ContinueLoop => continue,
+                ControlEffect::Exit(exit) => return Ok(exit),
             }
         }
     }
