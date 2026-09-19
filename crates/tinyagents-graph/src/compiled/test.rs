@@ -1471,7 +1471,6 @@ async fn carried_completed_sibling_goto_survives_resume() {
         .set_entry("super")
         .mark_command_routing("super")
         .mark_command_routing("hi")
-        .add_edge("hi", "y")
         .set_finish("lo")
         .set_finish("x")
         .set_finish("y")
