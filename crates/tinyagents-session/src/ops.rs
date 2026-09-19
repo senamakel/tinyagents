@@ -796,6 +796,8 @@ pub(super) fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sessi
     })
 }
 
+/// Parses a stored RFC-3339 timestamp, converting a malformed value into a
+/// [`TinyAgentsError::Storage`] rather than panicking.
 pub(super) fn parse_rfc3339(raw: &str) -> Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)
         .storage_context(&format!("invalid RFC3339 timestamp in session DB: {raw}"))?;
