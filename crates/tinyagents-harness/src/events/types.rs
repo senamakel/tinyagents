@@ -95,13 +95,23 @@ pub enum AgentEvent {
         output: Option<serde_json::Value>,
     },
 
-    /// The agent loop fixed the run's tool surface: how many schemas go on
-    /// the wire, how many are deferred behind `tool_search`, and what the wire
-    /// set costs in bytes. Emitted once per run, before the first model call,
-    /// so a prompt-budget ratchet can read the number the model actually pays.
+    /// The agent loop fixed the run's **pre-middleware** tool surface: how
+    /// many schemas were assembled from the registry (direct tools plus the
+    /// bridge tools when any tool is deferred), how many are deferred behind
+    /// `tool_search`, and what that base set costs in bytes. Emitted once per
+    /// run, before the first model call and before `before_agent`/
+    /// `before_model` middleware runs.
+    ///
+    /// This is a fixed run-start baseline, not a live per-request wire
+    /// metric: exposure-narrowing middleware
+    /// (`ToolPolicyMiddleware::before_model`, dynamic/contextual tool
+    /// selection) can still shrink `request.tools` on any given turn, and a
+    /// structured-output tool-call fallback can still grow it. Track this
+    /// event for the ceiling the run started with, not for what a specific
+    /// request actually sent.
     ToolsAdvertised {
-        /// Schemas in every request's `tools` array (direct tools plus the
-        /// bridge tools when any tool is deferred).
+        /// Schemas assembled before per-turn middleware runs (direct tools
+        /// plus the bridge tools when any tool is deferred).
         direct: usize,
         /// Tools reachable only through `tool_search` / `tool_call`.
         deferred: usize,
