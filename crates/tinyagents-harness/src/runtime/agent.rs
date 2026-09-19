@@ -420,6 +420,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             .await
     }
 
+    #[allow(unsafe_code)]
     async fn invoke_agent_stream_with_capabilities<'a>(
         &'a self,
         invocation: AgentInvocation<State, Ctx>,
