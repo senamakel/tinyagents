@@ -228,7 +228,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if should_execute_tools_concurrently(
             tool_calls.len(),
             canonical_parallel_safe,
-            self.middleware.len(),
             self.middleware.tool_middleware_len(),
         ) {
             self.execute_tools_concurrently(state, ctx, run, status, messages, tool_calls)
