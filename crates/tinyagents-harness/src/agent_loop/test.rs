@@ -2546,7 +2546,7 @@ async fn streaming_delta_transform_controls_final_run_and_cached_response() {
 async fn streaming_turn_keeps_a_signed_thinking_signature_ahead_of_a_tool_call() {
     use crate::testkit::StreamingMock;
 
-    let tool = Arc::new(FakeTool::returning("lookup", "ok"));
+    let tool = Arc::new(FakeTool::new("lookup", "ok"));
     let mut terminal = ModelResponse::assistant("");
     terminal.message.content = vec![tinyinference_llm::message::ContentBlock::Thinking {
         text: "let me think".to_string(),
