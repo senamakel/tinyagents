@@ -48,6 +48,15 @@ pub(super) struct RunCtx<'a, State, Update> {
     pub(super) steps: usize,
     pub(super) last_checkpoint: Option<CheckpointId>,
     pub(super) parent_checkpoint: Option<String>,
+    /// Node ids carried forward from a resumed mid-step checkpoint (an
+    /// interrupt/failure boundary whose completed siblings were never
+    /// routed) — see [`super::boundary::CompiledGraph::advance`]'s doc.
+    /// `None` for a fresh run or a resume from a fully-routed (normal)
+    /// boundary. Consumed (`take`n) by the first `advance` call of this run;
+    /// [`super::boundary`]'s failure/interrupt boundaries read it (without
+    /// consuming it) to keep carrying it forward across a step that
+    /// interrupts or fails more than once in a row.
+    pub(super) carried_completed: Option<Vec<NodeId>>,
 }
 
 impl<'a, State, Update> RunCtx<'a, State, Update>
