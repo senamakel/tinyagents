@@ -13,10 +13,8 @@
 //! attaches after a run has already produced output can request only what it
 //! missed with [`StreamProjection::since`] instead of re-reading everything.
 
-use std::collections::HashSet;
-
 use tinyagents_harness::events::AgentEvent;
-use tinyagents_harness::ids::{CallId, NodeId, RunId};
+use tinyagents_harness::ids::{CallId, RunId};
 use tinyinference_llm::message::MessageDelta;
 
 use super::{GraphEvent, GraphEventEnvelope, StreamMode};
