@@ -382,6 +382,7 @@ async fn prune_keeps_a_window_per_namespace() {
 
 mod file_backend {
     use super::checkpoint;
+    use crate::Checkpoint;
     use crate::checkpoint::{CheckpointConfig, Checkpointer, FileCheckpointer};
     use std::path::PathBuf;
 
