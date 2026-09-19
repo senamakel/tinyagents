@@ -86,13 +86,17 @@ Acceptance criteria:
 
 ### 2. Recoverable Unknown Tool Calls
 
-Status: missing.
+Status: shipped.
 
-TinyAgents currently returns `TinyAgentsError::ToolNotFound` when the model calls
-an unregistered tool. OpenHuman's legacy loop treated this as a recoverable tool
-result and let the model correct itself. The TinyAgents adapter now rewrites
-unknown calls to an internal `__openhuman_unknown_tool__` sentinel so the loop can
-continue.
+TinyAgents now has `UnknownToolPolicy::{Fail, ReturnToolError, Rewrite}` on
+`RunPolicy` (`crates/tinyagents-harness/src/runtime/types.rs`), applied in
+`crates/tinyagents-harness/src/agent_loop/tools.rs` (~305-371). The default is
+`ReturnToolError`: an unregistered tool call is injected back as a tool-error
+result naming the requested tool and the valid tools, so the loop continues
+and the model can self-correct, instead of aborting the run. `Fail` restores
+the old abort behavior, and `Rewrite { tool_name }` retargets the call to a
+fixed compatibility tool. OpenHuman's `UNKNOWN_TOOL_SENTINEL` workaround can
+be retired in favor of this policy.
 
 Implement:
 
