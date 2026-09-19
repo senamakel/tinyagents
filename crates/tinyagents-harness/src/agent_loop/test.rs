@@ -3827,7 +3827,11 @@ async fn concurrent_tool_failure_fails_every_started_sibling_before_returning() 
     harness.register_model(
         "mock",
         Arc::new(MockModel::with_responses(vec![multi_tool_call_response(
-            vec![("call-a", "alpha"), ("call-b", "boom")],
+            // "boom" fails fast and comes first in call order, so the fold
+            // reaches its fatal error while "alpha" (slower, but already
+            // resolved by the time `join_all` returns) is still an
+            // unprocessed sibling — exactly the scenario the fix covers.
+            vec![("call-a", "boom"), ("call-b", "alpha")],
         )])),
     );
     harness.register_tool(Arc::new(ConcurrencyProbeTool {
