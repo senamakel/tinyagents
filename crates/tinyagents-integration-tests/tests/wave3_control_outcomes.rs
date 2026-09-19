@@ -123,9 +123,14 @@ async fn jump_to_model_skips_the_turns_tool_calls() {
     harness.push_middleware(Arc::new(SkipToolsOnce {
         skipped: Mutex::new(false),
     }));
+    harness.with_policy(tinyagents_harness::runtime::RunPolicy {
+        limits: tinyagents_harness::limits::RunLimits::default()
+            .with_max_model_calls(3)
+            .with_behavior(tinyagents_harness::limits::LimitBehavior::StopWithPartial),
+        ..Default::default()
+    });
 
-    let mut config = tinyagents_harness::context::RunConfig::new("jump-to-model");
-    config.max_model_calls = Some(2);
+    let config = tinyagents_harness::context::RunConfig::new("jump-to-model");
     let result = harness
         .invoke_with_status(&(), (), config, vec![Message::user("go")])
         .await
