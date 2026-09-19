@@ -391,29 +391,27 @@ where
 /// turn planned one, drives the output-validation retry loop
 /// (`RunPolicy::output_retry`), and finishes the run.
 pub(crate) async fn settle_node<State, Ctx>(
-    rt: &Arc<LoopRuntime<State, Ctx>>,
+    harness: &AgentHarness<State, Ctx>,
+    run: &mut AgentRun,
     mut loop_state: LoopState,
 ) -> Result<NodeResult<LoopState>>
 where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
-    let mut ctx_guard = rt.ctx.lock().await;
-    let mut run_guard = rt.run.lock().await;
-
     if let Some(plan) = loop_state.pending_structured.take() {
         let extractor = StructuredExtractor::new(plan.strategy.clone(), &plan.schema_name, plan.schema.clone());
         let last_response = last_response_from_messages(&loop_state.messages);
         let outcome = extractor.extract_outcome(&last_response);
         let variant = outcome.variant.clone();
         let error = match outcome.value {
-            Some(value) => match &rt.harness.policy().output_retry {
+            Some(value) => match &harness.policy().output_retry {
                 _ => {
                     // Output validator hook (A3), mirroring the direct loop:
                     // consult `AgentHarness::with_output_validator` when set.
                     None::<String>.or({
-                        run_guard.structured = Some(value.clone());
-                        run_guard.structured_variant = variant.clone();
+                        run.structured = Some(value.clone());
+                        run.structured_variant = variant.clone();
                         loop_state.structured = Some(value);
                         loop_state.structured_variant = variant;
                         None
@@ -423,10 +421,10 @@ where
             None => outcome.error,
         };
         if let Some(error) = error {
-            let max_attempts = rt.harness.policy().output_retry.max_attempts;
+            let max_attempts = harness.policy().output_retry.max_attempts;
             if loop_state.output_retry_attempts < max_attempts {
                 loop_state.output_retry_attempts += 1;
-                let template = &rt.harness.policy().output_retry.message_template;
+                let template = &harness.policy().output_retry.message_template;
                 let prompt = template.replace("{error}", &error);
                 loop_state
                     .messages
@@ -441,8 +439,8 @@ where
     if loop_state.final_text.is_none() {
         loop_state.final_text = Some(last_assistant_text(&loop_state.messages));
     }
-    run_guard.messages = loop_state.messages.clone();
-    run_guard.final_response = Some(ModelResponse::assistant(
+    run.messages = loop_state.messages.clone();
+    run.final_response = Some(ModelResponse::assistant(
         loop_state.final_text.clone().unwrap_or_default(),
     ));
 
