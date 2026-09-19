@@ -473,10 +473,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Ok(ResolvedToolCall::ErrorMessage(message));
         }
         // Host authorization is deliberately last in admission: the gate sees
-        // the canonical arguments after hidden host values have replaced any
-        // model-forged fields, but before a tool can execute. A hosted run is
-        // identified from its explicit RunContext binding; the lower-level SDK
-        // path has no implicit host policy.
+        // the raw provider arguments (including any forged hidden fields),
+        // while execution receives the prepared trusted arguments. A hosted
+        // run is identified from its explicit RunContext binding; the
+        // lower-level SDK path has no implicit host policy.
         if let Some(binding) = self.host_run_binding(ctx.instance_id())? {
             let request = crate::host::ToolCallRequest::new(
                 call.name.clone(),

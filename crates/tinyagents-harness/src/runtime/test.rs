@@ -4,6 +4,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 use crate::context::{RunConfig, RunContext};
 use crate::host::{
@@ -13,7 +14,7 @@ use crate::host::{
     SecurityGate, StaticContextComposer, ToolCallRequest, UnlimitedBudgetGate,
 };
 use crate::limits::RunLimits;
-use crate::middleware::LoggingMiddleware;
+use crate::middleware::{LoggingMiddleware, ModelFallbackMiddleware};
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentTurnRequest, RunPolicy};
 use crate::subagent::{ChildDataPolicy, SubAgent, SubAgentTool};
@@ -43,6 +44,37 @@ struct DenyThenAllowGate {
 struct RedactJsonUserGate;
 
 struct RedactDeltaMiddleware;
+
+/// A resolver which has definitely entered its future before it stays pending.
+/// This lets boundary tests cancel or time out the actual resolver work rather
+/// than racing a pre-resolution checkpoint.
+struct PendingResolver {
+    started: Arc<tokio::sync::Notify>,
+}
+
+struct FirstThenPendingResolver {
+    initial: Arc<dyn ChatModel<()>>,
+    started: Arc<tokio::sync::Notify>,
+    calls: AtomicUsize,
+}
+
+struct HostFallbackResolver {
+    primary: Arc<dyn ChatModel<()>>,
+    fallback: Arc<dyn ChatModel<()>>,
+    requested_pins: Mutex<Vec<Option<String>>>,
+}
+
+struct RetryableFailingModel;
+
+struct RecordingArgumentGate {
+    seen: Mutex<Vec<serde_json::Value>>,
+}
+
+struct BlockExtensionGate;
+
+struct InjectedArgumentTool {
+    executed: Arc<Mutex<Vec<serde_json::Value>>>,
+}
 
 struct RetryableClassifier;
 
@@ -152,6 +184,63 @@ impl crate::host::ModelResolver<()> for LeadRecordingResolver {
             .expect("resolver lock")
             .push(request.model_pin.clone());
         Ok(Arc::clone(&self.model))
+    }
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for PendingResolver {
+    async fn resolve(
+        &self,
+        _request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for FirstThenPendingResolver {
+    async fn resolve(
+        &self,
+        _request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(self.initial.clone())
+        } else {
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for HostFallbackResolver {
+    async fn resolve(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        self.requested_pins
+            .lock()
+            .expect("resolver lock")
+            .push(request.model_pin.clone());
+        Ok(if request.model_pin.as_deref() == Some("host-backup") {
+            self.fallback.clone()
+        } else {
+            self.primary.clone()
+        })
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for RetryableFailingModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        Err(tinyinference_llm::Error::Model(
+            "transient failure".to_string(),
+        ))
     }
 }
 
@@ -301,6 +390,46 @@ impl SecurityGate for RedactJsonUserGate {
 }
 
 #[async_trait]
+impl SecurityGate for BlockExtensionGate {
+    async fn authorize_tool(&self, _call: &ToolCallRequest) -> crate::error::Result<GateDecision> {
+        Ok(GateDecision::Allow)
+    }
+
+    async fn screen_input(
+        &self,
+        text: &str,
+        _origin: crate::host::ContentOrigin,
+    ) -> crate::error::Result<ScreenOutcome> {
+        if text.contains("secret") {
+            Ok(ScreenOutcome::Block {
+                reason: "blocked extension".to_string(),
+            })
+        } else {
+            Ok(ScreenOutcome::Pass)
+        }
+    }
+}
+
+#[async_trait]
+impl SecurityGate for RecordingArgumentGate {
+    async fn authorize_tool(&self, call: &ToolCallRequest) -> crate::error::Result<GateDecision> {
+        self.seen
+            .lock()
+            .expect("gate lock")
+            .push(call.arguments.clone());
+        Ok(GateDecision::Allow)
+    }
+
+    async fn screen_input(
+        &self,
+        _text: &str,
+        _origin: crate::host::ContentOrigin,
+    ) -> crate::error::Result<ScreenOutcome> {
+        Ok(ScreenOutcome::Pass)
+    }
+}
+
+#[async_trait]
 impl crate::middleware::Middleware<(), ()> for RedactDeltaMiddleware {
     fn name(&self) -> &str {
         "redact-delta"
@@ -349,6 +478,37 @@ impl Tool for BlockedTool {
 
     async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         panic!("a definition-disallowed tool must never execute")
+    }
+}
+
+#[async_trait]
+impl Tool for InjectedArgumentTool {
+    fn name(&self) -> &str {
+        "injected"
+    }
+
+    fn description(&self) -> &str {
+        "records its prepared arguments"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "call_id": {"type": "string"}
+            },
+            "required": ["text", "call_id"]
+        })
+    }
+
+    fn injected_arguments(&self) -> Vec<tinytools::ToolInjectedArgument> {
+        vec![tinytools::ToolInjectedArgument::tool_call_id("call_id")]
+    }
+
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        self.executed.lock().expect("tool lock").push(arguments);
+        Ok(ToolResult::success("executed"))
     }
 }
 
@@ -476,6 +636,199 @@ async fn host_driven_turn_requires_an_installed_bundle_before_model_resolution()
 }
 
 #[tokio::test]
+async fn initial_host_model_resolution_is_cancelled_while_the_resolver_is_pending() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let token = crate::CancellationToken::new();
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(PendingResolver {
+            started: started.clone(),
+        }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+    let invocation = harness.invoke_agent(
+        AgentTurnRequest::new(
+            "helper",
+            vec![tinyinference_llm::message::Message::user("go")],
+        ),
+        RunContext::new(RunConfig::new("host-resolve-cancel"), ()).with_cancellation(token.clone()),
+        &(),
+    );
+    tokio::pin!(invocation);
+
+    let error = tokio::select! {
+        _ = started.notified() => {
+            token.cancel();
+            tokio::time::timeout(Duration::from_secs(1), &mut invocation)
+                .await
+                .expect("cancellation drops the resolver future")
+                .expect_err("cancelled resolution cannot complete")
+        }
+        result = &mut invocation => panic!("pending resolver unexpectedly finished: {result:?}"),
+    };
+    assert!(matches!(error, crate::error::TinyAgentsError::Cancelled));
+}
+
+#[tokio::test]
+async fn policy_only_deadline_bounds_initial_host_resolution_with_a_timeout_error() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(PendingResolver { started }),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_wall_clock_ms(Some(5)),
+        ..RunPolicy::default()
+    });
+    harness.with_host_capabilities(host);
+
+    let error = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("policy-host-resolve-timeout"), ()),
+            &(),
+        )
+        .await
+        .expect_err("policy deadline must bound a host resolver without a RunConfig timeout");
+    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)));
+    assert!(
+        error.to_string().contains("host model resolution for run `policy-host-resolve-timeout` exceeded its remaining wall-clock budget"),
+        "timeout must retain its host-resolution and policy-budget shape: {error}"
+    );
+}
+
+async fn assert_rebound_host_resolution_stops(
+    token: Option<crate::CancellationToken>,
+    policy_timeout: Option<u64>,
+) -> crate::error::TinyAgentsError {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let resolver = Arc::new(FirstThenPendingResolver {
+        initial: Arc::new(RetryableFailingModel),
+        started: started.clone(),
+        calls: AtomicUsize::new(0),
+    });
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        resolver,
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.push_model_middleware(Arc::new(ModelFallbackMiddleware::new(["fallback"])));
+    if let Some(timeout) = policy_timeout {
+        harness.with_policy(RunPolicy {
+            limits: RunLimits::default().with_max_wall_clock_ms(Some(timeout)),
+            ..RunPolicy::default()
+        });
+    }
+    harness.with_host_capabilities(host);
+    let mut context = RunContext::new(RunConfig::new("rebind-host-resolution"), ());
+    if let Some(token) = token.clone() {
+        context = context.with_cancellation(token);
+    }
+    let invocation = harness.invoke_agent(
+        AgentTurnRequest::new(
+            "helper",
+            vec![tinyinference_llm::message::Message::user("go")],
+        ),
+        context,
+        &(),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        _ = started.notified() => {
+            if let Some(token) = token {
+                token.cancel();
+            }
+            tokio::time::timeout(Duration::from_secs(1), &mut invocation)
+                .await
+                .expect("rebound resolver must not hang")
+                .expect_err("the rebinding resolver remains pending")
+        }
+        result = &mut invocation => panic!("rebind resolver unexpectedly finished: {result:?}"),
+    }
+}
+
+#[tokio::test]
+async fn middleware_rebinding_cancels_a_pending_host_resolver() {
+    let error =
+        assert_rebound_host_resolution_stops(Some(crate::CancellationToken::new()), None).await;
+    assert!(matches!(error, crate::error::TinyAgentsError::Cancelled));
+}
+
+#[tokio::test]
+async fn middleware_rebinding_applies_the_host_resolution_deadline() {
+    let error = assert_rebound_host_resolution_stops(None, Some(5)).await;
+    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)));
+    assert!(error.to_string().contains("host model resolution"));
+    assert!(error.to_string().contains("remaining wall-clock budget"));
+}
+
+#[tokio::test]
+async fn hosted_model_fallback_rebinds_through_the_host_resolver_not_the_local_registry() {
+    let host_backup = Arc::new(ScriptedModel::replies(vec!["host authority won"]));
+    let resolver = Arc::new(HostFallbackResolver {
+        primary: Arc::new(RetryableFailingModel),
+        fallback: host_backup.clone(),
+        requested_pins: Mutex::new(Vec::new()),
+    });
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        resolver.clone(),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("host-backup", Arc::new(MockModel::constant("local bypass")));
+    harness.push_model_middleware(Arc::new(ModelFallbackMiddleware::new(["host-backup"])));
+    harness.with_host_capabilities(host);
+
+    let run = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("hosted-fallback"), ()),
+            &(),
+        )
+        .await
+        .expect("host fallback resolves and succeeds");
+    assert_eq!(run.text().as_deref(), Some("host authority won"));
+    assert_eq!(host_backup.requests().len(), 1);
+    assert_eq!(
+        *resolver.requested_pins.lock().expect("resolver lock"),
+        vec![None, Some("host-backup".to_string())],
+        "the fallback name is passed back to the host resolver"
+    );
+}
+
+#[tokio::test]
 async fn hosted_turn_screens_and_redacts_json_user_blocks_before_model_submission() {
     let model = Arc::new(ScriptedModel::replies(vec!["ok"]));
     let host = crate::host::HostCapabilities::new(
@@ -521,6 +874,88 @@ async fn hosted_turn_screens_and_redacts_json_user_blocks_before_model_submissio
             json!({"safe": true})
         )]
     );
+}
+
+#[tokio::test]
+async fn hosted_turn_screens_and_redacts_provider_extension_user_blocks() {
+    let model = Arc::new(ScriptedModel::replies(vec!["ok"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(RedactJsonUserGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+    let message =
+        tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
+            content: vec![tinyinference_llm::message::ContentBlock::ProviderExtension(
+                json!({"secret": "do not forward"}),
+            )],
+        });
+
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new("helper", vec![message]),
+            RunContext::new(RunConfig::new("extension-redaction"), ()),
+            &(),
+        )
+        .await
+        .expect("redacted extension is safe to forward");
+
+    let request = model.requests().pop().expect("model request");
+    let user = request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            tinyinference_llm::message::Message::User(user) => Some(user),
+            _ => None,
+        })
+        .expect("user message retained");
+    assert_eq!(
+        user.content,
+        vec![tinyinference_llm::message::ContentBlock::ProviderExtension(
+            json!({"safe": true})
+        )]
+    );
+}
+
+#[tokio::test]
+async fn hosted_turn_blocks_provider_extension_user_blocks_before_model_submission() {
+    let model = Arc::new(ScriptedModel::replies(vec!["must not run"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(BlockExtensionGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+    let message =
+        tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
+            content: vec![tinyinference_llm::message::ContentBlock::ProviderExtension(
+                json!({"secret": "block me"}),
+            )],
+        });
+
+    let error = harness
+        .invoke_agent(
+            AgentTurnRequest::new("helper", vec![message]),
+            RunContext::new(RunConfig::new("extension-block"), ()),
+            &(),
+        )
+        .await
+        .expect_err("blocked extensions must not reach the provider");
+    assert!(error.to_string().contains("blocked extension"));
+    assert!(model.requests().is_empty());
 }
 
 #[tokio::test]
@@ -680,6 +1115,65 @@ async fn host_security_denial_returns_a_tool_message_without_executing_the_tool(
         run.messages
             .iter()
             .any(|message| message.text().contains("host denied this tool"))
+    );
+}
+
+#[tokio::test]
+async fn security_gate_sees_raw_provider_arguments_while_tools_receive_prepared_values() {
+    let mut tool_response = ModelResponse::assistant("");
+    tool_response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "real-call",
+            "injected",
+            json!({"text": "safe", "call_id": "forged-by-provider"}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_response,
+        ModelResponse::assistant("done"),
+    ]));
+    let gate = Arc::new(RecordingArgumentGate {
+        seen: Mutex::new(Vec::new()),
+    });
+    let executed = Arc::new(Mutex::new(Vec::new()));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        gate.clone(),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(InjectedArgumentTool {
+        executed: executed.clone(),
+    }));
+    harness.with_host_capabilities(host);
+
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("raw-provider-args"), ()),
+            &(),
+        )
+        .await
+        .expect("the allowed tool completes");
+
+    assert_eq!(
+        *gate.seen.lock().expect("gate lock"),
+        vec![json!({"text": "safe", "call_id": "forged-by-provider"})],
+        "the host authorizes the unmodified provider payload"
+    );
+    assert_eq!(
+        *executed.lock().expect("tool lock"),
+        vec![json!({"text": "safe", "call_id": "real-call"})],
+        "only the trusted call id reaches execution"
     );
 }
 
@@ -1494,6 +1988,85 @@ async fn host_delegate_registry_authorizes_recursive_children() {
         .await
         .expect("registered delegate runs through the parent's hosted child entry point");
     assert_eq!(run.text().as_deref(), Some("parent answer"));
+}
+
+#[tokio::test]
+async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
+    let mut parent_tool_call = ModelResponse::assistant("");
+    parent_tool_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "delegate",
+            "worker",
+            json!({"input": "child task"}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        parent_tool_call,
+        ModelResponse::assistant("child streamed answer"),
+        ModelResponse::assistant("parent final answer"),
+    ]));
+    let mut parent = AgentDefinition::new("parent", "Parent", "delegates");
+    parent.subagents.push("worker".into());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            parent,
+            AgentDefinition::new("worker", "Worker", "child"),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let child = Arc::new(SubAgent::new(
+        "worker",
+        "child",
+        Arc::new(AgentHarness::new()),
+    ));
+    let mut parent_harness = AgentHarness::new();
+    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+        child,
+        ChildDataPolicy::new(|_: &()| ()),
+    )));
+    parent_harness.with_host_capabilities(host);
+
+    let mut stream = parent_harness
+        .invoke_agent_stream(
+            AgentTurnRequest::new(
+                "parent",
+                vec![tinyinference_llm::message::Message::user("delegate")],
+            ),
+            RunContext::new(RunConfig::new("streaming-child"), ()),
+            &(),
+        )
+        .await
+        .expect("parent stream starts");
+    let mut child_delta_seen = false;
+    let mut terminal = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            crate::agent_loop::AgentStreamItem::Event(record) => {
+                child_delta_seen |= matches!(
+                    record.event,
+                    crate::events::AgentEvent::ModelDelta { ref delta, .. }
+                        if delta.text == "child streamed answer"
+                );
+            }
+            item => {
+                terminal = Some(item);
+                break;
+            }
+        }
+    }
+    assert!(
+        child_delta_seen,
+        "child deltas remain observable to the hosted parent"
+    );
+    match terminal.expect("stream has a terminal item") {
+        crate::agent_loop::AgentStreamItem::Completed(run) => {
+            assert_eq!(run.text().as_deref(), Some("parent final answer"));
+        }
+        other => panic!("expected completed parent stream, got {other:?}"),
+    }
 }
 
 #[tokio::test]
