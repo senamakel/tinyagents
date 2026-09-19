@@ -119,22 +119,55 @@ where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
 {
-    /// Wraps a node future in the configured per-node timeout (if any),
-    /// mapping an elapsed deadline onto [`TinyAgentsError::Timeout`].
+    /// Wraps a node future in panic safety and the configured per-node
+    /// timeout (if any), mapping an elapsed deadline onto
+    /// [`TinyAgentsError::Timeout`].
+    ///
+    /// A node handler that panics unwinds through `join_all`/`fut.await`
+    /// unless caught here (I4 part 1): [`futures::FutureExt::catch_unwind`]
+    /// converts an unwind into an ordinary `Err`, so the panic flows through
+    /// the same failure boundary (checkpoint write, `RunFailed` event, status
+    /// `Failed`) as any other node error, instead of poisoning the whole run
+    /// future and leaving the status store stuck at `Running`.
     async fn run_node_future(
         &self,
         node_id: &NodeId,
         fut: NodeFuture<Update>,
     ) -> Result<NodeResult<Update>> {
+        let node_id_owned = node_id.clone();
+        let guarded = async move {
+            match futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(fut)).await {
+                Ok(result) => result,
+                Err(payload) => Err(Self::panic_error(&node_id_owned, payload)),
+            }
+        };
         match self.graph.node_timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, fut).await {
+            Some(timeout) => match tokio::time::timeout(timeout, guarded).await {
                 Ok(result) => result,
                 Err(_) => Err(TinyAgentsError::Timeout(format!(
                     "node `{node_id}` exceeded its {timeout:?} timeout"
                 ))),
             },
-            None => fut.await,
+            None => guarded.await,
         }
+    }
+
+    /// Extracts a printable message from a caught panic payload, preferring a
+    /// `&str` then a `String` downcast, and produces the
+    /// [`TinyAgentsError::Graph`] that stands in for the panic at the normal
+    /// failure boundary.
+    fn panic_error(
+        node_id: &NodeId,
+        payload: Box<dyn std::any::Any + Send>,
+    ) -> TinyAgentsError {
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        TinyAgentsError::Graph(format!("node `{node_id}` panicked: {message}"))
     }
 
     /// Runs one node handler under the graph's node-retry policy.
