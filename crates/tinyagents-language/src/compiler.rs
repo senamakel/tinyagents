@@ -173,18 +173,17 @@ fn compile_graph(graph: &crate::types::GraphDecl) -> Result<Blueprint> {
         let has_static_edge = edge_targets.contains_key(node.name.as_str());
         let has_command_goto = node.command.as_ref().is_some_and(|c| c.goto.is_some());
 
-        if has_routes && (has_next || has_static_edge) {
-            return Err(compile_err(format!(
-                "node `{}` mixes static routing (`next`/edge) with command routing (`routes`); use one or the other",
-                node.name
-            )));
-        }
-
         // A node may declare at most one of `routes`, `next`, `command { goto
         // … }`, or a top-level edge as its routing source. Silently resolving
         // by precedence hides a real authoring mistake (e.g. a model-authored
         // revision that adds a `command.goto` without removing the old
-        // `next`), so any additional combination is a compile error.
+        // `next`), so any combination of more than one is a compile error —
+        // this one check covers every pair (routes+next, routes+edge,
+        // next+command.goto, …), so there is no separate "routes vs
+        // next/edge" check above it (M13 in
+        // `docs/runtime-comparison/code-review-workspace.md`: that redundant
+        // check used to exist here, duplicating this one with a different
+        // message for the same mistake).
         let routing_sources = [
             (has_routes, "routes"),
             (has_next, "`next`"),
