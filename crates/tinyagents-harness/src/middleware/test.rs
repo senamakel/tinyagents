@@ -240,6 +240,36 @@ async fn failing_hook_still_emits_balanced_completed_event() {
     );
 }
 
+/// I-3 regression: `run_stack_hook!` must emit `AgentEvent::MiddlewareFailed`
+/// for a hook that returns `Err`, not just fan `on_error` out privately. The
+/// variant existed but nothing in the stack emitted it before this fix.
+#[tokio::test]
+async fn failing_hook_emits_middleware_failed() {
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(FailingMiddleware));
+
+    let recorder = Arc::new(RecordingListener::new());
+    let mut c = ctx();
+    c.events.subscribe(recorder.clone());
+
+    let mut request = ModelRequest::default();
+    let _ = stack.run_before_model(&mut c, &(), &mut request).await;
+
+    let failed: Vec<AgentEvent> = recorder
+        .events()
+        .into_iter()
+        .map(|r| r.event)
+        .filter(|e| matches!(e, AgentEvent::MiddlewareFailed { .. }))
+        .collect();
+    assert_eq!(
+        failed,
+        vec![AgentEvent::MiddlewareFailed {
+            name: "failing".to_string(),
+            error: failed[0].to_owned_error_or_panic(),
+        }],
+    );
+}
+
 #[tokio::test]
 async fn on_model_delta_hook_emits_no_bracketing_events() {
     // The per-delta hook runs on the streaming hot path, so it must NOT emit
