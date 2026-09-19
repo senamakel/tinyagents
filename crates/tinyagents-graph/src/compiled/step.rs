@@ -345,7 +345,9 @@ where
     ///
     /// Pushes the node to `visited`, records updates/goto, emits the
     /// matching events, and returns the interrupt (with its branch index)
-    /// when the branch paused.
+    /// when the branch paused. Returning `Some` means the branch did *not*
+    /// complete (it is a `stalled` branch, not a `completed` one) even
+    /// though it is not an `Err`.
     fn fold_result(
         &self,
         index: usize,
@@ -390,11 +392,23 @@ where
         None
     }
 
-    /// Folds a [`StepOutcome`] into a [`StepRun`], in active-set index
-    /// order, stopping at the first error or interrupt — exactly the fold
-    /// the pre-split sequential/parallel loops did inline. Kept as one
-    /// function (rather than re-inlined at each call site) so a future
-    /// change to this policy (see the module doc) has one place to change.
+    /// Folds a [`StepOutcome`] into a [`StepRun`].
+    ///
+    /// Per the module doc (C1/C2), this walks *every* result in
+    /// `outcome.results` — never stopping early — and partitions each
+    /// branch into `completed` (an `Update`/`Command` result) or `stalled`
+    /// (an error or an interrupt). The first error and the first interrupt
+    /// encountered (in ascending original-index order) are recorded as this
+    /// step's `failure`/`interrupt`; every stalled branch, including any
+    /// later error/interrupt beyond the first, still lands in `stalled` so
+    /// the boundary can schedule it for resume rather than silently
+    /// dropping it or mistaking it for completed. For a sequential run
+    /// (which already stops invoking further branches at the first
+    /// stop condition — see [`Self::run_sequential`]), `outcome.results` is
+    /// simply a strict prefix, so this fold is behaviorally identical to the
+    /// old stop-early fold in that mode; the behavior change is scoped to
+    /// parallel steps, where `outcome.results` always covers the whole
+    /// active set.
     fn fold_step(
         &self,
         outcome: StepOutcome<Update>,
@@ -405,37 +419,47 @@ where
             updates: Vec::new(),
             goto_map: HashMap::new(),
         };
+        let mut completed: Vec<(usize, Activation)> = Vec::new();
+        let mut stalled: Vec<(usize, Activation)> = Vec::new();
         let mut interrupt: Option<(usize, Interrupt)> = None;
         let mut failure: Option<StepFailure> = None;
 
         for (index, (activation, result)) in outcome.results.into_iter().enumerate() {
-            let node_id = &activation.node;
-            let result = match result {
-                Ok(result) => result,
+            let node_id = activation.node.clone();
+            match result {
                 Err(error) => {
                     self.graph.emit(GraphEvent::NodeFailed {
-                        node: node_id.clone(),
+                        node: node_id,
                         step,
                         error: error.to_string(),
                     });
-                    failure = Some(StepFailure {
-                        failed_index: index,
-                        error,
-                    });
-                    break;
+                    if failure.is_none() {
+                        failure = Some(StepFailure {
+                            failed_index: index,
+                            error,
+                        });
+                    }
+                    stalled.push((index, activation));
                 }
-            };
-
-            if let Some(found) = self.fold_result(index, node_id, step, result, &mut accum, visited)
-            {
-                interrupt = Some(found);
-                break;
+                Ok(result) => {
+                    match self.fold_result(index, &node_id, step, result, &mut accum, visited) {
+                        Some(found) => {
+                            if interrupt.is_none() {
+                                interrupt = Some(found);
+                            }
+                            stalled.push((index, activation));
+                        }
+                        None => completed.push((index, activation)),
+                    }
+                }
             }
         }
 
         StepRun {
             updates: accum.updates,
             goto_map: accum.goto_map,
+            completed,
+            stalled,
             interrupt,
             failure,
         }
