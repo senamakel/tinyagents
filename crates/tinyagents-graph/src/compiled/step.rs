@@ -242,6 +242,73 @@ where
         }
     }
 
+    /// Looks up a live cache entry for `node_id`, when it has a
+    /// [`crate::NodeCachePolicy`] installed (via
+    /// [`crate::CompiledGraph::with_cached_node`]) and a
+    /// [`crate::cache::TaskCache`] backend is attached (via
+    /// [`crate::CompiledGraph::with_task_cache`]).
+    ///
+    /// A cache error, a missing entry, or a value that fails to decode into
+    /// `Update` are all treated as a miss (`None`) — caching is an
+    /// optimization, never a correctness requirement (see the module docs on
+    /// [`crate::cache::TaskCache`]).
+    async fn try_cache_get(
+        &self,
+        node_id: &NodeId,
+        state: &State,
+        send_arg: Option<&serde_json::Value>,
+    ) -> Option<Update> {
+        let cached = self.graph.cached_nodes.get(node_id)?;
+        let cache = self.graph.task_cache.as_ref()?;
+        let hash = (cached.key)(state, send_arg);
+        let key = TaskCacheKey::new(self.graph.graph_id.clone(), node_id.clone(), hash);
+        let value = cache.get(&key).await.ok().flatten()?;
+        (cached.decode)(value).ok()
+    }
+
+    /// Stores a cache-miss result for `node_id`, when it has a cache policy
+    /// and backend configured, and emits the miss's
+    /// [`GraphEvent::TaskCompleted`] (`cached: false`). A no-op for a node
+    /// with no cache policy, an error result, an interrupt, or a `Command`
+    /// with no update to store.
+    async fn try_cache_put(
+        &self,
+        node_id: &NodeId,
+        state: &State,
+        send_arg: Option<&serde_json::Value>,
+        result: &Result<NodeResult<Update>>,
+        step: usize,
+    ) {
+        let Some(cached) = self.graph.cached_nodes.get(node_id) else {
+            return;
+        };
+        let Some(cache) = self.graph.task_cache.as_ref() else {
+            return;
+        };
+        let Ok(result) = result else {
+            return;
+        };
+        let update = match result {
+            NodeResult::Update(update) => Some(update),
+            NodeResult::Command(command) => command.update.as_ref(),
+            NodeResult::Interrupt(_) => None,
+        };
+        let Some(update) = update else {
+            return;
+        };
+        let Ok(value) = (cached.encode)(update) else {
+            return;
+        };
+        let hash = (cached.key)(state, send_arg);
+        let key = TaskCacheKey::new(self.graph.graph_id.clone(), node_id.clone(), hash);
+        let _ = cache.put(&key, value, cached.ttl).await;
+        self.graph.emit(GraphEvent::TaskCompleted {
+            node: node_id.clone(),
+            step,
+            cached: false,
+        });
+    }
+
     /// Runs one superstep's active node set — concurrently when the graph
     /// opts into it (`with_parallel`) and more than one node is active, else
     /// sequentially — and folds the result. This is the single entry point
