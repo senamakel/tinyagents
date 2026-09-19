@@ -126,7 +126,11 @@ pub enum AgentEvent {
     ToolSearched {
         /// Identifier of the `tool_search` call.
         call_id: CallId,
-        /// The model's query, verbatim.
+        /// The model's query, verbatim — but only when
+        /// [`RunPolicy::capture`][crate::runtime::RunPolicy::capture]`.tool_io`
+        /// is enabled (default `false`, payload-free); empty string
+        /// otherwise. Same privacy class and gate as a normal successful
+        /// tool call's arguments.
         query: String,
         /// Number of deferred tools returned.
         matched: usize,
