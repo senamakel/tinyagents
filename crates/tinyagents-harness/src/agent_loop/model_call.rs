@@ -947,7 +947,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 _ => None,
             };
 
-            if let Some(message_delta) = message_delta {
+            if let Some(mut message_delta) = message_delta {
+                if strip_leading_whitespace && !message_delta.text.is_empty() {
+                    let stripped = message_delta.text.trim_start();
+                    if stripped.is_empty() {
+                        message_delta.text.clear();
+                    } else if stripped.len() == message_delta.text.len() {
+                        // No leading whitespace to strip in this delta; the
+                        // next delta carrying text is no longer the first.
+                        strip_leading_whitespace = false;
+                    } else {
+                        message_delta.text = stripped.to_string();
+                        strip_leading_whitespace = false;
+                    }
+                }
                 saw_tool_delta |= message_delta.tool_call.is_some();
                 // Build the middleware-facing delta first (it needs owned
                 // copies of the fields), then move `message_delta` into the
