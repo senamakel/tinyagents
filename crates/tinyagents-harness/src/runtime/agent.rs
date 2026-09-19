@@ -154,9 +154,10 @@ pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
 impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, State, Ctx> {
     type Item = AgentStreamItem;
 
+    #[allow(unsafe_code)]
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // `inner` is pinned independently by `Box`; this projection never moves
-        // the boxed stream or any other field of `AgentStream`.
+        // SAFETY: `inner` is pinned independently by `Box`; this projection
+        // never moves the boxed stream or any other field of `AgentStream`.
         let stream = unsafe { self.get_unchecked_mut() };
         match stream.inner.as_mut() {
             Some(inner) => match inner.as_mut().poll_next(context) {
