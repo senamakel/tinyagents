@@ -773,6 +773,12 @@ pub(crate) fn emit_host_progress<State: Send + Sync, Ctx: Send + Sync>(
     progress.send_nonterminal(event);
 }
 
+/// Collapses any preparation failure into a caller-safe message, preserving
+/// only [`TinyAgentsError::Cancelled`] and [`TinyAgentsError::Timeout`] — the
+/// two variants a caller needs to distinguish to react correctly (do not
+/// retry vs. may retry with a longer budget). Everything else (a definition
+/// lookup failure, a security block, a malformed definition) collapses to the
+/// same generic message so internal detail never reaches a hosted caller.
 fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError {
     match error {
         TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
