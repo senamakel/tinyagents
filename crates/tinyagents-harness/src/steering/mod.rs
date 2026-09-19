@@ -99,14 +99,20 @@ impl SteeringPolicy {
 
 impl SteeringHandle {
     /// Builds a handle backed by a fresh, empty queue gated by `policy`.
+    ///
+    /// The handle is unbound (empty `run_id`, `is_root = true`) until it is
+    /// attached to a run via
+    /// [`RunContext::with_steering`][crate::context::RunContext::with_steering],
+    /// which binds it to that run's id as the root of its steering tree.
     pub fn new(policy: SteeringPolicy) -> Self {
         Self {
             inner: Arc::new(SteeringInner {
                 queue: Mutex::new(VecDeque::new()),
                 policy,
-                paused: Mutex::new(None),
-                checkpoints: Mutex::new(0),
             }),
+            run_id: RunId::new(""),
+            is_root: true,
+            local: Arc::new(SteeringLocal::default()),
         }
     }
 
@@ -116,49 +122,118 @@ impl SteeringHandle {
         Self::new(SteeringPolicy::allow_all())
     }
 
-    /// Enqueues `command` for delivery to the running agent loop.
+    /// Binds this handle to `run_id` as the **root** of its steering tree.
+    ///
+    /// Called by [`RunContext::with_steering`][crate::context::RunContext::with_steering]
+    /// when an orchestrator attaches a handle to a run; every
+    /// [`SteeringTarget::Root`]-addressed command drains here.
+    pub(crate) fn bind_root(&self, run_id: RunId) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            run_id,
+            is_root: true,
+            local: Arc::clone(&self.local),
+        }
+    }
+
+    /// Derives a handle scoped to a child run.
+    ///
+    /// Shares the underlying queue and policy (so an orchestrator holding the
+    /// root handle can still reach the child by [`SteeringTarget::Run`] or
+    /// [`SteeringTarget::All`]), but gets its own identity and its own
+    /// pause/checkpoint state: a command addressed to the parent (or to
+    /// [`SteeringTarget::Root`]) is invisible to [`SteeringHandle::drain`] on
+    /// the child, and a pause latched on the child does not latch the parent's.
+    /// This is what keeps an `Inject`/`Pause` meant for the orchestrator from
+    /// being consumed by whichever sub-agent happens to reach a checkpoint
+    /// first (see I-5).
+    pub(crate) fn for_child(&self, run_id: RunId) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            run_id,
+            is_root: false,
+            local: Arc::new(SteeringLocal::default()),
+        }
+    }
+
+    /// Enqueues `command` addressed to [`SteeringTarget::Root`].
     ///
     /// The command becomes visible to the loop at its next steering checkpoint;
-    /// this method never blocks and does not itself check the policy.
+    /// this method never blocks and does not itself check the policy. Use
+    /// [`SteeringHandle::send_to`] to address a specific descendant run, or
+    /// [`SteeringHandle::send_all`] to reach every run sharing this handle.
+    pub fn send(&self, command: SteeringCommand) {
+        self.send_to(SteeringTarget::Root, command);
+    }
+
+    /// Enqueues `command` addressed to `target`.
     ///
     /// Queue accessors recover from a poisoned mutex (a panic in another
     /// holder) instead of panicking: the queue is a plain `VecDeque` with no
     /// invariants that a panicking holder could break mid-update.
-    pub fn send(&self, command: SteeringCommand) {
+    pub fn send_to(&self, target: SteeringTarget, command: SteeringCommand) {
         self.inner
             .queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(command);
+            .push_back((target, command));
     }
 
-    /// Removes and returns all currently queued commands in FIFO order, leaving
-    /// the queue empty. Called by the agent loop at each checkpoint.
+    /// Enqueues `command` addressed to every run sharing this handle
+    /// ([`SteeringTarget::All`]).
+    pub fn send_all(&self, command: SteeringCommand) {
+        self.send_to(SteeringTarget::All, command);
+    }
+
+    /// Removes and returns the commands addressed to *this* handle's run (its
+    /// own [`SteeringTarget::Run`], [`SteeringTarget::Root`] if this handle is
+    /// the root, or [`SteeringTarget::All`]), leaving commands addressed to
+    /// other runs in the shared queue for them to drain later. Called by the
+    /// agent loop at each checkpoint.
     pub fn drain(&self) -> Vec<SteeringCommand> {
         let mut queue = self
             .inner
             .queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        queue.drain(..).collect()
+        let mut matched = Vec::new();
+        let mut remaining = VecDeque::with_capacity(queue.len());
+        for (target, command) in queue.drain(..) {
+            if self.matches(&target) {
+                matched.push(command);
+            } else {
+                remaining.push_back((target, command));
+            }
+        }
+        *queue = remaining;
+        matched
     }
 
-    /// Returns `true` when no commands are currently queued.
+    /// Returns `true` when `target` addresses this handle's run.
+    fn matches(&self, target: &SteeringTarget) -> bool {
+        match target {
+            SteeringTarget::Root => self.is_root,
+            SteeringTarget::Run(id) => *id == self.run_id,
+            SteeringTarget::All => true,
+        }
+    }
+
+    /// Returns `true` when no commands addressed to this handle's run are
+    /// currently queued.
     pub fn is_empty(&self) -> bool {
-        self.inner
-            .queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_empty()
+        self.pending() == 0
     }
 
-    /// Returns the number of commands currently queued.
+    /// Returns the number of commands currently queued that are addressed to
+    /// this handle's run.
     pub fn pending(&self) -> usize {
         self.inner
             .queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+            .iter()
+            .filter(|(target, _)| self.matches(target))
+            .count()
     }
 
     /// Returns the policy gating this handle.
@@ -217,7 +292,7 @@ impl SteeringHandle {
     /// the *current* checkpoint is what a pause records (not the next one).
     fn advance_checkpoint(&self) -> usize {
         let mut checkpoints = self
-            .inner
+            .local
             .checkpoints
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -229,7 +304,7 @@ impl SteeringHandle {
     /// Locks the pause latch, recovering from poisoning (see
     /// [`SteeringHandle::send`]).
     fn lock_paused(&self) -> std::sync::MutexGuard<'_, Option<PauseState>> {
-        self.inner
+        self.local
             .paused
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
