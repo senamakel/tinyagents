@@ -34,8 +34,8 @@ use super::{AgentHarness, HostInvocationBinding, InvocationRuntime};
 /// `SubAgent` downcasts it at the recursive boundary and therefore cannot
 /// substitute an unhosted or differently-hosted child harness for the
 /// parent's policy.
-pub(crate) struct HostInvocationAuthority<State: Send + Sync> {
-    pub(crate) binding: HostInvocationBinding<State>,
+pub(crate) struct HostInvocationAuthority<State: Send + Sync, Ctx: Send + Sync> {
+    pub(crate) binding: HostInvocationBinding<State, Ctx>,
 }
 
 /// A host-owned turn request.
@@ -120,12 +120,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
         host: std::sync::Arc<crate::host::HostCapabilities<State>>,
         request: AgentTurnRequest,
         context: RunContext<Ctx>,
+        runtime: Option<std::sync::Arc<InvocationRuntime<State, Ctx>>>,
     ) -> Self {
         Self {
             host,
             request,
             context,
-            runtime: None,
+            runtime,
         }
     }
 }
@@ -250,8 +251,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, St
     }
 }
 
-struct PreparedAgentTurn<State: Send + Sync> {
-    binding: HostInvocationBinding<State>,
+struct PreparedAgentTurn<State: Send + Sync, Ctx: Send + Sync> {
+    binding: HostInvocationBinding<State, Ctx>,
     thread_id: ThreadId,
     run_id: crate::ids::RunId,
     input_text: String,
@@ -279,7 +280,7 @@ impl ProgressSender {
     }
 }
 
-impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
+impl<State: Send + Sync, Ctx: Send + Sync> Clone for PreparedAgentTurn<State, Ctx> {
     fn clone(&self) -> Self {
         Self {
             binding: self.binding.clone(),
@@ -291,7 +292,7 @@ impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
     /// Runs an agent through this invocation's host-capability bundle.
     ///
     /// The invocation type requires the four mandatory capabilities at
@@ -330,9 +331,10 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .as_deref()
             .map(InvocationRuntime::harness)
             .unwrap_or(self);
-        let prepared = runner
+        let mut prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
+        prepared.binding.runtime = runtime.clone();
         let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
@@ -432,9 +434,10 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .as_deref()
             .map(InvocationRuntime::harness)
             .unwrap_or(self);
-        let prepared = runner
+        let mut prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
+        prepared.binding.runtime = runtime.clone();
         let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
@@ -478,7 +481,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         host: std::sync::Arc<crate::host::HostCapabilities<State>>,
         request: AgentTurnRequest,
         context: &RunContext<Ctx>,
-    ) -> Result<PreparedAgentTurn<State>> {
+    ) -> Result<PreparedAgentTurn<State, Ctx>> {
         let cancellation = context.cancellation.clone();
         let preparation = self.prepare_agent_turn(host, request, context);
         let outcome = match self.host_io_budget(context) {
@@ -519,7 +522,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         host: std::sync::Arc<crate::host::HostCapabilities<State>>,
         mut request: AgentTurnRequest,
         context: &RunContext<Ctx>,
-    ) -> Result<PreparedAgentTurn<State>> {
+    ) -> Result<PreparedAgentTurn<State, Ctx>> {
         if request.agent_id.trim().is_empty() {
             return Err(TinyAgentsError::Validation(
                 "host-driven invocation requires a non-empty agent id".into(),
@@ -607,6 +610,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 role: definition.role,
                 allowed_tools: definition.tools.into_iter().collect(),
                 progress: progress.clone(),
+                runtime: None,
             },
             thread_id,
             run_id: context.run_id().clone(),
@@ -618,7 +622,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     fn install_host_terminal_observer(
         &self,
         context: &mut RunContext<Ctx>,
-        prepared: PreparedAgentTurn<State>,
+        prepared: PreparedAgentTurn<State, Ctx>,
     ) -> std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>
     where
         State: 'static,
@@ -668,9 +672,9 @@ unsafe fn extend_overlay_stream_lifetime<'a, State: Send + Sync + 'static, Ctx: 
 ///
 /// The binding is carried by the non-serializable context rather than the
 /// reusable harness, so concurrent roots have no shared mutable authority.
-pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx>(
+pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx: Send + Sync>(
     context: &RunContext<Ctx>,
-) -> Result<Option<HostInvocationBinding<State>>> {
+) -> Result<Option<HostInvocationBinding<State, Ctx>>> {
     let Some(authority) = context.host_authority.as_ref() else {
         return Ok(None);
     };
@@ -688,14 +692,15 @@ pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx>(
     // `RunContext::child` clones that same `Arc` only for recursive calls with
     // the same `State`. Thus a present authority always points at the concrete
     // type requested here for the active harness invocation.
-    let authority =
-        unsafe { &*(std::sync::Arc::as_ptr(authority) as *const HostInvocationAuthority<State>) };
+    let authority = unsafe {
+        &*(std::sync::Arc::as_ptr(authority) as *const HostInvocationAuthority<State, Ctx>)
+    };
     Ok(Some(authority.binding.clone()))
 }
 
 /// Best-effort progress projection. A host UI must never make the turn wait or
 /// fail, so delivery is detached and dropped when no Tokio runtime is available.
-pub(crate) fn emit_host_progress<State: Send + Sync, Ctx>(
+pub(crate) fn emit_host_progress<State: Send + Sync, Ctx: Send + Sync>(
     context: &RunContext<Ctx>,
     event: ProgressEvent,
 ) {
@@ -715,8 +720,8 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
     }
 }
 
-fn spawn_host_finalizer<State: Send + Sync + 'static>(
-    prepared: PreparedAgentTurn<State>,
+fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
+    prepared: PreparedAgentTurn<State, Ctx>,
     run: AgentRun,
     succeeded: bool,
     error: Option<String>,
@@ -738,8 +743,8 @@ fn spawn_host_finalizer<State: Send + Sync + 'static>(
     }
 }
 
-async fn finish_host_turn<State: Send + Sync>(
-    prepared: PreparedAgentTurn<State>,
+async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
+    prepared: PreparedAgentTurn<State, Ctx>,
     run: AgentRun,
     succeeded: bool,
     error: Option<String>,

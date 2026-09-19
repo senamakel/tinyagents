@@ -35,7 +35,7 @@ use tinyinference_llm::model::ResponseFormat;
 /// This is held only in that invocation's non-serializable
 /// [`RunContext`](crate::context::RunContext). It is never stored on the
 /// reusable harness, keyed by a run id, or written to graph/checkpoint state.
-pub(crate) struct HostInvocationBinding<State: Send + Sync> {
+pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     /// The capability bundle that prepared this exact invocation. This is
     /// per-run rather than read from the harness so a recursively invoked
     /// child cannot substitute its own installed (or missing) host policy.
@@ -51,9 +51,11 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync> {
     pub(crate) allowed_tools: HashSet<String>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
     pub(crate) progress: Option<super::agent::ProgressSender>,
+    /// The exact invocation-local runtime inherited by authorized children.
+    pub(crate) runtime: Option<Arc<InvocationRuntime<State, Ctx>>>,
 }
 
-impl<State: Send + Sync> Clone for HostInvocationBinding<State> {
+impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State, Ctx> {
     fn clone(&self) -> Self {
         Self {
             host: self.host.clone(),
@@ -62,6 +64,7 @@ impl<State: Send + Sync> Clone for HostInvocationBinding<State> {
             role: self.role.clone(),
             allowed_tools: self.allowed_tools.clone(),
             progress: self.progress.clone(),
+            runtime: self.runtime.clone(),
         }
     }
 }

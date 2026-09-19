@@ -2906,16 +2906,19 @@ async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
     fn hosted_parent_context(host: Arc<crate::host::HostCapabilities<()>>) -> RunContext<()> {
         let mut context = RunContext::new(RunConfig::new("hosted-direct-parent"), ());
         context.host_agent_id = Some("parent".to_string());
-        context.host_authority = Some(Arc::new(crate::runtime::HostInvocationAuthority {
-            binding: crate::runtime::HostInvocationBinding {
-                host,
-                agent_id: "parent".to_string(),
-                model_pin: None,
-                role: None,
-                allowed_tools: HashSet::new(),
-                progress: None,
+        context.host_authority = Some(Arc::new(
+            crate::runtime::HostInvocationAuthority::<(), ()> {
+                binding: crate::runtime::HostInvocationBinding {
+                    host,
+                    agent_id: "parent".to_string(),
+                    model_pin: None,
+                    role: None,
+                    allowed_tools: HashSet::new(),
+                    progress: None,
+                    runtime: None,
+                },
             },
-        }));
+        ));
         context
     }
 

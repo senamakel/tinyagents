@@ -367,6 +367,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             binding.host.clone(),
             crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
             ctx,
+            binding.runtime.clone(),
         );
         // A hosted parent always re-enters through this exact capability
         // bundle. The child harness supplies durable mechanics only; it cannot
