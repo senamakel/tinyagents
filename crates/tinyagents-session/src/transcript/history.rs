@@ -163,6 +163,8 @@ pub struct FileTranscriptLocator {
 }
 
 impl FileTranscriptLocator {
+    /// Builds a locator rooted at `workspace_dir` (i.e. it resolves
+    /// `{workspace_dir}/session_raw/...`).
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
