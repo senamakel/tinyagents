@@ -12,24 +12,38 @@ where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
 {
+    /// `completed` pairs each branch with its *original* active-set index
+    /// (not necessarily `0..completed.len()` in order — see
+    /// [`crate::compiled::step::StepRun::completed`] and
+    /// [`crate::compiled::boundary::CompiledGraph::advance`]'s
+    /// `carried_completed` handling, both of which can hand this a
+    /// non-contiguous or reordered set spanning more than one step's
+    /// original indices). That original index is what `goto_map` is keyed
+    /// by, so it is threaded through explicitly rather than re-derived from
+    /// `completed`'s own position.
     pub(super) fn route_completed(
         &self,
-        completed: &[Activation],
+        completed: &[(usize, Activation)],
         goto_map: &HashMap<usize, Vec<RouteTarget>>,
         state: &State,
         barrier_arrivals: &mut HashMap<NodeId, HashSet<NodeId>>,
     ) -> Result<Vec<Activation>> {
         let mut next: Vec<Activation> = Vec::new();
         let mut next_seen: HashSet<NodeId> = HashSet::new();
-        // Resolved targets per activation index, captured once here and
-        // reused by the barrier-relief pass below instead of calling
-        // `self.route` a second time — a router closure is only guaranteed
-        // pure/idempotent per the `route`/`add_conditional_edges` contract,
-        // not safe to invoke twice for the same activation.
+        // Resolved targets per completed-slice position (not original
+        // index), captured once here and reused by the barrier-relief pass
+        // below instead of calling `self.route` a second time — a router
+        // closure is only guaranteed pure/idempotent per the
+        // `route`/`add_conditional_edges` contract, not safe to invoke
+        // twice for the same activation.
         let mut resolved: Vec<Vec<RouteTarget>> = Vec::with_capacity(completed.len());
-        for (index, activation) in completed.iter().enumerate() {
+        for (orig_index, activation) in completed.iter() {
             let node_id = &activation.node;
-            let targets = self.route(node_id, goto_map.get(&index).map(Vec::as_slice), state)?;
+            let targets = self.route(
+                node_id,
+                goto_map.get(orig_index).map(Vec::as_slice),
+                state,
+            )?;
             resolved.push(targets.clone());
             for target in targets {
                 let tnode = target.node().clone();
