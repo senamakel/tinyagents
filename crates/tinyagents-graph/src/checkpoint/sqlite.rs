@@ -757,7 +757,7 @@ fn map_write_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<PendingWrit
         match serde_json::from_str::<serde_json::Value>(&payload_json) {
             Ok(payload) => Ok(PendingWrite {
                 node: NodeId::from(node),
-                task_id,
+                task_id: TaskId::from(task_id),
                 idx,
                 channel,
                 payload,
