@@ -52,9 +52,48 @@ turns up no matches — they are proposed, not implemented:
   the capability catalog itself (e.g. registry-owned middleware/listener
   wiring, distributed-supervisor integration).
 
-There is also no `impl DefinitionRegistry for CapabilityRegistry` yet (see
+~~There is also no `impl DefinitionRegistry for CapabilityRegistry` yet (see
 `docs/runtime-comparison/plan.md`, Phase 1c, `W-I8`/`W-I9`), and no
-`set_metadata` / `remove` mutation API on `CapabilityRegistry`.
+`set_metadata` / `remove` mutation API on `CapabilityRegistry`.~~ Implemented
+in Phase 1c — see below.
+
+## Phase 1c additions (W-I3, W-I8, W-I9)
+
+- **`impl tinyagents_definition::DefinitionRegistry for CapabilityRegistry<State>`**
+  (`capability/mod.rs`) — `resolve`/`list`/`delegates_for` read straight from
+  the registry's `agents` map, so a host that already registers agents in the
+  `CapabilityRegistry` no longer has to build a second, separately populated
+  `InMemoryDefinitionRegistry` by hand to satisfy
+  `HostCapabilities.definitions: Arc<dyn DefinitionRegistry>` (W-I9). Written
+  out by hand matching the exact signature `#[async_trait]` expands to,
+  rather than applying the macro here: `tinyagents-registry` only has
+  `async-trait` as a *dev*-dependency, so the macro is unavailable to
+  non-test library code without a `Cargo.toml` edit outside this change's
+  file boundary.
+- **`CapabilityRegistry::set_metadata(kind, name, ComponentMetadata)`** —
+  overwrites the metadata recorded for an already-registered `(kind, name)`,
+  making `ComponentMetadata::with_description`/`with_tag` actually reach a
+  registered component instead of being dead on arrival (W-I8).
+  **`register_model_with`/`register_tool_with`** attach metadata atomically
+  at registration instead of needing a follow-up `set_metadata` call.
+- **`CapabilityRegistry::remove(kind, name) -> bool`** — drops a registered
+  component and its metadata (a no-op, not an error, if absent). This is what
+  makes `diagnostics()`'s `alias_shadows_component`/`dangling_alias` checks
+  reachable through the public API: `alias()` is fail-closed against both at
+  insertion time, so before `remove` existed only `name_reused_across_kinds`
+  could ever fire.
+- **Deterministic default model (W-I3)** — `CapabilityRegistry` now tracks
+  `model_order: Vec<String>` alongside its model `HashMap`, appended the
+  first time a name is registered (`register_model`/`replace_model`;
+  re-registering an existing name via `replace_model` does not move it).
+  `to_model_registry()` builds the harness `ModelRegistry` by iterating
+  `model_order` instead of the `HashMap`, so the "first-registered model
+  becomes the default" rule
+  (`tinyagents_harness::model_registry::ModelRegistry::register`) is
+  reproducible across runs instead of following `HashMap` iteration order.
+  `to_model_registry_with_default(name)` (new) builds the same registry with
+  an explicit default instead, returning `TinyAgentsError::ModelNotFound` if
+  `name` is not registered.
 
 ## Why the gap
 
