@@ -25,6 +25,19 @@ use super::*;
 
 use crate::compiled::run_ctx::RunCtx;
 
+/// Counts how many activations of this step's active set target each node
+/// (I1): more than one is a `Send` fan-out of the same node, which
+/// [`RunCtx::node_context`] surfaces on [`NodeContext::siblings`] so a
+/// subgraph node handler can namespace its child checkpoint by task id
+/// instead of sharing one namespace across every fan-out branch.
+fn sibling_counts(active: &[Activation]) -> HashMap<NodeId, usize> {
+    let mut counts: HashMap<NodeId, usize> = HashMap::new();
+    for activation in active {
+        *counts.entry(activation.node.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
 /// The raw, unfolded result of running a superstep's active node set: one
 /// `(Activation, Result<NodeResult>)` pair per branch that was actually
 /// invoked, in active-set index order.

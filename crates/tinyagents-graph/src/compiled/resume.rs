@@ -267,6 +267,18 @@ where
     }
 }
 
+/// The key an activation's resume value is looked up under: its task id
+/// when known (I1/R5 — distinguishes concurrent same-node activations),
+/// falling back to its node id (legacy checkpoints, or a value fanned across
+/// every pending node with no interrupt provenance).
+fn resume_key(activation: &Activation) -> String {
+    if activation.task_id.as_str().is_empty() {
+        activation.node.to_string()
+    } else {
+        activation.task_id.as_str().to_string()
+    }
+}
+
 /// Parses a checkpoint's persisted `metadata.node_visits` object (see
 /// `boundary`'s checkpoint builders) back into the live per-node visit-count
 /// map. Missing/malformed metadata (checkpoints written before this field
