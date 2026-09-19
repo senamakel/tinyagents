@@ -17,7 +17,7 @@ fn ctx() -> RunContext<()> {
 fn registry_with(names: &[&str]) -> Arc<dyn ToolSet<(), ()>> {
     let mut registry: ToolRegistry<(), ()> = ToolRegistry::new();
     for name in names {
-        registry.register(Arc::new(EchoTool::new(name)));
+        registry.register(Arc::new(EchoTool::new(*name)));
     }
     Arc::new(registry)
 }
