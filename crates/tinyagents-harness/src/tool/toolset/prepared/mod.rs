@@ -68,6 +68,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> PreparedToolSet<State, Ctx> {
     }
 }
 
+/// Retains only the schemas a predicate accepts, in place.
+///
+/// Shared between [`PreparedToolSet::filtering`] and
+/// [`crate::middleware::library::DynamicToolSelectionMiddleware`]'s
+/// `before_model` hook, so the two keep exactly one "filter the model-visible
+/// tool schemas" implementation instead of the historical duplication
+/// (`docs/runtime-comparison/pydantic-ai.md` §4).
+pub(crate) fn retain_matching_schemas(
+    schemas: &mut Vec<tinyinference_llm::tool::ToolSchema>,
+    predicate: &(dyn Fn(&tinyinference_llm::tool::ToolSchema) -> bool + Send + Sync),
+) {
+    schemas.retain(predicate);
+}
+
 #[async_trait]
 impl<State: Send + Sync, Ctx: Send + Sync> ToolSet<State, Ctx> for PreparedToolSet<State, Ctx> {
     async fn tools(&self, ctx: &RunContext<Ctx>) -> Result<Vec<Arc<dyn Tool>>> {
