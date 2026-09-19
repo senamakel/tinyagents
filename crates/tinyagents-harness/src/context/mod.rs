@@ -628,6 +628,21 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
+    /// Attaches a durable [`crate::summarization::CompactionSink`] so every
+    /// [`crate::summarization::CompactionRecord`] a compaction produces on
+    /// this run is persisted (typically into a session's entry tree),
+    /// instead of only living in
+    /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
+    /// in-process buffer. `None` (the default) disables persistence.
+    #[must_use]
+    pub fn with_compaction_sink(
+        mut self,
+        sink: std::sync::Arc<dyn crate::summarization::CompactionSink>,
+    ) -> Self {
+        self.compaction_sink = Some(sink);
+        self
+    }
+
     /// Emits `event` on this run's event sink, returning the recorded entry.
     pub fn emit(&self, event: AgentEvent) -> EventRecord {
         self.events.emit(event)
