@@ -354,6 +354,7 @@ where
             barrier_arrivals: initial_barriers,
             async_writes: AsyncCheckpointWrites::default(),
             resume_map,
+            versions_seen: initial_versions_seen,
             visited: Vec::new(),
             all_child_runs: Vec::new(),
             steps: initial_steps,
