@@ -309,7 +309,8 @@ impl<Ctx> RunContext<Ctx> {
         }
     }
 
-    /// Builds an isolated child context from this live parent context.
+    /// Builds an isolated child context from this live parent context,
+    /// propagating the parent's host authority.
     ///
     /// A child gets a new run id, lineage record, [`LimitTracker`], control
     /// slot, and instance id.  It deliberately shares the capabilities that
@@ -317,7 +318,42 @@ impl<Ctx> RunContext<Ctx> {
     /// workspace policy, steering, streaming mode, thread identity, output
     /// cap, and depth cap.  The child starts with the parent's metadata; use
     /// [`Self::child_with_metadata`] to shallowly overlay child-specific keys.
-    pub fn child<ChildCtx>(
+    ///
+    /// This keeps the child's `Ctx` type identical to the parent's, which is
+    /// what makes propagating [`Self::host_authority`] sound: the type-erased
+    /// authority installed by a hosted invocation is keyed to the exact
+    /// `(State, Ctx)` pair it was constructed for, and this method is the only
+    /// place that carries it forward. A recursive call that needs a
+    /// *different* `Ctx` type must go through [`Self::child_with_data`]
+    /// instead, which never propagates host authority.
+    pub fn child(&self, child_config: RunConfig, data: Ctx) -> Result<RunContext<Ctx>> {
+        let mut child = self.child_without_authority(child_config, data)?;
+        child.host_authority = self.host_authority.clone();
+        Ok(child)
+    }
+
+    /// Builds an isolated child context whose user data type may differ from
+    /// this context's, deliberately *not* propagating host authority.
+    ///
+    /// Use this whenever the child's `Ctx` differs from the parent's (for
+    /// example, a differently-typed sub-harness). Because [`RunContext`] does
+    /// not track its `State` type parameter at all, and the erased host
+    /// authority is keyed to a specific `(State, Ctx)` pair, there is no sound
+    /// way to check at this boundary whether the parent's authority would
+    /// still apply to the child's types. Rather than guess, the child simply
+    /// starts unhosted; a caller that legitimately needs to delegate hosted
+    /// authority across a `Ctx` change must do so explicitly through the
+    /// hosted subagent entry points, which re-derive authority from the live
+    /// host capability bundle rather than reinterpreting the parent's.
+    pub fn child_with_data<ChildCtx>(
+        &self,
+        child_config: RunConfig,
+        data: ChildCtx,
+    ) -> Result<RunContext<ChildCtx>> {
+        self.child_without_authority(child_config, data)
+    }
+
+    fn child_without_authority<ChildCtx>(
         &self,
         child_config: RunConfig,
         data: ChildCtx,
@@ -332,7 +368,6 @@ impl<Ctx> RunContext<Ctx> {
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
         child.host_agent_id = self.host_agent_id.clone();
-        child.host_authority = self.host_authority.clone();
         Ok(child)
     }
 
