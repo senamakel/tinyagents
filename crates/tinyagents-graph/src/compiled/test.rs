@@ -107,12 +107,10 @@ async fn static_edge_fan_out_activates_every_target() {
     // and "b" as successors of "start" in the same superstep (I10), not
     // silently overwrite the first edge with the second.
     let graph = GraphBuilder::<Vec<String>, String>::new()
-        .set_reducer(ClosureStateReducer::new(
-            |mut s: Vec<String>, u: String| {
-                s.push(u);
-                Ok(s)
-            },
-        ))
+        .set_reducer(ClosureStateReducer::new(|mut s: Vec<String>, u: String| {
+            s.push(u);
+            Ok(s)
+        }))
         .add_node("start", |_s, _c: NodeContext| async move {
             Ok(NodeResult::Update("start".to_string()))
         })

@@ -3,3 +3,7 @@
    Compiling tinyagents-language v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-language)
    Compiling tinyagents-session v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-session)
    Compiling tinyagents-graph v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-graph)
+   Compiling tinyagents-orchestration v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-orchestration)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.21s
+     Running unittests src/lib.rs (target/debug/deps/tinyagents_orchestration-276c6440cc2de848)
+   Doc-tests tinyagents_orchestration
