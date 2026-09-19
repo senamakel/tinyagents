@@ -172,16 +172,29 @@ where
         if from == to {
             return true;
         }
-        let mut current = from;
+        // A static fan-out (`self.edges` mapping to more than one target) is
+        // still fully deterministic — every target in the list unconditionally
+        // activates, unlike a conditional branch — so this walks every static
+        // successor of `from`, not just a single chain, tracking visited nodes
+        // to stay finite over a cycle.
+        let mut stack: Vec<&NodeId> = vec![from];
         let mut seen: HashSet<&NodeId> = HashSet::new();
-        while let Some(next) = self.edges.get(current) {
-            if next == to {
-                return true;
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current) {
+                continue;
             }
-            if next == stop || !seen.insert(next) {
-                return false;
+            let Some(targets) = self.edges.get(current) else {
+                continue;
+            };
+            for next in targets {
+                if next == to {
+                    return true;
+                }
+                if next == stop {
+                    continue;
+                }
+                stack.push(next);
             }
-            current = next;
         }
         false
     }

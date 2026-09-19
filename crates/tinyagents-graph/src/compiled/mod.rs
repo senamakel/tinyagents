@@ -298,7 +298,7 @@ impl<State, Update> CompiledGraph<State, Update> {
         graph_id: GraphId,
         name: Option<String>,
         nodes: HashMap<NodeId, BuilderNode<State, Update>>,
-        edges: HashMap<NodeId, NodeId>,
+        edges: HashMap<NodeId, Vec<NodeId>>,
         branches: HashMap<NodeId, Branch<State>>,
         command_nodes: HashSet<NodeId>,
         waiting: HashMap<NodeId, HashSet<NodeId>>,

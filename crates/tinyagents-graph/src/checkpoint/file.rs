@@ -217,6 +217,35 @@ impl<State> FileCheckpointer<State> {
             serde_json::from_str::<WriteRecord>(line)
         })
     }
+
+    /// Reads every record's [`CheckpointHeader`] in `thread_id`'s file and
+    /// projects each onto [`CheckpointMetadata`], without ever decoding a
+    /// line's `State` payload.
+    ///
+    /// This is what makes [`Checkpointer::list`] cheap on a large thread: the
+    /// old implementation went through [`FileCheckpointer::read_records`],
+    /// which fully deserializes `Checkpoint<State>` — including `state` —
+    /// for every line just to summarize it. `State` is not `DeserializeOwned`
+    /// bounded here (unlike `read_records`), since a header decode never
+    /// touches it.
+    ///
+    /// Returns an empty vec when the thread file does not exist.
+    fn read_headers(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
+        let path = self.thread_path(thread_id);
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(io_err("open thread file", e)),
+        };
+        let headers: Vec<CheckpointHeader> =
+            decode_lines(&text, &format!("thread `{thread_id}`"), |line| {
+                serde_json::from_str::<CheckpointHeader>(line)
+            })?;
+        Ok(headers
+            .into_iter()
+            .map(|h| h.into_metadata(thread_id))
+            .collect())
+    }
 }
 
 impl<State> Clone for FileCheckpointer<State> {
