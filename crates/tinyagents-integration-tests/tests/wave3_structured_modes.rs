@@ -21,30 +21,67 @@ use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelRespo
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
 
-/// A model that records every request it receives, for the Prompted-mode
-/// test's assertion that the schema landed in a system message.
+/// A model that records every request it receives and replays a fixed
+/// script, in call order.
+///
+/// Used instead of [`MockModel`] for the `EndStrategy`/mixed-turn tests: its
+/// [`ModelProfile::permissive`] advertises native structured output, which
+/// selects [`tinyagents_harness::structured::StructuredStrategy::ProviderSchema`]
+/// — the mixed structured-call-plus-real-tool-call scenario these tests
+/// exercise only arises under
+/// [`tinyagents_harness::structured::StructuredStrategy::ToolCall`] (a
+/// tool-calling model *without* native structured output), so this model's
+/// profile declares exactly that, mirroring `wave2_loop_structured.rs`'s
+/// `RecordingModel`.
 struct RecordingModel {
+    profile: ModelProfile,
     script: Mutex<Vec<ModelResponse>>,
     seen: Mutex<Vec<ModelRequest>>,
+    calls: std::sync::atomic::AtomicUsize,
 }
 
 impl RecordingModel {
     fn new(script: Vec<ModelResponse>) -> Self {
         Self {
+            profile: ModelProfile {
+                tool_calling: true,
+                parallel_tool_calls: true,
+                native_structured_output: false,
+                json_schema: false,
+                ..ModelProfile::default()
+            },
             script: Mutex::new(script),
             seen: Mutex::new(Vec::new()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// A [`RecordingModel`] whose default profile is left untouched (so it
+    /// selects `ProviderSchema`, the profile [`MockModel`] would also pick) —
+    /// used by the Prompted-mode test, which forces its strategy via
+    /// `structured_strategy_override` regardless of profile.
+    fn with_default_profile(script: Vec<ModelResponse>) -> Self {
+        Self {
+            profile: ModelProfile::default(),
+            script: Mutex::new(script),
+            seen: Mutex::new(Vec::new()),
+            calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
     fn requests(&self) -> Vec<ModelRequest> {
         self.seen.lock().expect("poisoned").clone()
     }
+
+    fn call_count(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 #[async_trait]
 impl ChatModel<()> for RecordingModel {
     fn profile(&self) -> Option<&ModelProfile> {
-        None
+        Some(&self.profile)
     }
 
     async fn invoke(
@@ -53,6 +90,7 @@ impl ChatModel<()> for RecordingModel {
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
         self.seen.lock().expect("poisoned").push(request);
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut script = self.script.lock().expect("poisoned");
         if script.len() > 1 {
             Ok(script.remove(0))
