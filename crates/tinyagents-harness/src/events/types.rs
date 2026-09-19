@@ -526,6 +526,27 @@ pub enum AgentEvent {
         to_tokens: u64,
     },
 
+    /// A durable, rule-driven compaction ran and produced a
+    /// [`crate::summarization::CompactionRecord`].
+    ///
+    /// Distinguished from [`Self::Compressed`] (the older, simpler
+    /// event `ContextCompressionMiddleware`'s original `before_model` path
+    /// emits) by carrying [`crate::summarization::CompactionReason`] and by
+    /// always being emitted for a compaction produced through
+    /// `crate::summarization::compaction` — including the
+    /// overflow → compact → retry recovery path, which has no other event of
+    /// its own. Both events fire for the same compaction on the `before_model`
+    /// path; a listener that only cares about *whether* the transcript shrank
+    /// can ignore `reason` and treat this exactly like `Compressed`.
+    Compacted {
+        /// Why this compaction ran.
+        reason: crate::summarization::CompactionReason,
+        /// Estimated total tokens of the transcript before compaction.
+        tokens_before: u64,
+        /// Estimated total tokens of the transcript after compaction.
+        tokens_after: u64,
+    },
+
     /// The final turn's structured-output extraction failed schema
     /// validation, or a registered
     /// [`crate::structured::OutputValidator`] rejected the value with
