@@ -1469,9 +1469,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let result = match result {
                         Ok(result) => result,
                         Err(err) => {
-                            if let Some(request) =
-                                execution_deferral(&prepared.call, &err)
-                            {
+                            if let Some(request) = execution_deferral(&prepared.call, &err) {
                                 self.defer_started_tool_call(
                                     ctx,
                                     status,
@@ -1700,8 +1698,10 @@ where
             // A2: a deferral is a typed signal for the loop, not a failure to
             // redact. The metadata is host-only (never model-visible), so it
             // is safe to carry through the wrap onion to the fold.
-            Ok(deferral @ (TinyAgentsError::ApprovalRequired { .. }
-            | TinyAgentsError::CallDeferred { .. })) => Err(deferral),
+            Ok(
+                deferral @ (TinyAgentsError::ApprovalRequired { .. }
+                | TinyAgentsError::CallDeferred { .. }),
+            ) => Err(deferral),
             Ok(other) => Err(map_tool_dispatch_error(anyhow::Error::from(other))),
             Err(error) => Err(map_tool_dispatch_error(error)),
         },

@@ -148,7 +148,10 @@ async fn approval_required_call_defers_the_run_after_its_siblings_execute() {
     // The non-deferred sibling ran and its result is on the transcript; the
     // assistant's tool-call row is intact and the deferred call is unanswered.
     assert_eq!(lookup.calls().len(), 1);
-    assert!(delete.calls().is_empty(), "an approval-gated tool must not run");
+    assert!(
+        delete.calls().is_empty(),
+        "an approval-gated tool must not run"
+    );
     assert!(matches!(&run.messages[1], Message::Assistant(a) if a.tool_calls.len() == 2));
     assert_eq!(
         tool_result_text(&run.messages, "call-lookup").as_deref(),
@@ -223,14 +226,21 @@ async fn resume_with_approve_runs_the_tool_and_continues_to_the_model() {
         .expect("resume completes the run");
 
     assert_eq!(delete.calls(), vec![json!({"path": "/tmp/x"})]);
-    assert_eq!(lookup.calls().len(), 1, "the sibling is not re-run on resume");
+    assert_eq!(
+        lookup.calls().len(),
+        1,
+        "the sibling is not re-run on resume"
+    );
     assert_eq!(
         tool_result_text(&run.messages, "call-delete").as_deref(),
         Some("deleted")
     );
     assert_eq!(run.text().as_deref(), Some("all done"));
     assert!(run.deferred.is_none());
-    assert_eq!(run.model_calls, 1, "resume spends exactly one new model call");
+    assert_eq!(
+        run.model_calls, 1,
+        "resume spends exactly one new model call"
+    );
     assert!(recorder.events().iter().any(|event| matches!(
         event,
         AgentEvent::ToolApproved { call_id } if call_id == &CallId::new("call-delete")
@@ -242,8 +252,8 @@ async fn resume_with_approve_with_args_runs_the_tool_with_the_edited_arguments()
     let recorder = EventRecorder::new();
     let (harness, delete, _lookup, first) = deferred_run(&recorder).await;
 
-    let results = DeferredToolResults::new()
-        .approve_with_args("call-delete", json!({"path": "/tmp/safer"}));
+    let results =
+        DeferredToolResults::new().approve_with_args("call-delete", json!({"path": "/tmp/safer"}));
     let ctx = RunContext::new(RunConfig::new("second"), ()).with_events(recorder.sink());
     let run = harness
         .resume_deferred(&(), ctx, first.messages.clone(), results)
@@ -279,7 +289,10 @@ async fn resume_with_deny_answers_the_call_with_the_message_and_never_runs_it() 
             _ => None,
         })
         .expect("the denial is a tool-result row");
-    assert_eq!(denial.content, vec![ContentBlock::Text("operator refused the delete".into())]);
+    assert_eq!(
+        denial.content,
+        vec![ContentBlock::Text("operator refused the delete".into())]
+    );
     assert_eq!(denial.artifact.as_ref().unwrap()["is_error"], true);
     assert_eq!(run.text().as_deref(), Some("all done"));
     assert!(!run.executed_tools.iter().any(|name| name == "delete"));
@@ -297,7 +310,10 @@ async fn resume_refuses_an_incomplete_resolution_and_names_the_missing_ids() {
     let pending = first.deferred.clone().unwrap();
 
     let results = DeferredToolResults::new();
-    assert_eq!(pending.remaining(&results), vec![CallId::new("call-delete")]);
+    assert_eq!(
+        pending.remaining(&results),
+        vec![CallId::new("call-delete")]
+    );
     let ctx = RunContext::new(RunConfig::new("second"), ());
     let error = harness
         .resume_deferred(&(), ctx, first.messages.clone(), results)
@@ -319,7 +335,11 @@ async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resum
         "mock",
         Arc::new(MockModel::with_responses(vec![
             response(
-                vec![ToolCall::new("call-ext", "browser_click", json!({"x": 1, "y": 2}))],
+                vec![ToolCall::new(
+                    "call-ext",
+                    "browser_click",
+                    json!({"x": 1, "y": 2}),
+                )],
                 "",
             ),
             response(Vec::new(), "clicked"),
@@ -343,7 +363,8 @@ async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resum
     assert_eq!(pending.calls[0].arguments, json!({"x": 1, "y": 2}));
     assert!(tool_result_text(&first.messages, "call-ext").is_none());
 
-    let results = DeferredToolResults::new().respond("call-ext", ToolResult::success("ok: clicked (1,2)"));
+    let results =
+        DeferredToolResults::new().respond("call-ext", ToolResult::success("ok: clicked (1,2)"));
     let ctx = RunContext::new(RunConfig::new("second"), ());
     let run = harness
         .resume_deferred(&(), ctx, first.messages.clone(), results)
@@ -354,7 +375,10 @@ async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resum
         Some("ok: clicked (1,2)")
     );
     assert_eq!(run.text().as_deref(), Some("clicked"));
-    assert!(run.executed_tools.is_empty(), "the harness never ran the external tool");
+    assert!(
+        run.executed_tools.is_empty(),
+        "the harness never ran the external tool"
+    );
 }
 
 // ── Inline handler ──────────────────────────────────────────────────────────
@@ -411,8 +435,16 @@ async fn inline_handler_resolves_deferrals_without_surfacing_them() {
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0].approvals[0].id, "call-delete");
     let events = recorder.events();
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolDeferred { .. })));
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolApproved { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolDeferred { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolApproved { .. }))
+    );
 }
 
 /// A handler that leaves the request unresolved.
@@ -431,7 +463,10 @@ impl crate::tool::DeferredToolHandler for SilentHandler {
 #[tokio::test]
 async fn inline_handler_that_leaves_calls_unresolved_fails_the_run() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::with_responses(vec![mixed_batch()])));
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![mixed_batch()])),
+    );
     harness.register_tool(RecordingTool::approval_gated("delete", "deleted"));
     harness.register_tool(RecordingTool::plain("lookup", "found"));
     harness.with_deferred_tool_handler(Arc::new(SilentHandler));
@@ -476,7 +511,11 @@ async fn tool_raising_approval_required_defers_with_its_metadata() {
     harness.register_model(
         "mock",
         Arc::new(MockModel::with_responses(vec![response(
-            vec![ToolCall::new("call-wire", "wire_money", json!({"amount": 500}))],
+            vec![ToolCall::new(
+                "call-wire",
+                "wire_money",
+                json!({"amount": 500}),
+            )],
             "",
         )])),
     );
@@ -496,9 +535,21 @@ async fn tool_raising_approval_required_defers_with_its_metadata() {
     // The `ToolStarted` emitted before execution has exactly one terminal
     // partner, the `ToolDeferred`, and no `ToolFailed`.
     let events = recorder.events();
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolStarted { .. })));
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolDeferred { .. })));
-    assert!(!events.iter().any(|e| matches!(e, AgentEvent::ToolFailed { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStarted { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolDeferred { .. }))
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolFailed { .. }))
+    );
     assert_eq!(run.tool_calls, 0);
 }
 

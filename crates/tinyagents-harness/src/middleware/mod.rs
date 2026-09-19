@@ -326,7 +326,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
                         winning = Some(control);
                     }
                 }
-                Err(TinyAgentsError::ApprovalRequired { .. }) if ctx.is_call_approved(&call.id) => {}
+                Err(TinyAgentsError::ApprovalRequired { .. }) if ctx.is_call_approved(&call.id) => {
+                }
                 Err(
                     signal @ (TinyAgentsError::ApprovalRequired { .. }
                     | TinyAgentsError::CallDeferred { .. }
