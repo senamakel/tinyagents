@@ -369,75 +369,12 @@ where
             binding,
             ..
         } = seed;
-        let started_at = SystemTime::now();
 
-        // Build this run's recursion stack from the inherited parent frames and
-        // push the frame for this graph call. A push that would exceed
-        // `max_depth` fails the run with a clear recursion error before any
-        // node executes. Graph-call depth (the stack) is tracked separately
-        // from node-loop visits (`RunCtx::node_visits`, below).
-        let mut recursion =
-            RecursionStack::with_frames(self.recursion_frames.clone(), self.recursion_policy);
-        let root_run_id = self
-            .recursion_frames
-            .first()
-            .map(|f| f.run_id.clone())
-            .unwrap_or_else(|| run_id.clone());
-        let parent_run_id = self.recursion_frames.last().map(|f| f.run_id.clone());
-        let this_frame = RecursionFrame {
-            graph_id: self.graph_id.clone(),
-            node_id: self.recursion_node.clone(),
-            run_id: run_id.clone(),
-            task_id: None,
-            namespace: self.namespace.clone(),
-            depth: recursion.depth(),
-            parent: parent_run_id.clone(),
-        };
-        if let Err(err) = recursion.push(this_frame) {
-            self.emit(GraphEvent::RunStarted {
-                run_id: run_id.clone(),
-            });
-            self.fail_run(&run_id, &thread_id, started_at, 0, &err, None)
-                .await;
-            return Err(err);
-        }
-        // Serialized once per run for embedding in every checkpoint's metadata.
-        let recursion_meta =
-            serde_json::to_value(recursion.frames()).unwrap_or(serde_json::Value::Null);
-        let live_frames = recursion.frames().to_vec();
-
-        let mut ctx = RunCtx {
-            graph: self,
-            run_id,
-            thread_id,
-            root_run_id,
-            parent_run_id,
-            started_at,
-            live_frames,
-            recursion_meta,
-            recursion,
-            binding,
-            child_sink: ChildRunSink::new(),
-            node_visits: HashMap::new(),
-            barrier_arrivals: initial_barriers,
-            async_writes: AsyncCheckpointWrites::default(),
-            resume_map,
-            visited: Vec::new(),
-            all_child_runs: Vec::new(),
-            steps: 0,
-            last_checkpoint: None,
-            parent_checkpoint: initial_parent,
-        };
+        let mut ctx =
+            RunCtx::start(self, run_id, thread_id, resume_map, initial_barriers, initial_parent, binding)
+                .await?;
         let runner = StepRunner { graph: self };
 
-        ctx.emit(GraphEvent::RunStarted {
-            run_id: ctx.run_id.clone(),
-        });
-        // Surface this run's recursion depth so observers can attribute nested
-        // runs without reconstructing the tree from logs.
-        ctx.emit(GraphEvent::RecursionDepthChanged {
-            depth: ctx.recursion.depth(),
-        });
         // Record the run as live before the first superstep is scheduled.
         let mut running = ctx.base_status();
         running.active_nodes = activation_nodes(&initial_active);
@@ -445,66 +382,15 @@ where
 
         let mut active = initial_active;
         while !active.is_empty() {
-            // The effective step cap is the smaller of the builder's recursion
-            // limit and the policy's `max_total_steps`, so a policy never
-            // loosens an existing limit. Both surface a `RecursionLimit`.
-            let step_limit = self
-                .recursion_limit
-                .min(self.recursion_policy.max_total_steps);
-            if ctx.steps >= step_limit {
-                let err = TinyAgentsError::RecursionLimit(step_limit);
-                return self.fail_and_return(&mut ctx, err).await;
-            }
-            // Whole-run wall-clock deadline: stop *between* super-steps once the
-            // elapsed run time reaches it, leaving the last committed boundary
-            // checkpoint intact (unlike an external `tokio::time::timeout`, which
-            // aborts mid-super-step and cannot). The already-completed super-steps
-            // and their checkpoints are preserved; the run fails with `Timeout`.
-            if let Some(deadline) = self.run_deadline {
-                let elapsed = ctx.started_at.elapsed().unwrap_or_default();
-                if elapsed >= deadline {
-                    let err = TinyAgentsError::Timeout(format!(
-                        "graph run exceeded its {deadline:?} deadline after {} super-step(s) \
-                         ({elapsed:?} elapsed)",
-                        ctx.steps
-                    ));
-                    return self.fail_and_return(&mut ctx, err).await;
-                }
-            }
-            // Node-loop recursion: enforce `max_visits_per_node` per activation.
-            for activation in &active {
-                if let Err(err) = ctx
-                    .recursion
-                    .record_node_visit(&mut ctx.node_visits, &activation.node)
-                {
-                    return self.fail_and_return(&mut ctx, err).await;
-                }
-            }
-            ctx.steps += 1;
-            // Assign identities before any branch runs. A failure checkpoint
-            // carries these identities with its pending activations, letting a
-            // later resume skip only the completed fan-out task.
-            for (index, activation) in active.iter_mut().enumerate() {
-                if activation.task_id.is_empty() {
-                    activation.task_id = format!("{}:{}:{}", ctx.steps, index, activation.node);
-                }
-            }
-            ctx.emit(GraphEvent::StepStarted {
-                step: ctx.steps,
-                active: activation_nodes(&active),
-            });
-
-            let step = ctx.steps;
-            let outcome = if self.parallel && active.len() > 1 {
-                runner.run_parallel(&mut ctx, &active, &state, step).await
-            } else {
-                runner.run_sequential(&mut ctx, &active, &state, step).await
-            };
-            let outcome = match outcome {
-                Ok(outcome) => outcome,
+            let step = match self.begin_step(&mut ctx, &mut active).await {
+                Ok(step) => step,
                 Err(err) => return self.fail_and_return(&mut ctx, err).await,
             };
-            let step_run = runner.fold_step(outcome, step, &mut ctx.visited);
+
+            let step_run = match runner.run_step(&mut ctx, &active, &state, step).await {
+                Ok(step_run) => step_run,
+                Err(err) => return self.fail_and_return(&mut ctx, err).await,
+            };
 
             // Apply collected updates through the reducer at the boundary. A
             // reducer error here must still fail the run (not just unwind
@@ -514,13 +400,10 @@ where
                 Err(err) => return self.fail_and_return(&mut ctx, err).await,
             };
 
-            // Collect any child runs spawned by subgraph nodes this step. They
-            // are embedded into this boundary's checkpoint metadata (keyed by
-            // node) and accumulated onto the final `GraphExecution`.
-            let step_child_runs = ctx.child_sink.drain();
-            ctx.all_child_runs.extend(step_child_runs.iter().cloned());
-            let child_runs_meta =
-                serde_json::to_value(&step_child_runs).unwrap_or(serde_json::Value::Null);
+            // Child runs spawned by subgraph nodes this step are embedded
+            // into this boundary's checkpoint metadata (keyed by node) and
+            // accumulated onto the final `GraphExecution`.
+            let child_runs_meta = ctx.take_step_child_runs();
             let sb = StepBoundary {
                 active: &active,
                 goto_map: &step_run.goto_map,
@@ -548,6 +431,70 @@ where
             };
         }
 
+        Ok(self.finish_run(&mut ctx, state).await)
+    }
+
+    /// Checks the recursion-limit, wall-clock-deadline, and per-node
+    /// visit-count guards for the next superstep, then advances `ctx.steps`,
+    /// assigns any missing task ids in `active` (a failure checkpoint
+    /// carries these with its pending activations, letting a later resume
+    /// skip only the completed fan-out task), and emits `StepStarted`.
+    /// Returns the step number on success.
+    async fn begin_step(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        active: &mut [Activation],
+    ) -> Result<usize> {
+        // The effective step cap is the smaller of the builder's recursion
+        // limit and the policy's `max_total_steps`, so a policy never
+        // loosens an existing limit. Both surface a `RecursionLimit`.
+        let step_limit = self
+            .recursion_limit
+            .min(self.recursion_policy.max_total_steps);
+        if ctx.steps >= step_limit {
+            return Err(TinyAgentsError::RecursionLimit(step_limit));
+        }
+        // Whole-run wall-clock deadline: stop *between* super-steps once the
+        // elapsed run time reaches it, leaving the last committed boundary
+        // checkpoint intact (unlike an external `tokio::time::timeout`, which
+        // aborts mid-super-step and cannot). The already-completed super-steps
+        // and their checkpoints are preserved; the run fails with `Timeout`.
+        if let Some(deadline) = self.run_deadline {
+            let elapsed = ctx.started_at.elapsed().unwrap_or_default();
+            if elapsed >= deadline {
+                return Err(TinyAgentsError::Timeout(format!(
+                    "graph run exceeded its {deadline:?} deadline after {} super-step(s) \
+                     ({elapsed:?} elapsed)",
+                    ctx.steps
+                )));
+            }
+        }
+        // Node-loop recursion: enforce `max_visits_per_node` per activation.
+        for activation in active.iter() {
+            ctx.recursion
+                .record_node_visit(&mut ctx.node_visits, &activation.node)?;
+        }
+        ctx.steps += 1;
+        for (index, activation) in active.iter_mut().enumerate() {
+            if activation.task_id.is_empty() {
+                activation.task_id = format!("{}:{}:{}", ctx.steps, index, activation.node);
+            }
+        }
+        ctx.emit(GraphEvent::StepStarted {
+            step: ctx.steps,
+            active: activation_nodes(active),
+        });
+        Ok(ctx.steps)
+    }
+
+    /// Builds the terminal [`GraphExecution`] for a run that emptied its
+    /// active set without interrupting or failing: records a `Completed`
+    /// status and emits `RunCompleted`.
+    async fn finish_run(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        state: State,
+    ) -> GraphExecution<State> {
         let mut status = ctx.base_status();
         status.status = ExecutionStatus::Completed;
         status.current_step = ctx.steps;
@@ -559,18 +506,18 @@ where
             steps: ctx.steps,
         });
 
-        Ok(GraphExecution {
+        GraphExecution {
             state,
             run_id: ctx.run_id.clone(),
             graph_id: self.graph_id.clone(),
             root_run_id: ctx.root_run_id.clone(),
             parent_run_id: ctx.parent_run_id.clone(),
-            child_runs: ctx.all_child_runs,
-            visited: ctx.visited,
+            child_runs: std::mem::take(&mut ctx.all_child_runs),
+            visited: std::mem::take(&mut ctx.visited),
             steps: ctx.steps,
             interrupts: Vec::new(),
             status,
-            checkpoint_id: ctx.last_checkpoint,
-        })
+            checkpoint_id: ctx.last_checkpoint.clone(),
+        }
     }
 }
