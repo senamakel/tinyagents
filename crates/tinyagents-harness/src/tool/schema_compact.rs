@@ -59,6 +59,16 @@ impl SchemaCompaction {
 }
 
 /// Applies `compaction` to one schema, leaving name and format untouched.
+///
+/// `max_schema_bytes` is enforced as a hard ceiling here, not just a target
+/// for the ladder: when even the maximally-compacted rung (which keeps the
+/// top-level argument surface intact by design — see [`compact_parameters`])
+/// still exceeds the budget, the parameters are replaced with an open
+/// `{"type":"object","properties":{}}` schema rather than shipping a request
+/// over the configured limit. This only widens what is *advertised*; it does
+/// not weaken admission, which always validates against the tool's canonical
+/// declared schema, never the wire-projected one (see
+/// `docs/modules/harness/tool-discovery.md`).
 #[must_use]
 pub fn compact_tool_schema(schema: &ToolSchema, compaction: &SchemaCompaction) -> ToolSchema {
     let description = match compaction.max_description_bytes {
@@ -66,7 +76,20 @@ pub fn compact_tool_schema(schema: &ToolSchema, compaction: &SchemaCompaction) -
         None => schema.description.clone(),
     };
     let parameters = match compaction.max_schema_bytes {
-        Some(max) => compact_parameters(schema.parameters.clone(), max),
+        Some(max) => {
+            let compacted = compact_parameters(schema.parameters.clone(), max);
+            if serialized_len(&compacted) > max {
+                tinyagents_tracing::warn!(
+                    "[tool::schema] `{}`'s parameters still exceed the {max}-byte compaction \
+                     budget after the full ladder; advertising an open object schema instead of \
+                     sending an over-budget request",
+                    schema.name
+                );
+                json!({"type": "object", "properties": {}})
+            } else {
+                compacted
+            }
+        }
         None => schema.parameters.clone(),
     };
     ToolSchema {
