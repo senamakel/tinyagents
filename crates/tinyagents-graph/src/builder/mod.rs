@@ -17,8 +17,8 @@ mod types;
 pub use policy::{CacheKeyFn, NodeCachePolicy, NodePolicy, OnErrorFn};
 pub(crate) use types::{Branch, BuilderNode, NodeMeta};
 pub use types::{
-    END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
-    RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeContext, NodeFuture, NodeHandler,
+    Route, RouterFn, START,
 };
 
 use std::collections::{HashMap, HashSet};

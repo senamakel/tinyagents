@@ -101,8 +101,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::builder::{
-    BarrierRelief, Branch, BuilderNode, END, ForkId, NodeContext, NodeFuture, NodeHandler,
-    NodeMeta, NodePolicy, START,
+    BarrierRelief, Branch, BuilderNode, END, ForkId, IdleClock, NodeContext, NodeFuture,
+    NodeHandler, NodeMeta, NodePolicy, START,
 };
 use crate::checkpoint::{
     BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointTuple, Checkpointer, DurabilityMode,

@@ -445,6 +445,7 @@ where
             siblings,
             channel_versions: current_versions,
             versions_seen: seen_before,
+            idle_clock: crate::builder::IdleClock::default(),
         }
     }
 }

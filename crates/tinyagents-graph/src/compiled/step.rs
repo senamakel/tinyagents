@@ -119,9 +119,17 @@ where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
 {
-    /// Wraps a node future in panic safety and the node's effective flat
-    /// timeout (if any), mapping an elapsed deadline onto
+    /// Wraps a node future in panic safety and the node's effective
+    /// timeouts (if any), mapping an elapsed deadline onto
     /// [`TinyAgentsError::Timeout`].
+    ///
+    /// Two independent ceilings race the handler: the flat `timeout` (max
+    /// wall time for the attempt, regardless of heartbeats) and the
+    /// `idle_timeout` (max gap between two [`NodeContext::heartbeat`]
+    /// calls, re-armed by each one via [`IdleClock::idle_elapsed`]). Either
+    /// firing first fails the attempt; a node that never heartbeats sees
+    /// its idle timeout fire exactly `idle_timeout` after start, i.e. as a
+    /// flat timeout.
     ///
     /// A node handler that panics unwinds through `join_all`/`fut.await`
     /// unless caught here (I4 part 1): [`futures::FutureExt::catch_unwind`]
@@ -134,6 +142,7 @@ where
         node_id: &NodeId,
         fut: NodeFuture<Update>,
         policy: &NodePolicy<State, Update>,
+        idle_clock: &IdleClock,
     ) -> Result<NodeResult<Update>> {
         let node_id_owned = node_id.clone();
         let guarded = async move {
@@ -142,14 +151,29 @@ where
                 Err(payload) => Err(Self::panic_error(&node_id_owned, payload)),
             }
         };
-        match policy.timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, guarded).await {
-                Ok(result) => result,
-                Err(_) => Err(TinyAgentsError::Timeout(format!(
-                    "node `{node_id}` exceeded its {timeout:?} timeout"
-                ))),
-            },
-            None => guarded.await,
+        let flat = async {
+            match policy.timeout {
+                Some(timeout) => tokio::time::sleep(timeout).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        let idle = async {
+            match policy.idle_timeout {
+                Some(idle) => idle_clock.idle_elapsed(idle).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(guarded);
+        tokio::select! {
+            result = &mut guarded => result,
+            _ = flat => Err(TinyAgentsError::Timeout(format!(
+                "node `{node_id}` exceeded its {:?} timeout",
+                policy.timeout.unwrap_or_default()
+            ))),
+            _ = idle => Err(TinyAgentsError::Timeout(format!(
+                "node `{node_id}` exceeded its {:?} idle timeout without a heartbeat",
+                policy.idle_timeout.unwrap_or_default()
+            ))),
         }
     }
 
@@ -192,7 +216,10 @@ where
         let mut attempt = 0usize;
         loop {
             let fut = handler(state.clone(), ctx.clone());
-            match self.run_node_future(node_id, fut, policy).await {
+            match self
+                .run_node_future(node_id, fut, policy, &ctx.idle_clock)
+                .await
+            {
                 Ok(result) => return Ok(result),
                 Err(error) => {
                     let retry = policy

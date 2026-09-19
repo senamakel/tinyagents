@@ -68,6 +68,56 @@ impl ForkId {
     }
 }
 
+/// The heartbeat channel between a running node handler and the executor's
+/// idle-timeout watcher (see [`NodeContext::heartbeat`]).
+///
+/// Cheap to clone; every clone of a [`NodeContext`] shares the same clock,
+/// which is how a `heartbeat()` call made *inside* the handler future is
+/// observed by the timeout race wrapped *around* it. A fresh clock is built
+/// per activation; a hand-built context can use the [`Default`].
+#[derive(Clone, Default)]
+pub struct IdleClock {
+    notify: Arc<tokio::sync::Notify>,
+    beats: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl IdleClock {
+    /// Records a heartbeat, waking the idle-timeout watcher so it re-arms.
+    pub fn touch(&self) {
+        self.beats
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.notify.notify_one();
+    }
+
+    /// Total heartbeats recorded so far.
+    pub fn beats(&self) -> u64 {
+        self.beats.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Resolves once `idle` elapses with no heartbeat in between; every
+    /// [`Self::touch`] restarts the window. Never resolves if heartbeats keep
+    /// arriving inside the window. With no heartbeat at all this resolves
+    /// exactly `idle` after it is first polled — a flat timeout.
+    pub(crate) async fn idle_elapsed(&self, idle: Duration) {
+        loop {
+            let sleep = tokio::time::sleep(idle);
+            tokio::pin!(sleep);
+            tokio::select! {
+                _ = &mut sleep => return,
+                _ = self.notify.notified() => continue,
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for IdleClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdleClock")
+            .field("beats", &self.beats())
+            .finish()
+    }
+}
+
 /// Per-task runtime context passed to a durable node handler.
 ///
 /// The context exposes run identity, the current step, and — crucially — an
@@ -174,6 +224,7 @@ impl std::fmt::Debug for NodeContext {
             .field("siblings", &self.siblings)
             .field("channel_versions", &self.channel_versions)
             .field("versions_seen", &self.versions_seen)
+            .field("idle_clock", &self.idle_clock)
             .finish()
     }
 }

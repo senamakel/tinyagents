@@ -62,6 +62,7 @@ fn ctx_for_task(id: &str, task_id: &str, siblings: usize) -> NodeContext {
         siblings,
         channel_versions: Default::default(),
         versions_seen: Default::default(),
+        idle_clock: Default::default(),
     }
 }
 
