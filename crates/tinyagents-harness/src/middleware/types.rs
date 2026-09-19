@@ -91,6 +91,10 @@ pub struct AgentRun {
     pub final_response: Option<ModelResponse>,
     /// Parsed structured output, when the run requested a structured format.
     pub structured: Option<serde_json::Value>,
+    /// Which schema variant matched, when [`Self::structured`] was extracted
+    /// under [`crate::structured::StructuredStrategy::ToolCallUnion`] (A6).
+    /// `None` for every other strategy, and whenever `structured` is `None`.
+    pub structured_variant: Option<String>,
     /// Cumulative token usage across every model call in the run.
     pub usage: UsageTotals,
     /// Number of model calls dispatched during the run.
