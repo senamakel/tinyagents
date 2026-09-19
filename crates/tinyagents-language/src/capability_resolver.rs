@@ -23,7 +23,7 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 /// [`bind_capabilities_with_registry`] (or any resolver built with
 /// [`CapabilityResolver::from_registry`]); an unknown kind is a
 /// [`TinyAgentsError::Compile`] error. The set deliberately includes `model`,
-/// because [`compile`] defaults an unspecified kind to `model`.
+/// because [`crate::compile`] defaults an unspecified kind to `model`.
 ///
 /// The kinds carry the following capability-reference conventions, applied by
 /// the strict binding path:
