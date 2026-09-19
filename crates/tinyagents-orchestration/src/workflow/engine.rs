@@ -598,10 +598,13 @@ where
                 }
             };
             run = updated;
-            self.emit(tinyagents_graph::GraphEvent::NodeCompleted {
-                node: tinyagents_harness::ids::NodeId::new("run_phase"),
-                step: total_spawned as usize + 1,
-            });
+            self.emit(
+                run_id,
+                tinyagents_graph::GraphEvent::NodeCompleted {
+                    node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                    step: total_spawned as usize + 1,
+                },
+            );
             total_spawned += spawned;
             if run.status != WorkflowRunStatus::Running {
                 match run.status {
