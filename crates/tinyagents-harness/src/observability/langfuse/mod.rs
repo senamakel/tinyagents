@@ -652,6 +652,8 @@ pub fn clean_nulls(mut value: Value) -> Value {
     value
 }
 
+/// Formats a Unix-epoch millisecond timestamp as the UTC ISO-8601 string
+/// Langfuse's ingestion API expects (`YYYY-MM-DDTHH:MM:SS.sssZ`).
 pub fn iso_ms(ms: u64) -> String {
     use std::time::{Duration, UNIX_EPOCH};
     let system_time = UNIX_EPOCH + Duration::from_millis(ms);
