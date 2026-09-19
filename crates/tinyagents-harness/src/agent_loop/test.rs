@@ -2198,6 +2198,27 @@ impl Middleware<(), ()> for SecretRedactingDelta {
     }
 }
 
+/// Suppresses a streamed tool fragment before the accumulator can turn it into
+/// an executable call.
+struct SuppressToolDelta;
+
+#[async_trait]
+impl Middleware<(), ()> for SuppressToolDelta {
+    fn name(&self) -> &str {
+        "suppress-tool-delta"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut tinyinference_llm::model::ModelDelta,
+    ) -> Result<()> {
+        delta.tool_call = None;
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn invoke_streaming_fires_on_model_delta_per_delta_and_accumulates() {
     use crate::testkit::StreamingMock;
@@ -2294,6 +2315,50 @@ async fn streaming_delta_transform_controls_final_run_and_cached_response() {
     assert!(
         !second.text().unwrap_or_default().contains("raw-secret"),
         "the cached response must not retain the raw terminal secret"
+    );
+}
+
+#[tokio::test]
+async fn streaming_middleware_can_suppress_a_standalone_tool_delta() {
+    use crate::testkit::StreamingMock;
+
+    let tool = Arc::new(FakeTool::new("blocked", "must not run"));
+    let mut terminal = ModelResponse::assistant("");
+    terminal
+        .message
+        .tool_calls
+        .push(ToolCall::new("blocked-call", "blocked", json!({})));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "stream",
+        Arc::new(StreamingMock::new(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
+                call_id: "blocked-call".to_string(),
+                content: "{}".to_string(),
+                tool_name: Some("blocked".to_string()),
+            }),
+            ModelStreamItem::Completed(terminal),
+        ])),
+    );
+    harness.register_tool(tool.clone());
+    harness.push_middleware(Arc::new(SuppressToolDelta));
+
+    let run = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("suppressed-tool-delta"),
+            vec![Message::user("go")],
+        )
+        .await
+        .expect("suppressed tool call leaves a valid empty completion");
+
+    assert!(run.text().unwrap_or_default().is_empty());
+    assert_eq!(
+        *tool.calls.lock().unwrap(),
+        0,
+        "suppressed call must not run"
     );
 }
 

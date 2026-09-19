@@ -55,7 +55,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 result = resolution => result,
             },
         }.map_err(|error| match error {
-            TinyAgentsError::Timeout(_) => error,
+            TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
             _ => { tinyagents_tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
         })?;
         let name = model
@@ -774,6 +774,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut streamed_text = String::new();
         let mut streamed_reasoning = String::new();
         let mut saw_streamed_content = false;
+        let mut suppressed_tool_call_ids = Vec::new();
 
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
@@ -821,6 +822,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)
                     .await?;
+                if model_delta.tool_call.is_none()
+                    && let Some(tool_call) = &message_delta.tool_call
+                {
+                    suppressed_tool_call_ids.push(tool_call.call_id.clone());
+                }
                 saw_streamed_content |= !message_delta.text.is_empty()
                     || !message_delta.reasoning.is_empty()
                     || !model_delta.content.is_empty()
@@ -852,9 +858,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             tool_call: model_delta.tool_call,
                         })
                     }
-                    ModelStreamItem::ToolCallDelta(_) => model_delta
-                        .tool_call
-                        .map_or(item, ModelStreamItem::ToolCallDelta),
+                    ModelStreamItem::ToolCallDelta(_) => model_delta.tool_call.map_or_else(
+                        || {
+                            // The middleware deliberately suppressed the raw
+                            // tool fragment.  Keep a content-free item so the
+                            // accumulator cannot reconstruct or dispatch it.
+                            ModelStreamItem::MessageDelta(MessageDelta::default())
+                        },
+                        ModelStreamItem::ToolCallDelta,
+                    ),
                     _ => item,
                 };
                 *deltas_emitted += 1;
@@ -888,6 +900,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     )
                 }));
                 response.message.content = content;
+            }
+            if let ModelStreamItem::Completed(response) = &mut item
+                && !suppressed_tool_call_ids.is_empty()
+            {
+                response
+                    .message
+                    .tool_calls
+                    .retain(|call| !suppressed_tool_call_ids.contains(&call.id));
             }
 
             accumulator.push(&item);
