@@ -80,9 +80,9 @@ jobs:
         run: cargo doc --workspace --no-deps
         continue-on-error: true
 
-      # TODO: drop `continue-on-error` once the ~160 existing broken
-      # intra-doc link warnings across the workspace are fixed and this can
-      # block merges instead of only reporting.
+      # TODO: drop `continue-on-error` once the existing unused-dependency
+      # findings across the workspace are cleaned up and this can block
+      # merges instead of only reporting.
       - name: Unused dependencies
         uses: bnjbvr/cargo-machete@main
         continue-on-error: true
