@@ -42,7 +42,7 @@ pub fn type_signature(schema: &Value) -> String {
 }
 
 /// One `name: first sentence` line per top-level property that carries a
-/// description, in declaration order. Empty when none does.
+/// description, in `serde_json`'s (sorted) key order. Empty when none does.
 #[must_use]
 pub fn argument_notes(schema: &Value) -> Vec<String> {
     let Some(properties) = schema.get("properties").and_then(Value::as_object) else {

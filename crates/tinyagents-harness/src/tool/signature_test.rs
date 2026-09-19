@@ -15,7 +15,7 @@ fn renders_flat_objects_with_optional_markers() {
     });
     assert_eq!(
         type_signature(&schema),
-        "{path: string, limit?: integer, mode?: \"fast\" | \"full\"}"
+        "{limit?: integer, mode?: \"fast\" | \"full\", path: string}"
     );
     assert_eq!(argument_notes(&schema), vec!["path: Where to read"]);
 }
@@ -34,7 +34,7 @@ fn renders_arrays_unions_and_nesting() {
     });
     assert_eq!(
         type_signature(&schema),
-        "{tags: string[], rows: Array<{id: integer}>, v: string | null, t: number | null}"
+        "{rows: Array<{id: integer}>, t: number | null, tags: string[], v: string | null}"
     );
 }
 
