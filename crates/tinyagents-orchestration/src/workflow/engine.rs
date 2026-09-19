@@ -353,6 +353,7 @@ where
             executor,
             event_sink: None,
             lease_for: WORKFLOW_LEASE,
+            sequence: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
