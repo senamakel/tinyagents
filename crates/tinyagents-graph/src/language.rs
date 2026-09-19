@@ -144,3 +144,64 @@ where
 
     builder.compile()
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use tinyagents_language::compiler::compile;
+    use tinyagents_language::parser::parse_str;
+
+    #[derive(Clone, Debug, Default, PartialEq)]
+    struct S {
+        trail: Vec<String>,
+    }
+
+    struct EchoFactory;
+
+    impl NodeFactory<S> for EchoFactory {
+        fn make(&self, spec: &NodeSpec) -> Result<BoxedNode<S>> {
+            let name = spec.name.clone();
+            Ok(Arc::new(move |mut state: S, _ctx: crate::NodeContext| {
+                let name = name.clone();
+                Box::pin(async move {
+                    state.trail.push(name);
+                    Ok(crate::NodeResult::Update(state))
+                }) as crate::NodeFuture<S>
+            }))
+        }
+    }
+
+    fn blueprint(src: &str) -> Blueprint {
+        compile(&parse_str(src).unwrap()).unwrap().remove(0)
+    }
+
+    #[test]
+    fn build_graph_rejects_a_populated_ignored_field() {
+        let bp = blueprint(
+            "graph g { start a node a { kind model next END options [\"yes\", \"no\"] } }",
+        );
+        assert!(matches!(bp.nodes[0].options.as_slice(), [_, _]));
+
+        let err = build_graph::<S, _>(&bp, &EchoFactory).unwrap_err();
+        match err {
+            TinyAgentsError::Compile(message) => {
+                assert!(
+                    message.contains("`options`"),
+                    "expected the offending field named in the error, got: {message}"
+                );
+            }
+            other => panic!("expected TinyAgentsError::Compile, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn build_graph_accepts_a_blueprint_with_no_ignored_fields() {
+        let bp = blueprint("graph g { start a node a { kind model next b } node b { kind model next END } }");
+        assert_eq!(bp.start, "a");
+
+        let graph = build_graph::<S, _>(&bp, &EchoFactory).expect("no ignored fields, graph builds");
+        let run = graph.run(S::default()).await.expect("graph runs to end");
+        assert_eq!(run.state.trail, vec!["a".to_string(), "b".to_string()]);
+        assert_ne!(LANG_END, "");
+    }
+}
