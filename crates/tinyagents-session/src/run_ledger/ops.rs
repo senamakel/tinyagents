@@ -407,6 +407,13 @@ pub fn append_run_event(workspace_dir: &Path, event: RunEventAppend) -> Result<R
     })
 }
 
+/// Inserts a new [`RunTelemetry`] row or merges partial fields into an
+/// existing one, returning the row as stored.
+///
+/// Every counter field is `Option`, and `None` means "leave this field
+/// unchanged" rather than "reset to zero" — see the inline comment at the
+/// call site for why the insert and update sides need different `COALESCE`
+/// targets to make that true on first insert as well as on later updates.
 pub fn upsert_run_telemetry(
     workspace_dir: &Path,
     upsert: RunTelemetryUpsert,
@@ -464,6 +471,7 @@ pub fn upsert_run_telemetry(
     })
 }
 
+/// Fetches a single [`AgentRun`] by id, or `None` if no row matches.
 pub fn get_agent_run(workspace_dir: &Path, id: &str) -> Result<Option<AgentRun>> {
     crate::store::with_connection(workspace_dir, |conn| {
         init_run_ledger_schema(conn)?;
