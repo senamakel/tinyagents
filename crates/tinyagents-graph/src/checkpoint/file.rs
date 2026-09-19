@@ -844,8 +844,8 @@ where
                 if kept.len() != write_records.len() {
                     let mut buf = String::new();
                     for record in kept {
-                        let line = serde_json::to_string(record)
-                            .map_err(|e| io_err("encode write", e))?;
+                        let line =
+                            serde_json::to_string(record).map_err(|e| io_err("encode write", e))?;
                         buf.push_str(&line);
                         buf.push('\n');
                     }
@@ -954,7 +954,11 @@ where
         tokio::task::spawn_blocking(move || -> Result<Vec<PendingWrite>> {
             let path = this.writes_path(&config.thread_id);
             let records = Self::read_write_records(&path, &config.thread_id)?;
-            Ok(fold_write_records(records, &checkpoint_id, &config.namespace))
+            Ok(fold_write_records(
+                records,
+                &checkpoint_id,
+                &config.namespace,
+            ))
         })
         .await
         .map_err(|e| io_err("join blocking get_writes task", e))?

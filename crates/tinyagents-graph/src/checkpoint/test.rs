@@ -831,7 +831,11 @@ mod sqlite_backend {
         }
     }
 
-    fn counting_checkpoint(id: &str, parent: Option<&str>, step: usize) -> crate::Checkpoint<CountingState> {
+    fn counting_checkpoint(
+        id: &str,
+        parent: Option<&str>,
+        step: usize,
+    ) -> crate::Checkpoint<CountingState> {
         crate::Checkpoint {
             thread_id: "t".to_string(),
             checkpoint_id: id.to_string(),
@@ -884,10 +888,7 @@ mod sqlite_backend {
         assert_eq!(full.len(), 40);
         assert_eq!(full[0].checkpoint.checkpoint_id, "c39");
         assert_eq!(full[39].checkpoint.checkpoint_id, "c0");
-        assert_eq!(
-            DECODE_COUNT.load(std::sync::atomic::Ordering::SeqCst),
-            40
-        );
+        assert_eq!(DECODE_COUNT.load(std::sync::atomic::Ordering::SeqCst), 40);
     }
 
     #[tokio::test]
