@@ -22,9 +22,9 @@ pub use file::FileCheckpointer;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteCheckpointer;
 pub use types::{
-    BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSource,
-    CheckpointTuple, DurabilityMode, PendingActivation, PendingWrite, WRITES_IDX_ERROR,
-    WRITES_IDX_INTERRUPT, WRITES_IDX_RESUME, merge_writes,
+    BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
+    CheckpointSource, CheckpointTuple, CompletedTask, DurabilityMode, PendingActivation,
+    PendingWrite, WRITES_IDX_ERROR, WRITES_IDX_INTERRUPT, WRITES_IDX_RESUME, merge_writes,
 };
 
 use std::collections::{HashMap, HashSet};
