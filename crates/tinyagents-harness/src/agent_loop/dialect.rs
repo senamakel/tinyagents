@@ -121,6 +121,23 @@ impl RunDialect {
                     .collect();
                 let mut block = PFormatDialect::instructions();
                 block.push_str(&tinytools_agent::render::render_pformat_catalogue(&specs));
+                // The XML branch renders `tool_choice` into its instructions
+                // via `prompt_tools::tool_instructions`; P-Format has no
+                // schema on the wire either (the wire choice is reset to
+                // `Auto` below), so a forced choice has to be said in plain
+                // English here too or `Required`/`Tool(name)` silently loses
+                // its meaning — in particular the sole synthetic
+                // structured-output tool would no longer be forced, and a
+                // plain-text response would make extraction fail.
+                match &request.tool_choice {
+                    ToolChoice::Required => {
+                        block.push_str("\nYou must emit at least one tool call.\n");
+                    }
+                    ToolChoice::Tool(name) => {
+                        block.push_str(&format!("\nYou must call the `{name}` tool.\n"));
+                    }
+                    ToolChoice::Auto | ToolChoice::None => {}
+                }
                 prompt_tools::append_system_block(&messages, &block)
             }
         };
