@@ -772,7 +772,7 @@ where
         Ok((updated, spawned))
     }
 
-    fn fail_phase(
+    async fn fail_phase(
         &self,
         run: &WorkflowRun,
         phase_states: &mut Value,
@@ -788,44 +788,45 @@ where
             Some(json!([])),
         );
         set_phase_reason(phase_states, &phase.name, &reason);
-        let updated = self.persist(
-            run,
-            PersistRequest {
-                phase_states: phase_states.clone(),
-                child_run_ids: child_ids,
-                status: WorkflowRunStatus::Failed,
-                summary: Some(reason),
-                terminal: true,
-            },
-            owner,
-        )?;
+        let updated = self
+            .persist(
+                run,
+                PersistRequest {
+                    phase_states: phase_states.clone(),
+                    child_run_ids: child_ids,
+                    status: WorkflowRunStatus::Failed,
+                    summary: Some(reason),
+                    terminal: true,
+                },
+                owner,
+            )
+            .await?;
         Ok((updated, 0))
     }
 
-    fn persist(
+    async fn persist(
         &self,
         run: &WorkflowRun,
         request: PersistRequest,
         owner: &str,
     ) -> Result<WorkflowRun, OrchestrationError> {
-        self.store
-            .compare_and_swap(
-                WorkflowRunUpsert {
-                    id: run.id.clone(),
-                    definition_id: run.definition_id.clone(),
-                    parent_thread_id: run.parent_thread_id.clone(),
-                    input: run.input.clone(),
-                    phase_states: request.phase_states,
-                    child_run_ids: request.child_run_ids,
-                    status: request.status,
-                    summary: request.summary,
-                    started_at: Some(run.started_at),
-                    completed_at: request.terminal.then(Utc::now),
-                },
-                run.revision,
-                owner,
-                self.lease_for,
-            )?
+        let upsert = WorkflowRunUpsert {
+            id: run.id.clone(),
+            definition_id: run.definition_id.clone(),
+            parent_thread_id: run.parent_thread_id.clone(),
+            input: run.input.clone(),
+            phase_states: request.phase_states,
+            child_run_ids: request.child_run_ids,
+            status: request.status,
+            summary: request.summary,
+            started_at: Some(run.started_at),
+            completed_at: request.terminal.then(Utc::now),
+        };
+        let revision = run.revision;
+        let owner = owner.to_owned();
+        let lease_for = self.lease_for;
+        self.store_op(move |store| store.compare_and_swap(upsert, revision, &owner, lease_for))
+            .await?
             .ok_or_else(|| {
                 OrchestrationError("workflow lease lost before durable state transition".to_owned())
             })
