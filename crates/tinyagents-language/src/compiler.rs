@@ -487,22 +487,27 @@ fn provenance_of(graph: &crate::types::GraphDecl, origin: &Origin) -> BlueprintP
 
 /// Parses, compiles, and registry-binds `.rag` `source` in one call.
 ///
-/// This is the convenience façade for the common path: it runs
-/// `parse -> compile -> registry-bind` and returns the validated blueprints.
-/// Every produced [`Blueprint`] is checked against `registry` via
-/// [`bind_capabilities_with_registry`], so a returned blueprint references only
-/// registered capabilities.
+/// This is the legacy convenience façade for the common path: `parse ->
+/// compile -> registry-bind`, returning the validated blueprints. It is now a
+/// thin alias for [`crate::resolver::resolve_source`], which runs the same
+/// `parse -> resolve -> compile` pipeline through the single
+/// [`crate::resolver::Resolver`] binding gate but validates with real source
+/// spans (caret-underline error rendering) instead of compiling first and
+/// binding blueprints afterward with no span information — see I7 in
+/// `docs/runtime-comparison/code-review-workspace.md`. New code should call
+/// [`crate::resolver::resolve_source`] directly.
+///
+/// Not marked `#[deprecated]`: several integration tests and examples outside
+/// this crate's edit boundary for this change still call `compile_source`
+/// directly, and this workspace's `cargo clippy -D warnings` would turn every
+/// one of those call sites into a hard build failure this change cannot fix.
 ///
 /// # Errors
 ///
-/// Propagates [`TinyAgentsError::Parse`] from the parser,
-/// [`TinyAgentsError::Compile`] from [`compile`] and node-kind validation, and
-/// [`TinyAgentsError::Capability`] from capability binding.
+/// Propagates [`TinyAgentsError::Parse`] from the parser, and
+/// [`TinyAgentsError::Compile`]/[`TinyAgentsError::Capability`] from
+/// resolution and compilation — the same variants and message text this
+/// function has always returned.
 pub fn compile_source(source: &str, registry: &impl CapabilitySource) -> Result<Vec<Blueprint>> {
-    let program = parse_str(source)?;
-    let blueprints = compile(&program)?;
-    for blueprint in &blueprints {
-        bind_capabilities_with_registry(blueprint, registry)?;
-    }
-    Ok(blueprints)
+    crate::resolver::resolve_source(source, registry)
 }
