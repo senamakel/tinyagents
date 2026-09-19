@@ -256,7 +256,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             for schema in bridge {
                 if self.tools.dispatch(&schema.name).is_none() {
-                    tool_schemas.push(schema);
+                    tool_schemas.push(schema.clone());
+                    bridge_schemas.push(schema);
                 }
             }
         }
