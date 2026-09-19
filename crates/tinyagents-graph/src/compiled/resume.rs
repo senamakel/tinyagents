@@ -7,6 +7,8 @@
 
 use super::*;
 
+use crate::compiled::executor::RunSeed;
+
 impl<State, Update> CompiledGraph<State, Update>
 where
     State: Clone + Send + Sync + 'static,
