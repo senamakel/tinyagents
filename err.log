@@ -1,2 +1,36 @@
     Blocking waiting for file lock on build directory
    Compiling tinyagents-harness v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-harness)
+   Compiling tinyagents-language v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-language)
+   Compiling tinyagents-graph v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-graph)
+error[E0061]: this function takes 9 arguments but 8 arguments were supplied
+   --> crates/tinyagents-graph/src/compiled/executor.rs:541:23
+    |
+541 |           let mut ctx = RunCtx::start(
+    |  _______________________^^^^^^^^^^^^^-
+542 | |             self,
+543 | |             run_id,
+544 | |             thread_id,
+...   |
+549 | |             resume_seed,
+550 | |         )
+    | |_________- argument #9 of type `std::option::Option<CancellationToken>` is missing
+    |
+note: associated function defined here
+   --> crates/tinyagents-graph/src/compiled/run_ctx.rs:134:25
+    |
+134 |     pub(super) async fn start(
+    |                         ^^^^^
+...
+143 |         cancellation: Option<tinyagents_harness::CancellationToken>,
+    |         -----------------------------------------------------------
+help: provide the argument
+    |
+541 |         let mut ctx = RunCtx::start(
+...
+549 |             resume_seed,
+550 ~             /* std::option::Option<CancellationToken> */,
+551 ~         )
+    |
+
+For more information about this error, try `rustc --explain E0061`.
+error: could not compile `tinyagents-graph` (lib) due to 1 previous error
