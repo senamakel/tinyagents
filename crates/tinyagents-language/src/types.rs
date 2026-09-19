@@ -171,6 +171,33 @@ impl Blueprint {
     }
 }
 
+/// The current [`Blueprint::schema_version`]. Used as both the `Default`
+/// value and the serde field default, so a freshly built blueprint and one
+/// deserialized without the field (an old stored shape) agree.
+fn default_schema_version() -> u32 {
+    1
+}
+
+impl Default for Blueprint {
+    fn default() -> Self {
+        Self {
+            schema_version: default_schema_version(),
+            graph_id: String::new(),
+            start: String::new(),
+            channels: Vec::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            defaults: Vec::new(),
+            input: Vec::new(),
+            output: Vec::new(),
+            checkpoint: None,
+            interrupt: None,
+            joins: Vec::new(),
+            provenance: None,
+        }
+    }
+}
+
 // ===========================================================================
 // Provenance (source traceability for a compiled Blueprint)
 // ===========================================================================
