@@ -1,3 +1,7 @@
+//! Tests for [`ToolTimeoutSettings`]: bound normalization, clamping of
+//! explicit and inherited budgets, the `0` disables-inherited-deadline
+//! sentinel, and grace-ms padding on the enforced deadline.
+
 use std::time::Duration;
 
 use super::ToolTimeoutSettings;

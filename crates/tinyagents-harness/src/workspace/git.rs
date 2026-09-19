@@ -314,6 +314,8 @@ pub fn detect_worktree_overlaps(
         .collect()
 }
 
+/// Runs `git` in `cwd` with `args`, returning trimmed stdout on success or a
+/// [`GitWorktreeError::GitFailed`] carrying stderr on a non-zero exit.
 fn git(cwd: &Path, args: &[&str]) -> GitResult<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if !output.status.success() {
@@ -326,6 +328,9 @@ fn git(cwd: &Path, args: &[&str]) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Like [`git`], but returns raw (untrimmed) stdout — used where leading
+/// column characters (e.g. `git status --porcelain` status codes) are
+/// significant.
 fn git_raw(cwd: &Path, args: &[&str]) -> GitResult<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if !output.status.success() {

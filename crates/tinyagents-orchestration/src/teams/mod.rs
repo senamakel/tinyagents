@@ -1,4 +1,18 @@
 //! Durable, dependency-aware agent-team composition.
+//!
+//! A **team** is a durable group of worker agents (members) who claim and
+//! complete collaborative tasks. This module owns team creation, member
+//! lifecycle, task assignment and completion, and the event log that records
+//! all durable state changes.
+//!
+//! [`TeamService`] is the primary API: it validates team structure, manages
+//! member and task persistence (via the [`TeamLedger`] trait), and enforces
+//! coordination invariants (no duplicate names, no cycles in task dependencies,
+//! no dangling member or task references). [`runtime`] handles the per-member
+//! details: reading undelivered messages from the event log and composing the
+//! prompt a worker should receive. [`graph`] executes a member's work as a
+//! generic execute → complete/fail → done DAG, bridging the graph layer and
+//! durable team state.
 
 mod graph;
 mod runtime;
