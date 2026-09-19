@@ -302,3 +302,50 @@ async fn streamed_tool_call_markup_never_reaches_consumers() {
     assert_eq!(ids.len(), 1, "the scrubbed call still dispatches once");
     assert!(ids[0].ends_with("-tool-1"));
 }
+
+#[tokio::test]
+async fn a_signalled_but_missing_tool_call_is_re_prompted_then_recovered() {
+    let mut promised = ModelResponse::assistant("");
+    promised.finish_reason = Some("tool_calls".into());
+    let model = Arc::new(ScriptedModel::new(vec![
+        promised,
+        ModelResponse::assistant(
+            "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
+        ),
+        ModelResponse::assistant("done"),
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let harness = harness_with(model.clone(), &listener);
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.model_calls, 3, "one nudge, one call, one final");
+    assert_eq!(run.tool_calls, 1);
+    let second = &model.requests()[1];
+    let last = second.messages.last().expect("nudge appended").text();
+    assert!(last.contains("issue the actual tool call now"), "{last}");
+}
+
+#[tokio::test]
+async fn dropped_tool_call_nudges_are_bounded() {
+    let mut promised = ModelResponse::assistant("");
+    promised.finish_reason = Some("tool_calls".into());
+    let model = Arc::new(ScriptedModel::new(vec![
+        promised.clone(),
+        promised.clone(),
+        promised.clone(),
+        promised,
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let harness = harness_with(model, &listener);
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run ends instead of looping");
+    assert_eq!(run.model_calls, 4, "three nudges, then the answer is taken as final");
+    assert_eq!(run.tool_calls, 0);
+}

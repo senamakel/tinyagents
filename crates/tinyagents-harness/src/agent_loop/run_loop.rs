@@ -837,6 +837,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // A tool-calling response is a resolved turn too: clear the
             // recovery state before the tools run so the next turn starts from
             // the caller's configured cap and a full retry budget.
+            dropped_tool_call_nudges_used = 0;
             reset_truncated_empty_recovery(
                 &mut truncated_empty_retries_used,
                 &mut boosted_max_tokens,
