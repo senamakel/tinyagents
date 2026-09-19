@@ -146,6 +146,11 @@ where
         // a re-emitted subgraph interrupt whose task id was not stamped),
         // keying by every active activation of that node.
         let mut resume_map: HashMap<String, serde_json::Value> = HashMap::new();
+        // A caller-supplied per-task map (I1) always wins: it names its
+        // targets explicitly, so there is nothing to infer.
+        for (task_id, value) in &command.resume_by_task {
+            resume_map.insert(task_id.as_str().to_string(), value.clone());
+        }
         if let Some(value) = command.resume {
             let task_targets: Vec<String> = checkpoint
                 .interrupts
@@ -156,18 +161,22 @@ where
                 .collect();
             if !task_targets.is_empty() {
                 for task_id in task_targets {
-                    resume_map.insert(task_id, value.clone());
+                    resume_map.entry(task_id).or_insert_with(|| value.clone());
                 }
             } else {
                 let interrupted = interrupted_nodes(&checkpoint, &active);
                 if interrupted.is_empty() {
                     for activation in &active {
-                        resume_map.insert(resume_key(activation), value.clone());
+                        resume_map
+                            .entry(resume_key(activation))
+                            .or_insert_with(|| value.clone());
                     }
                 } else {
                     for node in interrupted {
                         for activation in active.iter().filter(|a| a.node == node) {
-                            resume_map.insert(resume_key(activation), value.clone());
+                            resume_map
+                                .entry(resume_key(activation))
+                                .or_insert_with(|| value.clone());
                         }
                     }
                 }
