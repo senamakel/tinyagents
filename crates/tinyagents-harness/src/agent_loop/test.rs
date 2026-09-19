@@ -3830,10 +3830,13 @@ async fn concurrent_tool_failure_fails_every_started_sibling_before_returning() 
             vec![("call-a", "alpha"), ("call-b", "boom")],
         )])),
     );
-    let max_seen = probe_pair(&mut harness, (80, 80));
-    let _ = max_seen; // only used to register the "alpha"/"beta" tools' peers
-    // Re-register "alpha" as the slow success half of this turn (probe_pair's
-    // "beta" is unused here; "boom" is the fast fatal failure).
+    harness.register_tool(Arc::new(ConcurrencyProbeTool {
+        name: "alpha",
+        reply: "alpha-out",
+        delay: std::time::Duration::from_millis(80),
+        active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_seen: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    }));
     harness.register_tool(Arc::new(FailingConcurrentTool { name: "boom" }));
 
     let recorder = EventRecorder::new();
