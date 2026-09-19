@@ -26,8 +26,8 @@ SDK-owned adapters for the lifecycle controls OpenHuman implements around it.
 OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows:
 
 - First-class reasoning and tool-call argument streaming events (tool
-  metadata, unknown-tool recovery, deferred approvals, and queued
-  steering/follow-ups have since shipped).
+  metadata, unknown-tool recovery, deferred approvals, queued steering, and
+  tool context/rich returns have since shipped).
 - Durable `TaskStore` and event/status stores with replay, lineage, cursors,
   redaction, and cancellation semantics.
 - Storage compatibility options for SQLite users that already depend on a
@@ -69,22 +69,18 @@ Status: shipped.
 
 TinyAgents now has `UnknownToolPolicy::{Fail, ReturnToolError, Rewrite}` on
 `RunPolicy` (`crates/tinyagents-harness/src/runtime/types.rs`), applied in
-`crates/tinyagents-harness/src/agent_loop/tools.rs` (~305-371). The default is
+`crates/tinyagents-harness/src/agent_loop/tools.rs`. The default is
 `ReturnToolError`: an unregistered tool call is injected back as a tool-error
-result naming the requested tool and the valid tools, so the loop continues
-and the model can self-correct, instead of aborting the run. `Fail` restores
-the old abort behavior, and `Rewrite { tool_name }` retargets the call to a
-fixed compatibility tool. OpenHuman's `UNKNOWN_TOOL_SENTINEL` workaround can
-be retired in favor of this policy.
+result naming the requested tool and the valid tools, so the model can
+self-correct instead of the run aborting. `Fail` restores the old abort
+behavior; `Rewrite { tool_name }` retargets the call to a fixed compatibility
+tool. OpenHuman's `UNKNOWN_TOOL_SENTINEL` workaround can be retired.
 
 Still open: a `RepairWithMiddleware` variant letting a tool middleware
 transform the call. Events preserve the requested name, arguments, and call id.
-
-Acceptance criteria:
-
-- OpenHuman can delete `UNKNOWN_TOOL_SENTINEL`.
-- Harness events distinguish "tool not found" from "tool executed and failed".
-- The policy can vary by run, sub-agent, or tool allowlist.
+Acceptance: OpenHuman can delete `UNKNOWN_TOOL_SENTINEL`; events distinguish
+"tool not found" from "tool executed and failed"; the policy can vary by run,
+sub-agent, or tool allowlist.
 
 ### 3. Reasoning And Tool-Argument Streaming
 
