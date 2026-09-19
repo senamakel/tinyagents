@@ -59,7 +59,7 @@ impl Send {
 /// `Checkpoint::completed_tasks` (see [`crate::Checkpoint::completed_routes`])
 /// so it survives a resume instead of being re-resolved via
 /// static/conditional edges only.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RouteTarget {
     /// Activate the node against the shared committed state.
     Node(NodeId),
