@@ -701,6 +701,115 @@ async fn update_state_as_command_node_is_rejected() {
         .unwrap();
 }
 
+/// I2 regression: `update_state` (with `as_node: None`, so it does not touch
+/// the interrupted node) followed by `resume(value)` must hand the resume
+/// value only to the node that actually interrupted — not to every node the
+/// checkpoint's pending set happens to carry, including one `update_state`
+/// itself just scheduled via a carried-forward completion's routing.
+/// Before the fix, `update_state` unconditionally wrote `interrupts:
+/// Vec::new()` with no `interrupted_nodes` metadata, so `resume` found no
+/// provenance and fanned the value across every pending node instead.
+#[tokio::test]
+async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
+    let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
+    let resumes_seen: Arc<std::sync::Mutex<Vec<(String, Option<serde_json::Value>)>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lo_resumes = resumes_seen.clone();
+    let y_resumes = resumes_seen.clone();
+    let graph = GraphBuilder::<Counter, i32>::new()
+        .with_parallel(true)
+        .set_reducer(ClosureStateReducer::new(|mut s: Counter, u: i32| {
+            s.value += u;
+            s.log.push(format!("+{u}"));
+            Ok(s)
+        }))
+        .add_node("super", |_s: Counter, _c: NodeContext| async move {
+            Ok(NodeResult::Command(
+                Command::default().with_goto(["lo", "hi"]),
+            ))
+        })
+        .add_node("lo", move |_s: Counter, c: NodeContext| {
+            let seen = lo_resumes.clone();
+            async move {
+                seen.lock().unwrap().push(("lo".to_string(), c.resume.clone()));
+                match c.resume {
+                    Some(_) => Ok(NodeResult::Update(2)),
+                    None => Ok(NodeResult::Interrupt(Interrupt::new("lo", json!({})))),
+                }
+            }
+        })
+        .add_node("hi", |_s: Counter, _c: NodeContext| async move {
+            Ok(NodeResult::Update(20))
+        })
+        .add_node("y", move |_s: Counter, c: NodeContext| {
+            let seen = y_resumes.clone();
+            async move {
+                seen.lock().unwrap().push(("y".to_string(), c.resume.clone()));
+                Ok(NodeResult::Update(5))
+            }
+        })
+        .set_entry("super")
+        .mark_command_routing("super")
+        .add_edge("hi", "y")
+        .set_finish("lo")
+        .set_finish("y")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let paused = graph
+        .run_with_thread(
+            "t-i2",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(paused.is_interrupted());
+
+    // A manual write with `as_node: None` — it must not clear the interrupt
+    // provenance. It also resolves `hi`'s deferred routing (a carried
+    // completion), scheduling `y` into the pending set alongside `lo`.
+    graph.update_state("t-i2", 0, None).await.unwrap();
+    let mid = cp.get("t-i2", None).await.unwrap().unwrap();
+    assert!(
+        mid.next_nodes.iter().any(|n| n.as_str() == "lo")
+            && mid.next_nodes.iter().any(|n| n.as_str() == "y"),
+        "both lo (still interrupted) and y (hi's deferred successor) must \
+         be pending, got {:?}",
+        mid.next_nodes
+    );
+
+    let resume_value = json!("only-for-lo");
+    let done = graph
+        .resume("t-i2", Command::resume(resume_value.clone()))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+
+    let seen = resumes_seen.lock().unwrap();
+    let lo_saw: Vec<_> = seen
+        .iter()
+        .filter(|(node, _)| node == "lo")
+        .map(|(_, r)| r.clone())
+        .collect();
+    let y_saw: Vec<_> = seen
+        .iter()
+        .filter(|(node, _)| node == "y")
+        .map(|(_, r)| r.clone())
+        .collect();
+    assert!(
+        lo_saw.iter().any(|r| *r == Some(resume_value.clone())),
+        "lo (the node that actually interrupted) must receive the resume value: {lo_saw:?}"
+    );
+    assert!(
+        y_saw.iter().all(|r| r.is_none()),
+        "y (merely pending, never interrupted) must not receive the resume value: {y_saw:?}"
+    );
+}
+
 #[tokio::test]
 async fn bulk_update_state_applies_successive_updates() {
     use crate::CheckpointSource;
