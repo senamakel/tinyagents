@@ -471,6 +471,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .with_tool_count(request.tools.len());
                     let permit = match self.call_budget(ctx) {
                         Some(remaining) => tokio::select! {
+                            biased;
                             _ = ctx.cancellation.cancelled() => {
                                 return Err(TinyAgentsError::Cancelled);
                             }
@@ -482,6 +483,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             }
                         },
                         None => tokio::select! {
+                            biased;
                             _ = ctx.cancellation.cancelled() => {
                                 return Err(TinyAgentsError::Cancelled);
                             }

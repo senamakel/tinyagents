@@ -1132,7 +1132,11 @@ async fn hosted_turn_blocks_provider_extension_user_blocks_before_model_submissi
         )
         .await
         .expect_err("blocked extensions must not reach the provider");
-    assert!(error.to_string().contains("blocked extension"));
+    assert_eq!(
+        error.to_string(),
+        "model error: hosted agent invocation failed"
+    );
+    assert!(!error.to_string().contains("secret"));
     assert!(model.requests().is_empty());
 }
 
@@ -1847,7 +1851,10 @@ async fn poisoned_host_binding_fails_closed_before_any_model_fallback() {
         )
         .await
         .expect_err("poison must not fall back to an unbound model");
-    assert!(error.to_string().contains("host run binding lock poisoned"));
+    assert_eq!(
+        error.to_string(),
+        "model error: hosted agent invocation failed"
+    );
     assert!(
         model.requests().is_empty(),
         "no provider request escaped host policy"
