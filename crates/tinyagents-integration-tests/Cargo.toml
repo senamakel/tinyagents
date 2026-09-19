@@ -27,13 +27,17 @@ tinyagents-session = { path = "../tinyagents-session" }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
 tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.3.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.2.0" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
+tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [features]
 default = []
 sqlite = ["tinyagents-graph/sqlite", "tinyagents-harness/sqlite"]
-tools = ["tinyagents-harness/tools"]
+# `tools` is kept as the forwarded feature name for backward compatibility
+# (see `tinyagents-harness`'s deprecated `tools` alias for `builtin-tools`).
+tools = ["tinyagents-harness/builtin-tools"]
 multimodal = ["tinyagents-harness/multimodal"]
+claude-code = ["tinyagents-harness/claude-code"]
+langfuse = ["tinyagents-harness/langfuse"]
 tracing = [
     "tinyagents-graph/tracing",
     "tinyagents-harness/tracing",
