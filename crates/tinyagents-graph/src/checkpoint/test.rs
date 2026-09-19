@@ -94,7 +94,7 @@ fn pending_activation_send_arg_roundtrips() {
         pending_activations: Some(vec![super::PendingActivation {
             node: NodeId::from("w"),
             send_arg: Some(json!({ "item": 42 })),
-            task_id: "1:0:w".to_string(),
+            task_id: tinyagents_harness::ids::TaskId::from("1:0:w"),
         }]),
         barrier_arrivals: vec![super::BarrierArrivals {
             node: NodeId::from("join"),

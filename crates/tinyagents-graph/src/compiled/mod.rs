@@ -113,7 +113,7 @@ use crate::status::GraphRunStatus;
 use crate::stream::{GraphEvent, GraphEventSink};
 use crate::{Result, TinyAgentsError};
 use tinyagents_harness::ids::{
-    CheckpointId, ExecutionStatus, GraphId, InterruptId, NodeId, RunId, ThreadId,
+    CheckpointId, ExecutionStatus, GraphId, InterruptId, NodeId, RunId, TaskId, ThreadId,
 };
 use tinyagents_harness::retry::is_retryable;
 
