@@ -217,6 +217,24 @@ impl std::fmt::Display for Route {
     }
 }
 
+impl From<Route> for String {
+    fn from(route: Route) -> Self {
+        route.0
+    }
+}
+
+impl From<String> for Route {
+    fn from(label: String) -> Self {
+        Self(label)
+    }
+}
+
+impl From<&str> for Route {
+    fn from(label: &str) -> Self {
+        Self(label.to_string())
+    }
+}
+
 /// Tunable per-graph defaults applied to a [`GraphBuilder`] in one call via
 /// [`GraphBuilder::set_defaults`].
 ///
