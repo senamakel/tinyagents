@@ -1,3 +1,7 @@
+//! Unit tests for `EventMapper`: text/thinking block streaming, the
+//! self-executed tool-call suppression, `result`/error terminal handling,
+//! and session id capture.
+
 use super::*;
 use serde_json::json;
 
