@@ -154,6 +154,9 @@ where
                 state,
                 pending: &next,
                 completed_tasks: &completed_tasks,
+                // Fully routed at this normal boundary, so nothing is left
+                // to carry forward.
+                completed_routes: &[],
                 child_runs: sb.child_runs_meta,
             };
             if matches!(self.durability, DurabilityMode::Async) && !terminal {
