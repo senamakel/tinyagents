@@ -228,6 +228,37 @@ where
             .map(|node| crate::checkpoint::CompletedTask::new(TaskId::from(String::new()), node))
             .collect();
         let barrier_arrivals = barriers_to_persisted(&arrivals);
+        // Per-task replay memos (`durable_task` writes, a deferred
+        // `interrupt_after` result) and executor-interrupt acknowledgements
+        // belong to the tasks that are still pending after this write, so
+        // carry exactly those forward; a task this write completed (or
+        // dropped) takes its memos with it.
+        let still_pending: HashSet<&str> = tasks
+            .iter()
+            .map(|t| t.task_id.as_str())
+            .filter(|id| !id.is_empty())
+            .collect();
+        let pending_writes: Vec<crate::checkpoint::PendingWrite> = base
+            .pending_writes
+            .iter()
+            .filter(|w| w.is_task_replay() && still_pending.contains(w.task_id.as_str()))
+            .cloned()
+            .collect();
+        let carried_acks: Vec<String> = base
+            .metadata
+            .get("acknowledged_interrupts")
+            .and_then(serde_json::Value::as_array)
+            .map(|acks| {
+                acks.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|key| {
+                        key.split_once(':')
+                            .is_some_and(|(_, task)| still_pending.contains(task))
+                    })
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // I2: carry the base checkpoint's interrupt provenance through this
         // manual write unless `as_node` names the node that actually
@@ -274,6 +305,9 @@ where
                     .collect::<Vec<_>>()
             );
         }
+        if !carried_acks.is_empty() {
+            metadata["acknowledged_interrupts"] = serde_json::json!(carried_acks);
+        }
         // I5/R3: the same `channel_bookkeeping` dispatch point the executor
         // boundary uses (`compiled::boundary::channel_checkpoint_fields`),
         // so a manual write can never disagree with a normal superstep
@@ -288,13 +322,18 @@ where
             .with_parent_checkpoint_id(Some(parent_id))
             .with_namespace(self.namespace.clone())
             .with_completed(completed)
+            .with_pending_writes(pending_writes)
             .with_interrupts(interrupts)
             .with_barrier_arrivals(barrier_arrivals)
             .with_channel_versions(channel_versions)
             .with_channel_deltas(channel_deltas)
             .with_versions_seen(base.versions_seen.clone())
             .with_metadata(metadata);
+        let writes = checkpoint.pending_writes.clone();
         let id = checkpointer.put(checkpoint).await?;
+        if !writes.is_empty() {
+            checkpointer.put_writes(&config, &writes).await?;
+        }
         self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
         Ok(config)
     }

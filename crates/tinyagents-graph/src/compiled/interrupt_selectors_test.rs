@@ -484,3 +484,22 @@ async fn interrupt_before_ack_survives_a_later_node_emitted_pause() {
         "re-run once for the node's own pause"
     );
 }
+
+#[tokio::test]
+async fn update_state_carries_a_deferred_interrupt_after_result_forward() {
+    // Inspect -> `update_state` (not attributed to the paused node) ->
+    // resume: the manual write must not lose `b`'s held-back result.
+    let b_runs = Arc::new(AtomicUsize::new(0));
+    let graph = chain(b_runs.clone(), |b| b.interrupt_after(["b"]));
+    graph.run_with_thread("edit", 0).await.unwrap();
+    assert_eq!(b_runs.load(AtomicOrdering::SeqCst), 1);
+
+    // Overwrite reducer: the committed state becomes 1000, `b` still pending.
+    graph.update_state("edit", 1000, None).await.unwrap();
+    let resumed = graph.retry("edit").await.unwrap();
+    assert_eq!(resumed.status.status, ExecutionStatus::Completed);
+    // `b`'s deferred update was computed against state 1 (-> 11), replayed
+    // verbatim (overwrite), then `c` adds 100.
+    assert_eq!(resumed.state, 111);
+    assert_eq!(b_runs.load(AtomicOrdering::SeqCst), 1);
+}
