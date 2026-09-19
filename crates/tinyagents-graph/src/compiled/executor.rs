@@ -16,6 +16,41 @@ use crate::compiled::boundary::StepBoundary;
 use crate::compiled::run_ctx::RunCtx;
 use crate::compiled::step::StepRunner;
 
+/// Everything a fresh or resumed run is seeded with, bundled so
+/// [`CompiledGraph::execute`]/[`CompiledGraph::execute_run`] take one
+/// parameter instead of positional state/thread/resume/barrier/binding
+/// arguments.
+struct RunSeed<State, Update> {
+    state: State,
+    active: Vec<Activation>,
+    thread_id: Option<ThreadId>,
+    resume_map: HashMap<NodeId, serde_json::Value>,
+    barriers: HashMap<NodeId, HashSet<NodeId>>,
+    parent: Option<String>,
+    binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    _update: std::marker::PhantomData<Update>,
+}
+
+impl<State, Update> RunSeed<State, Update> {
+    fn fresh(state: State, active: Vec<Activation>, thread_id: Option<ThreadId>) -> Self {
+        Self {
+            state,
+            active,
+            thread_id,
+            resume_map: HashMap::new(),
+            barriers: HashMap::new(),
+            parent: None,
+            binding: None,
+            _update: std::marker::PhantomData,
+        }
+    }
+
+    fn with_binding(mut self, binding: crate::subagent_node::AgentInvocationBinding) -> Self {
+        self.binding = Some(binding);
+        self
+    }
+}
+
 impl<State, Update> CompiledGraph<State, Update>
 where
     State: Clone + Send + Sync + 'static,
