@@ -126,8 +126,9 @@ fn run() -> Result<(), String> {
         models,
     };
 
+    let allowed_providers: Vec<&str> = PROVIDERS.iter().map(|(_, catalog_provider, _)| *catalog_provider).collect();
     snapshot
-        .validate()
+        .validate_with_providers(Some(&allowed_providers))
         .map_err(|e| format!("generated snapshot failed validation: {e}"))?;
 
     let json = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
