@@ -233,13 +233,24 @@ Refresh should be explicit and auditable:
 7. Run catalog validation tests.
 8. Commit the new snapshot only with a clear reason.
 
-Future command shape:
+Implemented command (`crates/tinyagents-registry/src/bin/catalog_gen.rs`,
+source `models.dev` rather than `litellm`):
 
 ```sh
-cargo run --example refresh_model_catalog -- \
-  --source litellm \
-  --output data/model-catalog/model-catalog.snapshot.json
+cargo run -p tinyagents-registry --bin catalog_gen -- \
+  --output crates/tinyagents-registry/model-catalog.snapshot.json
+# --input PATH reads a local models.dev payload instead of fetching it.
 ```
+
+It fetches `https://models.dev/api.json` (via `curl`, to avoid adding an HTTP
+client dependency to the registry crate for a dev-only tool), maps a curated
+provider list into `ModelCatalogEntry` (tiered pricing, context windows,
+modalities, reasoning flags, raw payload preserved verbatim per entry),
+filters out image/audio/video-only-output models (text-to-speech, image/video
+generation — not a `ChatModel` shape, and their output-token limit is a
+duration budget rather than a context bound, which would otherwise trip the
+output-vs-input-context check), and refuses to write a snapshot that fails
+`validate_with_providers(Some(KNOWN_PROVIDERS))`.
 
 Validation is implemented (`ModelCatalogSnapshot::validate` /
 `validate_with_providers` in `catalog.rs`, called by
