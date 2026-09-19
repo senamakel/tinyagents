@@ -568,6 +568,9 @@ pub fn list_messages(
     })
 }
 
+/// Lists a session's tool calls in insertion order (`id ASC`).
+///
+/// `limit` is capped at 1000 regardless of the requested value.
 pub fn list_tool_calls(
     workspace_dir: &Path,
     session_id: &str,
