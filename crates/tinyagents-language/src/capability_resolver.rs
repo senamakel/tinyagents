@@ -433,9 +433,31 @@ impl CapabilityResolver {
     }
 
     /// Runs the same checks as [`bind_blueprint`](Self::bind_blueprint), but
+    /// returns [`TinyAgentsError::Diagnostics`] carrying *every* offending
+    /// reference and node kind at once instead of folding to just the first.
+    ///
+    /// Prefer this over [`bind_blueprint`](Self::bind_blueprint) for a
+    /// self-authored plan a model may revise repeatedly: reporting every
+    /// problem in one pass lets the model fix them all before recompiling,
+    /// instead of playing error whack-a-mole one fix per attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::Diagnostics`] (never empty) if any reference
+    /// or node kind fails to resolve.
+    pub fn bind_blueprint_all(&self, blueprint: &Blueprint) -> Result<()> {
+        let diagnostics = self.bind_blueprint_diagnostics(blueprint);
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(into_diagnostics_error(diagnostics, None))
+        }
+    }
+
+    /// Runs the same checks as [`bind_blueprint`](Self::bind_blueprint), but
     /// collects *every* offending reference and node kind instead of stopping
-    /// at the first, so a caller (or `bind_blueprint` itself) can surface them
-    /// together.
+    /// at the first, so a caller (or `bind_blueprint`/`bind_blueprint_all`
+    /// themselves) can surface them together.
     ///
     /// An empty result means every reference resolves and every node kind is
     /// allowed.
