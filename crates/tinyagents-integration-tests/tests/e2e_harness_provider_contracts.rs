@@ -281,6 +281,8 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
                 retryable: true,
                 retry_after_ms: None,
                 raw: Some(json!({ "error": "nope" })),
+                partial_message: None,
+                stop_reason: None,
             },
         )])));
     let err = collect_model_stream(failed_stream).await.unwrap_err();
