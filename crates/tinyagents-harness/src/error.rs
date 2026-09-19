@@ -192,7 +192,7 @@ pub enum TinyAgentsError {
         /// The deferred tool's name.
         name: String,
         /// The call arguments the host needs to execute the call.
-        arguments serde_json::Value,
+        arguments: serde_json::Value,
     },
 
     /// Input failed validation before a call was made (for example a missing
