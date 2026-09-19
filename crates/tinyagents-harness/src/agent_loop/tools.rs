@@ -351,9 +351,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         .tools
                         .dispatch(tool_name)
                         .filter(|_| {
-                            allowed_tools.as_ref().is_none_or(|allowed| {
-                                allowed.is_empty() || allowed.contains(tool_name)
-                            })
+                            allowed_tools
+                                .as_ref()
+                                .is_none_or(|allowed| allowed.contains(tool_name))
                         })
                         .map(|dispatch| (tool_name.clone(), dispatch)),
                     _ => None,
