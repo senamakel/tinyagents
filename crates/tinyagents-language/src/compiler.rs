@@ -25,7 +25,6 @@
 //!    Rust-side factory, never from the declarative source.
 
 use crate::capability_resolver::CapabilitySource;
-use crate::parser::parse_str;
 use crate::types::{
     Blueprint, BlueprintProvenance, ChannelSpec, CommandSpec, END, EdgeSpan, EdgeSpec, IoFieldSpec,
     JoinSpec, NamedSpan, NodeSpec, Origin, Program, Routing, SendSpec,
