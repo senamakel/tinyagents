@@ -397,7 +397,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
                     CompactionReason::Overflow,
                 );
                 retried.messages = new_messages;
-                return next.run(ctx, state, retried).await.map_err(|_| first_error);
+                return next.run(ctx, state, retried).await;
             }
         }
 
