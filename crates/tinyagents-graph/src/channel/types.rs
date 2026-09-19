@@ -238,15 +238,48 @@ impl std::fmt::Debug for ChannelSet {
     }
 }
 
-/// A batch of `(channel_name, value)` writes returned by a node.
+/// One write within a [`ChannelUpdate`]: an ordinary reducer-merged write, or
+/// an [`Overwrite`](ChannelWrite::Overwrite) that bypasses the channel's
+/// merge rule entirely and replaces the value outright.
 ///
-/// Build one with [`ChannelUpdate::new`] and chain [`ChannelUpdate::set`]. Tag
-/// it with [`ChannelUpdate::at_step`] (passing `ctx.step`) to opt into
-/// same-step concurrent-write conflict detection and ephemeral clearing — see
-/// the module docs and [`ChannelState`].
+/// `Overwrite` is what lets an append-style ([`Topic`], a delta-tracked
+/// channel) reset its baseline: the replaced value becomes what subsequent
+/// merges build on, and — for a channel registered with
+/// [`ChannelSet::with_delta`] — it also rebases that channel's accumulated
+/// delta history (see [`ChannelState::step_deltas`]).
+#[derive(Clone, Debug)]
+pub enum ChannelWrite {
+    /// Folds `Value` into the channel's current value via its merge rule.
+    Merge(Value),
+    /// Replaces the channel's current value with `Value`, bypassing the
+    /// merge rule.
+    Overwrite(Value),
+}
+
+impl ChannelWrite {
+    /// The raw value carried by either variant.
+    pub fn value(&self) -> &Value {
+        match self {
+            ChannelWrite::Merge(v) | ChannelWrite::Overwrite(v) => v,
+        }
+    }
+
+    /// Whether this write is an [`Overwrite`](ChannelWrite::Overwrite).
+    pub fn is_overwrite(&self) -> bool {
+        matches!(self, ChannelWrite::Overwrite(_))
+    }
+}
+
+/// A batch of `(channel_name, write)` writes returned by a node.
+///
+/// Build one with [`ChannelUpdate::new`] and chain [`ChannelUpdate::set`] (an
+/// ordinary merged write) or [`ChannelUpdate::overwrite`] (bypasses the merge
+/// rule). Tag it with [`ChannelUpdate::at_step`] (passing `ctx.step`) to opt
+/// into same-step concurrent-write conflict detection and ephemeral clearing
+/// — see the module docs and [`ChannelState`].
 #[derive(Clone, Debug, Default)]
 pub struct ChannelUpdate {
-    pub(crate) writes: Vec<(String, Value)>,
+    pub(crate) writes: Vec<(String, ChannelWrite)>,
     pub(crate) step: Option<usize>,
 }
 
