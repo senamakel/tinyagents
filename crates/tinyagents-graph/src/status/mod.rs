@@ -42,7 +42,10 @@ impl GraphRunStatus {
         }
     }
 
-    /// Returns true when the run is in a terminal state.
+    /// Returns true when the run is in a terminal state — one this run id
+    /// will never advance from on its own. `Drained` counts (like
+    /// `Cancelled`): the process stopped the run; continuing the thread is a
+    /// new run started by `resume`/`retry`. `Interrupted` does not.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status,
