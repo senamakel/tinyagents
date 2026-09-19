@@ -156,10 +156,7 @@ where
     /// `&str` then a `String` downcast, and produces the
     /// [`TinyAgentsError::Graph`] that stands in for the panic at the normal
     /// failure boundary.
-    fn panic_error(
-        node_id: &NodeId,
-        payload: Box<dyn std::any::Any + Send>,
-    ) -> TinyAgentsError {
+    fn panic_error(node_id: &NodeId, payload: Box<dyn std::any::Any + Send>) -> TinyAgentsError {
         let message = if let Some(s) = payload.downcast_ref::<&str>() {
             (*s).to_string()
         } else if let Some(s) = payload.downcast_ref::<String>() {

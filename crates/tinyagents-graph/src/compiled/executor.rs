@@ -355,8 +355,14 @@ where
         target: ResumeTarget,
         command: Command<Update>,
     ) -> Result<GraphExecution<State>> {
-        self.resume_from_inner(thread_id.into(), target, command, None, RunOptions::default())
-            .await
+        self.resume_from_inner(
+            thread_id.into(),
+            target,
+            command,
+            None,
+            RunOptions::default(),
+        )
+        .await
     }
 
     /// Resumes a run from `target` with a host-bound recursive-agent binding.

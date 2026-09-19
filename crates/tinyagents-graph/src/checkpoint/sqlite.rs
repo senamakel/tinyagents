@@ -136,7 +136,6 @@ impl<State> SqliteCheckpointer<State> {
     pub fn schema_sql() -> &'static str {
         SCHEMA
     }
-
 }
 
 /// Locks a checkpointer's shared connection, mapping a poisoned mutex to a
@@ -308,8 +307,7 @@ fn insert_checkpoint_row<State: Serialize>(
         .map_err(|e| sqlite_err("encode namespace", e))?;
     let next_nodes = serde_json::to_string(&checkpoint.next_nodes)
         .map_err(|e| sqlite_err("encode next_nodes", e))?;
-    let record =
-        serde_json::to_string(checkpoint).map_err(|e| sqlite_err("encode record", e))?;
+    let record = serde_json::to_string(checkpoint).map_err(|e| sqlite_err("encode record", e))?;
     conn.execute(
         "INSERT INTO checkpoints (
             thread_id, checkpoint_id, parent_checkpoint_id, run_id,
@@ -346,8 +344,8 @@ fn insert_checkpoint_writes(
     checkpoint_id: &str,
     writes: &[PendingWrite],
 ) -> Result<usize> {
-    let namespace_json = serde_json::to_string(&config.namespace)
-        .map_err(|e| sqlite_err("encode namespace", e))?;
+    let namespace_json =
+        serde_json::to_string(&config.namespace).map_err(|e| sqlite_err("encode namespace", e))?;
     let mut stored = 0usize;
     for write in writes {
         // The replace-vs-ignore rule pushed into SQL: a control-plane write
