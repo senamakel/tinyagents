@@ -31,7 +31,8 @@ use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
 
 /// Builds a child harness whose model always asks for the `broken` tool, which
-/// fails with `Err(TinyAgentsError::Tool("boom"))`.
+/// fails with a foreign `anyhow` error. The harness maps that to its stable,
+/// non-sensitive tool-failure surface before a sub-agent can propagate it.
 fn failing_child_harness() -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
@@ -56,8 +57,8 @@ async fn subagent_invoke_propagates_tool_failure() {
         .expect_err("the child tool failure must propagate out of SubAgent::invoke");
 
     match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected TinyAgentsError::Tool(\"boom\"), got {other:?}"),
+        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
+        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
     }
 }
 
@@ -84,8 +85,8 @@ async fn subagent_tool_call_surfaces_failure_as_err() {
         .expect_err("SubAgentTool::call must surface the child failure as an Err");
 
     match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected TinyAgentsError::Tool(\"boom\"), got {other:?}"),
+        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
+        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
     }
 }
 
@@ -123,8 +124,8 @@ async fn orchestrator_observes_failing_subagent_tool() {
         .expect_err("the failing sub-agent tool must abort the orchestrator run");
 
     match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "boom"),
-        other => panic!("expected TinyAgentsError::Tool(\"boom\"), got {other:?}"),
+        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
+        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
     }
 
     // The orchestrator run emitted a RunFailed event (on_error fan-out path).

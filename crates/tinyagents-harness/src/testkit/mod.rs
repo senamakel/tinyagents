@@ -268,7 +268,7 @@ impl FakeTool {
     }
 
     /// Creates a `FakeTool` that always returns
-    /// `Err(`[`TinyAgentsError::Tool`]`(message))`.
+    /// a foreign `anyhow` error carrying `message`.
     pub fn failing(name: impl Into<String>, message: impl Into<String>) -> Self {
         let name = name.into();
         Self {
