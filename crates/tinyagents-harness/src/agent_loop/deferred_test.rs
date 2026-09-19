@@ -356,3 +356,148 @@ async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resum
     assert_eq!(run.text().as_deref(), Some("clicked"));
     assert!(run.executed_tools.is_empty(), "the harness never ran the external tool");
 }
+
+// ── Inline handler ──────────────────────────────────────────────────────────
+
+/// A handler that approves everything and records what it was asked.
+struct ApproveAllHandler {
+    asked: Mutex<Vec<DeferredToolRequests>>,
+}
+
+#[async_trait]
+impl crate::tool::DeferredToolHandler for ApproveAllHandler {
+    async fn handle(
+        &self,
+        requests: &DeferredToolRequests,
+    ) -> crate::error::Result<DeferredToolResults> {
+        self.asked.lock().unwrap().push(requests.clone());
+        Ok(requests.approve_all())
+    }
+}
+
+#[tokio::test]
+async fn inline_handler_resolves_deferrals_without_surfacing_them() {
+    let recorder = EventRecorder::new();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            mixed_batch(),
+            response(Vec::new(), "all done"),
+        ])),
+    );
+    let delete = RecordingTool::approval_gated("delete", "deleted");
+    harness.register_tool(delete.clone());
+    harness.register_tool(RecordingTool::plain("lookup", "found"));
+    let handler = Arc::new(ApproveAllHandler {
+        asked: Mutex::new(Vec::new()),
+    });
+    harness.with_deferred_tool_handler(handler.clone());
+
+    let ctx = RunContext::new(RunConfig::new("inline"), ()).with_events(recorder.sink());
+    let run = harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("the handler settles the batch");
+
+    assert!(run.deferred.is_none(), "the caller never sees the deferral");
+    assert_eq!(run.text().as_deref(), Some("all done"));
+    assert_eq!(delete.calls(), vec![json!({"path": "/tmp/x"})]);
+    assert_eq!(
+        tool_result_text(&run.messages, "call-delete").as_deref(),
+        Some("deleted")
+    );
+    let asked = handler.asked.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].approvals[0].id, "call-delete");
+    let events = recorder.events();
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolDeferred { .. })));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolApproved { .. })));
+}
+
+/// A handler that leaves the request unresolved.
+struct SilentHandler;
+
+#[async_trait]
+impl crate::tool::DeferredToolHandler for SilentHandler {
+    async fn handle(
+        &self,
+        _requests: &DeferredToolRequests,
+    ) -> crate::error::Result<DeferredToolResults> {
+        Ok(DeferredToolResults::new())
+    }
+}
+
+#[tokio::test]
+async fn inline_handler_that_leaves_calls_unresolved_fails_the_run() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", Arc::new(MockModel::with_responses(vec![mixed_batch()])));
+    harness.register_tool(RecordingTool::approval_gated("delete", "deleted"));
+    harness.register_tool(RecordingTool::plain("lookup", "found"));
+    harness.with_deferred_tool_handler(Arc::new(SilentHandler));
+
+    let error = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("an incomplete resolution is a validation failure");
+    assert!(
+        matches!(&error, TinyAgentsError::Validation(message) if message.contains("call-delete")),
+        "{error}"
+    );
+}
+
+// ── Execution-time deferral (`Err(ApprovalRequired)` from the tool) ─────────
+
+struct SelfDeferringTool;
+
+#[async_trait]
+impl Tool for SelfDeferringTool {
+    fn name(&self) -> &str {
+        "wire_money"
+    }
+    fn description(&self) -> &str {
+        "asks for approval from inside execute"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
+    }
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Err(TinyAgentsError::ApprovalRequired {
+            metadata: json!({"amount": arguments["amount"]}),
+        }
+        .into())
+    }
+}
+
+#[tokio::test]
+async fn tool_raising_approval_required_defers_with_its_metadata() {
+    let recorder = EventRecorder::new();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![response(
+            vec![ToolCall::new("call-wire", "wire_money", json!({"amount": 500}))],
+            "",
+        )])),
+    );
+    harness.register_tool(Arc::new(SelfDeferringTool));
+
+    let ctx = RunContext::new(RunConfig::new("exec-defer"), ()).with_events(recorder.sink());
+    let run = harness
+        .invoke_in_context(&(), ctx, vec![Message::user("pay")])
+        .await
+        .expect("a deferral is not an error");
+    let pending = run.deferred.expect("pending approval");
+    assert_eq!(pending.approvals[0].id, "call-wire");
+    assert_eq!(
+        pending.metadata.get(&CallId::new("call-wire")),
+        Some(&json!({"amount": 500}))
+    );
+    // The `ToolStarted` emitted before execution has exactly one terminal
+    // partner, the `ToolDeferred`, and no `ToolFailed`.
+    let events = recorder.events();
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolStarted { .. })));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolDeferred { .. })));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::ToolFailed { .. })));
+    assert_eq!(run.tool_calls, 0);
+}
