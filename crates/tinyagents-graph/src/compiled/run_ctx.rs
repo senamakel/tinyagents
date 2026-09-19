@@ -34,6 +34,14 @@ pub(super) struct RunCtx<'a, State, Update> {
     pub(super) root_run_id: RunId,
     pub(super) parent_run_id: Option<RunId>,
     pub(super) started_at: SystemTime,
+    /// Monotonic start instant used for wall-clock-jump-proof deadline
+    /// arithmetic (M3): `run_deadline` is checked against
+    /// [`std::time::Instant::elapsed`] rather than [`SystemTime::elapsed`],
+    /// so a system clock step (NTP sync, VM pause/resume, manual clock
+    /// change) cannot make a run time out early or never at all.
+    /// `started_at` (above) remains the wall-clock stamp surfaced on
+    /// [`GraphRunStatus`], which is what observers expect.
+    pub(super) started_instant: std::time::Instant,
     pub(super) live_frames: Vec<RecursionFrame>,
     pub(super) recursion_meta: serde_json::Value,
     pub(super) recursion: RecursionStack,
@@ -134,6 +142,7 @@ where
             carried_completed,
         } = resume_seed;
         let started_at = SystemTime::now();
+        let started_instant = std::time::Instant::now();
         // Graph-call depth (the stack) is tracked separately from node-loop
         // visits (`node_visits`, below).
         let mut recursion =
@@ -174,6 +183,7 @@ where
             root_run_id,
             parent_run_id,
             started_at,
+            started_instant,
             live_frames,
             recursion_meta,
             recursion,

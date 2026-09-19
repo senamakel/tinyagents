@@ -554,7 +554,7 @@ where
         // aborts mid-super-step and cannot). The already-completed super-steps
         // and their checkpoints are preserved; the run fails with `Timeout`.
         if let Some(deadline) = self.run_deadline {
-            let elapsed = ctx.started_at.elapsed().unwrap_or_default();
+            let elapsed = ctx.started_instant.elapsed();
             if elapsed >= deadline {
                 return Err(TinyAgentsError::Timeout(format!(
                     "graph run exceeded its {deadline:?} deadline after {} super-step(s) \

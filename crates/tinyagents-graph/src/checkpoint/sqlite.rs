@@ -62,6 +62,29 @@ fn sqlite_err(context: &str, err: impl std::fmt::Display) -> TinyAgentsError {
     TinyAgentsError::Checkpoint(format!("sqlite checkpointer: {context}: {err}"))
 }
 
+/// How long a statement waits for a competing writer's lock before giving up
+/// with `SQLITE_BUSY`, mirroring `tinyagents-session`'s `store.rs` (see its
+/// `BUSY_TIMEOUT` doc comment for why this is set explicitly rather than
+/// relied on as an undocumented `rusqlite` default).
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Applies the per-connection pragmas every checkpointer handle needs:
+/// `journal_mode = WAL` for concurrent-reader-friendly durability,
+/// `synchronous = NORMAL` (safe under WAL — only a whole-OS crash can lose a
+/// commit, not a process crash) instead of the slower `FULL` default, and an
+/// explicit `busy_timeout` so a writer contending with another connection
+/// waits rather than failing immediately with `SQLITE_BUSY`.
+fn prepare_connection(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(BUSY_TIMEOUT)
+        .map_err(|e| sqlite_err("set busy_timeout", e))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;",
+    )
+    .map_err(|e| sqlite_err("apply pragmas", e))?;
+    Ok(())
+}
+
 impl<State> SqliteCheckpointer<State> {
     /// Opens (creating if needed) a SQLite-backed checkpointer at `path`.
     ///
@@ -94,6 +117,7 @@ impl<State> SqliteCheckpointer<State> {
     /// across the boundary), apply [`SqliteCheckpointer::schema_sql`] to your own
     /// connection instead and drive the tables directly.
     pub fn from_connection(conn: Connection) -> Result<Self> {
+        prepare_connection(&conn)?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| sqlite_err("create schema", e))?;
         Ok(Self {
