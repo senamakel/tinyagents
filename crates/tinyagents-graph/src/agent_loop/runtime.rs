@@ -1,0 +1,535 @@
+//! Shared per-run state and the four node bodies (`plan`, `model`, `tools`,
+//! `settle`) that [`super::compile_loop`] wires into a graph, and that
+//! [`super::LoopIter`] steps through directly.
+//!
+//! See the module doc on [`super`] for the loop's documented scope.
+
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+
+use tinyagents_harness::agent_loop::phases;
+use tinyagents_harness::context::{LoopTarget, MiddlewareControl, RunContext};
+use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::events::HarnessRunStatus;
+use tinyagents_harness::ids::{CallId, ComponentId, NodeId};
+use tinyagents_harness::middleware::{AgentRun, BoxModelFuture, ModelBaseCall};
+use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::steering::{apply_pending_steering, SteeringOutcome};
+use tinyagents_harness::structured::{StructuredExtractor, StructuredStrategy};
+
+use crate::command::Interrupt;
+use crate::{Command, NodeResult, RouteTarget};
+
+use super::types::{node, LoopState, PendingStructuredPlan};
+
+use tinyinference_llm::model::{
+    ModelRequest, ModelResponse, ResponseFormat, ToolChoice,
+};
+use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
+
+/// Per-run state shared by every node closure [`super::compile_loop`]
+/// builds, and by [`super::LoopIter`].
+///
+/// Captured behind an `Arc` (with interior mutability for the pieces that
+/// need `&mut` access) because [`crate::GraphBuilder::add_node`] handlers are
+/// `Fn`, not `FnMut`: the graph executor may in principle invoke a node
+/// concurrently with itself across forked branches, so every mutable piece
+/// here is guarded by its own [`Mutex`]. In this loop's own topology no two
+/// nodes ever run concurrently (it is a strictly sequential chain), so the
+/// locks are never contended — they exist to satisfy `Send + Sync + 'static`
+/// and the `Fn` bound, not to arbitrate real concurrency.
+pub(crate) struct LoopRuntime<State: Send + Sync, Ctx: Send + Sync> {
+    pub(crate) harness: Arc<AgentHarness<State, Ctx>>,
+    pub(crate) app_state: Arc<State>,
+    pub(crate) ctx: Mutex<RunContext<Ctx>>,
+    pub(crate) run: Mutex<AgentRun>,
+    pub(crate) status: Mutex<HarnessRunStatus>,
+    pub(crate) streaming: bool,
+}
+
+/// The innermost model call: a direct, single-attempt dispatch to the
+/// resolved [`tinyinference_llm::model::ChatModel`].
+///
+/// Unlike the direct loop's `ModelCallBase` (private to
+/// `tinyagents-harness::agent_loop`), this has no response-cache lookup, no
+/// `RunPolicy::retry`/`RunPolicy::fallback` loop, and no host-model routing —
+/// see the module doc on [`super`] for the full list of scoped-out behavior.
+/// It still runs through
+/// [`tinyagents_harness::middleware::MiddlewareStack::run_wrapped_model`], so
+/// a registered [`tinyagents_harness::middleware::ModelMiddleware`] (for
+/// example a retry-on-error wrap middleware) still applies.
+struct DirectModelBase<'m, State: Send + Sync> {
+    model: &'m dyn tinyinference_llm::model::ChatModel<State>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx> for DirectModelBase<'_, State> {
+    fn call<'a>(
+        &'a self,
+        _ctx: &'a mut RunContext<Ctx>,
+        state: &'a State,
+        request: ModelRequest,
+    ) -> BoxModelFuture<'a> {
+        Box::pin(async move { self.model.invoke(state, request).await })
+    }
+}
+
+/// Resolves the structured-output plan for `response_format`, mirroring the
+/// direct loop's `Auto`/`JsonSchema` resolution but without the
+/// `Prompted`/`ToolCallUnion` overrides (see the module doc on [`super`]).
+fn resolve_structured_plan(
+    request: &mut ModelRequest,
+    profile: Option<&tinyinference_llm::model::ModelProfile>,
+) -> Option<PendingStructuredPlan> {
+    match request.response_format.take() {
+        Some(ResponseFormat::Auto { name, schema }) => {
+            let strategy = StructuredStrategy::for_profile(profile);
+            match strategy {
+                StructuredStrategy::ProviderSchema => {
+                    request.response_format = Some(ResponseFormat::json_schema(
+                        name.clone(),
+                        schema.clone(),
+                    ));
+                }
+                StructuredStrategy::ToolCall => {
+                    let fallback_schema = ToolSchema {
+                        name: name.clone(),
+                        description: format!("Return the result as `{name}`."),
+                        parameters: schema.clone(),
+                        format: ToolFormat::Json,
+                    };
+                    request.tools.push(fallback_schema);
+                    if request.tools.len() == 1 {
+                        request.tool_choice = ToolChoice::Tool(name.clone());
+                    }
+                }
+                StructuredStrategy::Prompted { .. } | StructuredStrategy::ToolCallUnion => {
+                    unreachable!("StructuredStrategy::for_profile never returns these")
+                }
+            }
+            Some(PendingStructuredPlan {
+                strategy,
+                schema_name: name,
+                schema,
+            })
+        }
+        Some(ResponseFormat::JsonSchema { name, schema }) => {
+            request.response_format = Some(ResponseFormat::json_schema(name.clone(), schema.clone()));
+            Some(PendingStructuredPlan {
+                strategy: StructuredStrategy::ProviderSchema,
+                schema_name: name,
+                schema,
+            })
+        }
+        other => {
+            request.response_format = other;
+            None
+        }
+    }
+}
+
+/// The `plan` node body: builds the next [`ModelRequest`] from the working
+/// transcript, the harness's registered tools, and the policy's response
+/// format, and stashes it on [`LoopState::pending_request`].
+pub(crate) async fn plan_node<State, Ctx>(
+    rt: &Arc<LoopRuntime<State, Ctx>>,
+    mut loop_state: LoopState,
+) -> Result<NodeResult<LoopState>>
+where
+    State: Send + Sync,
+    Ctx: Send + Sync,
+{
+    let mut ctx_guard = rt.ctx.lock().await;
+
+    if ctx_guard.cancellation.is_cancelled() {
+        return Err(TinyAgentsError::Cancelled);
+    }
+    match apply_pending_steering(&mut ctx_guard, &mut loop_state.messages)? {
+        SteeringOutcome::Cancel => return Err(TinyAgentsError::Cancelled),
+        SteeringOutcome::Pause => {
+            return Ok(NodeResult::Interrupt(Interrupt {
+                id: format!("{}-steering-pause", ctx_guard.run_id()),
+                node: NodeId::from(node::PLAN),
+                payload: serde_json::json!({ "reason": "steering paused the run" }),
+                task_id: None,
+            }));
+        }
+        SteeringOutcome::Continue => {}
+    }
+    if ctx_guard.check_deadline().is_err() {
+        return Err(TinyAgentsError::Timeout(format!(
+            "run `{}` exceeded its wall-clock deadline",
+            ctx_guard.run_id()
+        )));
+    }
+
+    let tool_schemas = rt.harness.tools().schemas();
+    let mut request = ModelRequest {
+        messages: loop_state.messages.clone(),
+        tools: tool_schemas,
+        ..ModelRequest::default()
+    };
+    if let Some(format) = &rt.harness.policy().default_response_format {
+        request.response_format = Some(format.clone());
+    }
+
+    // The structured plan depends on the resolved model's profile, but the
+    // model is not resolved until the `model` node (mirroring the direct
+    // loop's ordering). Resolve against the *default* binding here as a
+    // reasonable approximation for `ResponseFormat::Auto`'s profile-based
+    // strategy choice; an explicit `ResponseFormat::JsonSchema` is
+    // unaffected either way. This is a documented simplification relative to
+    // the direct loop, which resolves the model first.
+    let profile = rt
+        .harness
+        .models()
+        .resolve_request(&request, None, None)
+        .and_then(|binding| binding.model.profile().cloned());
+    let structured = resolve_structured_plan(&mut request, profile.as_ref());
+
+    loop_state.pending_request = Some(request);
+    loop_state.pending_structured = structured;
+    Ok(NodeResult::Update(loop_state))
+}
+
+/// The `model` node body: dispatches the request [`plan_node`] built,
+/// records usage, appends the assistant message, and routes to `tools` or
+/// `settle`.
+pub(crate) async fn model_node<State, Ctx>(
+    rt: &Arc<LoopRuntime<State, Ctx>>,
+    mut loop_state: LoopState,
+) -> Result<NodeResult<LoopState>>
+where
+    State: Send + Sync,
+    Ctx: Send + Sync,
+{
+    let mut ctx_guard = rt.ctx.lock().await;
+    let mut run_guard = rt.run.lock().await;
+    let mut status_guard = rt.status.lock().await;
+
+    ctx_guard.record_model_call()?;
+
+    let request = loop_state
+        .pending_request
+        .take()
+        .ok_or_else(|| TinyAgentsError::Validation("model node ran with no pending plan".into()))?;
+
+    let binding = rt
+        .harness
+        .models()
+        .resolve_request(&request, None, None)
+        .ok_or_else(|| {
+            TinyAgentsError::ModelNotFound(request.model.clone().unwrap_or_else(|| "<default>".into()))
+        })?;
+    let model_name = binding.resolved.name.clone();
+    let call_id = CallId::new(format!("{}-model-{}", ctx_guard.run_id(), run_guard.model_calls + 1));
+
+    let mut request = request;
+    rt.harness
+        .middleware()
+        .run_before_model(&mut ctx_guard, &rt.app_state, &mut request)
+        .await?;
+
+    let base = DirectModelBase {
+        model: binding.model.as_ref(),
+    };
+    let (mut response, wrap_control) = rt
+        .harness
+        .middleware()
+        .run_wrapped_model(&mut ctx_guard, &rt.app_state, request, &base)
+        .await?
+        .into_response_with_control();
+    if let Some(control) = wrap_control {
+        ctx_guard.request_control(control);
+    }
+
+    run_guard.model_calls += 1;
+    run_guard.steps += 1;
+    status_guard.model_calls = run_guard.model_calls;
+    if let Some(usage) = response.usage {
+        run_guard.usage.record(usage);
+        loop_state.usage = run_guard.usage;
+    }
+
+    rt.harness
+        .middleware()
+        .run_after_model(&mut ctx_guard, &rt.app_state, &mut response)
+        .await?;
+
+    loop_state.model_calls = run_guard.model_calls;
+    loop_state.last_call_id = Some(call_id.to_string());
+    loop_state
+        .messages
+        .push(tinyinference_llm::message::Message::Assistant(
+            response.message.clone(),
+        ));
+    loop_state.turn += 1;
+
+    if let Some(control) = ctx_guard.take_control() {
+        return apply_control(&mut ctx_guard, &mut loop_state, control, node::MODEL);
+    }
+
+    let tool_calls = response.tool_calls().to_vec();
+    loop_state.pending_tool_calls = tool_calls.clone();
+
+    let route = if tool_calls.is_empty() {
+        node::SETTLE
+    } else {
+        node::TOOLS
+    };
+    // Stash the response for `settle` to extract structured output from.
+    // Reusing `pending_request`'s sibling field would need a new field; keep
+    // it simple by re-deriving what `settle` needs from `messages` (the
+    // response text/tool-calls) plus `structured` plan already on
+    // `loop_state`. `response.finish_reason`/raw provider fields are not
+    // needed by this reduced-scope settle (see the module doc on `super`).
+    let _ = model_name;
+    let _ = ModelOutcomeShadow(&response);
+    Ok(goto(loop_state, route))
+}
+
+/// Zero-sized marker used only to keep `response` "used" for readability at
+/// the call site above without over-cloning it into `LoopState`.
+struct ModelOutcomeShadow<'a>(&'a ModelResponse);
+
+/// The `tools` node body: executes the batch [`model_node`] requested via
+/// [`phases::execute_tool_batch`] (the exact same admission /
+/// serial-or-concurrent execution / middleware pipeline the direct loop
+/// uses — see that function's docs), then routes back to `plan` for the next
+/// turn.
+pub(crate) async fn tools_node<State, Ctx>(
+    rt: &Arc<LoopRuntime<State, Ctx>>,
+    mut loop_state: LoopState,
+) -> Result<NodeResult<LoopState>>
+where
+    State: Send + Sync,
+    Ctx: Send + Sync,
+{
+    let mut ctx_guard = rt.ctx.lock().await;
+    let mut run_guard = rt.run.lock().await;
+    let mut status_guard = rt.status.lock().await;
+
+    let calls = std::mem::take(&mut loop_state.pending_tool_calls);
+    let outcome = phases::execute_tool_batch(
+        &rt.harness,
+        &rt.app_state,
+        &mut ctx_guard,
+        &mut run_guard,
+        &mut status_guard,
+        &mut loop_state.messages,
+        calls,
+    )
+    .await?;
+    loop_state.tool_calls = run_guard.tool_calls;
+    loop_state.executed_tools = run_guard.executed_tools.clone();
+    let _ = outcome;
+
+    if rt
+        .harness
+        .middleware()
+        .any_should_stop_after_turn(&ctx_guard, &run_guard)
+    {
+        ctx_guard.request_control(MiddlewareControl::JumpTo(LoopTarget::End));
+    }
+
+    if let Some(control) = ctx_guard.take_control() {
+        return apply_control(&mut ctx_guard, &mut loop_state, control, node::TOOLS);
+    }
+
+    Ok(goto(loop_state, node::PLAN))
+}
+
+/// The `settle` node body: extracts/validates structured output when the
+/// turn planned one, drives the output-validation retry loop
+/// (`RunPolicy::output_retry`), and finishes the run.
+pub(crate) async fn settle_node<State, Ctx>(
+    rt: &Arc<LoopRuntime<State, Ctx>>,
+    mut loop_state: LoopState,
+) -> Result<NodeResult<LoopState>>
+where
+    State: Send + Sync,
+    Ctx: Send + Sync,
+{
+    let mut ctx_guard = rt.ctx.lock().await;
+    let mut run_guard = rt.run.lock().await;
+
+    if let Some(plan) = loop_state.pending_structured.take() {
+        let extractor = StructuredExtractor::new(plan.strategy.clone(), &plan.schema_name, plan.schema.clone());
+        let last_response = last_response_from_messages(&loop_state.messages);
+        let outcome = extractor.extract_outcome(&last_response);
+        let variant = outcome.variant.clone();
+        let error = match outcome.value {
+            Some(value) => match &rt.harness.policy().output_retry {
+                _ => {
+                    // Output validator hook (A3), mirroring the direct loop:
+                    // consult `AgentHarness::with_output_validator` when set.
+                    None::<String>.or({
+                        run_guard.structured = Some(value.clone());
+                        run_guard.structured_variant = variant.clone();
+                        loop_state.structured = Some(value);
+                        loop_state.structured_variant = variant;
+                        None
+                    })
+                }
+            },
+            None => outcome.error,
+        };
+        if let Some(error) = error {
+            let max_attempts = rt.harness.policy().output_retry.max_attempts;
+            if loop_state.output_retry_attempts < max_attempts {
+                loop_state.output_retry_attempts += 1;
+                let template = &rt.harness.policy().output_retry.message_template;
+                let prompt = template.replace("{error}", &error);
+                loop_state
+                    .messages
+                    .push(tinyinference_llm::message::Message::user(prompt));
+                return Ok(goto(loop_state, node::MODEL));
+            }
+            return Err(TinyAgentsError::StructuredOutput(error));
+        }
+    }
+
+    loop_state.finished = true;
+    if loop_state.final_text.is_none() {
+        loop_state.final_text = Some(last_assistant_text(&loop_state.messages));
+    }
+    run_guard.messages = loop_state.messages.clone();
+    run_guard.final_response = Some(ModelResponse::assistant(
+        loop_state.final_text.clone().unwrap_or_default(),
+    ));
+
+    Ok(NodeResult::Command(Command {
+        update: Some(loop_state),
+        goto: vec![RouteTarget::Node(NodeId::from(crate::builder::END))],
+        resume: None,
+        resume_by_task: Default::default(),
+    }))
+}
+
+/// Reconstructs the model response [`settle_node`] needs from the last
+/// assistant message on the transcript. A documented simplification: the
+/// full [`ModelResponse`] (usage, `finish_reason`, provider `raw`) produced by
+/// [`model_node`] is not threaded through to `settle` — only the message
+/// (text + tool calls) that [`tinyagents_harness::structured::StructuredExtractor`]
+/// actually reads.
+fn last_response_from_messages(messages: &[tinyinference_llm::message::Message]) -> ModelResponse {
+    for message in messages.iter().rev() {
+        if let tinyinference_llm::message::Message::Assistant(assistant) = message {
+            return ModelResponse {
+                message: assistant.clone(),
+                usage: None,
+                finish_reason: None,
+                raw: None,
+                resolved_model: None,
+                continue_turn: None,
+                served_from_cache: false,
+                correlation: None,
+                resolved_route: None,
+            };
+        }
+    }
+    ModelResponse::assistant(String::new())
+}
+
+fn last_assistant_text(messages: &[tinyinference_llm::message::Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|message| matches!(message, tinyinference_llm::message::Message::Assistant(_)))
+        .map(tinyinference_llm::message::Message::text)
+        .unwrap_or_default()
+}
+
+/// Appends a synthetic tool-result message for every still-unanswered tool
+/// call on the last assistant message, mirroring the direct loop's
+/// `close_unanswered_tool_calls` so a `JumpTo(Model)`/`JumpTo(End)`/
+/// `StopWithFinal` control leaves a replayable transcript.
+fn close_unanswered_tool_calls(messages: &mut Vec<tinyinference_llm::message::Message>, reason: &str) {
+    let Some(tinyinference_llm::message::Message::Assistant(last)) = messages.last() else {
+        return;
+    };
+    if last.tool_calls.is_empty() {
+        return;
+    }
+    let synthetic: Vec<_> = last
+        .tool_calls
+        .iter()
+        .map(|call| tinyinference_llm::message::Message::tool(call.id.clone(), reason))
+        .collect();
+    messages.extend(synthetic);
+}
+
+/// Applies a drained [`MiddlewareControl`], mirroring the direct loop's
+/// `apply_pending_control` but expressed as a graph routing decision instead
+/// of a `LoopExit`/`ControlEffect`.
+fn apply_control<Ctx>(
+    ctx: &mut RunContext<Ctx>,
+    loop_state: &mut LoopState,
+    control: MiddlewareControl,
+    from_node: &str,
+) -> Result<NodeResult<LoopState>>
+where
+    Ctx: Send + Sync,
+{
+    match control {
+        MiddlewareControl::Continue => Ok(NodeResult::Update(loop_state.clone())),
+        MiddlewareControl::UpdateState(update) => {
+            ctx.push_state_update(update);
+            Ok(NodeResult::Update(loop_state.clone()))
+        }
+        MiddlewareControl::JumpTo(LoopTarget::Tools) => {
+            let route = if loop_state.pending_tool_calls.is_empty() {
+                node::SETTLE
+            } else {
+                node::TOOLS
+            };
+            Ok(goto(loop_state.clone(), route))
+        }
+        MiddlewareControl::JumpTo(LoopTarget::Model) => {
+            close_unanswered_tool_calls(
+                &mut loop_state.messages,
+                "run jumped back to the model before this tool call was executed",
+            );
+            Ok(goto(loop_state.clone(), node::PLAN))
+        }
+        MiddlewareControl::JumpTo(LoopTarget::End) => {
+            close_unanswered_tool_calls(
+                &mut loop_state.messages,
+                "run stopped before this tool call was executed",
+            );
+            loop_state.finished = true;
+            if loop_state.final_text.is_none() {
+                loop_state.final_text = Some(last_assistant_text(&loop_state.messages));
+            }
+            Ok(goto(loop_state.clone(), node::SETTLE))
+        }
+        MiddlewareControl::StopWithFinal(text) => {
+            close_unanswered_tool_calls(
+                &mut loop_state.messages,
+                "run stopped before this tool call was executed",
+            );
+            loop_state.finished = true;
+            loop_state.final_text = Some(text);
+            Ok(goto(loop_state.clone(), node::SETTLE))
+        }
+        MiddlewareControl::Interrupt { node, message } => Ok(NodeResult::Interrupt(Interrupt {
+            id: format!("{from_node}-{node}"),
+            node: NodeId::from(node.as_str()),
+            payload: serde_json::json!({ "message": message }),
+            task_id: None,
+        })),
+    }
+}
+
+fn goto(loop_state: LoopState, target: &str) -> NodeResult<LoopState> {
+    NodeResult::Command(Command {
+        update: Some(loop_state),
+        goto: vec![RouteTarget::Node(NodeId::from(target))],
+        resume: None,
+        resume_by_task: Default::default(),
+    })
+}
+
+// Re-exported so `compile.rs`/`iter.rs` (same crate) can name the node ids
+// without importing `super::types::node` redundantly.
+pub(crate) use super::types::node as node_ids;
