@@ -164,6 +164,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         self.model_middlewares.iter().any(|mw| mw.overrides_retry())
     }
 
+    /// Returns `true` when any registered lifecycle [`Middleware`] asks to
+    /// stop after the turn currently completing (see
+    /// [`Middleware::should_stop_after_turn`]).
+    ///
+    /// Called by the agent loop at the turn boundary — after tool execution,
+    /// before the loop would otherwise continue — so an aggregate stop
+    /// condition (a tally across the whole turn's tool results, not any
+    /// single call) can end the run as cleanly as
+    /// [`crate::context::MiddlewareControl::JumpTo`]`(`[`crate::context::LoopTarget::End`]`)`.
+    pub fn any_should_stop_after_turn(&self, ctx: &RunContext<Ctx>, run: &AgentRun) -> bool {
+        self.middlewares
+            .iter()
+            .any(|mw| mw.should_stop_after_turn(ctx, run))
+    }
+
     /// Returns the number of registered [`ToolMiddleware`] wrap hooks.
     pub fn tool_middleware_len(&self) -> usize {
         self.tool_middlewares.len()
