@@ -479,23 +479,20 @@ Acceptance criteria:
 
 Status: shipped.
 
-Every persistence layer now has a shared contract-test suite, so a backend
-swap or a new caller-supplied implementation can be certified rather than
-trusted: `tinyagents_graph::testkit::conformance` (checkpointer + task-store,
-run against memory/file/SQLite and JSONL in
-`crates/tinyagents-integration-tests/tests/conformance.rs` and
-`tests/persistence_conformance.rs`), `tinyagents_harness::store::conformance`
-(`run_store_conformance` for the flat `Store` trait,
-`run_namespaced_store_conformance` for `NamespacedStore` — search, TTL,
-`batch` alignment — run against `InMemoryStore`, `FileStore`, and
-`InMemoryNamespacedStore` in `tests/store_conformance.rs`; no in-tree SQLite
-`Store` exists yet, only a SQLite `ResponseCache`, so that backend is not yet
-covered), and `tinyagents_session::testkit::conformance` (run ledger +
-transcript history, run against SQLite and the in-memory double in
-`tests/session_conformance.rs`). See each module's docs
-(`docs/modules/harness/store.md`, `crates/tinyagents-session/src/README.md`)
-for details. Parallel-agent order/failure/timeout/cancellation regression
-tests remain open (see the fuzz/e2e graph-agent orchestration tests instead).
+Every persistence layer has a shared contract-test suite, so a backend swap or
+a caller-supplied implementation can be certified rather than trusted:
+`tinyagents_graph::testkit::conformance` (checkpointer + task-store, run
+against memory/file/SQLite and JSONL in `tests/conformance.rs` and
+`tests/persistence_conformance.rs`); `tinyagents_harness::store::conformance`
+(`run_store_conformance`/`run_namespaced_store_conformance`, run against
+`InMemoryStore`/`FileStore`/`InMemoryNamespacedStore` in
+`tests/store_conformance.rs` — no in-tree SQLite `Store` exists yet); and
+`tinyagents_session::testkit::conformance` (run ledger + transcript history,
+run against SQLite and an in-memory double in `tests/session_conformance.rs`).
+See `docs/modules/harness/store.md` and
+`crates/tinyagents-session/src/README.md` for details. Parallel-agent
+order/failure/timeout/cancellation regression tests remain open (see the
+fuzz/e2e graph-agent orchestration tests instead).
 
 ## Implementation Order
 
