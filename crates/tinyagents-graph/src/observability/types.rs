@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::status::GraphRunStatus;
-use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
+use crate::stream::{GraphEvent, GraphEventSink};
 use tinyagents_harness::error::Result;
 use tinyagents_harness::ids::{CheckpointId, EventId, GraphId, NodeId, RunId, ThreadId};
 use tinyagents_harness::observability::AppendWorker;
