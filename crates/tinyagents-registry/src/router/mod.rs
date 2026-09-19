@@ -206,3 +206,12 @@ impl WorkloadRouter {
         }
     }
 }
+
+/// Deprecated alias for [`WorkloadRouter`]. `ModelRouter` routes workload
+/// *tiers* to models, not models themselves, so the name was renamed for
+/// clarity; this alias exists only so external callers do not break.
+#[deprecated(
+    since = "2.2.0",
+    note = "renamed to `WorkloadRouter` for clarity: it routes workload tiers, not models"
+)]
+pub type ModelRouter = WorkloadRouter;
