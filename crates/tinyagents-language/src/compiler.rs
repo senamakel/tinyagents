@@ -4,7 +4,7 @@
 //! This is the gate that makes recursive self-authoring safe. A `.rag` plan —
 //! whether hand-written or emitted by a model running inside the harness — is
 //! semantically validated, then bound *by name* against a live registry through
-//! [`CapabilityResolver`]/[`bind_capabilities_with_registry`], so the resulting
+//! [`CapabilityResolver`]/[`crate::capability_resolver::bind_capabilities_with_registry`], so the resulting
 //! topology can only reach capabilities Rust has already registered and allowed.
 //! Runnable behaviour is supplied entirely by a Rust-side [`NodeFactory`], never
 //! by the source, so the same compiler path serves human and model authors alike
