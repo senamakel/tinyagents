@@ -12,25 +12,25 @@ tests remain valuable but do not close an E2E gap.
 | --- | --- | --- |
 | Graph construction, routing, fan-out, checkpoints, interrupts, export, streaming, subgraphs, parallelism | `graph_durable.rs`, `e2e_complex_graph.rs`, `e2e_durable_interrupt.rs`, `e2e_graph_export.rs`, `feature_graph_{routing,fanout,parallel,streaming}.rs` | Covered |
 | Graph goals, todo board, task dispatch, subagents, observability | `e2e_graph_{goals,todos,task_dispatch,subagent_node}.rs`, `e2e_observability.rs` | Covered; delegation durability remains unit-only |
-| Harness loop, tools, structured output, middleware, retry, cache, streams, subagents | `harness_agent_loop.rs`, `feature_harness_*`, `e2e_{middleware,streaming_cancel,tool_policy,subagents}.rs`, `wave2_*` | Covered; hosted runtime and optional features remain gaps |
+| Harness loop, tools, structured output, middleware, retry, cache, streams, subagents, hosted execution | `harness_agent_loop.rs`, `feature_harness_*`, `e2e_{middleware,streaming_cancel,tool_policy,subagents}.rs`, `wave2_*` | Covered; optional features remain gaps |
 | Language parsing, compilation, resolution, binding, RAG | `language_pipeline.rs`, `e2e_language_contracts.rs`, `e2e_rag_pipeline.rs`, `feature_language_*` | Covered; extended grammar is parser/compiler-only |
 | Registry catalog, capability binding, diagnostics, observability | `e2e_registry_binding.rs`, `e2e_registry_observability_contracts.rs`, `feature_registry_{catalog,diagnostics}.rs` | Covered; router-to-runtime fallback is a gap |
-| Session records, retention, search, lifecycle | `e2e_session_lifecycle.rs`, `feature_session_retention.rs`, persistence contracts | Covered; transcript and run-ledger workflows remain gaps |
-| Orchestration workflow | `e2e_orchestration_workflow.rs` | Happy path covered; team and recovery flows remain gaps |
+| Session records, retention, search, lifecycle, transcripts | `e2e_session_lifecycle.rs`, `feature_session_retention.rs`, `feature_session_transcript.rs`, persistence contracts | Covered; run-ledger workflows remain gaps |
+| Orchestration workflow and teams | `e2e_orchestration_workflow.rs`, `e2e_orchestration_teams.rs` | Happy paths covered; workflow recovery remains a gap |
 
 ## Prioritized execution backlog
 
-### P0: execute now
+### Completed P0 scenarios
 
 | Feature | Evidence of gap | Test to add |
 | --- | --- | --- |
-| Durable orchestration teams | `tinyagents-orchestration::teams` is only covered by `src/teams/{tests.rs,runtime/tests.rs,graph/tests.rs}` | `e2e_orchestration_teams.rs`: use `SessionTeamLedger` and `TeamService` to create a dependency chain, claim/complete work, deliver direct and broadcast messages, release a shutdown member's claim, reload the ledger, and assert lifecycle events. |
-| Hosted harness invocation | `AgentInvocation`, `AgentTurnRequest`, `HostCapabilities`, and hosted streaming are only covered by `tinyagents-harness/src/runtime/test.rs` | `feature_harness_hosted_invocation.rs`: invoke a host-authorized agent through public APIs with fixture resolver, security, context, budget, progress, and learning capabilities; assert attribution, input composition, safe error projection, and stream terminal handling. |
-| Session transcript persistence | Public transcript APIs are only covered by `tinyagents-session/src/transcript/test.rs` | `feature_session_transcript.rs`: write and append a transcript, force compaction and interrupted partials, then reopen and assert model replay, display timeline, companion Markdown, thread usage/lookup, and `FileTranscriptHistory`. |
+| Durable orchestration teams | `e2e_orchestration_teams.rs` | Covers a dependency chain, claim/complete evidence, direct and broadcast messages, shutdown claim release, durable reload, and lifecycle events. |
+| Hosted harness invocation | `feature_harness_hosted_invocation.rs` | Covers composed/screened input, host observer attribution, and public streamed failure sanitization. |
+| Session transcript persistence | `feature_session_transcript.rs` | Covers append, compaction, interrupted partials, replay/display projections, Markdown, thread summaries, and `FileTranscriptHistory` reopen. |
 | Registry runtime router | `ModelRouter`/`WorkloadRoute` only have crate-local tests | `feature_registry_router.rs`: route default and capability-gated workloads into harness model selection and verify primary failure falls back to the configured alternate. |
 | Definition-host boundary | `tinyagents-definition` has one inline unit test | `feature_definition_runtime.rs`: validate/serialize definitions and use them in a hosted delegated harness run, proving declared children succeed and undeclared children fail. |
 
-### P1: next execution batch
+### P0: next execution batch
 
 | Feature | Test to add |
 | --- | --- |
