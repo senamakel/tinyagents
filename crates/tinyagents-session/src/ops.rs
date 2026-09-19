@@ -432,6 +432,10 @@ pub fn search_sessions(
     with_connection(workspace_dir, |conn| search_sessions_inner(conn, params))
 }
 
+/// Connection-scoped implementation of [`search_sessions`], shared with any
+/// caller that already holds an open connection (currently just
+/// `search_sessions` itself, but kept split so a future transactional caller
+/// does not have to reopen one).
 pub(super) fn search_sessions_inner(
     conn: &Connection,
     params: &SessionSearchParams,
