@@ -68,8 +68,7 @@ fn state_view_downcasts_to_the_attached_type_and_is_none_otherwise() {
 #[test]
 fn custom_emits_a_custom_event_correlated_to_the_call() {
     let recorder = EventRecorder::new();
-    let ctx: RunContext =
-        RunContext::new(RunConfig::new("run-1"), ()).with_events(recorder.sink());
+    let ctx: RunContext = RunContext::new(RunConfig::new("run-1"), ()).with_events(recorder.sink());
     let tool_ctx = ToolExecutionContext::from_run_context(&ctx, CallId::new("call-7"));
 
     tool_ctx.custom(json!({"progress": 0.25}));
@@ -104,5 +103,8 @@ fn a_child_context_inherits_the_store_and_state_view() {
     let child = parent.child(RunConfig::new("child"), ()).unwrap();
     let tool_ctx = ToolExecutionContext::from_run_context(&child, CallId::new("c"));
     assert!(tool_ctx.store.is_some());
-    assert_eq!(tool_ctx.state::<AppState>(), Some(&AppState { user: "bob" }));
+    assert_eq!(
+        tool_ctx.state::<AppState>(),
+        Some(&AppState { user: "bob" })
+    );
 }

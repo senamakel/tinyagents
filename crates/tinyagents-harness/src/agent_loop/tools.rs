@@ -1084,11 +1084,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // Host-only metadata (B2): recorded on the run and on the event
         // below, never rendered into the transcript row.
         if let Some(metadata) = result.metadata.clone() {
-            run.tool_metadata.push(crate::middleware::ToolResultMetadata {
-                call_id: prepared.call_id.clone(),
-                tool_name: prepared.tool_name.clone(),
-                metadata,
-            });
+            run.tool_metadata
+                .push(crate::middleware::ToolResultMetadata {
+                    call_id: prepared.call_id.clone(),
+                    tool_name: prepared.tool_name.clone(),
+                    metadata,
+                });
         }
         status.tool_calls = run.tool_calls;
         release_active_tool_call(status, &prepared.call_id);

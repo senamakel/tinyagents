@@ -183,10 +183,7 @@ impl Fixture {
 
 #[tokio::test]
 async fn a_tool_sees_the_call_id_the_model_used() {
-    let mut fx = fixture(vec![
-        tool_turn(&[("call-xyz", "ctx")]),
-        final_turn("done"),
-    ]);
+    let mut fx = fixture(vec![tool_turn(&[("call-xyz", "ctx")]), final_turn("done")]);
     let (tool, observed) = ContextTool::new("ctx", ToolResult::success("ok"));
     fx.harness.register_tool(tool);
 
@@ -200,9 +197,11 @@ async fn a_tool_sees_the_call_id_the_model_used() {
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].call_id, Some(CallId::new("call-xyz")));
     // The transcript answers the same id.
-    assert!(run.messages.iter().any(
-        |message| matches!(message, Message::Tool(t) if t.tool_call_id == "call-xyz")
-    ));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| matches!(message, Message::Tool(t) if t.tool_call_id == "call-xyz"))
+    );
 }
 
 #[tokio::test]
@@ -431,7 +430,10 @@ async fn follow_up_image_becomes_an_image_block_and_a_file_a_placeholder() {
         .expect("run succeeds");
 
     let Message::User(follow_up) = &run.messages[3] else {
-        panic!("expected the follow-up user message, got {:?}", run.messages[3]);
+        panic!(
+            "expected the follow-up user message, got {:?}",
+            run.messages[3]
+        );
     };
     assert_eq!(
         follow_up.content,
@@ -492,7 +494,10 @@ async fn metadata_reaches_the_event_and_the_run_but_never_the_transcript() {
     // even in the tool row's host-side artifact.
     for request in fx.model.requests() {
         let wire = serde_json::to_string(&request.messages).unwrap();
-        assert!(!wire.contains(MARKER), "metadata leaked to the model: {wire}");
+        assert!(
+            !wire.contains(MARKER),
+            "metadata leaked to the model: {wire}"
+        );
     }
     let transcript = serde_json::to_string(&run.messages).unwrap();
     assert!(
