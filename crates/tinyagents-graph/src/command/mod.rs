@@ -14,11 +14,7 @@ mod types;
 
 pub use types::{Command, Interrupt, NodeResult, RouteTarget, Send};
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use tinyagents_harness::ids::NodeId;
-
-static INTERRUPT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 impl<Update> Command<Update> {
     /// Creates an empty command (no update, no routing, no resume).
