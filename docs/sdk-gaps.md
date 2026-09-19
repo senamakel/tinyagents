@@ -126,18 +126,26 @@ visible text. Block start/end channels now exist too:
 knows exactly when a tool-call block opens/closes instead of inferring it
 from delta content; `ToolDelta::content_index` carries the same index on the
 flat compatibility channel. Anthropic maps `content_block_start`/`_delta`/
-`_stop` 1:1 onto these; OpenAI chat-completions stamps `content_index` but
-does not yet derive `BlockStart`/`BlockEnd` (Responses has no streaming path
-here). `ProviderFailed` now also carries `partial_message`/`stop_reason` for
-a mid-stream failure. Remaining: OpenAI block-boundary derivation, and true
-mid-execution *tool* progress streaming — `tinytools::Tool` has no
-progress-callback surface, so `run_on_tool_delta`/`ToolProgress` still have
-no real caller; that needs a `tinytools` change, not a harness one.
+`_stop` 1:1 onto these; the OpenAI chat-completions adapter now derives them
+too, tracking the currently open block (text, reasoning, or each tool call by
+wire index) and emitting `BlockStart`/`BlockDelta`/`BlockEnd` as it switches
+or on `finish_reason`, sharing one dense index space across all three kinds
+so `content_index` matches the terminal message's `content` ordering. The
+OpenAI Responses API still has no true incremental SSE path in this crate
+(`stream()` does one unary call and replays it as `Started`/one
+`MessageDelta`/`Completed`), so there is nothing to derive blocks from there
+yet. `ProviderFailed` now also carries `partial_message`/`stop_reason` for a
+mid-stream failure on both adapters. Remaining: true mid-execution *tool*
+progress streaming — `tinytools::Tool` has no progress-callback surface, so
+`run_on_tool_delta`/`ToolProgress` still have no real caller; that needs a
+`tinytools` change, not a harness one.
 
 Remaining work:
 
-- Derive `BlockStart`/`BlockEnd` for the OpenAI chat-completions adapter from
-  its delta shape (Anthropic already emits them 1:1).
+- Give the OpenAI Responses API a true incremental SSE path (currently
+  simulated as one unary call), then derive `BlockStart`/`BlockEnd` from its
+  `response.output_text.delta` / `response.function_call_arguments.delta` /
+  reasoning-summary delta events.
 - Give `tinytools::Tool` a progress-callback surface so `run_on_tool_delta`/
   `ToolProgress` have a real, mid-execution caller.
 - Attribute every delta to run id, model call id, optional thread id, parent
