@@ -42,6 +42,7 @@ observability, or test contracts.
   - [Embeddings and retrieval](../modules/harness/embeddings.md)
   - [Prompt](../modules/harness/prompt.md)
   - [Tool](../modules/harness/tool.md)
+  - [Tool exposure and discovery](../modules/harness/tool-discovery.md)
   - [Middleware](../modules/harness/middleware.md)
   - [Sub-agent and orchestrator steering](../modules/harness/subagent-steering.md)
   - [Structured output](../modules/harness/structured-output.md)
@@ -118,6 +119,14 @@ resolved from the final post-middleware call: `Inherit` uses the shared dynamic
 default, `Millis` is clamped and padded with configured grace, and `Unbounded`
 has no per-tool deadline. Expiry is a recoverable tool result returned to the
 model; only the enclosing run wall-clock deadline aborts the run.
+
+Tool schemas are advertised by exposure, not by registration. Only
+`ToolExposure::Direct` tools appear in a request's `tools` array; `Deferred`
+tools are indexed per run and reached through the intrinsic `tool_search` /
+`tool_call` bridge, whose `tool_call` is unwrapped to the real tool before
+admission so policy and authorization see the true name. The `tools` array is
+therefore byte-stable for a whole run, which provider prompt caches depend on.
+`RunPolicy::tool_schemas` optionally projects and byte-budgets every schema.
 
 ## Module 2: Graph
 
