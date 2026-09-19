@@ -18,6 +18,7 @@ pub type Result<T> = std::result::Result<T, TinyAgentsError>;
 /// execution, model/tool invocation, run limits and policy, graph durability,
 /// and `.rag` language processing.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TinyAgentsError {
     /// A graph was compiled or run without a configured `START` edge, so there
     /// is no entry node to begin execution from.
