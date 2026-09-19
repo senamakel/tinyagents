@@ -14,6 +14,7 @@ The builder supports:
 - `set_defaults`
 - `with_max_concurrency`
 - `with_node_timeout`
+- `interrupt_before` / `interrupt_after` / `mark_interrupt`
 - `compile`
 
 `add_conditional_edges` accepts route labels and a router return value that are
@@ -69,26 +70,65 @@ mid-super-step and cannot leave a clean checkpoint. It bounds scheduling, not a
 single in-flight node — pair it with `with_node_timeout` to also bound
 individual handlers.
 
-Compile-time options:
+## Interrupt selectors
 
 ```rust
-pub struct CompileOptions {
-    pub name: Option<String>,
-    pub checkpointer: CheckpointerChoice,
-    pub cache: Option<Arc<dyn GraphCache>>,
-    pub store: Option<StoreRegistry>,
-    pub interrupt_before: InterruptSelector,
-    pub interrupt_after: InterruptSelector,
-    pub debug: bool,
-    pub stream_transformers: Vec<StreamTransformerFactory>,
-}
+GraphBuilder::<State, Update>::new()
+    .interrupt_before(["approve"])
+    .interrupt_after(["plan"])      // requires Update: Serialize + DeserializeOwned
+    .mark_interrupt("review")       // == interrupt_before(["review"])
 ```
 
-`CheckpointerChoice` mirrors the LangGraph subgraph model:
+`interrupt_before(nodes)` pauses the run instead of invoking a listed node;
+`interrupt_after(nodes)` lets the node run, then pauses *before* its result
+is applied, persisting the result as a deferred write that resume replays
+without re-running the handler. Both inject an `Interrupt` with payload
+`{"phase": "before" | "after"}`, need a checkpointer and thread like any
+interrupt, are validated at `compile()` (`MissingNode`), and set the
+export's `NodeInfo::interrupt` marker. `mark_interrupt` used to set only that
+marker; it is now an alias for `interrupt_before` — a node that already
+pauses itself should not be listed (it would pause twice; annotate it with
+`with_node_metadata` for the export instead). Full semantics, including how
+acknowledgements survive repeated pauses, are in
+[interrupts.md](interrupts.md#interrupt_before--interrupt_after-selectors).
 
-- `Inherit`: inherit the parent graph checkpointer when used as a subgraph.
-- `Enabled(Arc<dyn Checkpointer>)`: use this saver.
-- `Disabled`: do not checkpoint even if the parent has a saver.
+## `NodeContext::durable_task`
+
+```rust
+.add_node("charge", |state, ctx: NodeContext| async move {
+    let receipt: Receipt = ctx
+        .durable_task("charge-card", async { payments.charge(&state).await })
+        .await?;
+    if ctx.resume.is_none() {
+        return Ok(NodeResult::Interrupt(Interrupt::new("charge", json!(receipt))));
+    }
+    Ok(NodeResult::Update(state.with_receipt(receipt)))
+})
+```
+
+A node is re-run from its start after an interrupt/resume, a failure/retry,
+or an in-process node retry. `durable_task(key, fut)` runs `fut` at most
+once per `(task_id, key)`: the first execution awaits it and records its
+`Ok` output (`T: Serialize + DeserializeOwned`) as a
+`PendingWrite::durable_task` memo in the task's checkpoint write ledger; a
+re-run of the same task returns the stored value without polling `fut`. An
+`Err` is returned unmemoised. Keys are independent — a handler that memoised
+`"a"` then failed before `"b"` replays `"a"` and runs `"b"` fresh on retry.
+Memos are scoped to one task in one thread (not a cross-run cache; see
+`CompiledGraph::with_cached_node` for that) and are durable across process
+restarts on a checkpointed thread; a graph without a checkpointer still
+dedupes within one run. The executor pre-seeds each re-run's context from
+the checkpoint and persists new memos at whichever boundary the task
+stalls at (interrupt or failure); a task that completes drops its memos.
+
+## Not implemented: compile-time options
+
+An earlier draft of this page described a `CompileOptions` struct
+(`checkpointer: CheckpointerChoice`, `cache`, `store`, `debug`,
+`stream_transformers`) mirroring LangGraph's compile-time bag. It does not
+exist: checkpointers, caches, sinks, and policies are attached to the
+`CompiledGraph` with `with_*` methods after `compile()`, and the interrupt
+selectors live on the builder as above.
 
 Validation rules:
 

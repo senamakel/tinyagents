@@ -92,6 +92,14 @@ futures. On cancellation the executor persists a checkpoint whose
 status (and emits `GraphEvent::RunCancelled`), and returns `Ok` rather than
 an error — a cancelled run is resumable exactly like an interrupted one.
 
+`RunOptions::drain` (a `DrainSignal`, paired with the `DrainHandle` that
+raises it) is the graceful variant: it is checked only *between* supersteps,
+so the step in flight always completes and commits before the run stops with
+`ExecutionStatus::Drained` / `GraphEvent::RunDrained` and
+`GraphExecution::drained == true`. See
+[execution.md](execution.md#stopping-a-run-cancellation-and-graceful-drain)
+for the side-by-side contract.
+
 A `Drop` guard armed for the run's lifetime protects against the run future
 itself being dropped mid-flight (a host timeout racing `tokio::select!`,
 `JoinHandle::abort`, and similar). It disarms on every normal terminal exit
