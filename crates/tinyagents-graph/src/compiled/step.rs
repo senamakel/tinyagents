@@ -279,29 +279,31 @@ where
         result: &Result<NodeResult<Update>>,
         step: usize,
     ) {
-        let Some(cached) = self.graph.cached_nodes.get(node_id) else {
+        // Compute everything that needs to look at `result` (and therefore
+        // `Update`, which is not necessarily `Sync`) up front, so nothing
+        // borrowed from it is held across the `.await` below — only the
+        // owned, always-`Send + Sync` `TaskCacheKey`/`Value`/`Duration`
+        // survive into the awaited call.
+        let prepared = (|| {
+            let cached = self.graph.cached_nodes.get(node_id)?;
+            let result = result.as_ref().ok()?;
+            let update = match result {
+                NodeResult::Update(update) => Some(update),
+                NodeResult::Command(command) => command.update.as_ref(),
+                NodeResult::Interrupt(_) => None,
+            }?;
+            let value = (cached.encode)(update).ok()?;
+            let hash = (cached.key)(state, send_arg);
+            Some((value, hash, cached.ttl))
+        })();
+        let Some((value, hash, ttl)) = prepared else {
             return;
         };
         let Some(cache) = self.graph.task_cache.as_ref() else {
             return;
         };
-        let Ok(result) = result else {
-            return;
-        };
-        let update = match result {
-            NodeResult::Update(update) => Some(update),
-            NodeResult::Command(command) => command.update.as_ref(),
-            NodeResult::Interrupt(_) => None,
-        };
-        let Some(update) = update else {
-            return;
-        };
-        let Ok(value) = (cached.encode)(update) else {
-            return;
-        };
-        let hash = (cached.key)(state, send_arg);
         let key = TaskCacheKey::new(self.graph.graph_id.clone(), node_id.clone(), hash);
-        let _ = cache.put(&key, value, cached.ttl).await;
+        let _ = cache.put(&key, value, ttl).await;
         self.graph.emit(GraphEvent::TaskCompleted {
             node: node_id.clone(),
             step,
