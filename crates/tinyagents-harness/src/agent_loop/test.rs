@@ -1075,14 +1075,14 @@ async fn dynamic_toolset_change_folds_into_the_leading_system_message_by_default
         browse: browse.clone(),
     });
     harness.with_toolset(toolset.clone());
+    // Only `search` needs to be dispatchable (the script's only call); a
+    // bridge for `browse` too would register it in `self.tools` statically
+    // from turn one, defeating the point of this test (the toolset chain
+    // alone is what makes `browse` come and go).
     harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
-        toolset.clone(),
-        search,
+        toolset, search,
     )));
-    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
-        toolset,
-        browse,
-    )));
+    let _ = browse;
 
     let run = harness
         .invoke_default(
