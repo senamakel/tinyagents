@@ -300,6 +300,9 @@ const ABBREVS: &[(&str, &[&str])] = &[
 ];
 
 /// Tokenize a string into lowercase alphanumeric words.
+/// Splits `s` into a set of lowercase alphanumeric words, dropping
+/// punctuation and de-duplicating. Used for both query and tool-name/
+/// description tokenization so overlap counting compares like with like.
 fn tokenize(s: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut current = String::new();
@@ -316,6 +319,8 @@ fn tokenize(s: &str) -> HashSet<String> {
     out
 }
 
+/// Tokenizes `query`, drops stopwords and single-character tokens, then
+/// unions in the [`ABBREVS`] expansions for any abbreviation present.
 fn query_tokens(query: &str) -> HashSet<String> {
     let raw: HashSet<String> = tokenize(query)
         .into_iter()
