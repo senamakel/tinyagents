@@ -228,38 +228,24 @@ TinyAgents has `HarnessEventJournal`, `StoreEventJournal`, `HarnessStatusStore`,
 and `HarnessRunStatus`. OpenHuman still bridges TinyAgents events into its own
 progress system, cost tracker, run ledger, and UI status stream.
 
-Late attach is now partially solved on two fronts:
-
-- **Streaming assistant messages.** `tinyagents_harness::stream::{AssistantFrame,
-  FrameEncoder, reduce_frames}` (`crates/tinyagents-harness/src/stream/frame.rs`)
-  give a compact, durable per-block frame codec: `FrameEncoder` turns a
-  `ModelStreamItem` sequence into frames (with periodic
-  `ToolArgsCheckpoint` snapshots for long tool-argument streams), and
-  `reduce_frames` folds a — possibly truncated — frame sequence back into a
-  `PartialAssistantMessage` without replaying the original provider stream.
-- **Graph event streams.** Every `GraphEvent` the executor emits is now
-  wrapped in a `GraphEventEnvelope { run_id, task_id, ns, seq, event }`
-  (`crates/tinyagents-graph/src/stream/types.rs`); `seq` is monotonic per
-  emitting graph instance (shared across a journal-wrapping clone, fresh for
-  an embedded subgraph — see the envelope's own doc comment for why).
-  `tinyagents_graph::stream::StreamProjection` folds a mix of graph
-  envelopes and harness `AgentEvent`s into three cursor-ordered views
-  (`messages`, `tool_calls`, `subagents`); `StreamProjection::since(cursor)`
-  is exactly the late-attach replay primitive this gap calls for. `seq` does
-  not yet chain across a subgraph boundary into a single run-tree-wide
-  sequence (D4's typed `TaskId` end-to-end is the natural place to add that);
-  today a late-attaching consumer replays each `(run_id, ns)` scope's own
-  sequence, not one global one.
-- **Lossy-under-load is now documented, not silent.** `JournalGraphSink` was
-  already best-effort (`emit` never blocks the executor; a full bounded
-  queue drops), but nothing surfaced that a run's journal is now an
-  incomplete record. `JournalGraphSink::dropped()`
-  (`crates/tinyagents-graph/src/observability/mod.rs`) exposes the drop
-  counter so a caller can detect and act on it.
-
-Still missing: filters/compaction/redaction hooks, and the harness-side
-`HarnessEventJournal` has no equivalent `dropped()`/replay-cursor exposure
-yet (only the graph side got it this phase).
+Late attach is now partially solved. `tinyagents_harness::stream::{AssistantFrame,
+FrameEncoder, reduce_frames}` (`crates/tinyagents-harness/src/stream/frame.rs`)
+give a durable per-block frame codec: `FrameEncoder` turns a `ModelStreamItem`
+sequence into frames (periodic `ToolArgsCheckpoint` snapshots bound how far
+back a reader must replay), and `reduce_frames` folds a — possibly truncated —
+sequence back into a `PartialAssistantMessage`. On the graph side, every
+`GraphEvent` is now wrapped in a `GraphEventEnvelope { run_id, task_id, ns,
+seq, event }` (`crates/tinyagents-graph/src/stream/types.rs`, `seq` monotonic
+per emitting graph instance, fresh for an embedded subgraph), and
+`tinyagents_graph::stream::StreamProjection` folds graph envelopes plus
+harness `AgentEvent`s into cursor-ordered `messages`/`tool_calls`/`subagents`
+views; `StreamProjection::since(cursor)` is the late-attach replay primitive.
+`seq` does not yet chain across a subgraph boundary into one run-tree-wide
+sequence (D4's typed `TaskId` is the natural place for that).
+`JournalGraphSink::dropped()` now exposes its best-effort drop counter so
+lossy-under-load is observable rather than silent; the harness-side
+`HarnessEventJournal` has no equivalent yet. Filters/compaction/redaction
+hooks are still missing on both sides.
 
 Implement:
 
