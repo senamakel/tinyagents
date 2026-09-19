@@ -191,6 +191,16 @@ impl OverrideTool {
         self
     }
 
+    pub(crate) fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub(crate) fn with_parameters(mut self, parameters: Value) -> Self {
+        self.parameters = Some(parameters);
+        self
+    }
+
     pub(crate) fn with_policy_transform(
         mut self,
         transform: Arc<dyn Fn(ToolPolicy) -> ToolPolicy + Send + Sync>,
