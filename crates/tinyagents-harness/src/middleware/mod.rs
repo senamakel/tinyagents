@@ -256,14 +256,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
 
     /// Runs every middleware's [`Middleware::on_tool_delta`] in registration
     /// order for one streamed tool-progress delta.
+    ///
+    /// Like [`Self::run_on_model_delta`], and for the same reason (M-12):
+    /// this is **not** bracketed by `MiddlewareStarted`/`MiddlewareCompleted`
+    /// events. It used to be the one delta hook still routed through
+    /// `run_stack_hook!`, so a stack of `N` middlewares produced `2*N`
+    /// bookkeeping events per streamed tool-progress delta — noise a
+    /// `ModelCompleted`-based exporter had to filter, for a hook that (unlike
+    /// `before_tool`/`after_tool`) can fire many times per call. Both delta
+    /// hooks now agree: bracket every non-delta hook, skip both delta hooks.
+    /// A caller that needs to observe delta-level middleware activity should
+    /// instrument the hook implementation itself.
     pub async fn run_on_tool_delta(
         &self,
         ctx: &mut RunContext<Ctx>,
         state: &State,
         delta: &mut ToolDelta,
     ) -> Result<()> {
-        run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .on_tool_delta(ctx, state, delta))
+        for mw in self.middlewares.iter() {
+            if let Err(e) = mw.on_tool_delta(ctx, state, delta).await {
+                self.fan_out_on_error(ctx, &e).await;
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 
     /// Runs every middleware's [`Middleware::after_tool`] in reverse
