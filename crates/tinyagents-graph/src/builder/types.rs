@@ -260,7 +260,10 @@ pub struct GraphBuilder<State, Update> {
     /// (the `graph_id` remains the stable identifier).
     pub(crate) name: Option<String>,
     pub(crate) nodes: HashMap<NodeId, BuilderNode<State, Update>>,
-    pub(crate) edges: HashMap<NodeId, NodeId>,
+    /// Static/waiting edges: source node -> its ordered, deduplicated list of
+    /// successor targets. A node may have more than one static successor
+    /// (fan-out): every target in the list activates, not just one.
+    pub(crate) edges: HashMap<NodeId, Vec<NodeId>>,
     pub(crate) branches: HashMap<NodeId, Branch<State>>,
     pub(crate) command_nodes: HashSet<NodeId>,
     /// Barrier/waiting edges: target node -> set of predecessor nodes that must

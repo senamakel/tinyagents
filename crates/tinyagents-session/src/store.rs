@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rusqlite::Connection;
@@ -6,6 +8,29 @@ use rusqlite::Connection;
 use super::context::StorageContext;
 use super::migrations;
 use tinyagents_harness::error::Result;
+
+/// A connection handle shared by every caller for one database path.
+///
+/// `rusqlite::Connection` is `Send` but not `Sync`, so a `Mutex` is the
+/// minimum needed to hand the same handle to concurrent callers; it also
+/// gives operations on one database path the same autocommit serialization
+/// they had before, when each call opened (and implicitly serialized behind)
+/// its own file handle.
+type ConnectionHandle = Arc<Mutex<Connection>>;
+
+/// Process-wide cache of open session-database connections, keyed by the
+/// resolved database file path.
+///
+/// A `Connection::open` per operation was measured as the dominant cost of
+/// session-store calls under load: each open re-parses pragmas, re-checks
+/// migrations, and pays SQLite's own connection setup. Caching by path
+/// reuses one connection for the lifetime of the process (or until nothing
+/// references it — entries are never evicted, matching the small, bounded
+/// number of distinct workspaces a single process actually opens).
+fn connection_cache() -> &'static Mutex<HashMap<PathBuf, ConnectionHandle>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, ConnectionHandle>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Subdirectory of the workspace holding the session database.
 const DB_SUBDIR: &str = "session_db";
