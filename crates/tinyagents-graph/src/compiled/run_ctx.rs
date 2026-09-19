@@ -305,9 +305,12 @@ where
             parent: parent_run_id.clone(),
         };
         if let Err(err) = recursion.push(this_frame) {
-            graph.emit(GraphEvent::RunStarted {
-                run_id: run_id.clone(),
-            });
+            graph.emit(
+                &run_id,
+                GraphEvent::RunStarted {
+                    run_id: run_id.clone(),
+                },
+            );
             graph
                 .fail_run(&run_id, &thread_id, started_at, 0, &err, None)
                 .await;
