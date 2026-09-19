@@ -35,6 +35,24 @@ pub struct ToolDiscoveryPolicy {
     pub max_limit: usize,
 }
 
+impl ToolDiscoveryPolicy {
+    /// Normalizes `(default_limit, max_limit)` into a pair that is always
+    /// safe to advertise and to clamp a model-supplied `limit` into.
+    ///
+    /// A misconfigured policy (`max_limit: 0`, or `default_limit >
+    /// max_limit`) would otherwise let a model-supplied numeric `limit`
+    /// reach `usize::clamp(1, max_limit)`, which panics when the minimum
+    /// exceeds the maximum, and would advertise an inconsistent
+    /// `minimum`/`maximum` pair in the `tool_search` schema. The effective
+    /// maximum is always at least 1; the effective default never exceeds it.
+    #[must_use]
+    pub(crate) fn effective_limits(&self) -> (usize, usize) {
+        let max = self.max_limit.max(1);
+        let default = self.default_limit.clamp(1, max);
+        (default, max)
+    }
+}
+
 impl Default for ToolDiscoveryPolicy {
     fn default() -> Self {
         Self {
