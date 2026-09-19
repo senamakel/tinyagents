@@ -1066,11 +1066,11 @@ async fn policy_only_deadline_bounds_initial_host_resolution_with_a_timeout_erro
         )
         .await
         .expect_err("policy deadline must bound a host resolver without a RunConfig timeout");
-    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)));
-    assert!(
-        error.to_string().contains("host model resolution for run `policy-host-resolve-timeout` exceeded its remaining wall-clock budget"),
-        "timeout must retain its host-resolution and policy-budget shape: {error}"
-    );
+    // `HostedError` intentionally sanitizes the message to a fixed string per
+    // `kind` (I-6) — the detailed "exceeded its remaining wall-clock budget"
+    // text is still available on the run's internal `TinyAgentsError` (see
+    // the non-hosted equivalents of this test), just not leaked here.
+    assert_eq!(error.kind, crate::runtime::HostedErrorKind::Timeout);
 }
 
 #[tokio::test]
