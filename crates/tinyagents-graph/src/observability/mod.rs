@@ -560,6 +560,22 @@ impl GraphEventSink for JournalGraphSink {
     }
 }
 
+impl JournalGraphSink {
+    /// Number of observations dropped because the background drain's bounded
+    /// queue was full when they were submitted (G-M7).
+    ///
+    /// Journaling is deliberately lossy under load — [`Self::emit`] never
+    /// blocks the executor waiting for durable I/O, so a burst that outpaces
+    /// the drain worker drops the observation rather than stalling the run.
+    /// A non-zero value here means the journal is an incomplete record of
+    /// what happened during that burst; a caller that needs a complete log
+    /// should watch this counter (or size the drain capacity generously for
+    /// its workload) rather than assume every emitted event was persisted.
+    pub fn dropped(&self) -> u64 {
+        self.worker.dropped()
+    }
+}
+
 /// Extracts the checkpoint id a [`GraphEvent::CheckpointSaved`] carries, so the
 /// observation envelope can record it directly.
 fn checkpoint_of(event: &GraphEvent) -> Option<CheckpointId> {
