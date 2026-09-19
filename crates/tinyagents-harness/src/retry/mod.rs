@@ -333,6 +333,7 @@ pub fn retry_after_hint(error: &TinyAgentsError) -> Option<Duration> {
 /// | `Provider` | depends | Classified from [`tinyinference_llm::model::ProviderError::retryable`] — a 429/408/409/5xx is retryable, a 4xx like 401/400 is not. |
 /// | `Model` | depends | No structured `ProviderError` to read, so the message text is run through [`classify_provider_failure`] — a 5xx / 429 / timeout is retryable, an `invalid api key` or `model not found` is not. |
 /// | `Tool` | yes | Tool execution may have hit a transient dependency. |
+/// | `CallTimeout` | **yes** | A per-call ceiling fired with run time still left; unlike `Timeout`, the run is not out of budget. |
 /// | `Validation` | **no** | Caller-side schema or policy error; retrying will not help. |
 /// | `Serialization` | **no** | Malformed data; retrying will not help. |
 /// | `RecursionLimit` | **no** | Structural loop cap; not transient. |
