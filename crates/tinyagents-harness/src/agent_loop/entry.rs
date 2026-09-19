@@ -309,13 +309,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical
                 // to "the model produced an empty final answer".
-                if terminal.run.paused.is_some() {
+                let paused = terminal.run.paused.is_some();
+                if paused {
                     status.mark_interrupted();
                 } else {
                     status.mark_completed();
                 }
                 PartialRunOutcome {
-                    run: terminal.complete(true, None),
+                    run: terminal.complete(
+                        !paused,
+                        paused.then(|| "hosted turn paused before completion".to_string()),
+                    ),
                     status,
                     error: None,
                 }

@@ -70,6 +70,7 @@ pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
     inner: Option<Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>>,
     cancellation: crate::CancellationToken,
     terminal_observer: std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>,
+    terminal_observed: bool,
     marker: std::marker::PhantomData<(&'a State, Ctx)>,
 }
 
@@ -77,11 +78,24 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, 
     type Item = AgentStreamItem;
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // `inner` is pinned independently by `Box`; projecting only that field
-        // does not move the outer stream.
-        let inner = unsafe { self.map_unchecked_mut(|stream| &mut stream.inner) };
-        match inner.get_mut().as_mut() {
-            Some(inner) => inner.as_mut().poll_next(context),
+        // `inner` is pinned independently by `Box`; this projection never moves
+        // the boxed stream or any other field of `AgentStream`.
+        let stream = unsafe { self.get_unchecked_mut() };
+        match stream.inner.as_mut() {
+            Some(inner) => match inner.as_mut().poll_next(context) {
+                Poll::Ready(Some(item)) => {
+                    stream.terminal_observed = matches!(
+                        item,
+                        AgentStreamItem::Completed(_) | AgentStreamItem::Failed { .. }
+                    );
+                    Poll::Ready(Some(item))
+                }
+                Poll::Ready(None) => {
+                    stream.terminal_observed = true;
+                    Poll::Ready(None)
+                }
+                Poll::Pending => Poll::Pending,
+            },
             None => Poll::Ready(None),
         }
     }
@@ -91,7 +105,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, St
     fn drop(&mut self) {
         // Dropping the driving stream drops the loop's `TerminalRunGuard`,
         // which forwards its actual partial run to the installed observer.
-        self.cancellation.cancel();
+        if !self.terminal_observed {
+            self.cancellation.cancel();
+        }
         self.inner.take();
         if let Ok(mut observer) = self.terminal_observer.lock()
             && let Some(observer) = observer.take()
@@ -253,6 +269,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             inner: Some(Box::pin(stream)),
             cancellation,
             terminal_observer,
+            terminal_observed: false,
             marker: std::marker::PhantomData,
         })
     }
@@ -363,6 +380,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     source: tinyinference_llm::model::ModelResolutionSource::AgentDefault,
                 },
                 model,
+                allowed_tools: definition.tools.into_iter().collect(),
                 progress: progress.clone(),
             },
         )?;

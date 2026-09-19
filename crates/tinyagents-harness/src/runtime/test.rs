@@ -32,6 +32,8 @@ use serde_json::json;
 
 struct NoopTool;
 
+struct BlockedTool;
+
 struct DenyToolGate;
 
 struct DenyThenAllowGate {
@@ -267,6 +269,25 @@ impl Tool for NoopTool {
     }
 }
 
+#[async_trait]
+impl Tool for BlockedTool {
+    fn name(&self) -> &str {
+        "blocked"
+    }
+
+    fn description(&self) -> &str {
+        "must not be available to this agent"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        panic!("a definition-disallowed tool must never execute")
+    }
+}
+
 #[test]
 fn new_harness_is_empty_with_default_policy() {
     let harness: AgentHarness<()> = AgentHarness::new();
@@ -388,6 +409,62 @@ async fn host_driven_turn_requires_an_installed_bundle_before_model_resolution()
         .await
         .expect_err("host entry point rejects missing configuration");
     assert!(error.to_string().contains("with_host_capabilities"));
+}
+
+#[tokio::test]
+async fn hosted_definition_tool_allowlist_filters_schemas_and_rejects_fabricated_calls() {
+    let mut blocked_call = ModelResponse::assistant("");
+    blocked_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "blocked-call",
+            "blocked",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        blocked_call,
+        ModelResponse::assistant("recovered"),
+    ]));
+    let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]);
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.register_tool(Arc::new(BlockedTool));
+    harness.with_host_capabilities(host);
+
+    let run = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("allowlist"), ()),
+            &(),
+        )
+        .await
+        .expect("the model recovers after its denied call");
+
+    assert_eq!(run.text().as_deref(), Some("recovered"));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("unknown tool `blocked`"))
+    );
+    let requests = model.requests();
+    assert_eq!(
+        requests[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["noop"]
+    );
 }
 
 #[tokio::test]

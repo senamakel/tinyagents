@@ -150,7 +150,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // The tool set is fixed for the duration of a run, so build the sorted
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
-        let tool_schemas = self.tools.schemas();
+        let allowed_tools = self
+            .host_run_binding(ctx.instance_id())?
+            .map(|binding| binding.allowed_tools);
+        let tool_schemas = self
+            .tools
+            .schemas()
+            .into_iter()
+            .filter(|schema| {
+                allowed_tools
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&schema.name))
+            })
+            .collect::<Vec<_>>();
 
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool. Under the tool-call strategy the schema is sent as an
@@ -168,11 +180,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 _ => None,
             })
-            && self
-                .tools
-                .names()
+            && tool_schemas
                 .iter()
-                .any(|registered| registered == name)
+                .any(|registered| registered.name == *name)
         {
             return Err(TinyAgentsError::Validation(format!(
                 "structured-output schema name `{name}` collides with a registered tool of the \
@@ -355,49 +365,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             )?;
             let model_name = binding.resolved.name.clone();
 
-            // A host budget is acquired only for an explicit host-driven run.
-            // The permit remains alive through response accounting below, so a
-            // cancellation or provider error still releases it through Drop.
-            let host_budget = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
-                if let Some(budget) = host_run.host.budget.clone() {
-                    let context_state = crate::host::ContextState {
-                        message_count: request.messages.len(),
-                        prompt_tokens: crate::token_estimation::estimate_slice_tokens(
-                            &request.messages,
-                        ),
-                        context_window_tokens: binding
-                            .model
-                            .profile()
-                            .and_then(|profile| profile.max_input_tokens),
-                        iterations: run.steps,
-                    };
-                    let hint = budget.compression_hint(&context_state);
-                    if hint.is_advised() {
-                        tinyagents_tracing::debug!(
-                            ?hint,
-                            "[host] budget gate advised context compression"
-                        );
-                        apply_host_budget_compression(ctx, &mut request.messages, hint)?;
-                    }
-                    let estimate = crate::host::CallEstimate::new(
-                        &model_name,
-                        crate::token_estimation::estimate_slice_tokens(&request.messages),
-                        request.max_tokens.unwrap_or_default() as u64,
-                    )
-                    .with_agent(host_run.agent_id)
-                    .with_thread(
-                        ctx.thread_id()
-                            .cloned()
-                            .unwrap_or_else(|| ctx.run_id().as_str().into()),
-                    );
-                    Some((budget.clone(), budget.acquire(&estimate).await?))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
             // An explicit request override that resolution skipped (unknown
             // name, missing capability, or provider-retired) falls through to
             // a lower-priority candidate by documented fail-closed semantics;
@@ -467,6 +434,54 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            // A host budget is acquired only for an explicit host-driven run.
+            // Do it after structured-output planning: a synthetic schema tool
+            // is part of the provider request and must be included in its
+            // estimate. The permit remains alive through response accounting,
+            // so cancellation or a provider error still releases it through
+            // Drop.
+            let host_budget = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
+                if let Some(budget) = host_run.host.budget.clone() {
+                    let context_state = crate::host::ContextState {
+                        message_count: request.messages.len(),
+                        prompt_tokens: crate::token_estimation::estimate_slice_tokens(
+                            &request.messages,
+                        ),
+                        context_window_tokens: binding
+                            .model
+                            .profile()
+                            .and_then(|profile| profile.max_input_tokens),
+                        iterations: run.steps,
+                    };
+                    let hint = budget.compression_hint(&context_state);
+                    if hint.is_advised() {
+                        tinyagents_tracing::debug!(
+                            ?hint,
+                            "[host] budget gate advised context compression"
+                        );
+                        apply_host_budget_compression(ctx, &mut request.messages, hint)?;
+                    }
+                    let estimate = crate::host::CallEstimate::new(
+                        &model_name,
+                        crate::token_estimation::estimate_slice_tokens(&request.messages),
+                        request.max_tokens.unwrap_or_default() as u64,
+                    )
+                    .with_agent(host_run.agent_id)
+                    .with_thread(
+                        ctx.thread_id()
+                            .cloned()
+                            .unwrap_or_else(|| ctx.run_id().as_str().into()),
+                    )
+                    .with_tool_count(request.tools.len());
+                    Some((budget.clone(), budget.acquire(&estimate).await?))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let request_has_tools = !request.tools.is_empty();
+
             let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
             status.mark_running(HarnessPhase::Model);
             status.active_model_call = Some(call_id.clone());
@@ -519,7 +534,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // canonical TinyTools-Agent parser rather than the retired
             // harness prompt parser, and only recover when the provider did
             // not already supply structured calls.
-            recover_text_dialect_calls(&mut response, &call_id);
+            recover_text_dialect_calls(&mut response, &call_id, request_has_tools);
 
             // Accounting.
             run.model_calls += 1;
@@ -914,8 +929,9 @@ fn apply_host_budget_compression<Ctx>(
 fn recover_text_dialect_calls(
     response: &mut tinyinference_llm::model::ModelResponse,
     model_call_id: &CallId,
+    has_tools: bool,
 ) {
-    if !response.message.tool_calls.is_empty() {
+    if !has_tools || !response.message.tool_calls.is_empty() {
         return;
     }
 
@@ -993,4 +1009,23 @@ fn reset_truncated_empty_recovery(
     *retries_used = 0;
     *boosted_max_tokens = None;
     *truncation_base = None;
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::recover_text_dialect_calls;
+    use crate::ids::CallId;
+    use tinyinference_llm::model::ModelResponse;
+
+    #[test]
+    fn text_dialect_markup_is_not_recovered_when_the_request_offered_no_tools() {
+        let mut response = ModelResponse::assistant(
+            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
+        );
+
+        recover_text_dialect_calls(&mut response, &CallId::new("model-1"), false);
+
+        assert!(response.message.tool_calls.is_empty());
+        assert!(response.text().contains("<tool_call>"));
+    }
 }

@@ -104,6 +104,12 @@ impl CallEstimate {
         self
     }
 
+    /// Records the number of tool schemas attached to the request.
+    pub fn with_tool_count(mut self, tool_count: usize) -> Self {
+        self.tool_count = tool_count;
+        self
+    }
+
     /// Total tokens the call is expected to consume, saturating rather than
     /// overflowing — an absurd estimate must not wrap around to a small number
     /// and let an oversized call slip past a budget check.

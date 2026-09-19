@@ -292,7 +292,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Ok(ResolvedToolCall::ErrorMessage(detail));
         }
 
-        let (dispatch, tool) = match self.tools.dispatch(&call.name) {
+        // Hosted turns carry an explicit definition allowlist. Do not merely
+        // hide disallowed schemas: a model can still fabricate a name, so the
+        // dispatch boundary must reject it too.
+        let allowed_tools = self
+            .host_run_binding(ctx.instance_id())?
+            .map(|binding| binding.allowed_tools);
+        let is_allowed = allowed_tools
+            .as_ref()
+            .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
+        let (dispatch, tool) = match is_allowed
+            .then(|| self.tools.dispatch(&call.name))
+            .flatten()
+        {
             Some(dispatch) => {
                 let tool = dispatch.tool();
                 (dispatch, tool)
@@ -310,6 +322,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     UnknownToolPolicy::Rewrite { tool_name } => self
                         .tools
                         .dispatch(tool_name)
+                        .filter(|_| {
+                            allowed_tools.as_ref().is_none_or(|allowed| {
+                                allowed.is_empty() || allowed.contains(tool_name)
+                            })
+                        })
                         .map(|dispatch| (tool_name.clone(), dispatch)),
                     _ => None,
                 };
@@ -333,7 +350,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // requested tool and the valid tools, then continue so
                     // the model can correct itself. This consumed one
                     // tool-call budget slot above, bounding the loop.
-                    let valid = self.tools.names().join(", ");
+                    let valid = self
+                        .tools
+                        .names()
+                        .into_iter()
+                        .filter(|name| {
+                            allowed_tools
+                                .as_ref()
+                                .is_none_or(|allowed| allowed.is_empty() || allowed.contains(name))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     let args_repr = serde_json::to_string(&arguments)
                         .unwrap_or_else(|_| "<unserializable>".to_string());
                     let message = format!(
@@ -585,15 +612,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .host
                 .security
                 .screen_input(&rendered, crate::host::ContentOrigin::Tool)
-                .await?
+                .await
             {
-                crate::host::ScreenOutcome::Pass => {}
-                crate::host::ScreenOutcome::Redacted(text) => {
+                Ok(crate::host::ScreenOutcome::Pass) => {}
+                Ok(crate::host::ScreenOutcome::Redacted(text)) => {
                     result.content = vec![tinytools::ToolContent::Text { text }];
                     result.markdown_formatted = None;
                 }
-                crate::host::ScreenOutcome::Block { reason } => {
+                Ok(crate::host::ScreenOutcome::Block { reason }) => {
                     result = tinytools::ToolResult::error(reason);
+                }
+                Err(error) => {
+                    self.fail_tool_call(
+                        ctx,
+                        status,
+                        &prepared.call_id,
+                        &prepared.tool_name,
+                        prepared.started_at_ms,
+                        &error,
+                    );
+                    return Err(error);
                 }
             }
         }
@@ -663,7 +701,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 run: ctx.run_id().clone(),
                 call: prepared.call_id.clone(),
                 success: !result.is_error,
-                output: String::new(),
+                output: if self.policy.capture.tool_io {
+                    model_output
+                } else {
+                    String::new()
+                },
             },
         );
         status.set_last_event(record.id);
@@ -1009,12 +1051,13 @@ fn tool_message_from_result(
 /// Maps a canonical-dispatch failure back to the harness error surface.
 ///
 /// Typed harness errors retain their original classification (cancellation,
-/// timeout, middleware refusal, etc.). Foreign errors preserve their complete
-/// causal display chain in the tool-failure detail.
+/// timeout, middleware refusal, etc.). Foreign errors are intentionally
+/// collapsed: third-party error chains can include credentials or user data,
+/// and a tool failure may be surfaced to the model or an event consumer.
 pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
     match error.downcast::<TinyAgentsError>() {
         Ok(error) => error,
-        Err(error) => TinyAgentsError::Tool(format!("{error:#}")),
+        Err(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
     }
 }
 
@@ -1291,13 +1334,13 @@ mod canonical_result_tests {
     }
 
     #[test]
-    fn dispatch_error_mapping_preserves_harness_classification_and_foreign_chain() {
+    fn dispatch_error_mapping_preserves_harness_classification_without_leaking_foreign_detail() {
         let cancelled = map_tool_dispatch_error(anyhow::Error::new(TinyAgentsError::Cancelled));
         assert!(matches!(cancelled, TinyAgentsError::Cancelled));
 
         let foreign = map_tool_dispatch_error(anyhow::anyhow!("outer: {}", "root cause"));
         assert!(
-            matches!(foreign, TinyAgentsError::Tool(message) if message.contains("root cause"))
+            matches!(foreign, TinyAgentsError::Tool(message) if message == "tool dispatch failed")
         );
     }
 

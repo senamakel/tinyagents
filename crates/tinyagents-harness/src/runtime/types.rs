@@ -17,7 +17,7 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::cache::ResponseCache;
@@ -44,6 +44,10 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
     pub(crate) agent_id: String,
     pub(crate) resolved: ResolvedModel,
     pub(crate) model: Arc<dyn ChatModel<State>>,
+    /// Canonical names the resolved definition authorizes for this exact run.
+    /// An empty list retains the legacy unrestricted catalogue; a non-empty
+    /// list is a host boundary enforced for schemas and dispatch alike.
+    pub(crate) allowed_tools: HashSet<String>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
     pub(crate) progress: Option<tokio::sync::mpsc::UnboundedSender<crate::host::ProgressEvent>>,
 }
@@ -55,6 +59,7 @@ impl<State: Send + Sync> Clone for HostRunBinding<State> {
             agent_id: self.agent_id.clone(),
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
+            allowed_tools: self.allowed_tools.clone(),
             progress: self.progress.clone(),
         }
     }
