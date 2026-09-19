@@ -547,6 +547,7 @@ where
             nodes,
             edges,
             branches,
+            route_label_checks: _,
             command_nodes,
             waiting,
             reducer,
