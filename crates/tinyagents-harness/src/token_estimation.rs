@@ -5,7 +5,7 @@
 //! Several independent places in the harness need "roughly how many tokens is
 //! this transcript?" — compaction gating, context middleware, and budget
 //! preflight. Each grew its own `chars / 4` loop over
-//! [`Message::text`][super::Message::text], and every one of them silently
+//! [`Message::text`], and every one of them silently
 //! under-counted the same way: a transcript's *structure* (tool calls, tool
 //! result correlation ids, role labels, per-message framing) is invisible to
 //! `text()`, and an assistant turn that only calls tools has **no text at
