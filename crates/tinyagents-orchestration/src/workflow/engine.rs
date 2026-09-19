@@ -884,10 +884,7 @@ where
     /// writes, so a stop/resume hand-off cannot be overwritten by its loser.
     async fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
         let owned_run_id = run_id.to_owned();
-        let Ok(Some(current)) = self
-            .store_op(move |store| Ok(store.load(&owned_run_id)?))
-            .await
-        else {
+        let Ok(Some(current)) = self.store_op(move |store| store.load(&owned_run_id)).await else {
             return false;
         };
         if !current.status.is_terminal() {
