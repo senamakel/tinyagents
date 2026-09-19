@@ -12,7 +12,7 @@ use serde_json::json;
 use super::run::{decision_is_approve, is_incompatible_checkpoint_error};
 use super::*;
 use crate::Interrupt;
-use crate::checkpoint::{Checkpoint, Checkpointer};
+use crate::checkpoint::{Checkpoint, Checkpointer, PendingActivation};
 use tinyagents_harness::cancel::CancellationToken;
 
 /// A reviewer that rejects the first `reject_first` executions, then approves,
