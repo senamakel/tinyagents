@@ -2313,7 +2313,7 @@ async fn native_tool_calling_model_does_not_execute_quoted_text_dialect_markup()
         },
         text: "Here is the tool-call format for reference:\n\
                ```\n\
-               <tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>\n\
+               <tool_call>{\"name\": \"shell\", \"arguments\": {\"command\": \"id\"}}</tool_call>\n\
                ```\n",
         attempts: Mutex::new(0),
     });
