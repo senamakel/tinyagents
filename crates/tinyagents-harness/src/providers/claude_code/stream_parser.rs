@@ -21,23 +21,15 @@ pub enum ClaudeCodeEvent {
     },
     /// A `tool_result` (or other) user-role event echoed by the CLI's own
     /// internal tool loop; not surfaced to the harness (see `event_mapper`).
-    User {
-        message: Value,
-    },
+    User { message: Value },
     /// A fully-assembled assistant message (as opposed to a `stream_event`
     /// partial); CC 2.x emits one of these after streaming completes.
-    Assistant {
-        message: Value,
-    },
+    Assistant { message: Value },
     /// A partial streaming update (`content_block_start`/`_delta`/`_stop`)
     /// for the in-progress assistant message.
-    StreamEvent {
-        event: Value,
-    },
+    StreamEvent { event: Value },
     /// Rate-limit telemetry from the CLI; not currently interpreted.
-    RateLimit {
-        raw: Value,
-    },
+    RateLimit { raw: Value },
     /// The terminal event for the turn: final text (via `raw`), usage, and
     /// cost.
     Result {
@@ -47,15 +39,10 @@ pub enum ClaudeCodeEvent {
         raw: Value,
     },
     /// An explicit CLI-level error for the turn.
-    Error {
-        message: String,
-    },
+    Error { message: String },
     /// JSONL line that failed to parse. Kept so the driver can log without
     /// dropping silently. Not surfaced as a `ProviderDelta`.
-    ParseError {
-        line: String,
-        reason: String,
-    },
+    ParseError { line: String, reason: String },
 }
 
 /// Stateful parser that takes byte chunks from `proc.stdout` and emits
