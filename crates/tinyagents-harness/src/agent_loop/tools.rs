@@ -1673,6 +1673,7 @@ mod canonical_result_tests {
             ],
             is_error: true,
             markdown_formatted: Some("## compact failure".to_string()),
+            ..ToolResult::default()
         }
     }
 
