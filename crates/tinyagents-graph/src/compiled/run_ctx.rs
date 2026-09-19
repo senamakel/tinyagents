@@ -372,6 +372,7 @@ where
             last_checkpoint: None,
             parent_checkpoint: initial_parent,
             carried_completed,
+            deferred_pending: Vec::new(),
             cancellation,
             drop_guard,
         };
