@@ -355,7 +355,10 @@ async fn a_forced_pformat_dialect_preserves_a_forced_named_tool_choice() {
         .find(|m| matches!(m, Message::System(_)))
         .expect("system")
         .text();
-    assert!(system.contains("You must call the `lookup` tool."), "{system}");
+    assert!(
+        system.contains("You must call the `lookup` tool."),
+        "{system}"
+    );
 }
 
 /// Middleware recording every visible text delta the harness emits.
