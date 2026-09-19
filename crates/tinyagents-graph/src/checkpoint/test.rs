@@ -382,7 +382,7 @@ async fn prune_keeps_a_window_per_namespace() {
 mod file_backend {
     use super::checkpoint;
     use crate::Checkpoint;
-    use crate::checkpoint::{CheckpointConfig, Checkpointer, FileCheckpointer};
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, FileCheckpointer, PendingActivation};
     use std::path::PathBuf;
 
     /// A unique-per-test temp dir derived from the test name + pid (no clock).
@@ -644,7 +644,7 @@ mod file_backend {
 #[cfg(feature = "sqlite")]
 mod sqlite_backend {
     use super::checkpoint;
-    use crate::checkpoint::{CheckpointConfig, Checkpointer, SqliteCheckpointer};
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, PendingActivation, SqliteCheckpointer};
 
     #[tokio::test]
     async fn put_get_list_roundtrip_in_memory() {
