@@ -2973,7 +2973,7 @@ impl Checkpointer<i32> for FailNonTerminalCheckpointer {
         &self,
         checkpoint: crate::checkpoint::Checkpoint<i32>,
     ) -> tinyagents_harness::error::Result<tinyagents_harness::ids::CheckpointId> {
-        if !checkpoint.next_nodes.is_empty() {
+        if !checkpoint.tasks.is_empty() {
             return Err(tinyagents_harness::error::TinyAgentsError::Checkpoint(
                 "injected background write failure".to_string(),
             ));
