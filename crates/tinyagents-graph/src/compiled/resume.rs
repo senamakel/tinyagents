@@ -122,12 +122,16 @@ where
             }
         };
 
-        // The resume value belongs to the node(s) that actually interrupted. The
-        // pending set is deliberately wider than that at an interrupt boundary
-        // (it also carries the successors of branches that completed before the
-        // interrupt), so fanning the value across it would hand `ctx.resume` to
-        // nodes that have never run. A boundary that recorded no interrupt (a
-        // failure boundary, resumed via `retry` with no value) keeps the old
+        // The resume value belongs to the node(s) that actually interrupted.
+        // Interrupt/failure boundaries persist `pending` as exactly the
+        // stalled (interrupted/failed) branches of that step — a completed
+        // sibling's routing is deferred rather than folded into `pending`
+        // (see `boundary::advance`'s `carried_completed` handling) — but a
+        // checkpoint could still carry a wider pending set (a hand-built one,
+        // or one written before this policy), so this still keys off
+        // `interrupted_nodes` rather than assuming `active` is exactly the
+        // interrupted set. A boundary that recorded no interrupt (a failure
+        // boundary, resumed via `retry` with no value) keeps the old
         // fan-across-pending behaviour.
         let mut resume_map = HashMap::new();
         if let Some(value) = command.resume {
