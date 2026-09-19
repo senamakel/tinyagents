@@ -18,29 +18,24 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use tinyagents_harness::error::Result;
 
 use super::super::context::StorageContext;
 use super::store::init_run_ledger_schema;
 use super::types::{
-    AgentRun, AgentRunKind, AgentRunListRequest, AgentRunListResponse, AgentRunStatus,
-    AgentRunUpsert, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
-    AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
-    AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
-    RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry,
-    RunTelemetryUpsert, WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest,
-    WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
+    AgentRun, AgentRunListRequest, AgentRunListResponse, AgentRunStatus, AgentRunUpsert, RunEvent,
+    RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry, RunTelemetryUpsert,
+    WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest, WorkflowRunListResponse,
+    WorkflowRunUpsert,
 };
 
 mod rows;
 mod team;
 
 use rows::{
-    get_agent_run_inner, get_agent_team_inner, get_agent_team_member_inner,
-    get_agent_team_task_inner, get_run_telemetry_inner, map_agent_run_row,
-    map_agent_team_member_row, map_agent_team_row, map_agent_team_task_row, map_run_event_row,
+    get_agent_run_inner, get_run_telemetry_inner, map_agent_run_row, map_run_event_row,
     map_workflow_run_row,
 };
 
