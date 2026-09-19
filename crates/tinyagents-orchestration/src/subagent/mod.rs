@@ -23,8 +23,8 @@ pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
 pub use types::{
     ArtifactReference, PersistedSubagentPause, PreparedSubagent, SubagentError, SubagentExecution,
-    SubagentIncomplete, SubagentOutcome, SubagentPause, SubagentRequest, SubagentResume,
-    SubagentStatus, SubagentTaskKey,
+    SubagentIncomplete, SubagentOutcome, SubagentPause, SubagentRequest, SubagentRequestParts,
+    SubagentResume, SubagentStatus, SubagentTaskKey,
 };
 
 #[cfg(test)]
