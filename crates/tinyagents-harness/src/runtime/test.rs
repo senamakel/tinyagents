@@ -2915,7 +2915,7 @@ async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
         context.host_agent_id = Some("parent".to_string());
         context.host_authority = Some(Arc::new(
             crate::runtime::HostInvocationAuthority::<(), ()> {
-                binding: crate::runtime::HostInvocationBinding {
+                binding: Arc::new(crate::runtime::HostInvocationBinding {
                     host,
                     agent_id: "parent".to_string(),
                     model_pin: None,
@@ -2923,7 +2923,7 @@ async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
                     allowed_tools: HashSet::new(),
                     progress: None,
                     runtime: None,
-                },
+                }),
             },
         ));
         context
