@@ -288,11 +288,36 @@ pub fn set_additional_properties_false(mut schema: Value) -> Value {
 pub fn prepare_parameters(parameters: &Value, preparation: &SchemaPreparation) -> Value {
     let normalized = normalize_parameters(parameters);
     let cleaned = SchemaCleanr::clean(normalized, preparation.strategy);
-    if !preparation.strict {
-        return cleaned;
+    let sanitized = if preparation.strict {
+        let required = require_all_properties(cleaned);
+        set_additional_properties_false(required)
+    } else {
+        cleaned
+    };
+    apply_schema_transform(&sanitized, preparation.schema_transform.as_ref())
+}
+
+/// Applies an optional [`SchemaTransform`] to `schema`, returning it
+/// unchanged when `transform` is `None`.
+///
+/// This is the seam a resolved [`ModelProfile`]'s
+/// [`schema_transform`][ModelProfile::schema_transform] goes through both for
+/// tool schemas (via [`SchemaPreparation::schema_transform`]) and for a
+/// structured-output schema, which is never a [`ToolSchema`] and so cannot go
+/// through [`prepare_tool_schema`].
+pub fn apply_schema_transform(schema: &Value, transform: Option<&SchemaTransform>) -> Value {
+    match transform {
+        Some(transform) => transform.apply(schema),
+        None => schema.clone(),
     }
-    let required = require_all_properties(cleaned);
-    set_additional_properties_false(required)
+}
+
+/// Applies `profile`'s [`SchemaTransform`] (if any) to `schema`. Convenience
+/// wrapper over [`apply_schema_transform`] for callers holding a
+/// `Option<&ModelProfile>` rather than the transform itself — the common
+/// shape at a structured-output call site.
+pub fn apply_profile_schema_transform(schema: &Value, profile: Option<&ModelProfile>) -> Value {
+    apply_schema_transform(schema, profile.and_then(|p| p.schema_transform.as_ref()))
 }
 
 /// Projects one [`ToolSchema`] for a provider: clean the parameters, then
