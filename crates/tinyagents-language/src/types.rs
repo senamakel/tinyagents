@@ -105,7 +105,7 @@ pub const END: &str = "END";
 /// independently of the source text. Runnable node *behaviour* is not part of
 /// the blueprint — it is supplied later by a Rust-side
 /// [`crate::compiler::NodeFactory`].
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Blueprint {
     /// The blueprint schema version, for stored/diffed/reloaded blueprints
     /// (`Blueprint` docs above) to detect and migrate old shapes. Defaults to
