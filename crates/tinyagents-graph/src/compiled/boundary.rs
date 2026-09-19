@@ -189,6 +189,7 @@ where
                 self.route_completed(sb.completed, sb.goto_map, state, &mut ctx.barrier_arrivals)?
             }
         };
+        let next = self.apply_defer(ctx, next);
 
         // Persist a boundary checkpoint. Under `Exit` durability only the
         // terminal boundary (the step that empties the active set) is
