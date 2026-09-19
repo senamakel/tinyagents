@@ -679,6 +679,7 @@ unsafe fn extend_overlay_stream_lifetime<'a>(
 ///
 /// The binding is carried by the non-serializable context rather than the
 /// reusable harness, so concurrent roots have no shared mutable authority.
+#[allow(unsafe_code)]
 pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx: Send + Sync>(
     context: &RunContext<Ctx>,
 ) -> Result<Option<HostInvocationBinding<State, Ctx>>> {
