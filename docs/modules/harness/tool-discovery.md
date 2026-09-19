@@ -118,6 +118,31 @@ top-level argument — instead of the raw JSON Schema (`tool::type_signature`,
 `tool::argument_notes`). Constraints and nested descriptions are dropped; the
 native path is unaffected.
 
+## Live proof
+
+`tests/live_tool_deferral.rs` runs the same task against a real model twice
+over a 41-tool registry — all `Direct`, then the 40-tool long tail `Deferred`
+— and requires both runs to reach `stock_quote`, the deferred run to spend
+fewer prompt tokens on its first call, and its `tools` array to be
+byte-identical throughout. Measured over OpenRouter (2026-09-19):
+
+| model                       | first-call prompt tokens | total prompt tokens | route  |
+|-----------------------------|--------------------------|---------------------|--------|
+| `openai/gpt-4.1-mini`       | 3,814 → 878 (−77%)       | 7,692 → 3,275       | search |
+| `anthropic/claude-haiku-4.5`| 7,923 → 1,582 (−80%)     | 15,944 → 5,370      | bridge |
+| `google/gemini-2.5-flash`   | 2,557 → 837 (−67%)       | 5,161 → 3,743       | search |
+
+Schema bytes on the wire went from 24,725 (41 tools) to 3,791 (3 tools + a
+40-entry manifest). "Route" is how the model reached the tool: through
+`tool_search`, or straight off the manifest via `tool_call` (Haiku read the
+name in the description and skipped the search). The extra model call the
+deferred run spends is already paid for on the first turn.
+
+```text
+TOOL_DEFERRAL_LIVE=1 cargo test -p tinyagents-integration-tests \
+    --test live_tool_deferral -- --nocapture
+```
+
 ## Marking a tool deferred
 
 ```rust

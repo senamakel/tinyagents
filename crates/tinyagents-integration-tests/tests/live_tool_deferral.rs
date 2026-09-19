@@ -31,46 +31,124 @@ use tinytools::{Tool, ToolExposure, ToolResult};
 /// The long tail: 40 plausible integration tools a host might register. Only
 /// `stock_quote` answers the task.
 const LONG_TAIL: &[(&str, &str)] = &[
-    ("stock_quote", "Fetch the latest trading price for a stock ticker symbol. Returns price, bid, ask and volume."),
-    ("calendar_invite", "Send a calendar invite to one or more attendees for a given time window."),
-    ("pdf_read", "Extract the text of a PDF document stored in the workspace."),
-    ("slack_post", "Post a message to a Slack channel the user is a member of."),
-    ("gmail_search", "Search the user's Gmail inbox with a query string."),
+    (
+        "stock_quote",
+        "Fetch the latest trading price for a stock ticker symbol. Returns price, bid, ask and volume.",
+    ),
+    (
+        "calendar_invite",
+        "Send a calendar invite to one or more attendees for a given time window.",
+    ),
+    (
+        "pdf_read",
+        "Extract the text of a PDF document stored in the workspace.",
+    ),
+    (
+        "slack_post",
+        "Post a message to a Slack channel the user is a member of.",
+    ),
+    (
+        "gmail_search",
+        "Search the user's Gmail inbox with a query string.",
+    ),
     ("gmail_send", "Send an email from the user's Gmail account."),
-    ("github_create_issue", "Open an issue in a GitHub repository."),
-    ("github_list_pulls", "List open pull requests for a GitHub repository."),
-    ("github_merge_pull", "Merge a pull request in a GitHub repository."),
+    (
+        "github_create_issue",
+        "Open an issue in a GitHub repository.",
+    ),
+    (
+        "github_list_pulls",
+        "List open pull requests for a GitHub repository.",
+    ),
+    (
+        "github_merge_pull",
+        "Merge a pull request in a GitHub repository.",
+    ),
     ("jira_create_ticket", "Create a Jira ticket in a project."),
-    ("jira_transition", "Move a Jira ticket to another workflow state."),
-    ("notion_search", "Search pages in the user's Notion workspace."),
+    (
+        "jira_transition",
+        "Move a Jira ticket to another workflow state.",
+    ),
+    (
+        "notion_search",
+        "Search pages in the user's Notion workspace.",
+    ),
     ("notion_append", "Append blocks to a Notion page."),
     ("linear_create_issue", "Create an issue in a Linear team."),
-    ("weather_forecast", "Get the weather forecast for a city over the next days."),
-    ("currency_convert", "Convert an amount between two currencies at today's rate."),
-    ("flight_search", "Search flights between two airports on a date."),
+    (
+        "weather_forecast",
+        "Get the weather forecast for a city over the next days.",
+    ),
+    (
+        "currency_convert",
+        "Convert an amount between two currencies at today's rate.",
+    ),
+    (
+        "flight_search",
+        "Search flights between two airports on a date.",
+    ),
     ("hotel_search", "Search hotels in a city for a date range."),
-    ("maps_directions", "Get driving directions between two places."),
-    ("maps_geocode", "Turn an address into latitude and longitude."),
+    (
+        "maps_directions",
+        "Get driving directions between two places.",
+    ),
+    (
+        "maps_geocode",
+        "Turn an address into latitude and longitude.",
+    ),
     ("image_generate", "Generate an image from a text prompt."),
     ("image_describe", "Describe the contents of an image file."),
     ("audio_transcribe", "Transcribe an audio file to text."),
     ("text_to_speech", "Synthesise speech audio from text."),
     ("translate_text", "Translate text between two languages."),
-    ("spreadsheet_read", "Read a range of cells from a spreadsheet."),
-    ("spreadsheet_write", "Write values into a range of cells in a spreadsheet."),
-    ("database_query", "Run a read-only SQL query against the analytics database."),
-    ("cron_schedule", "Schedule a recurring job with a cron expression."),
+    (
+        "spreadsheet_read",
+        "Read a range of cells from a spreadsheet.",
+    ),
+    (
+        "spreadsheet_write",
+        "Write values into a range of cells in a spreadsheet.",
+    ),
+    (
+        "database_query",
+        "Run a read-only SQL query against the analytics database.",
+    ),
+    (
+        "cron_schedule",
+        "Schedule a recurring job with a cron expression.",
+    ),
     ("cron_cancel", "Cancel a scheduled recurring job."),
-    ("webhook_call", "Call an outbound webhook URL with a JSON payload."),
-    ("browser_open", "Open a URL in the headless browser and return the page text."),
-    ("browser_click", "Click an element on the current headless browser page."),
-    ("crypto_price", "Fetch the current price of a cryptocurrency."),
+    (
+        "webhook_call",
+        "Call an outbound webhook URL with a JSON payload.",
+    ),
+    (
+        "browser_open",
+        "Open a URL in the headless browser and return the page text.",
+    ),
+    (
+        "browser_click",
+        "Click an element on the current headless browser page.",
+    ),
+    (
+        "crypto_price",
+        "Fetch the current price of a cryptocurrency.",
+    ),
     ("news_search", "Search recent news articles for a topic."),
-    ("wikipedia_summary", "Fetch the summary of a Wikipedia article."),
-    ("contacts_lookup", "Look up a person in the user's address book."),
+    (
+        "wikipedia_summary",
+        "Fetch the summary of a Wikipedia article.",
+    ),
+    (
+        "contacts_lookup",
+        "Look up a person in the user's address book.",
+    ),
     ("todo_add", "Add an item to the user's to-do list."),
     ("todo_complete", "Mark a to-do item as complete."),
-    ("timer_set", "Set a countdown timer that notifies the user when it ends."),
+    (
+        "timer_set",
+        "Set a countdown timer that notifies the user when it ends.",
+    ),
 ];
 
 struct LiveTool {
@@ -213,7 +291,12 @@ struct Outcome {
     quoted: bool,
 }
 
-async fn run_once(label: &'static str, api_key: &str, model_name: &str, long_tail: ToolExposure) -> Outcome {
+async fn run_once(
+    label: &'static str,
+    api_key: &str,
+    model_name: &str,
+    long_tail: ToolExposure,
+) -> Outcome {
     let listener = Arc::new(RecordingListener::new());
     let calls = Arc::new(Mutex::new(Vec::new()));
     let model = Arc::new(Observed {
@@ -317,8 +400,20 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
     let model_name =
         std::env::var("TOOL_DEFERRAL_MODEL").unwrap_or_else(|_| "openai/gpt-4.1-mini".to_string());
 
-    let before = run_once("before (all Direct)", &api_key, &model_name, ToolExposure::Direct).await;
-    let after = run_once("after (long tail Deferred)", &api_key, &model_name, ToolExposure::Deferred).await;
+    let before = run_once(
+        "before (all Direct)",
+        &api_key,
+        &model_name,
+        ToolExposure::Direct,
+    )
+    .await;
+    let after = run_once(
+        "after (long tail Deferred)",
+        &api_key,
+        &model_name,
+        ToolExposure::Deferred,
+    )
+    .await;
 
     eprintln!("\nmodel: {model_name}");
     eprintln!(
@@ -343,21 +438,36 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
         "first-call prompt tokens: {} -> {} ({:.0}% fewer); tools byte-stable across the deferred run: {}\n",
         before.first_call_input_tokens,
         after.first_call_input_tokens,
-        100.0 * (1.0 - after.first_call_input_tokens as f64 / before.first_call_input_tokens.max(1) as f64),
+        100.0
+            * (1.0
+                - after.first_call_input_tokens as f64
+                    / before.first_call_input_tokens.max(1) as f64),
         after.tools_byte_stable
     );
 
-    assert!(before.quoted, "the direct run should have called stock_quote");
-    assert!(after.quoted, "the deferred run should have discovered and called stock_quote");
+    assert!(
+        before.quoted,
+        "the direct run should have called stock_quote"
+    );
+    assert!(
+        after.quoted,
+        "the deferred run should have discovered and called stock_quote"
+    );
     // Any discovery route is a pass: some models search, some read the
     // manifest inside `tool_search`'s description and call the tool straight
     // away (through `tool_call` or by name). All three are the design working.
-    assert_ne!(after.route, "-", "the deferred run should have discovered stock_quote");
+    assert_ne!(
+        after.route, "-",
+        "the deferred run should have discovered stock_quote"
+    );
     assert_eq!(after.deferred, LONG_TAIL.len());
     assert!(after.schema_bytes < before.schema_bytes / 3);
     assert!(
         after.first_call_input_tokens < before.first_call_input_tokens,
         "deferral should cut the first call's prompt"
     );
-    assert!(after.tools_byte_stable, "the tools array must not change within a run");
+    assert!(
+        after.tools_byte_stable,
+        "the tools array must not change within a run"
+    );
 }

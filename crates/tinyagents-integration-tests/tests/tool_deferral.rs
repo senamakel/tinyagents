@@ -439,10 +439,12 @@ async fn tool_schemas_projection_applies_to_wire_and_catalog() {
             ToolExposure::Direct,
         ))
         .with_policy(RunPolicy {
-            tool_schemas: Some(SchemaPreparation::openai().with_compaction(SchemaCompaction {
-                max_description_bytes: Some(40),
-                max_schema_bytes: None,
-            })),
+            tool_schemas: Some(
+                SchemaPreparation::openai().with_compaction(SchemaCompaction {
+                    max_description_bytes: Some(40),
+                    max_schema_bytes: None,
+                }),
+            ),
             ..RunPolicy::default()
         });
 
@@ -453,7 +455,10 @@ async fn tool_schemas_projection_applies_to_wire_and_catalog() {
 
     // The verbose direct description was clipped on the wire…
     let tools: Vec<Value> = serde_json::from_str(&model.tools_seen()[0]).unwrap();
-    let verbose = tools.iter().find(|t| t["name"] == "verbose_direct").unwrap();
+    let verbose = tools
+        .iter()
+        .find(|t| t["name"] == "verbose_direct")
+        .unwrap();
     assert!(verbose["description"].as_str().unwrap().len() <= 40);
     assert!(!model.tools_seen()[0].contains(&long));
     // …and the search answer for the deferred tool went through the same

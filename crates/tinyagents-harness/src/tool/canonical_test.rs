@@ -86,7 +86,10 @@ impl tinytools::Tool for Exposed {
         self.exposure
     }
 
-    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+    async fn execute(
+        &self,
+        _arguments: serde_json::Value,
+    ) -> anyhow::Result<tinytools::ToolResult> {
         Ok(tinytools::ToolResult::success("ok"))
     }
 }
@@ -121,7 +124,12 @@ fn schemas_split_by_exposure_and_stay_name_sorted() {
     assert_eq!(registry.names().len(), 5);
     assert_eq!(
         registry.model_callable_names(),
-        vec!["alpha_direct", "beta_deferred", "mid_deferred", "zeta_direct"]
+        vec![
+            "alpha_direct",
+            "beta_deferred",
+            "mid_deferred",
+            "zeta_direct"
+        ]
     );
 }
 
