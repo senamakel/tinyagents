@@ -676,6 +676,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     if response.resolved_model.is_none() {
                         response.resolved_model = Some(resolved);
                     }
+                    split_thinking_tags(&mut response, model.profile());
                     return Ok(response);
                 }
                 Err(error) => {
