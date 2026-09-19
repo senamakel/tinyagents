@@ -104,11 +104,13 @@
 //! | `paths`         | `session_raw` / `sessions` path resolution and resume scan.  |
 //! | `markdown`      | Human-readable `.md` companion rendering.                    |
 //! | `legacy_md`     | Legacy HTML-comment `.md` reader.                            |
+//! | `migration`     | One-shot legacy date-grouped layout conversion.               |
 
 mod history;
 mod jsonl;
 mod legacy_md;
 mod markdown;
+mod migration;
 mod paths;
 mod reader;
 mod thread_lookup;
@@ -120,6 +122,7 @@ pub use history::{
     TranscriptRead, TranscriptTurn,
 };
 pub use legacy_md::read_transcript_legacy_md;
+pub use migration::{TranscriptLayoutMigration, migrate_layout_if_needed};
 pub use paths::{find_latest_transcript, resolve_keyed_transcript_path};
 pub use reader::{read_transcript, read_transcript_display};
 pub use thread_lookup::{
