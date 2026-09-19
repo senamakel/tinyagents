@@ -567,6 +567,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         Some((StructuredStrategy::ToolCallUnion, name, Value::Null))
                     }
                     Some(ResponseFormat::Auto { name, schema }) => {
+                        let schema = crate::tool::apply_profile_schema_transform(
+                            &schema,
+                            binding.model.profile(),
+                        );
                         let strategy = StructuredStrategy::for_profile(binding.model.profile());
                         match strategy {
                             StructuredStrategy::ProviderSchema => {
