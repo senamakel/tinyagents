@@ -317,7 +317,7 @@ impl<Ctx> RunContext<Ctx> {
     /// workspace policy, steering, streaming mode, thread identity, output
     /// cap, and depth cap.  Metadata is shallow-merged automatically: any key
     /// set on `child_config.metadata` overlays the parent's metadata object
-    /// (see [`shallow_merge_metadata`]), so callers only need to pass the
+    /// (see `shallow_merge_metadata`), so callers only need to pass the
     /// child-specific keys.
     pub fn child<ChildCtx>(
         &self,

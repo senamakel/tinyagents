@@ -1,17 +1,33 @@
+//! Phase state projection and advancement for workflow runs.
+//!
+//! This module owns the JSON phase-state document (a BTreeMap of phase names
+//! to status + outputs) that the workflow engine persists. It provides queries
+//! (what phases are runnable?) and mutations (mark complete, reset after
+//! interruption) over this state without touching the underlying persistence layer.
+
 use serde_json::{Value, json};
 
 use super::{WorkflowDefinition, WorkflowPhase};
 
 /// Durable status of one phase in a workflow run.
+///
+/// Phases transition: Pending → Running → (Completed | Failed). A phase
+/// interrupted while running can be reset to Pending for retry; completed
+/// phases are immutable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseStatus {
+    /// Phase has not yet started.
     Pending,
+    /// Phase is currently executing (likely in a child).
     Running,
+    /// Phase completed successfully; immutable.
     Completed,
+    /// Phase failed; may be retried by resetting to Pending.
     Failed,
 }
 
 impl PhaseStatus {
+    /// Returns the string representation of this status (used in JSON).
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",

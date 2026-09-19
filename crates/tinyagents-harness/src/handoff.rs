@@ -68,12 +68,19 @@ struct HandoffInner {
     next_id: u64,
 }
 
+/// One stashed tool result: the raw content plus the name of the tool that
+/// produced it, returned by [`ResultHandoffCache::get`] and stored on
+/// [`ResultHandoffCache::store`].
 pub struct CachedResult {
+    /// Name of the tool whose result was stashed.
     pub tool_name: String,
+    /// The (cleaned) payload the sub-agent can query with
+    /// `extract_from_result`.
     pub content: String,
 }
 
 impl ResultHandoffCache {
+    /// Creates an empty cache.
     pub fn new() -> Self {
         Self::default()
     }
