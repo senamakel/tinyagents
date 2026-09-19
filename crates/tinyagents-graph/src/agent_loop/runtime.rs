@@ -258,7 +258,7 @@ where
     let mut request = request;
     rt.harness
         .middleware()
-        .run_before_model(&mut ctx_guard, rt.app_state, &mut request)
+        .run_before_model(&mut ctx_guard, &rt.app_state, &mut request)
         .await?;
 
     let started_record = ctx_guard.emit(AgentEvent::ModelStarted {
@@ -273,7 +273,7 @@ where
     let (mut response, wrap_control) = rt
         .harness
         .middleware()
-        .run_wrapped_model(&mut ctx_guard, rt.app_state, request, &base)
+        .run_wrapped_model(&mut ctx_guard, &rt.app_state, request, &base)
         .await?
         .into_response_with_control();
     if let Some(control) = wrap_control {
@@ -290,7 +290,7 @@ where
 
     rt.harness
         .middleware()
-        .run_after_model(&mut ctx_guard, rt.app_state, &mut response)
+        .run_after_model(&mut ctx_guard, &rt.app_state, &mut response)
         .await?;
 
     let completed_record = ctx_guard.emit(AgentEvent::ModelCompleted {
