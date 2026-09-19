@@ -330,16 +330,22 @@ pub struct SendSpec {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NodeSpec {
     /// The node name.
+    #[serde(default)]
     pub name: String,
     /// The node kind (defaults to `model` when unspecified in source).
+    #[serde(default)]
     pub kind: String,
     /// The bound model name, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// The node prompt, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     /// Tool capability names referenced by this node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
     /// How control leaves this node.
+    #[serde(default)]
     pub routing: Routing,
     /// A registered agent name for a `subagent` node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
