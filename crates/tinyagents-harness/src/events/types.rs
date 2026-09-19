@@ -653,8 +653,8 @@ pub enum AgentEvent {
     /// only when at least one message changed — same-origin runs (the
     /// common case) never emit this.
     ///
-    /// See `crate::agent_loop::handoff_transform` for the exact rules
-    /// (redacted/signed thinking, tool-call id normalization, image
+    /// See the harness's cross-provider handoff transform for the exact
+    /// rules (redacted/signed thinking, tool-call id normalization, image
     /// downgrade).
     HandoffTransformApplied {
         /// Number of messages rewritten by the transform for this call.
