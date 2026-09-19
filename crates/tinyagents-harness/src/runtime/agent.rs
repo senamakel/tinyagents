@@ -749,8 +749,7 @@ pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx: Send + Sync>(
     // whose concrete type does not match this call's own `State`/`Ctx`
     // before this cast runs, so a mismatched authority never reaches it.
     let authority = unsafe {
-        &*(std::sync::Arc::as_ptr(authority) as *const dyn ErasedHostAuthority
-            as *const HostInvocationAuthority<State, Ctx>)
+        &*(std::sync::Arc::as_ptr(authority) as *const HostInvocationAuthority<State, Ctx>)
     };
     Ok(Some(authority.binding.clone()))
 }
