@@ -995,6 +995,29 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 prepared.started_at_ms,
                                 &err,
                             );
+                            // Every remaining `Execute` slot already emitted
+                            // `ToolStarted` (phase 2) and is registered in
+                            // `status.active_tool_calls`, but its future
+                            // already resolved (phase 3 ran every future to
+                            // completion via `join_all`) without ever getting
+                            // a terminal event, because this fold stopped
+                            // here. Give each of them one now so every
+                            // `ToolStarted` still has exactly one terminal
+                            // partner and no tool call is reported in-flight
+                            // after the run has already failed.
+                            let aborted = TinyAgentsError::Tool(
+                                "aborted: sibling tool call failed".to_string(),
+                            );
+                            for (sibling_prepared, _) in executed {
+                                self.fail_tool_call(
+                                    ctx,
+                                    status,
+                                    &sibling_prepared.call_id,
+                                    &sibling_prepared.tool_name,
+                                    sibling_prepared.started_at_ms,
+                                    &aborted,
+                                );
+                            }
                             return Err(err);
                         }
                     };
