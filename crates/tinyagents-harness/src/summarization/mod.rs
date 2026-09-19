@@ -131,7 +131,7 @@ impl Summarizer for ConcatSummarizer {
 // ---------------------------------------------------------------------------
 
 impl SummarizationPolicy {
-    /// Builds a policy from a model [`ModelProfile`], reading its
+    /// Builds a policy from a model [`ModelProfile`](tinyinference_llm::model::ModelProfile), reading its
     /// [`max_input_tokens`][tinyinference_llm::model::ModelProfile::max_input_tokens]
     /// as the context window and using `threshold` as the trigger fraction.
     ///

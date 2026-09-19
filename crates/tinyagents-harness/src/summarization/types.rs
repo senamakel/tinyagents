@@ -16,7 +16,7 @@ use tinyinference_llm::message::Message;
 
 /// A cheap heuristic estimate of the number of tokens in a piece of text.
 ///
-/// The value is derived by [`estimate_tokens`] and should be treated as an
+/// The value is derived by [`estimate_tokens`](super::estimate_tokens) and should be treated as an
 /// approximation only — it does not use a real tokenizer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenEstimate {

@@ -95,7 +95,7 @@ fn render_content(content: &[ContentBlock]) -> Vec<String> {
 /// `<role>: <parts>`, with tool calls rendered as
 /// `<tool_call id="…" name="…">{args}</tool_call>` and tool results as
 /// `<tool_result id="…">…</tool_result>`. Large payloads are elided (see
-/// [`MAX_RENDERED_PAYLOAD_CHARS`]).
+/// `MAX_RENDERED_PAYLOAD_CHARS`).
 pub fn render_message_for_summary(message: &Message) -> String {
     let mut parts: Vec<String> = match message {
         Message::System(m) => render_content(&m.content),
