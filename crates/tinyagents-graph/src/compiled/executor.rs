@@ -68,6 +68,10 @@ pub(super) struct RunSeed<State, Update> {
     /// mid-step completions) — see [`ResumeSeed`]. Left at its `Default`
     /// (empty/zero) for a fresh run.
     pub(super) resume_seed: ResumeSeed,
+    /// Optional per-run options (I4 part 2) — currently the cooperative
+    /// cancellation token, if the caller opted in via
+    /// [`CompiledGraph::run_with_options`]/[`CompiledGraph::resume_with_options`].
+    pub(super) options: RunOptions,
     pub(super) _update: std::marker::PhantomData<Update>,
 }
 

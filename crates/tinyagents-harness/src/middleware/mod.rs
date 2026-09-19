@@ -134,6 +134,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         self.model_middlewares.len()
     }
 
+    /// Returns `true` when a registered [`ModelMiddleware`] already retries
+    /// the model call itself (see [`ModelMiddleware::overrides_retry`]).
+    ///
+    /// The agent loop's base call uses this to skip its own
+    /// [`crate::runtime::RunPolicy::retry`] loop, so `RetryMiddleware` and the
+    /// loop's built-in retry do not multiply attempts together (I-7).
+    pub fn has_retry_override(&self) -> bool {
+        self.model_middlewares
+            .iter()
+            .any(|mw| mw.overrides_retry())
+    }
+
     /// Returns the number of registered [`ToolMiddleware`] wrap hooks.
     pub fn tool_middleware_len(&self) -> usize {
         self.tool_middlewares.len()
