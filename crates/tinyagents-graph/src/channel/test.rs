@@ -446,7 +446,7 @@ fn register_reducer_is_reachable_through_the_graph_builder() {
     let _graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
         .set_reducer(ChannelState::new())
         .register_reducer("channel-test-via-builder", |_a: Value, b: Value| Ok(b))
-        .add_node("noop", |s: ChannelState, _c: NodeContext| async move {
+        .add_node("noop", |_s: ChannelState, _c: NodeContext| async move {
             Ok(NodeResult::Update(ChannelUpdate::new()))
         })
         .set_entry("noop")
