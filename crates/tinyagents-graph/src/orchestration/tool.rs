@@ -366,6 +366,10 @@ pub fn orchestration_tool_schema(kind: OrchestrationToolKind) -> ToolSchema {
     )
 }
 
+/// JSON Schema for one control's tool-call arguments, used by
+/// [`orchestration_tool_schema`] and enforced ad hoc by the `call_*` parsing
+/// helpers below (there is no schema-validation step between the model's
+/// call and argument parsing, so the two must be kept in sync by hand).
 fn orchestration_parameters(kind: OrchestrationToolKind) -> Value {
     match kind {
         OrchestrationToolKind::Spawn => json!({
