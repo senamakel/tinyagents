@@ -235,82 +235,80 @@ where
 /// records usage, appends the assistant message, and routes to `tools` or
 /// `settle`.
 pub(crate) async fn model_node<State, Ctx>(
-    rt: &Arc<LoopRuntime<State, Ctx>>,
+    harness: &AgentHarness<State, Ctx>,
+    app_state: &State,
+    ctx: &mut RunContext<Ctx>,
+    run: &mut AgentRun,
+    status: &mut HarnessRunStatus,
     mut loop_state: LoopState,
 ) -> Result<NodeResult<LoopState>>
 where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
-    let mut ctx_guard = rt.ctx.lock().await;
-    let mut run_guard = rt.run.lock().await;
-    let mut status_guard = rt.status.lock().await;
-
-    ctx_guard.record_model_call()?;
+    ctx.record_model_call()?;
 
     let request = loop_state
         .pending_request
         .take()
         .ok_or_else(|| TinyAgentsError::Validation("model node ran with no pending plan".into()))?;
 
-    let binding = rt
-        .harness
+    let binding = harness
         .models()
         .resolve_request(&request, None, None)
         .ok_or_else(|| {
             TinyAgentsError::ModelNotFound(request.model.clone().unwrap_or_else(|| "<default>".into()))
         })?;
     let model_name = binding.resolved.name.clone();
-    let call_id = CallId::new(format!("{}-model-{}", ctx_guard.run_id(), run_guard.model_calls + 1));
+    let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
 
     let mut request = request;
-    rt.harness
+    harness
         .middleware()
-        .run_before_model(&mut ctx_guard, &rt.app_state, &mut request)
+        .run_before_model(ctx, app_state, &mut request)
         .await?;
 
-    let started_record = ctx_guard.emit(AgentEvent::ModelStarted {
+    let started_record = ctx.emit(AgentEvent::ModelStarted {
         call_id: call_id.clone(),
         model: model_name.clone(),
     });
-    status_guard.set_last_event(started_record.id);
+    status.set_last_event(started_record.id);
 
     let base = DirectModelBase {
         model: binding.model.as_ref(),
     };
-    let (mut response, wrap_control) = rt
-        .harness
+    let (mut response, wrap_control) = harness
         .middleware()
-        .run_wrapped_model(&mut ctx_guard, &rt.app_state, request, &base)
+        .run_wrapped_model(ctx, app_state, request, &base)
         .await?
         .into_response_with_control();
     if let Some(control) = wrap_control {
-        ctx_guard.request_control(control);
+        ctx.request_control(control);
     }
 
-    run_guard.model_calls += 1;
-    run_guard.steps += 1;
-    status_guard.model_calls = run_guard.model_calls;
+    run.model_calls += 1;
+    run.steps += 1;
+    status.model_calls = run.model_calls;
     if let Some(usage) = response.usage {
-        run_guard.usage.record(usage);
-        loop_state.usage = run_guard.usage;
+        run.usage.record(usage);
+        loop_state.usage = run.usage;
     }
 
-    rt.harness
+    harness
         .middleware()
-        .run_after_model(&mut ctx_guard, &rt.app_state, &mut response)
+        .run_after_model(ctx, app_state, &mut response)
         .await?;
 
-    let completed_record = ctx_guard.emit(AgentEvent::ModelCompleted {
+    let completed_record = ctx.emit(AgentEvent::ModelCompleted {
         call_id: call_id.clone(),
         started_at_ms: None,
         usage: response.usage,
         input: None,
         output: None,
     });
-    status_guard.set_last_event(completed_record.id);
+    status.set_last_event(completed_record.id);
 
-    loop_state.model_calls = run_guard.model_calls;
+    loop_state.model_calls = run.model_calls;
     loop_state.last_call_id = Some(call_id.to_string());
     loop_state
         .messages
@@ -319,8 +317,8 @@ where
         ));
     loop_state.turn += 1;
 
-    if let Some(control) = ctx_guard.take_control() {
-        return apply_control(&mut ctx_guard, &mut loop_state, control, node::MODEL);
+    if let Some(control) = ctx.take_control() {
+        return apply_control(ctx, &mut loop_state, control, node::MODEL);
     }
 
     let tool_calls = response.tool_calls().to_vec();
