@@ -128,7 +128,28 @@ struct PreparedAgentTurn<State: Send + Sync> {
     run_id: crate::ids::RunId,
     input_text: String,
     messages: Vec<tinyinference_llm::message::Message>,
-    progress: Option<tokio::sync::mpsc::Sender<ProgressEvent>>,
+    progress: Option<ProgressSender>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ProgressSender {
+    tx: tokio::sync::mpsc::Sender<ProgressEvent>,
+    nonterminal_slots: std::sync::Arc<tokio::sync::Semaphore>,
+}
+
+impl ProgressSender {
+    fn send_nonterminal(&self, event: ProgressEvent) {
+        let Ok(permit) = self.nonterminal_slots.clone().try_acquire_owned() else {
+            return;
+        };
+        if self.tx.try_send(event).is_ok() {
+            permit.forget();
+        }
+    }
+
+    fn send_terminal(&self, event: ProgressEvent) {
+        let _ = self.tx.try_send(event);
+    }
 }
 
 impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
@@ -450,11 +471,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let Some(progress) = binding.progress else {
             return;
         };
-        if progress.try_send(event).is_err() {
-            tinyagents_tracing::debug!(
-                "[host] dropping progress event because the bounded queue is full or closed"
-            );
-        }
+        progress.send_nonterminal(event);
     }
 }
 
@@ -484,12 +501,12 @@ async fn finish_host_turn<State: Send + Sync>(
     // consumer completely outside the agent's critical path.
     if let Some(progress) = &prepared.progress {
         if let Some(message) = error {
-            let _ = progress.try_send(ProgressEvent::Error {
+            progress.send_terminal(ProgressEvent::Error {
                 run: prepared.run_id.clone(),
                 message,
             });
         } else {
-            let _ = progress.try_send(ProgressEvent::Finished {
+            progress.send_terminal(ProgressEvent::Finished {
                 run: prepared.run_id.clone(),
                 usage: Some(run.usage.usage),
             });
@@ -533,7 +550,7 @@ async fn finish_host_turn<State: Send + Sync>(
 
 fn start_progress_dispatcher(
     sink: Option<std::sync::Arc<dyn crate::host::ProgressSink>>,
-) -> Option<tokio::sync::mpsc::Sender<ProgressEvent>> {
+) -> Option<ProgressSender> {
     let sink = sink?;
     let handle = tokio::runtime::Handle::try_current().ok()?;
     // Progress is observational. Bound it so a slow sink cannot retain every
@@ -541,13 +558,21 @@ fn start_progress_dispatcher(
     // One slot is reserved for the single terminal outcome. Producers use
     // `try_send` for ordinary progress, so at most 128 nonterminal events can
     // fill before finalization claims the remaining slot.
-    let (tx, mut rx) = tokio::sync::mpsc::channel(129);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ProgressEvent>(129);
+    let nonterminal_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(128));
+    let released_slots = nonterminal_slots.clone();
     handle.spawn(async move {
         while let Some(event) = rx.recv().await {
+            if !event.is_terminal() {
+                released_slots.add_permits(1);
+            }
             sink.emit(event).await;
         }
     });
-    Some(tx)
+    Some(ProgressSender {
+        tx,
+        nonterminal_slots,
+    })
 }
 
 async fn screen_user_messages<State: Send + Sync>(

@@ -50,7 +50,7 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
     /// list is a host boundary enforced for schemas and dispatch alike.
     pub(crate) allowed_tools: HashSet<String>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
-    pub(crate) progress: Option<tokio::sync::mpsc::Sender<crate::host::ProgressEvent>>,
+    pub(crate) progress: Option<super::agent::ProgressSender>,
 }
 
 impl<State: Send + Sync> Clone for HostRunBinding<State> {

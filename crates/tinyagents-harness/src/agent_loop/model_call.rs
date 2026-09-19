@@ -826,20 +826,51 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
     ///   fail-closed behaviour `run_loop` already has for a pre-wrap override.
     ///   Silently substituting a different model is the one outcome that is
     ///   never acceptable.
-    fn rebind(
+    async fn rebind(
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
-    ) -> ResolvedModelBinding<State> {
+    ) -> Result<ResolvedModelBinding<State>> {
         let captured = || ResolvedModelBinding {
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
         };
         let Some(requested) = request.model.as_deref() else {
-            return captured();
+            return Ok(captured());
         };
+        if let Some(host_run) = self.harness.host_run_binding(ctx.instance_id())? {
+            let mut resolve = crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
+            if ctx.depth() == 0 {
+                resolve = resolve.as_team_lead();
+            }
+            if let Some(role) = host_run.role.clone() {
+                resolve = resolve.with_role(role);
+            }
+            if let Some(pin) = request.model.clone().or(host_run.model_pin.clone()) {
+                resolve = resolve.with_model_pin(pin);
+            }
+            if let Some(capabilities) = request.required_capabilities.clone() {
+                resolve = resolve.with_required_capabilities(capabilities);
+            }
+            let model = host_run.host.models.resolve(&resolve).await.map_err(|error| {
+                tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] wrap model resolution failed");
+                TinyAgentsError::Model("host model resolution failed".to_string())
+            })?;
+            let name = model
+                .profile()
+                .and_then(|profile| profile.model.clone())
+                .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
+            return Ok(ResolvedModelBinding {
+                resolved: ResolvedModel {
+                    name,
+                    requested: resolve.model_pin,
+                    source: ModelResolutionSource::RequestOverride,
+                },
+                model,
+            });
+        }
         if requested == self.resolved.name {
-            return captured();
+            return Ok(captured());
         }
         match self.harness.models.resolve_request(request, None, None) {
             Some(binding)
@@ -852,7 +883,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                     to = %binding.resolved.name,
                     "[model] wrap layer overrode the model; re-resolved the binding"
                 );
-                binding
+                Ok(binding)
             }
             _ => {
                 tinyagents_tracing::warn!(
@@ -865,7 +896,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                     requested: requested.to_string(),
                     resolved: self.resolved.name.clone(),
                 });
-                captured()
+                Ok(captured())
             }
         }
     }
@@ -881,7 +912,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
-            let binding = self.rebind(ctx, &request);
+            let binding = self.rebind(ctx, &request).await?;
             self.harness
                 .invoke_model_with_retry(
                     state,

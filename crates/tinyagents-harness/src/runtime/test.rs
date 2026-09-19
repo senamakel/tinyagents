@@ -49,6 +49,7 @@ struct RetryableClassifier;
 struct LeadRecordingResolver {
     model: Arc<dyn ChatModel<()>>,
     team_lead_flags: Mutex<Vec<bool>>,
+    model_pins: Mutex<Vec<Option<String>>>,
 }
 
 struct RecordingBudget {
@@ -146,6 +147,10 @@ impl crate::host::ModelResolver<()> for LeadRecordingResolver {
             .lock()
             .expect("resolver lock")
             .push(request.is_team_lead);
+        self.model_pins
+            .lock()
+            .expect("resolver lock")
+            .push(request.model_pin.clone());
         Ok(Arc::clone(&self.model))
     }
 }
@@ -524,6 +529,7 @@ async fn hosted_model_resolution_marks_only_root_contexts_as_team_leads() {
     let resolver = Arc::new(LeadRecordingResolver {
         model: model.clone(),
         team_lead_flags: Mutex::new(Vec::new()),
+        model_pins: Mutex::new(Vec::new()),
     });
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
