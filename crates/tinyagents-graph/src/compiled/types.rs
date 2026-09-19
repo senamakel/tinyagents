@@ -94,6 +94,15 @@ pub struct CompiledGraph<State, Update> {
     pub(crate) node_policies: Arc<HashMap<NodeId, NodePolicy<State, Update>>>,
     /// Graph-wide default execution policy (`GraphBuilder::set_node_defaults`).
     pub(crate) node_defaults: Option<Arc<NodePolicy<State, Update>>>,
+    /// Backend for opt-in per-node result caching; see
+    /// [`CompiledGraph::with_task_cache`]. `None` (default) disables caching
+    /// entirely, even for nodes with a [`NodeCachePolicy`] installed via
+    /// [`CompiledGraph::with_cached_node`].
+    pub(crate) task_cache: Option<Arc<dyn crate::cache::TaskCache>>,
+    /// Per-node cache policy plus the type-erased `Update` codec installed by
+    /// [`CompiledGraph::with_cached_node`] (the entry point that supplies the
+    /// `Serialize + DeserializeOwned` bound this struct itself is free of).
+    pub(crate) cached_nodes: Arc<HashMap<NodeId, crate::cache::CachedNode<State, Update>>>,
 }
 
 impl<State, Update> std::fmt::Debug for CompiledGraph<State, Update> {
