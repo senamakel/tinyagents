@@ -213,6 +213,20 @@ fn barriers_from_persisted(persisted: &[BarrierArrivals]) -> HashMap<NodeId, Has
         .collect()
 }
 
+/// Projects the live per-node visit-count map onto a JSON object for
+/// embedding into a checkpoint's `metadata` (see the I3 finding in
+/// `docs/runtime-comparison/code-review-graph.md`: without this, per-node
+/// visit caps reset on every resume instead of bounding the whole thread's
+/// lifetime). `NodeId` is not itself a valid `serde_json` map key type, so
+/// this builds the object directly rather than serializing the `HashMap`.
+fn node_visits_to_json(node_visits: &HashMap<NodeId, usize>) -> serde_json::Value {
+    node_visits
+        .iter()
+        .map(|(node, count)| (node.to_string(), serde_json::json!(count)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into()
+}
+
 /// Maps an [`Activation`] slice to its node ids (for events, status, and
 /// checkpoint records, which are node-keyed).
 fn activation_nodes(active: &[Activation]) -> Vec<NodeId> {
