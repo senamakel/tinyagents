@@ -435,21 +435,45 @@ impl Parser<'_> {
             ));
         };
 
+        // Duplicate single-value node items are a parse error, not
+        // last-wins: without this, a model-authored revision that adds a
+        // second `model "x"` line changes behaviour silently (M1 in
+        // `docs/runtime-comparison/code-review-workspace.md`).
+        let dup = |this: &Self, span: Span, item: &str| -> Result<()> {
+            Err(this.error(format!("duplicate `{item}` in node body"), span))
+        };
+
         match keyword.as_str() {
             "kind" => {
+                let span = tok.span;
                 self.advance();
                 let (k, _) = self.expect_ident()?;
+                if node.kind.is_some() {
+                    return dup(self, span, "kind");
+                }
                 node.kind = Some(k);
             }
             "model" => {
+                let span = tok.span;
                 self.advance();
-                node.model = Some(self.expect_string()?);
+                let value = self.expect_string()?;
+                if node.model.is_some() {
+                    return dup(self, span, "model");
+                }
+                node.model = Some(value);
             }
             // `prompt` and `system` both populate the node prompt; `system`
-            // is accepted as an alias for forward compatibility.
+            // is accepted as an alias for forward compatibility, so a
+            // `prompt` followed by a `system` (or vice versa) is still a
+            // duplicate of the same underlying field.
             "prompt" | "system" => {
+                let span = tok.span;
                 self.advance();
-                node.prompt = Some(self.expect_string()?);
+                let value = self.expect_string()?;
+                if node.prompt.is_some() {
+                    return dup(self, span, "prompt");
+                }
+                node.prompt = Some(value);
             }
             "tools" => {
                 self.advance();
@@ -464,24 +488,49 @@ impl Parser<'_> {
                 node.routes = self.parse_routes_block()?;
             }
             "agent" => {
+                let span = tok.span;
                 self.advance();
-                node.agent = Some(self.expect_string()?);
+                let value = self.expect_string()?;
+                if node.agent.is_some() {
+                    return dup(self, span, "agent");
+                }
+                node.agent = Some(value);
             }
             "graph" => {
+                let span = tok.span;
                 self.advance();
-                node.graph = Some(self.expect_string()?);
+                let value = self.expect_string()?;
+                if node.graph.is_some() {
+                    return dup(self, span, "graph");
+                }
+                node.graph = Some(value);
             }
             "script" => {
+                let span = tok.span;
                 self.advance();
-                node.script = Some(self.expect_string()?);
+                let value = self.expect_string()?;
+                if node.script.is_some() {
+                    return dup(self, span, "script");
+                }
+                node.script = Some(value);
             }
             "input" => {
+                let span = tok.span;
                 self.advance();
-                node.input = Some(self.expect_string()?);
+                let value = self.expect_string()?;
+                if node.input.is_some() {
+                    return dup(self, span, "input");
+                }
+                node.input = Some(value);
             }
             "command" => {
+                let span = tok.span;
                 self.advance();
-                node.command = Some(self.parse_command_block()?);
+                let value = self.parse_command_block()?;
+                if node.command.is_some() {
+                    return dup(self, span, "command");
+                }
+                node.command = Some(value);
             }
             "sends" => {
                 self.advance();
@@ -496,13 +545,22 @@ impl Parser<'_> {
                 node.options = self.parse_string_list()?;
             }
             "checkpoint" => {
+                let span = tok.span;
                 self.advance();
                 let (policy, _) = self.expect_ident()?;
+                if node.checkpoint.is_some() {
+                    return dup(self, span, "checkpoint");
+                }
                 node.checkpoint = Some(policy);
             }
             "timeout" => {
+                let span = tok.span;
                 self.advance();
-                node.timeout = Some(self.parse_literal()?);
+                let value = self.parse_literal()?;
+                if node.timeout.is_some() {
+                    return dup(self, span, "timeout");
+                }
+                node.timeout = Some(value);
             }
             "retry" => {
                 self.advance();
@@ -513,8 +571,13 @@ impl Parser<'_> {
                 node.metadata = self.parse_defaults_block()?;
             }
             "steering" => {
+                let span = tok.span;
                 self.advance();
-                node.steering = Some(self.parse_steering_block()?);
+                let value = self.parse_steering_block()?;
+                if node.steering.is_some() {
+                    return dup(self, span, "steering");
+                }
+                node.steering = Some(value);
             }
             other => {
                 return Err(self.error(format!("unknown node item `{other}`"), tok.span));
