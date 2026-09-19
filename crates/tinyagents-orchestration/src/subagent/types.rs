@@ -6,20 +6,34 @@ use tinyinference_llm::{message::Message, usage::UsageTotals};
 
 /// A host-provided request to run a task through a subagent.
 ///
-/// `parent_run` is live execution data, deliberately not a serializable host
-/// DTO. The planner must derive the child's fully resolved context explicitly
-/// instead of consulting task-local state.
-pub struct SubagentRequest<C = ()> {
-    /// Host-local task id. Its durable lifecycle identity is scoped by
-    /// [`SubagentTaskKey`], derived from this request's parent run.
-    pub task_id: String,
-    /// The explicit live parent context from which a child context is derived.
-    pub parent_run: RunContext<C>,
-    /// Host-visible task input that the planner converts into model messages.
+/// `run_context` is owned live execution data, deliberately not a serializable
+/// host DTO. It may already be a lineage-preserving child created from a
+/// borrowed parent. Durable identity is carried separately in `task_key` so a
+/// continuation can use a fresh execution context without changing its
+/// original persistence key.
+pub struct SubagentRequest<C = (), H = ()> {
+    task_key: SubagentTaskKey,
+    run_context: RunContext<C>,
+    host_request: H,
+    input: String,
+    resume: Option<SubagentResume>,
+}
+
+/// One-way planner view of a validated request.
+///
+/// This is intentionally produced only by [`SubagentRequest::into_parts`]; it
+/// cannot be turned back into a lifecycle request without a validated
+/// constructor.
+pub struct SubagentRequestParts<C = (), H = ()> {
+    /// Durable identity selected by the validated constructor.
+    pub task_key: SubagentTaskKey,
+    /// Owned execution context for this invocation.
+    pub run_context: RunContext<C>,
+    /// Opaque host options for this invocation.
+    pub host_request: H,
+    /// Host-visible task input.
     pub input: String,
-    /// Optional host-owned conversation thread correlation id.
-    pub thread_id: Option<String>,
-    /// A caller-supplied checkpoint. When absent the driver asks persistence.
+    /// Loaded or caller-supplied resume state.
     pub resume: Option<SubagentResume>,
 }
 
@@ -41,18 +55,136 @@ pub struct SubagentTaskKey {
     pub task_id: String,
 }
 
-impl<C> SubagentRequest<C> {
-    /// Derives the durable lifecycle key without exposing host context data.
-    pub fn task_key(&self) -> SubagentTaskKey {
+impl SubagentTaskKey {
+    /// Creates an initial durable identity from a context at task creation.
+    /// Continuations must retain this returned key rather than derive another
+    /// one from their fresh execution context.
+    pub fn from_context<C>(
+        run_context: &RunContext<C>,
+        task_id: impl Into<String>,
+        thread_id: Option<String>,
+    ) -> Self {
+        let task_id = task_id.into();
         SubagentTaskKey {
-            root_run_id: self.parent_run.lineage().root_run_id.as_str().to_owned(),
-            parent_run_id: self.parent_run.run_id().as_str().to_owned(),
-            thread_id: self
-                .thread_id
-                .clone()
-                .or_else(|| self.parent_run.thread_id().map(|id| id.as_str().to_owned())),
-            task_id: self.task_id.clone(),
+            root_run_id: run_context.lineage().root_run_id.as_str().to_owned(),
+            parent_run_id: run_context.run_id().as_str().to_owned(),
+            thread_id: thread_id
+                .or_else(|| run_context.thread_id().map(|id| id.as_str().to_owned())),
+            task_id,
         }
+    }
+}
+
+impl<C, H> SubagentRequest<C, H> {
+    /// Creates a fresh lifecycle from an actual parent and its owned child.
+    ///
+    /// Both `RunConfig` run ids must be durable unique host ids; this API can
+    /// reject an equal parent/child id but cannot prove global uniqueness.
+    pub fn fresh_from_parent<P>(
+        parent: &RunContext<P>,
+        owned_child: RunContext<C>,
+        task_id: impl Into<String>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        let task_key = SubagentTaskKey::from_context(parent, task_id, None);
+        Self::validate_key(&task_key)?;
+        if owned_child.lineage().root_run_id != parent.lineage().root_run_id
+            || owned_child.lineage().parent_run_id.as_ref() != Some(parent.run_id())
+            || owned_child.run_id() == parent.run_id()
+        {
+            return Err(SubagentError::InvalidRequest(
+                "owned execution context is not a distinct direct child of the supplied parent"
+                    .into(),
+            ));
+        }
+        Self::validate_thread(&task_key, &owned_child)?;
+        Ok(Self {
+            task_key,
+            run_context: owned_child,
+            host_request,
+            input: input.into(),
+            resume,
+        })
+    }
+
+    /// Continues an authorized durable lifecycle with a fresh owned context.
+    ///
+    /// Hosts must authorize and recover `original_key` from their own durable
+    /// record; do not derive a replacement key from the fresh context.
+    pub fn continue_with_key(
+        original_key: SubagentTaskKey,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::validate_key(&original_key)?;
+        Self::validate_thread(&original_key, &fresh_owned_context)?;
+        Ok(Self {
+            task_key: original_key,
+            run_context: fresh_owned_context,
+            host_request,
+            input: input.into(),
+            resume,
+        })
+    }
+
+    /// Returns the sole durable identity for this lifecycle.
+    pub fn task_key(&self) -> &SubagentTaskKey {
+        &self.task_key
+    }
+
+    /// Returns the durable task id, derived from [`Self::task_key`].
+    pub fn task_id(&self) -> &str {
+        &self.task_key.task_id
+    }
+
+    /// Borrows the owned execution context before the request is consumed.
+    pub fn run_context(&self) -> &RunContext<C> {
+        &self.run_context
+    }
+
+    pub(crate) fn resume(&self) -> Option<&SubagentResume> {
+        self.resume.as_ref()
+    }
+
+    pub(crate) fn set_resume(&mut self, resume: Option<SubagentResume>) {
+        self.resume = resume;
+    }
+
+    /// Consumes this validated request for planner use.
+    pub fn into_parts(self) -> SubagentRequestParts<C, H> {
+        SubagentRequestParts {
+            task_key: self.task_key,
+            run_context: self.run_context,
+            host_request: self.host_request,
+            input: self.input,
+            resume: self.resume,
+        }
+    }
+
+    fn validate_key(key: &SubagentTaskKey) -> Result<(), SubagentError> {
+        if key.root_run_id.is_empty() || key.parent_run_id.is_empty() || key.task_id.is_empty() {
+            return Err(SubagentError::InvalidRequest(
+                "durable task keys require non-empty root, parent, and task ids".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_thread(
+        key: &SubagentTaskKey,
+        context: &RunContext<C>,
+    ) -> Result<(), SubagentError> {
+        let context_thread = context.thread_id().map(|thread| thread.as_str());
+        if context_thread.is_some() && context_thread != key.thread_id.as_deref() {
+            return Err(SubagentError::InvalidRequest(
+                "execution context thread disagrees with durable task key".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -185,6 +317,8 @@ pub struct PersistedSubagentPause {
 /// owns them; the driver never flattens them into an untyped host error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubagentError {
+    /// A supplied context or durable key violates neutral lifecycle invariants.
+    InvalidRequest(String),
     /// The planner rejected or could not resolve a request.
     Planning(String),
     /// The executor could not finish a prepared run.
@@ -209,6 +343,7 @@ pub enum SubagentError {
 impl std::fmt::Display for SubagentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidRequest(message) => write!(f, "invalid subagent request: {message}"),
             Self::Planning(message) => write!(f, "subagent planning failed: {message}"),
             Self::Execution(message) => write!(f, "subagent execution failed: {message}"),
             Self::Persistence(message) => write!(f, "subagent persistence failed: {message}"),

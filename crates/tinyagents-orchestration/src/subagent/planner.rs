@@ -8,10 +8,10 @@ use super::{PreparedSubagent, SubagentError, SubagentRequest};
 /// lineage and tool policy. Returning a plan is intentionally all-or-nothing:
 /// the generic driver cannot fill missing host data with defaults.
 #[async_trait]
-pub trait SubagentPlanner<C: Send + 'static = ()>: Send + Sync {
+pub trait SubagentPlanner<C: Send + 'static = (), H: Send + 'static = ()>: Send + Sync {
     /// Resolves one request before any execution or terminal persistence.
     async fn prepare(
         &self,
-        request: SubagentRequest<C>,
+        request: SubagentRequest<C, H>,
     ) -> Result<PreparedSubagent<C>, SubagentError>;
 }

@@ -48,12 +48,40 @@ struct FakePlanner {
     actions: Arc<Mutex<Vec<Action>>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HostRequest {
+    label: String,
+}
+
+struct PayloadPlanner {
+    payloads: Mutex<Vec<HostRequest>>,
+}
+
+#[async_trait]
+impl SubagentPlanner<String, HostRequest> for PayloadPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<String, HostRequest>,
+    ) -> Result<PreparedSubagent<String>, SubagentError> {
+        let request = request.into_parts();
+        self.payloads.lock().unwrap().push(request.host_request);
+        Ok(PreparedSubagent {
+            task_id: request.task_key.task_id,
+            agent_key: "payload-agent".into(),
+            input: vec![Message::user(request.input)],
+            tools: ToolSnapshot::new(vec![]).unwrap(),
+            run_context: request.run_context,
+        })
+    }
+}
+
 #[async_trait]
 impl SubagentPlanner<String> for FakePlanner {
     async fn prepare(
         &self,
         request: SubagentRequest<String>,
     ) -> Result<PreparedSubagent<String>, SubagentError> {
+        let request = request.into_parts();
         *self.calls.lock().unwrap() += 1;
         *self.saw_resume.lock().unwrap() = request.resume.is_some();
         self.seen_resumes
@@ -65,11 +93,11 @@ impl SubagentPlanner<String> for FakePlanner {
             return Err(SubagentError::Planning("rejected".into()));
         }
         Ok(PreparedSubagent {
-            task_id: request.task_id,
+            task_id: request.task_key.task_id,
             agent_key: "resolved-agent".into(),
             input: vec![Message::user(request.input)],
             tools: ToolSnapshot::new(vec![]).unwrap(),
-            run_context: request.parent_run,
+            run_context: request.run_context,
         })
     }
 }
@@ -77,6 +105,7 @@ impl SubagentPlanner<String> for FakePlanner {
 struct FakeExecutor {
     calls: Mutex<usize>,
     context_ids: Mutex<Vec<u64>>,
+    root_run_ids: Mutex<Vec<String>>,
     context_cancellations: Mutex<Vec<CancellationToken>>,
     mode: ExecutorMode,
     started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -94,6 +123,15 @@ impl SubagentExecutor<String> for FakeExecutor {
             .lock()
             .unwrap()
             .push(execution.prepared.run_context.instance_id());
+        self.root_run_ids.lock().unwrap().push(
+            execution
+                .prepared
+                .run_context
+                .lineage()
+                .root_run_id
+                .as_str()
+                .to_owned(),
+        );
         self.context_cancellations
             .lock()
             .unwrap()
@@ -215,20 +253,23 @@ impl SubagentPersistence for FakePersistence {
 }
 
 fn request(task_id: &str, data: &str) -> SubagentRequest<String> {
-    request_with_parent(
-        task_id,
-        RunContext::new(RunConfig::new(format!("run-{task_id}")), data.into()),
-    )
+    let parent = RunContext::new(RunConfig::new(format!("parent-{task_id}")), data.to_owned());
+    let child = parent
+        .child(RunConfig::new(format!("run-{task_id}")), data.to_owned())
+        .unwrap();
+    SubagentRequest::fresh_from_parent(&parent, child, task_id, (), "do work", None).unwrap()
 }
 
-fn request_with_parent(task_id: &str, parent_run: RunContext<String>) -> SubagentRequest<String> {
-    SubagentRequest {
-        task_id: task_id.into(),
-        parent_run,
-        input: "do work".into(),
-        thread_id: Some("thread-1".into()),
-        resume: None,
-    }
+fn request_with_parent(task_id: &str, run_context: RunContext<String>) -> SubagentRequest<String> {
+    let task_key = SubagentTaskKey::from_context(&run_context, task_id, Some("thread-1".into()));
+    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None).unwrap()
+}
+
+fn continuation_request(
+    task_key: SubagentTaskKey,
+    run_context: RunContext<String>,
+) -> SubagentRequest<String> {
+    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None).unwrap()
 }
 
 fn driver(
@@ -257,6 +298,7 @@ fn fakes(mode: ExecutorMode) -> Fakes {
         Arc::new(FakeExecutor {
             calls: Mutex::new(0),
             context_ids: Mutex::new(Vec::new()),
+            root_run_ids: Mutex::new(Vec::new()),
             context_cancellations: Mutex::new(Vec::new()),
             mode,
             started: Mutex::new(None),
@@ -328,12 +370,13 @@ impl SubagentPlanner<String> for MismatchedPlanner {
         &self,
         request: SubagentRequest<String>,
     ) -> Result<PreparedSubagent<String>, SubagentError> {
+        let request = request.into_parts();
         Ok(PreparedSubagent {
             task_id: "other-task".into(),
             agent_key: "resolved-agent".into(),
             input: vec![Message::user(request.input)],
             tools: ToolSnapshot::new(vec![]).unwrap(),
-            run_context: request.parent_run,
+            run_context: request.run_context,
         })
     }
 }
@@ -422,13 +465,17 @@ impl SubagentExecutor<String> for NestedExecutor {
                 .expect("nested executor is attached to its driver");
             let child = child_driver
                 .run(
-                    SubagentRequest {
-                        task_id: "child".into(),
-                        parent_run: execution.prepared.run_context,
-                        input: "nested work".into(),
-                        thread_id: None,
-                        resume: None,
-                    },
+                    SubagentRequest::continue_with_key(
+                        SubagentTaskKey::from_context(
+                            &execution.prepared.run_context,
+                            "child",
+                            None,
+                        ),
+                        execution.prepared.run_context,
+                        (),
+                        "nested work",
+                        None,
+                    )?,
                     execution.cancellation,
                 )
                 .await?;
@@ -487,7 +534,7 @@ async fn planner_rejection_does_not_execute_or_persist_terminal_state() {
 async fn prepared_context_identity_reaches_executor() {
     let (planner, executor, persistence, _) = fakes(ExecutorMode::Completed);
     let incoming = request("task", "identity");
-    let expected = incoming.parent_run.instance_id();
+    let expected = incoming.run_context().instance_id();
     let outcome = driver(planner, executor.clone(), persistence)
         .run(incoming, CancellationToken::new())
         .await
@@ -495,6 +542,58 @@ async fn prepared_context_identity_reaches_executor() {
 
     assert_eq!(outcome.status, SubagentStatus::Completed);
     assert_eq!(*executor.context_ids.lock().unwrap(), vec![expected]);
+}
+
+#[tokio::test]
+async fn caller_owned_child_context_keeps_its_lineage_into_execution() {
+    let (planner, executor, persistence, _) = fakes(ExecutorMode::Completed);
+    let root = RunContext::new(RunConfig::new("root-lineage"), "root".to_owned());
+    let child = root
+        .child(RunConfig::new("owned-child"), "child".to_owned())
+        .unwrap();
+    driver(planner, executor.clone(), persistence)
+        .run(
+            request_with_parent("lineage", child),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(*executor.root_run_ids.lock().unwrap(), vec!["root-lineage"]);
+}
+
+#[tokio::test]
+async fn opaque_host_request_reaches_the_planner_unchanged() {
+    let (_, executor, persistence, _) = fakes(ExecutorMode::Completed);
+    let planner = Arc::new(PayloadPlanner {
+        payloads: Mutex::new(Vec::new()),
+    });
+    let context = RunContext::new(RunConfig::new("payload-run"), "ctx".into());
+    let key = SubagentTaskKey::from_context(&context, "payload", Some("thread-1".into()));
+    let request = SubagentRequest::continue_with_key(
+        key,
+        context,
+        HostRequest {
+            label: "per-call options".into(),
+        },
+        "do work",
+        None,
+    )
+    .unwrap();
+    SubagentDriver::new(SubagentCapabilities {
+        planner: Some(planner.clone()),
+        executor: Some(executor),
+        persistence: Some(persistence),
+    })
+    .unwrap()
+    .run(request, CancellationToken::new())
+    .await
+    .unwrap();
+    assert_eq!(
+        *planner.payloads.lock().unwrap(),
+        vec![HostRequest {
+            label: "per-call options".into()
+        }]
+    );
 }
 
 #[tokio::test]
@@ -633,6 +732,43 @@ async fn duplicate_task_id_returns_recorded_outcome_without_second_execution_or_
     assert_eq!(*planner.calls.lock().unwrap(), 1);
     assert_eq!(*executor.calls.lock().unwrap(), 1);
     assert_eq!(persistence.outcomes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn fresh_request_rejects_an_unrelated_or_thread_mismatched_context() {
+    let parent = RunContext::new(
+        RunConfig::new("parent").with_thread("thread-a"),
+        "parent".to_owned(),
+    );
+    let unrelated = RunContext::new(
+        RunConfig::new("unrelated").with_thread("thread-a"),
+        "other".to_owned(),
+    );
+    assert!(matches!(
+        SubagentRequest::fresh_from_parent(&parent, unrelated, "task", (), "input", None),
+        Err(SubagentError::InvalidRequest(_))
+    ));
+
+    let wrong_thread_child = parent
+        .child(
+            RunConfig::new("wrong-thread-child").with_thread("thread-b"),
+            "child".to_owned(),
+        )
+        .unwrap();
+    assert!(matches!(
+        SubagentRequest::fresh_from_parent(&parent, wrong_thread_child, "task", (), "input", None,),
+        Err(SubagentError::InvalidRequest(_))
+    ));
+
+    let key = SubagentTaskKey::from_context(&parent, "task", None);
+    let fresh_wrong_thread = RunContext::new(
+        RunConfig::new("continuation").with_thread("thread-b"),
+        "fresh".to_owned(),
+    );
+    assert!(matches!(
+        SubagentRequest::continue_with_key(key, fresh_wrong_thread, (), "input", None),
+        Err(SubagentError::InvalidRequest(_))
+    ));
 }
 
 #[tokio::test]
@@ -823,6 +959,43 @@ async fn awaiting_input_is_not_cached_and_the_next_call_resumes_to_completion() 
         ]
     );
     assert_eq!(persistence.outcomes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn continuation_keeps_original_key_with_a_fresh_owned_context() {
+    let (planner, _, persistence, actions) = fakes(ExecutorMode::Pause);
+    let executor = Arc::new(PauseThenCompleteExecutor {
+        calls: Mutex::new(0),
+        actions,
+    });
+    let lifecycle = driver(planner.clone(), executor, persistence.clone());
+    let original = RunContext::new(RunConfig::new("original-run"), "first".into());
+    let key = SubagentTaskKey::from_context(&original, "continued", Some("thread-1".into()));
+    lifecycle
+        .run(
+            continuation_request(key.clone(), original),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let fresh = RunContext::new(RunConfig::new("fresh-turn-context"), "second".into());
+    let completed = lifecycle
+        .run(
+            continuation_request(key.clone(), fresh),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.status, SubagentStatus::Completed);
+    assert_eq!(*planner.seen_resumes.lock().unwrap(), vec![false, true]);
+    assert!(
+        persistence
+            .keys
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|seen| seen == &key)
+    );
 }
 
 #[tokio::test]

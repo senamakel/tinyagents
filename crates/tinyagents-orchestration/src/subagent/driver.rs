@@ -12,9 +12,9 @@ use tinyagents_harness::CancellationToken;
 ///
 /// Hosts that cannot provide every seam must receive a typed construction error
 /// rather than accidentally executing a partial lifecycle.
-pub struct SubagentCapabilities<C: Send + 'static = ()> {
+pub struct SubagentCapabilities<C: Send + 'static = (), H: Send + 'static = ()> {
     /// Host planner, which resolves policy and explicit execution inputs.
-    pub planner: Option<Arc<dyn SubagentPlanner<C>>>,
+    pub planner: Option<Arc<dyn SubagentPlanner<C, H>>>,
     /// Host executor, which drives the prepared run.
     pub executor: Option<Arc<dyn SubagentExecutor<C>>>,
     /// Host persistence for resume and one lifecycle record.
@@ -26,8 +26,8 @@ pub struct SubagentCapabilities<C: Send + 'static = ()> {
 /// Concurrent calls for one scoped task key coalesce, while task ids from
 /// distinct parents, roots, or threads remain independent. Hosts still need
 /// idempotent persistence for multiple processes/drivers.
-pub struct SubagentDriver<C: Send + 'static = ()> {
-    planner: Arc<dyn SubagentPlanner<C>>,
+pub struct SubagentDriver<C: Send + 'static = (), H: Send + 'static = ()> {
+    planner: Arc<dyn SubagentPlanner<C, H>>,
     executor: Arc<dyn SubagentExecutor<C>>,
     persistence: Arc<dyn SubagentPersistence>,
     terminal_outcomes: Mutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
@@ -77,9 +77,9 @@ impl InFlight {
     }
 }
 
-impl<C: Send + 'static> SubagentDriver<C> {
+impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
     /// Validates host capability availability before exposing a runnable driver.
-    pub fn new(capabilities: SubagentCapabilities<C>) -> Result<Self, SubagentError> {
+    pub fn new(capabilities: SubagentCapabilities<C, H>) -> Result<Self, SubagentError> {
         Ok(Self {
             planner: capabilities
                 .planner
@@ -103,10 +103,10 @@ impl<C: Send + 'static> SubagentDriver<C> {
     /// history, usage, and artifact references while changing only the status.
     pub async fn run(
         &self,
-        request: SubagentRequest<C>,
+        request: SubagentRequest<C, H>,
         cancellation: CancellationToken,
     ) -> Result<SubagentOutcome, SubagentError> {
-        let task_key = request.task_key();
+        let task_key = request.task_key().clone();
         if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
             return Ok(outcome);
         }
@@ -151,18 +151,18 @@ impl<C: Send + 'static> SubagentDriver<C> {
 
     async fn run_reserved(
         &self,
-        mut request: SubagentRequest<C>,
+        mut request: SubagentRequest<C, H>,
         task_key: SubagentTaskKey,
         cancellation: CancellationToken,
     ) -> Result<SubagentOutcome, SubagentError> {
-        let task_id = request.task_id.clone();
+        let task_id = request.task_id().to_owned();
 
         if cancellation.is_cancelled() {
             return self.persist_cancelled(task_key, task_id).await;
         }
 
-        if request.resume.is_none() {
-            request.resume = self.persistence.load(&task_key).await?;
+        if request.resume().is_none() {
+            request.set_resume(self.persistence.load(&task_key).await?);
         }
         if cancellation.is_cancelled() {
             return self.persist_cancelled(task_key, task_id).await;
