@@ -598,6 +598,7 @@ where
             "step": step,
             "recursion": ctx.recursion_meta,
             "child_runs": boundary.child_runs,
+            "node_visits": node_visits_to_json(&ctx.node_visits),
         });
         // Which node of *this* graph paused, as opposed to the (possibly
         // re-emitted, child-owned) `Interrupt::node`. Resume keys the resume
