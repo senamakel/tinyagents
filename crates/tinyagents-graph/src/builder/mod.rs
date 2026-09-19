@@ -15,7 +15,7 @@ mod policy;
 mod types;
 
 pub use policy::{CacheKeyFn, NodeCachePolicy, NodePolicy, OnErrorFn};
-pub(crate) use types::{Branch, BuilderNode, NodeMeta};
+pub(crate) use types::{Branch, BuilderNode, NodeMeta, UpdateCodec};
 pub use types::{
     END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeContext, NodeFuture, NodeHandler,
     Route, RouterFn, START,
@@ -93,6 +93,9 @@ where
             node_meta: HashMap::new(),
             node_policies: HashMap::new(),
             node_defaults: None,
+            interrupt_before: HashSet::new(),
+            interrupt_after: HashSet::new(),
+            update_codec: None,
         }
     }
 
@@ -493,9 +496,68 @@ where
         self
     }
 
-    /// Marks `node` as an interrupt point for the export.
-    pub fn mark_interrupt(mut self, node: impl Into<NodeId>) -> Self {
-        self.node_meta.entry(node.into()).or_default().interrupt = true;
+    /// Marks `node` as an interrupt point: an alias for
+    /// [`Self::interrupt_before`] (the run pauses before `node` executes)
+    /// that also sets the export-facing interrupt marker
+    /// (`NodeInfo::interrupt`). Earlier versions set only the marker; the
+    /// runtime pause is now real.
+    pub fn mark_interrupt(self, node: impl Into<NodeId>) -> Self {
+        self.interrupt_before([node])
+    }
+
+    /// Pauses the run *before* each of `nodes` executes.
+    ///
+    /// When the executor is about to invoke a listed node, it instead
+    /// records an [`Interrupt`](crate::Interrupt) for that activation with
+    /// payload `{"phase": "before"}` (stamped with the task id) and persists
+    /// an interrupt-boundary checkpoint, without calling the handler. The
+    /// handler runs exactly once overall: `resume` re-schedules the paused
+    /// activation and runs it normally, delivering any `Command::resume`
+    /// value on [`NodeContext::resume`]. Requires a checkpointer and a
+    /// thread, like any interrupt. Nodes are validated at [`Self::compile`];
+    /// the export marks them as interrupt points.
+    pub fn interrupt_before(
+        mut self,
+        nodes: impl IntoIterator<Item = impl Into<NodeId>>,
+    ) -> Self {
+        for node in nodes {
+            let node = node.into();
+            self.node_meta.entry(node.clone()).or_default().interrupt = true;
+            self.interrupt_before.insert(node);
+        }
+        self
+    }
+
+    /// Pauses the run *after* each of `nodes` has run, before its result is
+    /// applied.
+    ///
+    /// The handler runs to completion; its `Update`/`Command` is then held
+    /// back from committed state — serialized as a deferred-result write
+    /// (`PendingWrite::interrupt_after`) in the interrupt-boundary
+    /// checkpoint — and an [`Interrupt`](crate::Interrupt) with payload
+    /// `{"phase": "after"}` is returned. The paused run's state (and the
+    /// checkpoint's) therefore does *not* yet include the node's write. On
+    /// `resume`, the executor replays the stored result — applying the
+    /// update through the reducer and honouring the node's `goto` — without
+    /// invoking the handler again, so the handler still runs exactly once.
+    /// A node that itself returns `NodeResult::Interrupt` is not paused a
+    /// second time. Requires `Update: Serialize + DeserializeOwned` (the
+    /// codec for the deferred write), plus a checkpointer and a thread.
+    pub fn interrupt_after(
+        mut self,
+        nodes: impl IntoIterator<Item = impl Into<NodeId>>,
+    ) -> Self
+    where
+        Update: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        if self.update_codec.is_none() {
+            self.update_codec = Some(UpdateCodec::serde());
+        }
+        for node in nodes {
+            let node = node.into();
+            self.node_meta.entry(node.clone()).or_default().interrupt = true;
+            self.interrupt_after.insert(node);
+        }
         self
     }
 
@@ -595,6 +657,11 @@ where
             }
         }
 
+        // interrupt selectors must name real nodes
+        for node in self.interrupt_before.iter().chain(&self.interrupt_after) {
+            self.require_node(node)?;
+        }
+
         // command-routing nodes must not also have static/conditional edges
         for node in &self.command_nodes {
             self.require_node(node)?;
@@ -623,6 +690,9 @@ where
             barrier_reliefs,
             node_policies,
             node_defaults,
+            interrupt_before,
+            interrupt_after,
+            update_codec,
         } = self;
 
         Ok(CompiledGraph::from_parts(
@@ -642,7 +712,8 @@ where
             node_meta,
             barrier_reliefs,
         )
-        .with_node_policies(node_policies, node_defaults))
+        .with_node_policies(node_policies, node_defaults)
+        .with_interrupt_selectors(interrupt_before, interrupt_after, update_codec))
     }
 
     fn require_node(&self, id: &NodeId) -> Result<()> {
