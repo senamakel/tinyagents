@@ -1,6 +1,5 @@
 //! Tests for the [`AgentHarness`] builder and [`RunPolicy`].
 
-use std::collections::HashSet;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
