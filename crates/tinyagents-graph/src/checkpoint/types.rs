@@ -12,6 +12,7 @@
 //! scopes nested subgraph checkpoints so a parent run and the child graphs it
 //! embeds never overwrite each other.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::command::{Interrupt, RouteTarget};
