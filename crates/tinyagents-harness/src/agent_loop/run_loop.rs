@@ -481,6 +481,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 });
             }
 
+            // Cross-provider handoff: rewrite any part of the outgoing
+            // transcript that a mid-session provider/model switch left
+            // unsafe to replay verbatim (foreign signed/redacted thinking,
+            // non-conforming tool-call ids, unsupported images) right before
+            // this request is sent. A no-op (same-origin run, the common
+            // case) allocates nothing — see `handoff_transform`.
+            if let Some(profile) = binding.model.profile() {
+                let target_origin = handoff_transform::target_origin_for(profile);
+                let outcome =
+                    handoff_transform::prepare_for_model(&request.messages, profile, &target_origin);
+                if outcome.changes > 0 {
+                    request.messages = outcome.messages.into_owned();
+                    ctx.emit(AgentEvent::HandoffTransformApplied {
+                        changes: outcome.changes,
+                    });
+                }
+            }
+
             // Resolve the structured-output plan against the resolved model.
             // `Auto` consults the model profile to choose provider-native schema
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
