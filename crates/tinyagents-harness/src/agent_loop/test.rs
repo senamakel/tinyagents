@@ -2296,6 +2296,42 @@ async fn runtime_fallback_skips_capability_ineligible_candidate() {
     );
 }
 
+/// I-2 end-to-end regression: under the default `Auto` text-dialect recovery
+/// policy, a model whose resolved profile reports native tool calling must
+/// never have `<tool_call>` markup it merely quotes — here, inside a fenced
+/// code block explaining the format — executed as a real tool call. Before
+/// the fix, `recover_text_dialect_calls` ran unconditionally whenever the
+/// request offered tools and the provider returned no native calls,
+/// regardless of the model's own advertised capabilities.
+#[tokio::test]
+async fn native_tool_calling_model_does_not_execute_quoted_text_dialect_markup() {
+    let tool = Arc::new(FakeTool::new("shell", "must not run"));
+    let model = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: true,
+            ..ModelProfile::default()
+        },
+        text: "Here is the tool-call format for reference:\n\
+               ```\n\
+               <tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>\n\
+               ```\n",
+        attempts: Mutex::new(0),
+    });
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("native", model.clone());
+    harness.register_tool(tool.clone());
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("how do tool calls work?")])
+        .await
+        .expect("run succeeds with a plain text final answer");
+
+    assert_eq!(*tool.calls.lock().unwrap(), 0, "the quoted call must not run");
+    assert!(run.text().unwrap_or_default().contains("<tool_call>"));
+    assert_eq!(*model.attempts.lock().unwrap(), 1, "no retry/fallback needed");
+}
+
 #[tokio::test]
 async fn invoke_with_status_reports_completed() {
     use crate::ids::{ExecutionStatus, HarnessPhase};
