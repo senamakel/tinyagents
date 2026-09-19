@@ -620,10 +620,7 @@ impl<Ctx> RunContext<Ctx> {
     /// Sets how the agent loop reacts when [`crate::tool::ToolEffectLedger::started`]
     /// itself fails. Defaults to [`crate::tool::LedgerFailure::Abort`].
     #[must_use]
-    pub fn with_tool_effect_ledger_failure(
-        mut self,
-        failure: crate::tool::LedgerFailure,
-    ) -> Self {
+    pub fn with_tool_effect_ledger_failure(mut self, failure: crate::tool::LedgerFailure) -> Self {
         self.tool_effect_ledger_failure = failure;
         self
     }

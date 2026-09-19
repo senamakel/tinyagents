@@ -5064,7 +5064,9 @@ mod tool_effects_test {
                 .lock()
                 .unwrap()
                 .values()
-                .filter(|effect| effect.run_id == run_id && effect.status == ToolEffectStatus::Started)
+                .filter(|effect| {
+                    effect.run_id == run_id && effect.status == ToolEffectStatus::Started
+                })
                 .cloned()
                 .collect())
         }
@@ -5175,8 +5177,8 @@ mod tool_effects_test {
             on_started: Some(started_signal.clone()),
             ..Default::default()
         });
-        let ctx: RunContext<()> =
-            RunContext::new(RunConfig::new("run-crash"), ()).with_tool_effect_ledger(ledger.clone());
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-crash"), ())
+            .with_tool_effect_ledger(ledger.clone());
 
         let harness = Arc::new(harness);
         let run_harness = harness.clone();
@@ -5252,7 +5254,11 @@ mod tool_effects_test {
             "no tool answer appended for a Safe-replay call — the loop must \
              re-execute it"
         );
-        assert!(recorder.kinds().contains(&"tool.effect_reconciled".to_string()));
+        assert!(
+            recorder
+                .kinds()
+                .contains(&"tool.effect_reconciled".to_string())
+        );
         // The ledger row is untouched (still `started`): re-execution will
         // settle it normally through the ordinary started/settled path.
         assert_eq!(
@@ -5304,16 +5310,17 @@ mod tool_effects_test {
 
         assert_eq!(synthesized.len(), 1);
         assert!(matches!(synthesized[0], Message::Tool(_)));
-        assert_eq!(
-            synthesized[0].text(),
-            "interrupted before settlement"
-        );
+        assert_eq!(synthesized[0].text(), "interrupted before settlement");
         assert_eq!(messages.len(), 3, "an interrupted answer was appended");
         assert_eq!(
             ledger.get("run-1", "call-1").unwrap().status,
             ToolEffectStatus::Interrupted
         );
-        assert!(recorder.kinds().contains(&"tool.effect_reconciled".to_string()));
+        assert!(
+            recorder
+                .kinds()
+                .contains(&"tool.effect_reconciled".to_string())
+        );
     }
 
     #[tokio::test]
