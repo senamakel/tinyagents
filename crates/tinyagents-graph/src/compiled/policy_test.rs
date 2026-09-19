@@ -359,7 +359,9 @@ async fn cache_key_receives_send_arg_per_fanout_activation() {
                 resume_by_task: Default::default(),
             }))
         })
-        .add_node("work", move |_s, ctx: NodeContext| {
+        .add_node("work", {
+            let calls = calls.clone();
+            move |_s, ctx: NodeContext| {
             let calls = calls.clone();
             async move {
                 calls.fetch_add(1, AtomicOrdering::SeqCst);
