@@ -563,10 +563,13 @@ where
                 }
                 return Ok(());
             };
-            self.emit(tinyagents_graph::GraphEvent::NodeStarted {
-                node: tinyagents_harness::ids::NodeId::new("run_phase"),
-                step: total_spawned as usize + 1,
-            });
+            self.emit(
+                run_id,
+                tinyagents_graph::GraphEvent::NodeStarted {
+                    node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                    step: total_spawned as usize + 1,
+                },
+            );
             let phase_result = self
                 .run_phase(
                     &run,
