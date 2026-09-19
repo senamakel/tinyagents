@@ -1,3 +1,2 @@
     Blocking waiting for file lock on build directory
-   Compiling tinyagents-graph v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-graph)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.21s
+   Compiling tinyagents-harness v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-harness)
