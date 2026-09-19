@@ -290,6 +290,29 @@ pub(super) const MIGRATIONS: &[&str] = &[
      );
      CREATE INDEX IF NOT EXISTS idx_branch_entries_tip
         ON branch_entries(session_id, tip_id, ordinal);",
+    // ---- 7: tool-effect ledger (B5, see `super::run_ledger::tool_effects`) -
+    //
+    // One row per admitted tool call, written `started` before the call
+    // executes and updated in place to a terminal status
+    // (`completed`/`failed`/`interrupted`) once it settles. A row still
+    // `started` for a run with no live driver is the signature of a crash
+    // between admission and settlement; `list_unresolved_tool_effects` finds
+    // exactly those rows so a resumed run can decide, per tool, whether it is
+    // safe to re-execute (see `tinytools::ToolReplay`).
+    "CREATE TABLE IF NOT EXISTS tool_effects (
+        run_id           TEXT NOT NULL,
+        call_id          TEXT NOT NULL,
+        tool             TEXT NOT NULL,
+        status           TEXT NOT NULL,
+        idempotency_key  TEXT,
+        effect_summary   TEXT,
+        started_at       TEXT NOT NULL,
+        settled_at       TEXT,
+        PRIMARY KEY (run_id, call_id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_tool_effects_status ON tool_effects(run_id, status);
+     CREATE INDEX IF NOT EXISTS idx_tool_effects_idempotency
+        ON tool_effects(idempotency_key);",
 ];
 
 /// Applies every migration newer than the database's recorded schema version.
