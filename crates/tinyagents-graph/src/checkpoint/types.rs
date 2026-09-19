@@ -32,6 +32,22 @@ fn task_id_is_empty(id: &TaskId) -> bool {
     id.as_str().is_empty()
 }
 
+/// The current on-disk checkpoint record shape (checkpoint format v2): a
+/// single `tasks`/`completed` pair replaces the four overlapping v1
+/// projections of pending work (`next_nodes`, `completed_tasks` +
+/// `completed_routes`, `pending_activations`). See the module docs on
+/// [`Checkpoint`] and `docs/modules/graph/checkpointing.md` for the full
+/// decode story.
+pub const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+
+/// `#[serde(default = "..")]` for [`Checkpoint::version`]: a record with no
+/// `version` field on disk predates the field entirely, which is exactly
+/// what checkpoint format v1 (the shape before this constant existed) looked
+/// like.
+fn checkpoint_version_v1() -> u32 {
+    1
+}
+
 /// Why a checkpoint was written.
 ///
 /// Mirrors the documented metadata `source` taxonomy: a checkpoint is produced
