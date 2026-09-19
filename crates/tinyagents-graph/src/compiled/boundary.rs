@@ -149,13 +149,16 @@ where
         }
         let terminal = next.is_empty();
         let checkpoint_id = if persist_now {
+            // Fully routed at this normal boundary, so nothing is left to
+            // carry forward: every completed task's routing is empty.
+            let completed = completed_tasks
+                .iter()
+                .map(|a| crate::checkpoint::CompletedTask::new(a.task_id.clone(), a.node.clone()))
+                .collect();
             let boundary = BoundaryCheckpoint {
                 state,
                 pending: &next,
-                completed_tasks: &completed_tasks,
-                // Fully routed at this normal boundary, so nothing is left
-                // to carry forward.
-                completed_routes: &[],
+                completed,
                 child_runs: sb.child_runs_meta,
             };
             if matches!(self.durability, DurabilityMode::Async) && !terminal {
