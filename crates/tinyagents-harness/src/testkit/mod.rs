@@ -143,6 +143,10 @@ impl<State: Send + Sync> ChatModel<State> for StreamingMock {
         let items = self.items.clone();
         Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
     }
+
+    fn profile(&self) -> Option<&tinyinference_llm::model::ModelProfile> {
+        self.profile.as_ref()
+    }
 }
 
 // ---------------------------------------------------------------------------
