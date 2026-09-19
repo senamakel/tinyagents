@@ -695,15 +695,19 @@ where
         .with_channel_versions(channel_versions)
         .with_channel_deltas(channel_deltas)
         .with_versions_seen(versions_seen)
-        .with_metadata(serde_json::json!({
-            "source": "loop",
-            "step": step,
-            "recursion": ctx.recursion_meta,
-            "child_runs": boundary.child_runs,
-            "failed_node": failed_node.as_str(),
-            "error": error.to_string(),
-            "node_visits": node_visits_to_json(&ctx.node_visits),
-        }));
+        .with_metadata(Self::with_carried_acks(
+            serde_json::json!({
+                "source": "loop",
+                "step": step,
+                "recursion": ctx.recursion_meta,
+                "child_runs": boundary.child_runs,
+                "failed_node": failed_node.as_str(),
+                "error": error.to_string(),
+                "node_visits": node_visits_to_json(&ctx.node_visits),
+            }),
+            ctx,
+            boundary.pending,
+        ));
         let writes = checkpoint.pending_writes.clone();
         let config = CheckpointConfig {
             thread_id: checkpoint.thread_id.clone(),
@@ -860,6 +864,39 @@ where
         out
     }
 
+    /// Stamps `metadata.acknowledged_interrupts` with the executor-injected
+    /// interrupt phases (`"<phase>:<task_id>"`, see
+    /// [`RunCtx::acknowledged_interrupts`]) already acknowledged for any
+    /// task still in `pending`, so they survive this boundary. Without this
+    /// a task that acknowledged its `interrupt_before` pause and then paused
+    /// again (its `interrupt_after`, or an interrupt it emitted itself)
+    /// would be paused *before* a second time on the next resume, since
+    /// resume derives acknowledgements from the latest checkpoint's own
+    /// interrupts. Acks of tasks no longer pending are dropped; the key is
+    /// omitted entirely when nothing carries over.
+    fn with_carried_acks(
+        mut metadata: serde_json::Value,
+        ctx: &RunCtx<'_, State, Update>,
+        pending: &[Activation],
+    ) -> serde_json::Value {
+        let carried: Vec<&String> = ctx
+            .acknowledged_interrupts
+            .iter()
+            .filter(|key| {
+                pending.iter().any(|a| {
+                    key.split_once(':')
+                        .is_some_and(|(_, task)| task == a.task_id.as_str())
+                })
+            })
+            .collect();
+        if !carried.is_empty() {
+            let mut carried: Vec<&String> = carried;
+            carried.sort();
+            metadata["acknowledged_interrupts"] = serde_json::json!(carried);
+        }
+        metadata
+    }
+
     /// Records completion markers for the tasks that finished in the step a
     /// boundary checkpoint closes.
     ///
@@ -925,6 +962,7 @@ where
                     .collect::<Vec<_>>()
             );
         }
+        let metadata = Self::with_carried_acks(metadata, ctx, boundary.pending);
         let pending_writes = Self::completion_writes(&boundary.completed, &boundary.task_writes);
         let (channel_versions, channel_deltas, versions_seen) =
             self.channel_checkpoint_fields(ctx, boundary.state);

@@ -440,3 +440,47 @@ async fn retry_without_a_resume_value_skips_schema_validation() {
     let again = graph.retry("retry").await.unwrap();
     assert!(again.is_interrupted());
 }
+
+#[tokio::test]
+async fn interrupt_before_ack_survives_a_later_node_emitted_pause() {
+    // `b` is `interrupt_before` *and* emits its own interrupt on its first
+    // real run: the executor's `before` pause must not fire again after the
+    // node's own pause is resumed.
+    let b_runs = Arc::new(AtomicUsize::new(0));
+    let runs = b_runs.clone();
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("b", move |s, ctx: NodeContext| {
+            let runs = runs.clone();
+            async move {
+                runs.fetch_add(1, AtomicOrdering::SeqCst);
+                match ctx.resume {
+                    Some(_) => Ok(NodeResult::Update(s + 10)),
+                    None => Ok(NodeResult::Interrupt(Interrupt::new("b", json!({})))),
+                }
+            }
+        })
+        .set_entry("b")
+        .set_finish("b")
+        .interrupt_before(["b"])
+        .compile()
+        .unwrap()
+        .with_checkpointer(memory());
+
+    let first = graph.run_with_thread("ack", 0).await.unwrap();
+    assert_eq!(phase(&first.interrupts[0]), "before");
+    let second = graph.retry("ack").await.unwrap();
+    assert!(second.is_interrupted());
+    assert_eq!(phase(&second.interrupts[0]), "", "the node's own interrupt");
+    assert_eq!(b_runs.load(AtomicOrdering::SeqCst), 1);
+    let done = graph
+        .resume("ack", Command::resume(json!({ "ok": true })))
+        .await
+        .unwrap();
+    assert_eq!(done.status.status, ExecutionStatus::Completed);
+    assert_eq!(done.state, 10);
+    assert_eq!(
+        b_runs.load(AtomicOrdering::SeqCst),
+        2,
+        "re-run once for the node's own pause"
+    );
+}
