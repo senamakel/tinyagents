@@ -312,9 +312,15 @@ impl<Ctx> RunContext<Ctx> {
     }
 
     /// Returns the next value from this context's own child-ordinal counter
-    /// (starting at `0`), advancing it. See
-    /// [`RunContext::child_ordinal`][types::RunContext::child_ordinal] for
-    /// why this is per-context rather than process-global.
+    /// (starting at `0`), advancing it.
+    ///
+    /// The counter is per-context, not process-global: a freshly constructed
+    /// context (including a child context, which never inherits its parent's
+    /// counter) always starts at `0`. Callers that spawn deterministically
+    /// named children — [`crate::subagent::SubAgent`], for one — use this
+    /// instead of a process-wide sequence so two processes calling the same
+    /// parent context's child spawner in the same order derive identical
+    /// ordinals, and therefore identical child run ids (M-2).
     pub fn next_child_ordinal(&self) -> u64 {
         self.child_ordinal
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
