@@ -150,18 +150,46 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // The tool set is fixed for the duration of a run, so build the sorted
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
+        //
+        // Only *direct* tools go on the wire. Deferred tools are indexed into
+        // the run's catalogue and reached through the `tool_search` /
+        // `tool_call` bridge, whose two schemas are appended *after* the
+        // name-sorted direct set so the cached prefix is unchanged by them.
+        // The same host allow-list gates both halves: deferral only ever
+        // subtracts from what the host admitted.
         let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
             .map(|binding| binding.allowed_tools);
-        let tool_schemas = self
+        let host_allows = |name: &str| {
+            allowed_tools
+                .as_ref()
+                .is_none_or(|allowed| allowed.is_empty() || allowed.contains(name))
+        };
+        let mut tool_schemas = self
             .tools
             .schemas()
             .into_iter()
-            .filter(|schema| {
-                allowed_tools
-                    .as_ref()
-                    .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&schema.name))
-            })
+            .filter(|schema| host_allows(&schema.name))
             .collect::<Vec<_>>();
+        if let Some(preparation) = &self.policy.tool_schemas {
+            tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
+        }
+        let deferred_catalog = self.deferred_catalog(&host_allows);
+        if !deferred_catalog.is_empty() {
+            // A host-registered `tool_search`/`tool_call` keeps its slot: the
+            // intrinsic bridge only fills a name nobody registered.
+            let bridge = crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery);
+            for schema in bridge {
+                if !tool_schemas.iter().any(|existing| existing.name == schema.name) {
+                    tool_schemas.push(schema);
+                }
+            }
+        }
+        let record = ctx.emit(AgentEvent::ToolsAdvertised {
+            direct: tool_schemas.len(),
+            deferred: deferred_catalog.len(),
+            schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
+        });
+        status.set_last_event(record.id);
 
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool. Under the tool-call strategy the schema is sent as an
