@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cancel::CancellationToken;
 use crate::events::EventSink;
-use crate::ids::{RunId, ThreadId};
+use crate::ids::{CallId, RunId, ThreadId};
 use crate::limits::LimitTracker;
 use crate::steering::SteeringHandle;
 use crate::store::StoreRegistry;
