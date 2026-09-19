@@ -231,17 +231,15 @@ counter so lossy-under-load is observable; the harness-side
 `HarnessEventJournal` has no equivalent yet. Filters/compaction/redaction
 hooks are still missing on both sides.
 
-Implement:
+Remaining work:
 
-- Durable event journals with cursors, replay windows, filters, compaction, and
-  redaction hooks.
+- Replay windows, filters, compaction, and redaction hooks on the durable
+  journals (cursors/`since` now exist for `StreamProjection`; the journals
+  themselves still lack cursor-addressable replay).
 - Status stores with parent/root lineage, thread-scoped listing, phase details,
   active tool/model call ids, usage totals, cost totals, and terminal summaries.
-- Event filters for UI surfaces: text stream only, tool timeline, cost updates,
-  graph lifecycle, errors, task lifecycle.
 - Redaction policies for prompts, tool args, tool results, PII, secrets, and
   provider payloads.
-- Stable event ids and offset semantics across process restarts.
 
 Acceptance criteria:
 
