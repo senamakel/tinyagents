@@ -563,57 +563,54 @@ where
         thread_id: &str,
         checkpoint_id: Option<&str>,
     ) -> Result<Option<Checkpoint<State>>> {
-        // Stream lines and fully decode only the single target line, instead of
-        // deserializing every record's `State` just to pick one. Selection
-        // matches the previous `rev().find` / `next_back` semantics: the last
-        // matching line (or the last line, for `None`) wins.
-        let path = self.thread_path(thread_id);
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io_err("open thread file", e)),
-        };
-        let reader = BufReader::new(file);
-        let mut target: Option<String> = None;
-        for line in reader.lines() {
-            let line = line.map_err(|e| io_err("read line", e))?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            match checkpoint_id {
-                Some(id) => {
-                    // Decode only the id header to test the match, not `State`.
-                    let header: CheckpointHeader = serde_json::from_str(&line)
-                        .map_err(|e| decode_json_err("file checkpointer", "header", e))?;
-                    if header.checkpoint_id == id {
-                        target = Some(line);
-                    }
-                }
-                None => target = Some(line),
-            }
-        }
-        match target {
-            Some(line) => {
-                Ok(Some(serde_json::from_str(&line).map_err(|e| {
-                    decode_json_err("file checkpointer", "record", e)
-                })?))
-            }
-            None => Ok(None),
-        }
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        let checkpoint_id = checkpoint_id.map(str::to_string);
+        tokio::task::spawn_blocking(move || {
+            this.get_sync(&thread_id, checkpoint_id.as_deref(), None)
+        })
+        .await
+        .map_err(|e| io_err("join blocking get task", e))?
+    }
+
+    async fn get_scoped(
+        &self,
+        thread_id: &str,
+        checkpoint_id: Option<&str>,
+        namespace: &[String],
+    ) -> Result<Option<Checkpoint<State>>> {
+        // A direct scan, like `get`, instead of the trait default's
+        // `list` (a full metadata projection of the whole thread) followed by
+        // a second full pass through `get` — one file read instead of two,
+        // and the namespace filter is applied on the header alongside the id
+        // filter rather than as a separate `list` step.
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        let checkpoint_id = checkpoint_id.map(str::to_string);
+        let namespace = namespace.to_vec();
+        tokio::task::spawn_blocking(move || {
+            this.get_sync(&thread_id, checkpoint_id.as_deref(), Some(&namespace))
+        })
+        .await
+        .map_err(|e| io_err("join blocking get_scoped task", e))?
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
-        Ok(self
-            .read_records(thread_id)?
-            .iter()
-            .map(Checkpoint::to_metadata)
-            .collect())
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        tokio::task::spawn_blocking(move || this.read_headers(&thread_id))
+            .await
+            .map_err(|e| io_err("join blocking list task", e))?
     }
 
     async fn get_thread(&self, thread_id: &str) -> Result<Vec<Checkpoint<State>>> {
         // Single-pass bulk read: parse the thread file once, instead of the
         // default's one whole-file `get` scan per listed id (O(H²)).
-        self.read_records(thread_id)
+        let this = self.clone();
+        let thread_id = thread_id.to_string();
+        tokio::task::spawn_blocking(move || this.read_records(&thread_id))
+            .await
+            .map_err(|e| io_err("join blocking get_thread task", e))?
     }
 
     async fn state_history(
