@@ -21,7 +21,7 @@
 //! | `ToolCall`              | An artificial tool call carries the arguments as JSON         |
 //!
 //! Use [`response_format_for_strategy`] to obtain the correct
-//! [`ResponseFormat`] to include in a [`ModelRequest`], then call
+//! [`ResponseFormat`] to include in a [`ModelRequest`](tinyinference_llm::model::ModelRequest), then call
 //! [`StructuredExtractor::extract`] on the completed [`ModelResponse`].
 //!
 //! # Repair, validation, and non-fatal extraction
