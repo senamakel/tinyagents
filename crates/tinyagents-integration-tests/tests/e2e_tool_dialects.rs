@@ -456,6 +456,7 @@ async fn a_pure_tool_call_stream_leaves_no_raw_markup_in_the_terminal_response()
         .with_policy(RunPolicy {
             limits: tinyagents_harness::limits::RunLimits {
                 max_model_calls: 1,
+                behavior: tinyagents_harness::limits::LimitBehavior::StopWithPartial,
                 ..tinyagents_harness::limits::RunLimits::default()
             },
             ..RunPolicy::default()
@@ -464,7 +465,7 @@ async fn a_pure_tool_call_stream_leaves_no_raw_markup_in_the_terminal_response()
     let run = harness
         .invoke_streaming_default(&(), vec![Message::user("go")])
         .await
-        .expect("run completes");
+        .expect("run stops cleanly with the partial transcript at the call cap");
 
     let deltas = seen.lock().unwrap().clone();
     let joined = deltas.concat();
