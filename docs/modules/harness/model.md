@@ -359,22 +359,9 @@ the Chat Completions path only (not the Responses/Codex path).
 ### Multimodal content blocks (implemented)
 
 `ContentBlock` gained `Audio(MediaRef)`, `Video(MediaRef)`, and
-`Document(MediaRef)`, where `MediaRef` is `Url { url, media_type }` / `Base64
-{ data, media_type }` / `Path { path, media_type }`. The harness never
-fetches a `Url` or reads a `Path` itself — resolving those into bytes is a
-host concern. `Modalities` gained `video_in`, `video_out`, and
-`document_in`. Adapter support follows each provider's actual wire format:
-OpenAI's Chat Completions adapter maps `Audio(MediaRef::Base64{..})` to an
-`input_audio` content part (and fails closed, rather than silently dropping,
-for a `Url`/`Path` audio reference or any `Document`/`Video` block, which
-Chat Completions cannot represent); Anthropic's Messages adapter maps
-`Document` to a native `document` content block (`base64`/`url` source, or a
-placeholder text block for `Path`) and renders `Audio`/`Video` as a
-placeholder text block noting the omitted attachment, since neither has a
-Messages API wire form. See `providers/openai/test.rs` and
-`providers/anthropic/test.rs` for the serialization fixtures. An
-SSRF-guarded downloader for resolving `Url`/`Path` references into bytes was
-scoped out of this pass (that resolution is a host concern).
+`Document(MediaRef)`, plus matching `Modalities` fields and OpenAI/Anthropic
+adapter support. See [multimodal.md](multimodal.md) for the full shape,
+adapter mapping, and what was scoped out (an SSRF-guarded downloader).
 
 ## Model Lifecycle Gating
 
