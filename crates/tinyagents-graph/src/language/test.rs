@@ -52,7 +52,10 @@ fn build_graph_lowers_options_to_interrupt_marker_and_metadata() {
     let graph = build_graph::<S, _>(&bp, &EchoFactory).expect("options is lowered, not rejected");
     let topology = graph.topology();
     let node = topology.nodes.iter().find(|n| n.id == "a").unwrap();
-    assert!(node.interrupt, "options marks the node as an interrupt point");
+    assert!(
+        node.interrupt,
+        "options marks the node as an interrupt point"
+    );
     assert_eq!(
         node.metadata.get("options").map(String::as_str),
         Some("approve,reject")
@@ -68,7 +71,10 @@ fn build_graph_lowers_node_metadata() {
     let graph = build_graph::<S, _>(&bp, &EchoFactory).expect("metadata is lowered");
     let topology = graph.topology();
     let node = topology.nodes.iter().find(|n| n.id == "a").unwrap();
-    assert_eq!(node.metadata.get("owner").map(String::as_str), Some("triage"));
+    assert_eq!(
+        node.metadata.get("owner").map(String::as_str),
+        Some("triage")
+    );
     assert_eq!(node.metadata.get("priority").map(String::as_str), Some("3"));
 }
 

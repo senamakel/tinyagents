@@ -165,7 +165,9 @@ fn uniform_node_timeout(blueprint: &Blueprint) -> Result<Option<Duration>> {
     if !disagreeing.is_empty() {
         return Err(TinyAgentsError::Compile(format!(
             "per-node timeout not supported yet: node `{}`={:?} disagrees with {}",
-            declared[0].0, first, disagreeing.join(", ")
+            declared[0].0,
+            first,
+            disagreeing.join(", ")
         )));
     }
     Ok(Some(first))
@@ -400,8 +402,11 @@ where
         // `metadata`: free-form `key value` annotations. A direct, lossless
         // mapping onto `GraphBuilder::with_node_metadata`.
         for (key, value) in &spec.metadata {
-            builder =
-                builder.with_node_metadata(spec.name.as_str(), key.as_str(), literal_display(value));
+            builder = builder.with_node_metadata(
+                spec.name.as_str(),
+                key.as_str(),
+                literal_display(value),
+            );
         }
     }
 
