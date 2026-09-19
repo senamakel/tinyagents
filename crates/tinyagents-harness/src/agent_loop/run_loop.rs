@@ -457,11 +457,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             }
                             StructuredStrategy::ToolCall => {
                                 request.response_format = Some(ResponseFormat::Text);
-                                request.tools.push(ToolSchema {
+                                let fallback_schema = ToolSchema {
                                     name: name.clone(),
                                     description: format!("Return the result as `{name}`."),
                                     parameters: schema.clone(),
                                     format: tinyinference_llm::tool::ToolFormat::Json,
+                                };
+                                // This schema is generated here, after the
+                                // direct and bridge schemas above were
+                                // prepared for the target provider, so it
+                                // needs the same projection or it reaches the
+                                // wire raw (see the `tool_schemas` and bridge
+                                // preparation above).
+                                request.tools.push(match &self.policy.tool_schemas {
+                                    Some(preparation) => {
+                                        crate::tool::prepare_tool_schema(
+                                            &fallback_schema,
+                                            preparation,
+                                        )
+                                    }
+                                    None => fallback_schema,
                                 });
                                 // Force the schema tool **only** when it is the
                                 // sole tool available. Forcing it inside a
