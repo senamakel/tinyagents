@@ -37,6 +37,14 @@ impl crate::subagent_node::AgentInvoker for NestedRecordingInvoker {
 
 /// Builds a minimal [`NodeContext`] standing in for the embedding node `id`.
 fn ctx_for(id: &str) -> NodeContext {
+    ctx_for_task(id, "task-test", 1)
+}
+
+/// Builds a minimal [`NodeContext`] standing in for a `Send` fan-out
+/// activation of embedding node `id`: `task_id` names this activation and
+/// `siblings` is the fan-out width (I1), which is what a subgraph node
+/// consults to decide whether to namespace its child checkpoint by task id.
+fn ctx_for_task(id: &str, task_id: &str, siblings: usize) -> NodeContext {
     NodeContext {
         graph_id: tinyagents_harness::ids::GraphId::new("graph-test"),
         node_id: NodeId::from(id),
@@ -50,6 +58,8 @@ fn ctx_for(id: &str) -> NodeContext {
         recursion_frames: Vec::new(),
         child_runs: None,
         agent_binding: None,
+        task_id: tinyagents_harness::ids::TaskId::from(task_id),
+        siblings,
     }
 }
 
