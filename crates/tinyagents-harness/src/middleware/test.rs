@@ -499,8 +499,21 @@ async fn context_compression_falls_back_to_trim_when_summarizer_errors() {
 /// than a schema-free one under the same trigger budget.
 #[tokio::test]
 async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
-    let (policy, before) = over_threshold_request();
+    // A finer-grained transcript than `over_threshold_request` (which trims
+    // straight to the system-only floor in both cases here): ten ~20-token
+    // messages under a 100-token trigger budget leaves room to see the
+    // schema reservation actually change how many messages survive, rather
+    // than both cases bottoming out at the same floor.
+    let policy = SummarizationPolicy {
+        keep_last: 0,
+        trigger_tokens: 100,
+        ..SummarizationPolicy::default()
+    };
     let trigger_budget = policy.trigger_budget();
+    let mut before = vec![Message::system("You are a helpful assistant.")];
+    for i in 0..10 {
+        before.push(user(&format!("message {i}: {}", "x".repeat(60))));
+    }
     let mw = Arc::new(ContextCompressionMiddleware::with_summarizer(
         policy,
         Box::new(FailingSummarizer),
