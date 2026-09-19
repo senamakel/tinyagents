@@ -231,11 +231,13 @@ When the model calls a tool that is not registered, the agent loop's behavior is
 governed by `RunPolicy::unknown_tool: UnknownToolPolicy`
 (`crates/tinyagents-harness/src/runtime/types.rs`):
 
-- `UnknownToolPolicy::Fail` (default, historical) — abort the run with
-  `TinyAgentsError::ToolNotFound(name)`.
-- `UnknownToolPolicy::ReturnToolError` — inject a tool-error result (naming the
-  requested tool, echoing its arguments, and listing the registered tools) back
-  into the transcript and continue, letting the model retry with a valid tool.
+- `UnknownToolPolicy::Fail` — abort the run with
+  `TinyAgentsError::ToolNotFound(name)`. No longer the default (see below);
+  still available for callers that want a hard stop.
+- `UnknownToolPolicy::ReturnToolError` (default) — inject a tool-error result
+  (naming the requested tool, echoing its arguments, and listing the
+  registered tools) back into the transcript and continue, letting the model
+  retry with a valid tool.
 - `UnknownToolPolicy::Rewrite { tool_name }` — retarget the unknown call to a
   fixed compatibility tool and retry the lookup once; if that target is also
   unregistered, fall back to `ReturnToolError` behavior.
