@@ -157,21 +157,40 @@ where
     }
 }
 
-/// Bridges a [`ToolSet`] into the [`crate::tool::ToolDispatch`] the agent
-/// loop's admission path already speaks, so a name only the toolset chain
-/// exposes (not [`crate::tool::ToolRegistry::model_dispatch`]) can be
+/// Bridges one [`ToolSet`]-owned tool into the [`crate::tool::ToolDispatch`]
+/// the agent loop's admission path already speaks, so a name only a toolset
+/// chain exposes (not [`crate::tool::ToolRegistry::model_dispatch`]) can be
 /// admitted and executed through the exact same call path as a directly
-/// registered tool. Built by the loop when [`crate::runtime::AgentHarness`]
-/// has a toolset installed (see
-/// [`crate::runtime::AgentHarness::with_toolset`]) and the requested name is
-/// not in the registry.
-pub(crate) struct ToolSetDispatchBridge<State: Send + Sync, Ctx: Send + Sync> {
+/// registered tool — timeout policy, injected-argument handling, schema
+/// validation, and every other admission step in `agent_loop/tools.rs` apply
+/// identically.
+///
+/// # Why this is not wired automatically
+///
+/// [`crate::runtime::AgentHarness::with_toolset`] wires the toolset chain
+/// into per-turn **advertisement** automatically. Dispatch is different:
+/// coercing this bridge into `Arc<dyn ToolDispatch<State, Ctx>>` requires
+/// `State: 'static, Ctx: 'static`, a bound the agent loop's generic admission
+/// path deliberately does not carry (recursive sub-agent dispatch stays
+/// callable with a borrowed, non-`'static` `State`/`Ctx` — see
+/// `runtime/agent.rs`'s `host_invocation_binding`). A concrete application's
+/// `State`/`Ctx` are `'static` in the overwhelming majority of cases, so a
+/// caller wanting a toolset-only tool to be callable (not just advertised)
+/// registers a bridge for it explicitly:
+///
+/// ```ignore
+/// let tool = toolset.tools(&ctx).await?.into_iter().find(|t| t.name() == "search").unwrap();
+/// harness.register_tool_dispatch(Arc::new(ToolSetDispatchBridge::new(toolset.clone(), tool)));
+/// ```
+pub struct ToolSetDispatchBridge<State: Send + Sync, Ctx: Send + Sync> {
     toolset: Arc<dyn ToolSet<State, Ctx>>,
     tool: Arc<dyn Tool>,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> ToolSetDispatchBridge<State, Ctx> {
-    pub(crate) fn new(toolset: Arc<dyn ToolSet<State, Ctx>>, tool: Arc<dyn Tool>) -> Self {
+    /// Builds a dispatcher for `tool` (a declaration `toolset` currently
+    /// exposes) that executes it through [`ToolSet::call`].
+    pub fn new(toolset: Arc<dyn ToolSet<State, Ctx>>, tool: Arc<dyn Tool>) -> Self {
         Self { toolset, tool }
     }
 }
