@@ -208,10 +208,10 @@ pub fn read_thread_usage_summary(
             .cached_input_tokens
             .saturating_add(meta.cached_input_tokens);
         group.runs = group.runs.saturating_add(1);
-        if group.model.is_none() {
-            if let Some((_, model)) = read_last_assistant_usage(path) {
-                group.model = model;
-            }
+        if group.model.is_none()
+            && let Some((_, model)) = read_last_assistant_usage(path)
+        {
+            group.model = model;
         }
     }
     summary.subagents = groups.into_values().collect();

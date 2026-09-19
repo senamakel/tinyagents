@@ -190,7 +190,7 @@ fn file_history_never_converts_or_drops_durable_fields() {
     assert_eq!(replayed[0].content, assistant.content);
     assert_eq!(replayed[0].extra_metadata, assistant.extra_metadata);
     assert_eq!(replayed[0].cache_breakpoints, vec![4]);
-    TranscriptHistory::replace(&history, &[assistant.clone()]).unwrap();
+    TranscriptHistory::replace(&history, std::slice::from_ref(&assistant)).unwrap();
     TranscriptHistory::clear(&history).unwrap();
     assert!(TranscriptHistory::messages(&history).unwrap().is_empty());
     let display = read_transcript_display(history.path()).unwrap();

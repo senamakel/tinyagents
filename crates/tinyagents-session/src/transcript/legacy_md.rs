@@ -87,10 +87,7 @@ fn parse_legacy_messages(raw: &str) -> Result<Vec<TranscriptMessage>> {
     let mut messages = Vec::new();
     let mut search_from = 0;
 
-    loop {
-        let Some(open_start) = raw[search_from..].find(LEGACY_MSG_OPEN_PREFIX) else {
-            break;
-        };
+    while let Some(open_start) = raw[search_from..].find(LEGACY_MSG_OPEN_PREFIX) {
         let open_start = search_from + open_start;
         let after_prefix = open_start + LEGACY_MSG_OPEN_PREFIX.len();
 

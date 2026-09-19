@@ -265,14 +265,14 @@ fn render_md_companion(
         .collect();
 
     let md_path = md_companion_path(jsonl_path);
-    if let Some(parent) = md_path.parent() {
-        if let Err(err) = fs::create_dir_all(parent) {
-            log::warn!(
-                "[transcript] failed to create md companion dir {}: {err}",
-                parent.display()
-            );
-            return;
-        }
+    if let Some(parent) = md_path.parent()
+        && let Err(err) = fs::create_dir_all(parent)
+    {
+        log::warn!(
+            "[transcript] failed to create md companion dir {}: {err}",
+            parent.display()
+        );
+        return;
     }
     let md = render_markdown(messages, meta, &per_msg_usage);
     if let Err(err) = fs::write(&md_path, md.as_bytes()) {

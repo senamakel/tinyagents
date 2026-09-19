@@ -85,10 +85,10 @@ pub fn find_latest_transcript(workspace_dir: &Path, agent_name: &str) -> Option<
     // Primary path: flat session_raw/ directory. The stem-suffix scan
     // is naturally date-independent, so an idle thread resumes the same
     // way today as it did weeks ago.
-    if raw_root.is_dir() {
-        if let Some(path) = latest_in_dir(&raw_root, &sanitized) {
-            return Some(path);
-        }
+    if raw_root.is_dir()
+        && let Some(path) = latest_in_dir(&raw_root, &sanitized)
+    {
+        return Some(path);
     }
 
     // Fallback: legacy date-grouped layout (one-release migration
@@ -102,16 +102,16 @@ pub fn find_latest_transcript(workspace_dir: &Path, agent_name: &str) -> Option<
 
     for date_str in [&today, &yesterday] {
         let raw_dir = raw_root.join(date_str);
-        if raw_dir.is_dir() {
-            if let Some(path) = latest_in_dir(&raw_dir, &sanitized) {
-                return Some(path);
-            }
+        if raw_dir.is_dir()
+            && let Some(path) = latest_in_dir(&raw_dir, &sanitized)
+        {
+            return Some(path);
         }
         let legacy_dir = sessions_root.join(date_str);
-        if legacy_dir.is_dir() {
-            if let Some(path) = latest_in_dir(&legacy_dir, &sanitized) {
-                return Some(path);
-            }
+        if legacy_dir.is_dir()
+            && let Some(path) = latest_in_dir(&legacy_dir, &sanitized)
+        {
+            return Some(path);
         }
     }
 

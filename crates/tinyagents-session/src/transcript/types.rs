@@ -217,7 +217,7 @@ pub struct CompactionMarker {
 /// One record in a display projection, in file order.
 #[derive(Debug, Clone)]
 pub enum DisplayRecord {
-    Message(DisplayMessage),
+    Message(Box<DisplayMessage>),
     Compaction(CompactionMarker),
 }
 

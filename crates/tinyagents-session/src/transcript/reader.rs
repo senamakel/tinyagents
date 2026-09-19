@@ -194,7 +194,9 @@ pub fn read_transcript_display(path: &Path) -> Result<DisplaySessionTranscript> 
                 }));
             }
             Ok(LineKind::Message(ml)) => {
-                records.push(DisplayRecord::Message(display_message_from_line(ml)));
+                records.push(DisplayRecord::Message(Box::new(display_message_from_line(
+                    ml,
+                ))));
             }
             Err(err) => {
                 log::warn!(
@@ -273,10 +275,10 @@ pub(super) fn read_last_assistant_usage(path: &Path) -> Option<(MessageUsage, Op
             }
             Ok(LineKind::Compaction(cl)) => {
                 for ml in &cl.replacement {
-                    if ml.role == "assistant" {
-                        if let Some(usage) = ml.usage.clone() {
-                            result = Some((usage, ml.model.clone()));
-                        }
+                    if ml.role == "assistant"
+                        && let Some(usage) = ml.usage.clone()
+                    {
+                        result = Some((usage, ml.model.clone()));
                     }
                 }
             }
