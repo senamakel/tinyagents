@@ -343,26 +343,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `RunContext`; explicit-model SDK calls continue to resolve only
             // through the local registry. Context-instance identity keeps two
             // same-id concurrent runs from borrowing each other's model.
-            let binding = self.host_run_binding(ctx.instance_id())?.map_or_else(
-                || {
-                    self.models
-                        .resolve_request(&request, None, None)
-                        .ok_or_else(|| {
-                            TinyAgentsError::ModelNotFound(
-                                request
-                                    .model
-                                    .clone()
-                                    .unwrap_or_else(|| "<default>".to_string()),
-                            )
-                        })
-                },
-                |binding| {
-                    Ok(ResolvedModelBinding {
-                        resolved: binding.resolved,
-                        model: binding.model,
-                    })
-                },
-            )?;
+            let binding = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
+                let mut resolve_request =
+                    crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
+                if let Some(model_pin) = host_run.model_pin.clone() {
+                    resolve_request = resolve_request.with_model_pin(model_pin);
+                }
+                let model = host_run.host.models.resolve(&resolve_request).await?;
+                let name = model
+                    .profile()
+                    .and_then(|profile| profile.model.clone())
+                    .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
+                ResolvedModelBinding {
+                    resolved: tinyinference_llm::model::ResolvedModel {
+                        name,
+                        requested: host_run.model_pin,
+                        source: tinyinference_llm::model::ModelResolutionSource::AgentDefault,
+                    },
+                    model,
+                }
+            } else {
+                self.models
+                    .resolve_request(&request, None, None)
+                    .ok_or_else(|| {
+                        TinyAgentsError::ModelNotFound(
+                            request
+                                .model
+                                .clone()
+                                .unwrap_or_else(|| "<default>".to_string()),
+                        )
+                    })?
+            };
             let model_name = binding.resolved.name.clone();
 
             // An explicit request override that resolution skipped (unknown
@@ -473,7 +484,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             .unwrap_or_else(|| ctx.run_id().as_str().into()),
                     )
                     .with_tool_count(request.tools.len());
-                    Some((budget.clone(), budget.acquire(&estimate).await?))
+                    let permit = match ctx.remaining_wall_clock() {
+                        Some(remaining) => tokio::select! {
+                            _ = ctx.cancellation.cancelled() => {
+                                return Err(TinyAgentsError::Cancelled);
+                            }
+                            acquired = tokio::time::timeout(remaining, budget.acquire(&estimate)) => {
+                                acquired.map_err(|_| TinyAgentsError::Timeout(format!(
+                                    "budget admission for run `{}` exceeded its remaining wall-clock deadline",
+                                    ctx.run_id()
+                                )))??
+                            }
+                        },
+                        None => tokio::select! {
+                            _ = ctx.cancellation.cancelled() => {
+                                return Err(TinyAgentsError::Cancelled);
+                            }
+                            acquired = budget.acquire(&estimate) => acquired?,
+                        },
+                    };
+                    Some((budget.clone(), permit))
                 } else {
                     None
                 }
@@ -567,6 +597,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     budget.record(&usage).await?;
                 }
             }
+            // The permit guards a provider call, not the tools it may request.
+            // Keeping a parent permit while awaiting a sub-agent tool can
+            // deadlock a one-slot gate: the child needs that same slot for its
+            // model call while the parent waits for the child tool to return.
+            drop(host_budget);
             let captured_output = self
                 .policy
                 .capture

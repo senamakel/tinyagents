@@ -350,18 +350,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ));
             }
         }
-        let model = host
-            .models
-            .resolve(
-                &crate::host::ModelResolveRequest::new(&request.agent_id)
-                    .with_model_pin(definition.model.clone().unwrap_or_default()),
-            )
-            .await?;
-        let model_name = model
-            .profile()
-            .and_then(|profile| profile.model.clone())
-            .unwrap_or_else(|| format!("host:{}", request.agent_id));
-
         let mut messages = Vec::with_capacity(request.messages.len() + preamble.len() + 1);
         if !system.is_empty() {
             messages.push(tinyinference_llm::message::Message::system(system));
@@ -374,12 +362,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             HostRunBinding {
                 host: host.clone(),
                 agent_id: request.agent_id.clone(),
-                resolved: tinyinference_llm::model::ResolvedModel {
-                    name: model_name,
-                    requested: definition.model,
-                    source: tinyinference_llm::model::ModelResolutionSource::AgentDefault,
-                },
-                model,
+                model_pin: definition.model,
                 allowed_tools: definition.tools.into_iter().collect(),
                 progress: progress.clone(),
             },

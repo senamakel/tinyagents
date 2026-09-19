@@ -29,7 +29,6 @@ use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::cache::CachePolicy;
 use tinyinference_llm::model::ResponseFormat;
-use tinyinference_llm::model::{ChatModel, ResolvedModel};
 
 /// Model and identity selected by a host-driven invocation.
 ///
@@ -42,8 +41,9 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
     /// child cannot substitute its own installed (or missing) host policy.
     pub(crate) host: HostCapabilities<State>,
     pub(crate) agent_id: String,
-    pub(crate) resolved: ResolvedModel,
-    pub(crate) model: Arc<dyn ChatModel<State>>,
+    /// Definition-selected pin passed to the host resolver at every provider
+    /// call. It is advisory; the host remains the routing authority.
+    pub(crate) model_pin: Option<String>,
     /// Canonical names the resolved definition authorizes for this exact run.
     /// An empty list retains the legacy unrestricted catalogue; a non-empty
     /// list is a host boundary enforced for schemas and dispatch alike.
@@ -57,8 +57,7 @@ impl<State: Send + Sync> Clone for HostRunBinding<State> {
         Self {
             host: self.host.clone(),
             agent_id: self.agent_id.clone(),
-            resolved: self.resolved.clone(),
-            model: Arc::clone(&self.model),
+            model_pin: self.model_pin.clone(),
             allowed_tools: self.allowed_tools.clone(),
             progress: self.progress.clone(),
         }

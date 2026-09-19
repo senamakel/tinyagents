@@ -217,6 +217,20 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
 }
 
 #[test]
+fn child_keeps_its_stricter_recursion_cap() {
+    let parent: RunContext<()> = RunContext::new(RunConfig::new("parent").with_max_depth(4), ());
+    let child = parent
+        .child(RunConfig::new("child").with_max_depth(1), ())
+        .expect("the first child is within both caps");
+
+    assert_eq!(child.max_depth(), 1);
+    assert!(matches!(
+        child.child(RunConfig::new("grandchild"), ()),
+        Err(crate::TinyAgentsError::SubAgentDepth(1))
+    ));
+}
+
+#[test]
 fn child_accepts_its_own_tags_timeout_and_call_caps() {
     let parent: RunContext<()> =
         RunContext::new(RunConfig::new("parent").with_thread("thread"), ());
