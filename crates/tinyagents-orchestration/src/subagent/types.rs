@@ -189,7 +189,7 @@ impl<C, H> SubagentRequest<C, H> {
 }
 
 /// A neutral checkpoint offered to a planner for resumption.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SubagentResume {
     /// Lossless model history available to the host planner.
     pub history: Vec<Message>,
@@ -228,7 +228,7 @@ pub struct SubagentExecution<C = ()> {
 ///
 /// The reference intentionally contains no filesystem path or URL. Hosts own
 /// artifact authorization and resolution.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ArtifactReference {
     /// Stable host artifact identifier.
     pub id: String,
@@ -239,7 +239,7 @@ pub struct ArtifactReference {
 }
 
 /// A neutral suspension point that can later be supplied to a planner.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SubagentPause {
     /// Why execution needs input or an external host action.
     pub reason: String,
@@ -248,14 +248,14 @@ pub struct SubagentPause {
 }
 
 /// A neutral non-successful but terminal completion.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SubagentIncomplete {
     /// A host-safe explanation for incomplete work.
     pub reason: String,
 }
 
 /// The visible status of one subagent run.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SubagentStatus {
     /// The subagent completed normally.
     Completed,
@@ -267,8 +267,75 @@ pub enum SubagentStatus {
     Cancelled,
 }
 
-/// Complete neutral result of one subagent execution.
+/// The durable lifecycle action that made a run result observable.
+///
+/// Hosts use this to attach side effects such as event-bus notifications and
+/// progress records to the same successful commit boundary as the outcome.
+/// In particular, a terminal result loaded from durable storage must be
+/// returned to a caller without publishing a second terminal notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubagentPersistenceDisposition {
+    /// This invocation committed a resumable pause record.
+    PauseCommitted,
+    /// This invocation atomically advanced an existing durable pause after a
+    /// continuation.  It owns the new pause's host effects just as the first
+    /// pause writer does; observers that lost the compare-and-swap receive
+    /// [`Self::PauseExisting`] instead.
+    PauseReplaced,
+    /// This invocation atomically inserted the terminal record.
+    TerminalInserted,
+    /// A pause record was already made visible by another invocation.
+    PauseExisting,
+    /// A terminal record was already made visible by another invocation.
+    TerminalExisting,
+    /// This caller stopped observing an in-flight lifecycle before it reached
+    /// a durable boundary. It must not publish terminal or pause effects.
+    ObserverCancelled,
+}
+
+impl SubagentPersistenceDisposition {
+    /// Whether this invocation owns host terminal/pause side effects.
+    pub const fn should_emit_host_effects(self) -> bool {
+        matches!(
+            self,
+            Self::PauseCommitted | Self::PauseReplaced | Self::TerminalInserted
+        )
+    }
+}
+
+/// Result of a neutral subagent lifecycle.
+///
+/// The outcome is lossless host-neutral execution data. The disposition says
+/// whether this caller won durable persistence, preventing a second driver or
+/// a coalesced caller from repeating host-visible lifecycle effects.
 #[derive(Clone, Debug, PartialEq)]
+pub struct SubagentRunResult {
+    /// The authoritative execution outcome.
+    pub outcome: SubagentOutcome,
+    /// The successful persistence boundary for this invocation.
+    pub disposition: SubagentPersistenceDisposition,
+}
+
+impl SubagentRunResult {
+    /// Creates a result at a known persistence disposition.
+    pub const fn new(
+        outcome: SubagentOutcome,
+        disposition: SubagentPersistenceDisposition,
+    ) -> Self {
+        Self {
+            outcome,
+            disposition,
+        }
+    }
+
+    /// Whether the caller must publish host effects for this result.
+    pub const fn should_emit_host_effects(&self) -> bool {
+        self.disposition.should_emit_host_effects()
+    }
+}
+
+/// Complete neutral result of one subagent execution.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SubagentOutcome {
     /// Host-stable task identity.
     pub task_id: String,
@@ -309,8 +376,41 @@ impl SubagentOutcome {
 pub struct PersistedSubagentPause {
     /// Durable scoped lifecycle identity.
     pub key: SubagentTaskKey,
-    /// The resumable pause state.
-    pub pause: SubagentPause,
+    /// The complete paused outcome. Keeping the visible output, history,
+    /// usage, and artifacts with the suspension means a duplicate driver can
+    /// return the durable winner rather than its own uncommitted result.
+    pub outcome: SubagentOutcome,
+    /// The exact resumable state this invocation consumed, when it is a
+    /// continuation. Persistence implementations compare this under their
+    /// scoped-key transaction before replacing a pause. `None` means this
+    /// attempt creates the first pause for a fresh lifecycle.
+    pub replaces: Option<SubagentResume>,
+}
+
+/// Result of atomically persisting a pause transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubagentPausePersistenceDisposition {
+    /// A fresh lifecycle installed its first pause.
+    Inserted,
+    /// A continuation consumed and replaced the exact prior pause.
+    Replaced,
+    /// Another lifecycle already owns the current pause.
+    Existing,
+    /// A terminal outcome already closed the lifecycle.
+    TerminalExisting,
+}
+
+/// Result of atomically persisting a terminal transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubagentTerminalPersistenceDisposition {
+    /// This invocation atomically closed an unpaused lifecycle or consumed the
+    /// exact pause it had loaded.
+    Inserted,
+    /// Another invocation already committed a terminal outcome.
+    Existing,
+    /// Another invocation owns a newer or unconsumed pause. The caller must
+    /// return that pause outcome rather than manufacture a terminal result.
+    PauseExisting,
 }
 
 /// Typed lifecycle failures. Adapters classify their errors at the seam that

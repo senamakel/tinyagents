@@ -1,8 +1,11 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use async_trait::async_trait;
 use tinyagents_harness::{
@@ -198,12 +201,21 @@ struct FakePersistence {
     pause_error: bool,
     terminal_error: bool,
     outcomes: Mutex<Vec<SubagentOutcome>>,
+    terminals: Mutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
+    pauses: Mutex<HashMap<SubagentTaskKey, SubagentOutcome>>,
     saved_pause: Mutex<Option<SubagentResume>>,
     keys: Mutex<Vec<SubagentTaskKey>>,
 }
 
 #[async_trait]
 impl SubagentPersistence for FakePersistence {
+    async fn load_terminal(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
+        self.keys.lock().unwrap().push(key.clone());
+        Ok(self.terminals.lock().unwrap().get(key).cloned())
+    }
     async fn load(&self, key: &SubagentTaskKey) -> Result<Option<SubagentResume>, SubagentError> {
         self.actions.lock().unwrap().push(Action::Load);
         self.keys.lock().unwrap().push(key.clone());
@@ -217,14 +229,52 @@ impl SubagentPersistence for FakePersistence {
         }
     }
 
-    async fn save_pause(&self, pause: PersistedSubagentPause) -> Result<(), SubagentError> {
+    async fn load_pause(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(self.pauses.lock().unwrap().get(key).cloned())
+    }
+
+    async fn save_pause(
+        &self,
+        pause: PersistedSubagentPause,
+    ) -> Result<SubagentPausePersistenceDisposition, SubagentError> {
         self.actions.lock().unwrap().push(Action::Pause);
-        self.keys.lock().unwrap().push(pause.key);
+        self.keys.lock().unwrap().push(pause.key.clone());
         if self.pause_error {
             Err(SubagentError::Persistence("pause save failed".into()))
         } else {
-            *self.saved_pause.lock().unwrap() = Some(pause.pause.resume);
-            Ok(())
+            let mut pauses = self.pauses.lock().unwrap();
+            match pauses.get(&pause.key) {
+                None if pause.replaces.is_none() => {
+                    let resume = match &pause.outcome.status {
+                        SubagentStatus::AwaitingInput(pause) => pause.resume.clone(),
+                        _ => unreachable!("fake only persists awaiting outcomes"),
+                    };
+                    *self.saved_pause.lock().unwrap() = Some(resume);
+                    pauses.insert(pause.key, pause.outcome);
+                    Ok(SubagentPausePersistenceDisposition::Inserted)
+                }
+                Some(current)
+                    if pause.replaces.as_ref().is_some_and(|expected| {
+                        matches!(
+                            &current.status,
+                            SubagentStatus::AwaitingInput(current_pause)
+                                if current_pause.resume == *expected
+                        )
+                    }) =>
+                {
+                    let resume = match &pause.outcome.status {
+                        SubagentStatus::AwaitingInput(pause) => pause.resume.clone(),
+                        _ => unreachable!("fake only persists awaiting outcomes"),
+                    };
+                    *self.saved_pause.lock().unwrap() = Some(resume);
+                    pauses.insert(pause.key, pause.outcome);
+                    Ok(SubagentPausePersistenceDisposition::Replaced)
+                }
+                _ => Ok(SubagentPausePersistenceDisposition::Existing),
+            }
         }
     }
 
@@ -232,7 +282,8 @@ impl SubagentPersistence for FakePersistence {
         &self,
         key: &SubagentTaskKey,
         outcome: &SubagentOutcome,
-    ) -> Result<(), SubagentError> {
+        replaces: Option<&SubagentResume>,
+    ) -> Result<SubagentTerminalPersistenceDisposition, SubagentError> {
         self.actions
             .lock()
             .unwrap()
@@ -246,8 +297,24 @@ impl SubagentPersistence for FakePersistence {
         if self.terminal_error {
             Err(SubagentError::Persistence("terminal save failed".into()))
         } else {
-            self.outcomes.lock().unwrap().push(outcome.clone());
-            Ok(())
+            let mut terminals = self.terminals.lock().unwrap();
+            if terminals.contains_key(key) {
+                Ok(SubagentTerminalPersistenceDisposition::Existing)
+            } else if self.pauses.lock().unwrap().get(key).is_some_and(|paused| {
+                !replaces.is_some_and(|expected| {
+                    matches!(
+                        &paused.status,
+                        SubagentStatus::AwaitingInput(pause) if pause.resume == *expected
+                    )
+                })
+            }) {
+                Ok(SubagentTerminalPersistenceDisposition::PauseExisting)
+            } else {
+                terminals.insert(key.clone(), outcome.clone());
+                self.pauses.lock().unwrap().remove(key);
+                self.outcomes.lock().unwrap().push(outcome.clone());
+                Ok(SubagentTerminalPersistenceDisposition::Inserted)
+            }
         }
     }
 }
@@ -310,6 +377,8 @@ fn fakes(mode: ExecutorMode) -> Fakes {
             pause_error: false,
             terminal_error: false,
             outcomes: Mutex::new(Vec::new()),
+            terminals: Mutex::new(HashMap::new()),
+            pauses: Mutex::new(HashMap::new()),
             saved_pause: Mutex::new(None),
             keys: Mutex::new(Vec::new()),
         }),
@@ -335,30 +404,47 @@ struct BlockingPersistence {
 
 #[async_trait]
 impl SubagentPersistence for BlockingPersistence {
+    async fn load_terminal(
+        &self,
+        _key: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(None)
+    }
     async fn load(&self, _: &SubagentTaskKey) -> Result<Option<SubagentResume>, SubagentError> {
         Ok(None)
     }
 
-    async fn save_pause(&self, _: PersistedSubagentPause) -> Result<(), SubagentError> {
+    async fn load_pause(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(None)
+    }
+
+    async fn save_pause(
+        &self,
+        _: PersistedSubagentPause,
+    ) -> Result<SubagentPausePersistenceDisposition, SubagentError> {
         if matches!(self.stage, BlockingStage::Pause) && self.first.swap(false, Ordering::AcqRel) {
             self.started.notify_one();
             self.release.notified().await;
         }
-        Ok(())
+        Ok(SubagentPausePersistenceDisposition::Inserted)
     }
 
     async fn record_terminal(
         &self,
         _: &SubagentTaskKey,
         outcome: &SubagentOutcome,
-    ) -> Result<(), SubagentError> {
+        _: Option<&SubagentResume>,
+    ) -> Result<SubagentTerminalPersistenceDisposition, SubagentError> {
         if matches!(self.stage, BlockingStage::Terminal) && self.first.swap(false, Ordering::AcqRel)
         {
             self.started.notify_one();
             self.release.notified().await;
         }
         self.outcomes.lock().unwrap().push(outcome.clone());
-        Ok(())
+        Ok(SubagentTerminalPersistenceDisposition::Inserted)
     }
 }
 
@@ -487,7 +573,7 @@ impl SubagentExecutor<String> for NestedExecutor {
                 // This models the host's parent-visible roll-up: the child is
                 // added once alongside the parent's own model call.
                 usage: UsageTotals {
-                    calls: child.usage.calls + 1,
+                    calls: child.outcome.usage.calls + 1,
                     ..UsageTotals::default()
                 },
                 artifacts: Vec::new(),
@@ -540,7 +626,7 @@ async fn prepared_context_identity_reaches_executor() {
         .await
         .unwrap();
 
-    assert_eq!(outcome.status, SubagentStatus::Completed);
+    assert_eq!(outcome.outcome.status, SubagentStatus::Completed);
     assert_eq!(*executor.context_ids.lock().unwrap(), vec![expected]);
 }
 
@@ -635,6 +721,8 @@ async fn load_pause_and_terminal_errors_remain_typed() {
         pause_error: false,
         terminal_error: false,
         outcomes: Mutex::new(Vec::new()),
+        terminals: Mutex::new(HashMap::new()),
+        pauses: Mutex::new(HashMap::new()),
         saved_pause: Mutex::new(None),
         keys: Mutex::new(Vec::new()),
     });
@@ -652,6 +740,8 @@ async fn load_pause_and_terminal_errors_remain_typed() {
         load_mode: LoadMode::Empty,
         terminal_error: false,
         outcomes: Mutex::new(Vec::new()),
+        terminals: Mutex::new(HashMap::new()),
+        pauses: Mutex::new(HashMap::new()),
         saved_pause: Mutex::new(None),
         keys: Mutex::new(Vec::new()),
     });
@@ -669,6 +759,8 @@ async fn load_pause_and_terminal_errors_remain_typed() {
         load_mode: LoadMode::Empty,
         pause_error: false,
         outcomes: Mutex::new(Vec::new()),
+        terminals: Mutex::new(HashMap::new()),
+        pauses: Mutex::new(HashMap::new()),
         saved_pause: Mutex::new(None),
         keys: Mutex::new(Vec::new()),
     });
@@ -689,6 +781,8 @@ async fn loaded_resume_reaches_planner_before_execution_and_execution_errors_do_
         pause_error: false,
         terminal_error: false,
         outcomes: Mutex::new(Vec::new()),
+        terminals: Mutex::new(HashMap::new()),
+        pauses: Mutex::new(HashMap::new()),
         saved_pause: Mutex::new(None),
         keys: Mutex::new(Vec::new()),
     });
@@ -728,10 +822,66 @@ async fn duplicate_task_id_returns_recorded_outcome_without_second_execution_or_
         .await
         .unwrap();
 
-    assert_eq!(first, second);
+    assert_eq!(first.outcome, second.outcome);
+    assert_eq!(
+        first.disposition,
+        SubagentPersistenceDisposition::TerminalInserted
+    );
+    assert_eq!(
+        second.disposition,
+        SubagentPersistenceDisposition::TerminalExisting
+    );
     assert_eq!(*planner.calls.lock().unwrap(), 1);
     assert_eq!(*executor.calls.lock().unwrap(), 1);
     assert_eq!(persistence.outcomes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn separate_drivers_share_terminal_winner_and_disposition() {
+    let (planner, executor, persistence, _) = fakes(ExecutorMode::Completed);
+    let first = driver(planner.clone(), executor.clone(), persistence.clone())
+        .run(request("shared-terminal", "one"), CancellationToken::new())
+        .await
+        .unwrap();
+    let second = driver(planner, executor, persistence.clone())
+        .run(request("shared-terminal", "two"), CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        first.disposition,
+        SubagentPersistenceDisposition::TerminalInserted
+    );
+    assert_eq!(
+        second.disposition,
+        SubagentPersistenceDisposition::TerminalExisting
+    );
+    assert_eq!(first.outcome, second.outcome);
+    assert_eq!(persistence.outcomes.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_later_continuation_replaces_its_consumed_pause_and_owns_new_effects() {
+    let (planner, executor, persistence, _) = fakes(ExecutorMode::Pause);
+    let first = driver(planner.clone(), executor.clone(), persistence.clone())
+        .run(request("shared-pause", "one"), CancellationToken::new())
+        .await
+        .unwrap();
+    let second = driver(planner, executor, persistence)
+        .run(request("shared-pause", "two"), CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        first.disposition,
+        SubagentPersistenceDisposition::PauseCommitted
+    );
+    assert_eq!(
+        second.disposition,
+        SubagentPersistenceDisposition::PauseReplaced
+    );
+    assert!(first.should_emit_host_effects());
+    assert!(second.should_emit_host_effects());
 }
 
 #[tokio::test]
@@ -805,11 +955,11 @@ async fn concurrent_same_task_calls_coalesce_to_one_lifecycle() {
     cancellation.cancel();
 
     assert_eq!(
-        first.await.unwrap().unwrap().status,
+        first.await.unwrap().unwrap().outcome.status,
         SubagentStatus::Cancelled
     );
     assert_eq!(
-        second.await.unwrap().unwrap().status,
+        second.await.unwrap().unwrap().outcome.status,
         SubagentStatus::Cancelled
     );
     assert_eq!(*planner.calls.lock().unwrap(), 1);
@@ -856,14 +1006,19 @@ async fn cancelled_follower_returns_without_cancelling_the_leader_or_persisting(
         .expect("cancelled follower must not wait for the leader")
         .unwrap()
         .unwrap();
-    assert_eq!(follower_outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(follower_outcome.outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(
+        follower_outcome.disposition,
+        SubagentPersistenceDisposition::ObserverCancelled
+    );
+    assert!(!follower_outcome.should_emit_host_effects());
     assert!(!leader_cancellation.is_cancelled());
     assert_eq!(*executor.calls.lock().unwrap(), 1);
     assert!(persistence.outcomes.lock().unwrap().is_empty());
 
     leader_cancellation.cancel();
     assert_eq!(
-        leader.await.unwrap().unwrap().status,
+        leader.await.unwrap().unwrap().outcome.status,
         SubagentStatus::Cancelled
     );
     assert_eq!(persistence.outcomes.lock().unwrap().len(), 1);
@@ -906,8 +1061,8 @@ async fn same_task_id_from_distinct_parent_runs_never_shares_lifecycle_state() {
         .collect::<Vec<_>>();
     assert_eq!(
         terminal_keys.len(),
-        4,
-        "load and terminal use each scoped key"
+        6,
+        "initial terminal lookup, pause lookup, and terminal persistence use each scoped key"
     );
     assert!(
         terminal_keys
@@ -940,8 +1095,11 @@ async fn awaiting_input_is_not_cached_and_the_next_call_resumes_to_completion() 
         .await
         .unwrap();
 
-    assert!(matches!(first.status, SubagentStatus::AwaitingInput(_)));
-    assert_eq!(second.status, SubagentStatus::Completed);
+    assert!(matches!(
+        first.outcome.status,
+        SubagentStatus::AwaitingInput(_)
+    ));
+    assert_eq!(second.outcome.status, SubagentStatus::Completed);
     assert_eq!(*planner.calls.lock().unwrap(), 2);
     assert_eq!(*executor.calls.lock().unwrap(), 2);
     assert_eq!(*planner.seen_resumes.lock().unwrap(), vec![false, true]);
@@ -986,7 +1144,7 @@ async fn continuation_keeps_original_key_with_a_fresh_owned_context() {
         )
         .await
         .unwrap();
-    assert_eq!(completed.status, SubagentStatus::Completed);
+    assert_eq!(completed.outcome.status, SubagentStatus::Completed);
     assert_eq!(*planner.seen_resumes.lock().unwrap(), vec![false, true]);
     assert!(
         persistence
@@ -1019,7 +1177,7 @@ async fn driver_replaces_prepared_context_cancellation_with_execution_token() {
     cancellation.cancel();
     let outcome = task.await.unwrap().unwrap();
 
-    assert_eq!(outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(outcome.outcome.status, SubagentStatus::Cancelled);
     assert!(executor.context_cancellations.lock().unwrap()[0].is_cancelled());
 }
 
@@ -1064,7 +1222,11 @@ async fn cancellation_before_persistence_commit_records_only_cancelled_terminal(
             .unwrap()
             .unwrap();
 
-        assert_eq!(outcome.status, SubagentStatus::Cancelled);
+        assert_eq!(outcome.outcome.status, SubagentStatus::Cancelled);
+        assert_eq!(
+            outcome.disposition,
+            SubagentPersistenceDisposition::TerminalInserted
+        );
         assert_eq!(persistence.outcomes.lock().unwrap().len(), 1);
         assert_eq!(
             persistence.outcomes.lock().unwrap()[0].status,
@@ -1120,7 +1282,7 @@ async fn nested_same_driver_task_uses_child_reservation_and_rolls_usage_up_once(
     .expect("a nested child task must not wait on a driver-global lock")
     .unwrap();
 
-    assert_eq!(parent.usage.calls, 8);
+    assert_eq!(parent.outcome.usage.calls, 8);
     assert_eq!(*executor.calls.lock().unwrap(), vec!["parent", "child"]);
     let records = persistence.outcomes.lock().unwrap();
     assert_eq!(records.len(), 2);
@@ -1145,7 +1307,7 @@ async fn cancellation_before_execution_records_one_truthful_terminal() {
         .await
         .unwrap();
 
-    assert_eq!(outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(outcome.outcome.status, SubagentStatus::Cancelled);
     assert_eq!(*planner.calls.lock().unwrap(), 0);
     assert_eq!(*executor.calls.lock().unwrap(), 0);
     assert_eq!(
@@ -1174,7 +1336,7 @@ async fn cancellation_during_execution_is_truthful_and_terminal_once() {
     cancellation.cancel();
     let outcome = task.await.unwrap().unwrap();
 
-    assert_eq!(outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(outcome.outcome.status, SubagentStatus::Cancelled);
     assert_eq!(*executor.calls.lock().unwrap(), 1);
     assert_eq!(
         actions.lock().unwrap().last(),
@@ -1190,11 +1352,11 @@ async fn cancellation_after_execution_preserves_lossless_result_data() {
         .await
         .unwrap();
 
-    assert_eq!(outcome.status, SubagentStatus::Cancelled);
-    assert_eq!(outcome.output, "result");
-    assert_eq!(outcome.history, vec![Message::assistant("result")]);
-    assert_eq!(outcome.usage.calls, 7);
-    assert_eq!(outcome.artifacts.len(), 1);
+    assert_eq!(outcome.outcome.status, SubagentStatus::Cancelled);
+    assert_eq!(outcome.outcome.output, "result");
+    assert_eq!(outcome.outcome.history, vec![Message::assistant("result")]);
+    assert_eq!(outcome.outcome.usage.calls, 7);
+    assert_eq!(outcome.outcome.artifacts.len(), 1);
 }
 
 #[tokio::test]

@@ -4,7 +4,9 @@ use tokio::sync::{Mutex, Notify};
 
 use super::{
     PersistedSubagentPause, SubagentError, SubagentExecution, SubagentExecutor, SubagentOutcome,
-    SubagentPersistence, SubagentPlanner, SubagentRequest, SubagentStatus, SubagentTaskKey,
+    SubagentPausePersistenceDisposition, SubagentPersistence, SubagentPersistenceDisposition,
+    SubagentPlanner, SubagentRequest, SubagentRunResult, SubagentStatus, SubagentTaskKey,
+    SubagentTerminalPersistenceDisposition,
 };
 use tinyagents_harness::CancellationToken;
 
@@ -39,7 +41,7 @@ pub struct SubagentDriver<C: Send + 'static = (), H: Send + 'static = ()> {
 /// The map only protects reservation and removal. Planner, executor, and
 /// persistence futures never run while it is locked.
 struct InFlight {
-    result: Mutex<Option<Result<SubagentOutcome, SubagentError>>>,
+    result: Mutex<Option<Result<SubagentRunResult, SubagentError>>>,
     notify: Notify,
 }
 
@@ -55,7 +57,7 @@ impl InFlight {
         &self,
         cancellation: &CancellationToken,
         task_id: &str,
-    ) -> Result<SubagentOutcome, SubagentError> {
+    ) -> Result<SubagentRunResult, SubagentError> {
         loop {
             let notified = self.notify.notified();
             tokio::pin!(notified);
@@ -65,13 +67,13 @@ impl InFlight {
             }
             tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => return Ok(SubagentOutcome::cancelled(task_id)),
+                _ = cancellation.cancelled() => return Ok(SubagentRunResult::new(SubagentOutcome::cancelled(task_id), SubagentPersistenceDisposition::ObserverCancelled)),
                 _ = &mut notified => {}
             }
         }
     }
 
-    async fn complete(&self, result: Result<SubagentOutcome, SubagentError>) {
+    async fn complete(&self, result: Result<SubagentRunResult, SubagentError>) {
         *self.result.lock().await = Some(result);
         self.notify.notify_waiters();
     }
@@ -105,10 +107,20 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         &self,
         request: SubagentRequest<C, H>,
         cancellation: CancellationToken,
-    ) -> Result<SubagentOutcome, SubagentError> {
+    ) -> Result<SubagentRunResult, SubagentError> {
         let task_key = request.task_key().clone();
         if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
-            return Ok(outcome);
+            return Ok(SubagentRunResult::new(
+                outcome,
+                SubagentPersistenceDisposition::TerminalExisting,
+            ));
+        }
+        if let Some(outcome) = self.persistence.load_terminal(&task_key).await? {
+            self.cache_terminal(task_key, &outcome).await;
+            return Ok(SubagentRunResult::new(
+                outcome,
+                SubagentPersistenceDisposition::TerminalExisting,
+            ));
         }
 
         let (entry, is_leader) = {
@@ -123,16 +135,45 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             }
         };
         if !is_leader {
-            return entry.wait(&cancellation, &task_key.task_id).await;
+            return entry
+                .wait(&cancellation, &task_key.task_id)
+                .await
+                .map(|result| {
+                    SubagentRunResult::new(
+                        result.outcome,
+                        match result.disposition {
+                            SubagentPersistenceDisposition::PauseCommitted
+                            | SubagentPersistenceDisposition::PauseReplaced
+                            | SubagentPersistenceDisposition::PauseExisting => {
+                                SubagentPersistenceDisposition::PauseExisting
+                            }
+                            SubagentPersistenceDisposition::TerminalInserted
+                            | SubagentPersistenceDisposition::TerminalExisting => {
+                                SubagentPersistenceDisposition::TerminalExisting
+                            }
+                            SubagentPersistenceDisposition::ObserverCancelled => {
+                                SubagentPersistenceDisposition::ObserverCancelled
+                            }
+                        },
+                    )
+                });
         }
         // A preceding caller may have committed a terminal result between the
         // initial cache check and this reservation. Do not reopen that task
         // after its in-flight entry has been removed.
         if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
-            entry.complete(Ok(outcome.clone())).await;
+            entry
+                .complete(Ok(SubagentRunResult::new(
+                    outcome.clone(),
+                    SubagentPersistenceDisposition::TerminalExisting,
+                )))
+                .await;
             let mut in_flight = self.in_flight.lock().await;
             in_flight.remove(&task_key);
-            return Ok(outcome);
+            return Ok(SubagentRunResult::new(
+                outcome,
+                SubagentPersistenceDisposition::TerminalExisting,
+            ));
         }
 
         let result = self
@@ -154,18 +195,31 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         mut request: SubagentRequest<C, H>,
         task_key: SubagentTaskKey,
         cancellation: CancellationToken,
-    ) -> Result<SubagentOutcome, SubagentError> {
+    ) -> Result<SubagentRunResult, SubagentError> {
         let task_id = request.task_id().to_owned();
 
         if cancellation.is_cancelled() {
-            return self.persist_cancelled(task_key, task_id).await;
+            return self
+                .persist_cancelled(task_key, SubagentOutcome::cancelled(task_id), None)
+                .await;
         }
 
         if request.resume().is_none() {
             request.set_resume(self.persistence.load(&task_key).await?);
         }
+        // Keep the exact pause seen at the durable read boundary. The
+        // persistence seam uses it as a scoped compare-and-swap expectation
+        // if execution pauses again, so a resumed pause can advance while a
+        // duplicate continuation returns the newer durable winner.
+        let expected_pause = request.resume().cloned();
         if cancellation.is_cancelled() {
-            return self.persist_cancelled(task_key, task_id).await;
+            return self
+                .persist_cancelled(
+                    task_key,
+                    SubagentOutcome::cancelled(task_id),
+                    expected_pause,
+                )
+                .await;
         }
 
         let mut prepared = self.planner.prepare(request).await?;
@@ -176,7 +230,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             });
         }
         if cancellation.is_cancelled() {
-            return self.persist_cancelled(task_key, prepared.task_id).await;
+            return self
+                .persist_cancelled(
+                    task_key,
+                    SubagentOutcome::cancelled(prepared.task_id),
+                    expected_pause,
+                )
+                .await;
         }
         prepared.run_context = prepared.run_context.with_cancellation(cancellation.clone());
 
@@ -206,84 +266,207 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             Err(_) if cancellation.is_cancelled() => SubagentOutcome::cancelled(task_id),
             Err(error) => return Err(error),
         };
-        self.persist(task_key, outcome, &cancellation).await
+        self.persist(task_key, outcome, expected_pause, &cancellation)
+            .await
     }
 
     async fn persist_cancelled(
         &self,
         task_key: SubagentTaskKey,
-        task_id: String,
-    ) -> Result<SubagentOutcome, SubagentError> {
-        let outcome = SubagentOutcome::cancelled(task_id);
+        mut outcome: SubagentOutcome,
+        expected_pause: Option<super::SubagentResume>,
+    ) -> Result<SubagentRunResult, SubagentError> {
+        outcome.status = SubagentStatus::Cancelled;
         // Once cancellation has won, this is the one terminal action. Do not
         // race it with the already-latched token or a caller could observe an
         // indeterminate terminal write.
-        self.persistence
-            .record_terminal(&task_key, &outcome)
-            .await?;
-        self.cache_terminal(task_key, &outcome).await;
-        Ok(outcome)
+        match self
+            .persistence
+            .record_terminal(&task_key, &outcome, expected_pause.as_ref())
+            .await?
+        {
+            SubagentTerminalPersistenceDisposition::Inserted => {
+                self.cache_terminal(task_key, &outcome).await;
+                Ok(SubagentRunResult::new(
+                    outcome,
+                    SubagentPersistenceDisposition::TerminalInserted,
+                ))
+            }
+            SubagentTerminalPersistenceDisposition::Existing => {
+                self.load_terminal_winner(task_key).await
+            }
+            SubagentTerminalPersistenceDisposition::PauseExisting => {
+                self.load_pause_winner(task_key).await
+            }
+        }
     }
 
     async fn persist(
         &self,
         task_key: SubagentTaskKey,
         outcome: SubagentOutcome,
+        expected_pause: Option<super::SubagentResume>,
         cancellation: &CancellationToken,
-    ) -> Result<SubagentOutcome, SubagentError> {
+    ) -> Result<SubagentRunResult, SubagentError> {
         if matches!(&outcome.status, SubagentStatus::Cancelled) {
-            self.persistence
-                .record_terminal(&task_key, &outcome)
-                .await?;
-            self.cache_terminal(task_key, &outcome).await;
-            return Ok(outcome);
+            return self
+                .persist_cancelled(task_key, outcome, expected_pause)
+                .await;
         }
-        let committed = match &outcome.status {
-            SubagentStatus::AwaitingInput(pause) => {
-                self.commit_or_cancel(
-                    self.persistence.save_pause(PersistedSubagentPause {
-                        key: task_key.clone(),
-                        pause: pause.clone(),
-                    }),
-                    cancellation,
-                )
-                .await?
+        let disposition = match &outcome.status {
+            SubagentStatus::AwaitingInput(_) => {
+                match self
+                    .commit_or_cancel(
+                        self.persistence.save_pause(PersistedSubagentPause {
+                            key: task_key.clone(),
+                            outcome: outcome.clone(),
+                            replaces: expected_pause.clone(),
+                        }),
+                        cancellation,
+                    )
+                    .await?
+                {
+                    Some(SubagentPausePersistenceDisposition::Inserted) => {
+                        SubagentPersistenceDisposition::PauseCommitted
+                    }
+                    Some(SubagentPausePersistenceDisposition::Replaced) => {
+                        SubagentPersistenceDisposition::PauseReplaced
+                    }
+                    Some(SubagentPausePersistenceDisposition::Existing) => {
+                        return self.load_pause_winner(task_key).await;
+                    }
+                    Some(SubagentPausePersistenceDisposition::TerminalExisting) => {
+                        return self.load_terminal_winner(task_key).await;
+                    }
+                    None => {
+                        return self
+                            .persist_cancelled(task_key, outcome, expected_pause)
+                            .await;
+                    }
+                }
             }
             SubagentStatus::Completed | SubagentStatus::Incomplete(_) => {
-                self.commit_or_cancel(
-                    self.persistence.record_terminal(&task_key, &outcome),
-                    cancellation,
-                )
-                .await?
+                match self
+                    .commit_or_cancel(
+                        async {
+                            self.persistence
+                                .record_terminal(&task_key, &outcome, expected_pause.as_ref())
+                                .await
+                        },
+                        cancellation,
+                    )
+                    .await?
+                {
+                    Some(SubagentTerminalPersistenceDisposition::Inserted) => {
+                        SubagentPersistenceDisposition::TerminalInserted
+                    }
+                    Some(SubagentTerminalPersistenceDisposition::Existing) => {
+                        SubagentPersistenceDisposition::TerminalExisting
+                    }
+                    Some(SubagentTerminalPersistenceDisposition::PauseExisting) => {
+                        return self.load_pause_winner(task_key).await;
+                    }
+                    None => {
+                        return self
+                            .persist_cancelled(task_key, outcome, expected_pause)
+                            .await;
+                    }
+                }
             }
             SubagentStatus::Cancelled => unreachable!("handled before persistence race"),
         };
-        if !committed {
-            return self.persist_cancelled(task_key, outcome.task_id).await;
-        }
         if matches!(
             &outcome.status,
             SubagentStatus::Completed | SubagentStatus::Incomplete(_)
         ) {
-            self.cache_terminal(task_key, &outcome).await;
+            let terminal = if matches!(
+                disposition,
+                SubagentPersistenceDisposition::TerminalExisting
+            ) {
+                self.persistence
+                    .load_terminal(&task_key)
+                    .await?
+                    .ok_or_else(|| {
+                        SubagentError::Persistence(
+                            "terminal insert lost without durable outcome".into(),
+                        )
+                    })?
+            } else {
+                outcome.clone()
+            };
+            self.cache_terminal(task_key, &terminal).await;
+            return Ok(SubagentRunResult::new(terminal, disposition));
         }
-        Ok(outcome)
+        Ok(SubagentRunResult::new(outcome, disposition))
     }
 
-    async fn commit_or_cancel<F>(
+    async fn load_pause_winner(
+        &self,
+        task_key: SubagentTaskKey,
+    ) -> Result<SubagentRunResult, SubagentError> {
+        // A terminal can win after the pause CAS reports contention. It is
+        // authoritative over every prior pause and must never be reopened.
+        if let Some(terminal) = self.persistence.load_terminal(&task_key).await? {
+            self.cache_terminal(task_key, &terminal).await;
+            return Ok(SubagentRunResult::new(
+                terminal,
+                SubagentPersistenceDisposition::TerminalExisting,
+            ));
+        }
+        let paused = self
+            .persistence
+            .load_pause(&task_key)
+            .await?
+            .ok_or_else(|| {
+                SubagentError::Persistence(
+                    "pause compare-and-swap lost without a durable pause or terminal outcome"
+                        .into(),
+                )
+            })?;
+        if !matches!(paused.status, SubagentStatus::AwaitingInput(_)) {
+            return Err(SubagentError::Persistence(
+                "durable pause record did not contain an awaiting-input outcome".into(),
+            ));
+        }
+        Ok(SubagentRunResult::new(
+            paused,
+            SubagentPersistenceDisposition::PauseExisting,
+        ))
+    }
+
+    async fn load_terminal_winner(
+        &self,
+        task_key: SubagentTaskKey,
+    ) -> Result<SubagentRunResult, SubagentError> {
+        let terminal = self
+            .persistence
+            .load_terminal(&task_key)
+            .await?
+            .ok_or_else(|| {
+                SubagentError::Persistence(
+                    "terminal compare-and-swap lost without a durable terminal outcome".into(),
+                )
+            })?;
+        self.cache_terminal(task_key, &terminal).await;
+        Ok(SubagentRunResult::new(
+            terminal,
+            SubagentPersistenceDisposition::TerminalExisting,
+        ))
+    }
+
+    async fn commit_or_cancel<F, T>(
         &self,
         operation: F,
         cancellation: &CancellationToken,
-    ) -> Result<bool, SubagentError>
+    ) -> Result<Option<T>, SubagentError>
     where
-        F: Future<Output = Result<(), SubagentError>>,
+        F: Future<Output = Result<T, SubagentError>>,
     {
         tokio::select! {
             biased;
-            _ = cancellation.cancelled() => Ok(false),
+            _ = cancellation.cancelled() => Ok(None),
             result = operation => {
-                result?;
-                Ok(true)
+                Ok(Some(result?))
             }
         }
     }
