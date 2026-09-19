@@ -355,22 +355,39 @@ where
                 node: node_id.clone(),
                 step,
             });
-            self.graph.emit(GraphEvent::NodeStarted {
-                node: node_id.clone(),
-                step,
-            });
 
-            let node_ctx = ctx.node_context(
-                activation,
-                step,
-                None,
-                siblings.get(node_id).copied().unwrap_or(1),
-                state,
-            );
-            let policy = self.graph.effective_policy(node_id);
-            let result = self
-                .run_node_with_retry(node_id, &node.handler, state, node_ctx, step, &policy)
-                .await;
+            let send_arg = activation.send_arg.clone();
+            let result = if let Some(update) = self
+                .try_cache_get(node_id, state, send_arg.as_ref())
+                .await
+            {
+                self.graph.emit(GraphEvent::TaskCompleted {
+                    node: node_id.clone(),
+                    step,
+                    cached: true,
+                });
+                Ok(NodeResult::Update(update))
+            } else {
+                self.graph.emit(GraphEvent::NodeStarted {
+                    node: node_id.clone(),
+                    step,
+                });
+
+                let node_ctx = ctx.node_context(
+                    activation,
+                    step,
+                    None,
+                    siblings.get(node_id).copied().unwrap_or(1),
+                    state,
+                );
+                let policy = self.graph.effective_policy(node_id);
+                let result = self
+                    .run_node_with_retry(node_id, &node.handler, state, node_ctx, step, &policy)
+                    .await;
+                self.try_cache_put(node_id, state, send_arg.as_ref(), &result, step)
+                    .await;
+                result
+            };
             let stop = matches!(result, Err(_) | Ok(NodeResult::Interrupt(_)));
             results.push((activation.clone(), result));
             if stop {
