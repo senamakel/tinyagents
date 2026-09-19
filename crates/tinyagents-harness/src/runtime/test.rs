@@ -1704,6 +1704,99 @@ async fn security_gate_sees_raw_provider_arguments_while_tools_receive_prepared_
     );
 }
 
+/// A deferred tool that echoes its argument, used to exercise the
+/// `tool_call` discovery bridge's argument unwrapping under host
+/// authorization.
+struct DeferredEchoTool;
+
+#[async_trait]
+impl Tool for DeferredEchoTool {
+    fn name(&self) -> &str {
+        "quote"
+    }
+
+    fn description(&self) -> &str {
+        "echoes its argument"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {"symbol": {"type": "string"}},
+            "required": ["symbol"]
+        })
+    }
+
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success(arguments.to_string()))
+    }
+}
+
+/// Regression: `admit_tool_call` used to snapshot `model_arguments` for host
+/// authorization *before* the `tool_call` discovery bridge unwrapped the
+/// call, so the host's `SecurityGate` saw the stale `{"name", "arguments"}`
+/// wrapper the model literally sent instead of the real tool's arguments
+/// that validation and execution actually use — an argument-sensitive
+/// authorization decision could approve a different payload than the one it
+/// reviewed. The gate must see the unwrapped real arguments.
+#[tokio::test]
+async fn security_gate_sees_unwrapped_arguments_for_a_bridged_deferred_call() {
+    let mut tool_response = ModelResponse::assistant("");
+    tool_response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "real-call",
+            crate::tool::discover::TOOL_CALL_NAME,
+            json!({"name": "quote", "arguments": {"symbol": "ACME"}}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_response,
+        ModelResponse::assistant("done"),
+    ]));
+    let gate = Arc::new(RecordingArgumentGate {
+        seen: Mutex::new(Vec::new()),
+    });
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        gate.clone(),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(DeferredEchoTool));
+
+    harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("bridged-args"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the deferred tool call completes");
+
+    assert_eq!(
+        *gate.seen.lock().expect("gate lock"),
+        vec![json!({"symbol": "ACME"})],
+        "the host must authorize the unwrapped real-tool arguments, not the \
+         stale `tool_call` bridge wrapper"
+    );
+}
+
 #[tokio::test]
 async fn denied_tool_calls_release_their_reserved_limit_for_a_later_approval() {
     fn call(id: &str) -> ModelResponse {

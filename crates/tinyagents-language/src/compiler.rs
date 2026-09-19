@@ -4,25 +4,23 @@
 //! This is the gate that makes recursive self-authoring safe. A `.rag` plan —
 //! whether hand-written or emitted by a model running inside the harness — is
 //! semantically validated, then bound *by name* against a live registry through
-//! [`CapabilityResolver`]/[`bind_capabilities_with_registry`], so the resulting
+//! [`crate::CapabilityResolver`]/[`bind_capabilities_with_registry`], so the resulting
 //! topology can only reach capabilities Rust has already registered and allowed.
-//! Runnable behaviour is supplied entirely by a Rust-side [`NodeFactory`], never
-//! by the source, so the same compiler path serves human and model authors alike
+//! Runnable node behaviour is never part of this crate's output: materialising a
+//! [`Blueprint`] into a runnable graph (via a caller-supplied `NodeFactory`) is
+//! the responsibility of the downstream `tinyagents-graph` crate's `language`
+//! module, so the same `Blueprint` shape serves human and model authors alike
 //! and the model can re-enter the very runtime it is executing in.
 //!
-//! The compiler has three responsibilities, each exposed as a free function or
-//! trait so callers can stop at the level of safety they need:
+//! This module has two responsibilities, each exposed as a free function so
+//! callers can stop at the level of safety they need:
 //!
 //! 1. [`compile`] — semantic validation of the AST and lowering into one
 //!    serializable [`Blueprint`] per graph.
-//! 2. [`bind_capabilities`] — checks every model/tool reference in a blueprint
-//!    against an allowlist ([`CapabilityResolver`]). This is the registry
+//! 2. [`crate::bind_capabilities`] — checks every model/tool reference in a blueprint
+//!    against an allowlist ([`crate::CapabilityResolver`]). This is the registry
 //!    binding gate: declarative source can only reference capabilities that
 //!    Rust has already registered and allowed.
-//! 3. [`build_graph`] — materialises a blueprint into a durable
-//!    [`CompiledGraph`] using a caller-supplied [`NodeFactory`]. The blueprint
-//!    describes *topology*; runnable node behaviour comes entirely from the
-//!    Rust-side factory, never from the declarative source.
 
 use crate::capability_resolver::{CapabilitySource, bind_capabilities_with_registry};
 use crate::parser::parse_str;

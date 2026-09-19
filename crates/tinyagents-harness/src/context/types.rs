@@ -139,8 +139,7 @@ pub struct RunConfig {
 /// channel.
 ///
 /// This is the harness-native complement to the graph
-/// [`Command`][crate::graph::command::Command]/[`Interrupt`][crate::graph::command::Interrupt]
-/// vocabulary: the agent loop drains any requested control at its safe
+/// `Command`/`Interrupt` vocabulary (in `tinyagents-graph`): the agent loop drains any requested control at its safe
 /// checkpoints (after each model response) and acts on it, so behaviors like
 /// "stop after an early-exit tool" or "pause on budget" no longer need a
 /// bespoke side channel. Requests are visible via

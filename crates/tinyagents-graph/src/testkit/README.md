@@ -55,6 +55,21 @@ two backends that both implement a trait should behave identically. These
 functions encode that contract once so any backend — built-in or a
 caller-supplied adapter — can be certified by running the same assertions:
 
+- `checkpointer_contract(cp)` — basic `Checkpointer` contract: put/get
+  (latest and specific), duplicate-id resolution, insertion-order listing,
+  unknown-thread misses, namespace-scoped lookup, `list_threads`,
+  `delete_thread`, and `prune`.
+- `checkpointer_concurrent_contract(cp: Arc<C>)` — concurrent-write contract:
+  many tasks putting distinct checkpoints on one shared instance must not lose
+  writes.
+- `checkpointer_writes_contract(cp)` — pending-writes ledger contract: data
+  writes are idempotent by `(task_id, idx)`, control-plane writes upsert,
+  writes are namespace-isolated, and `delete_checkpoints`/`delete_thread`
+  remove the writes they own.
+- `checkpointer_lineage_contract(cp)` — lineage and thread-operation contract:
+  `get_tuple` addressing (including parent config), `state_history`
+  ordering/limit/cycle-termination, `copy_thread` semantics (including
+  rejecting a non-empty target), and per-namespace `prune`.
 - `taskstore_contract(store)` — basic CRUD/lifecycle contract for a
   `graph::orchestration::TaskStore` implementation.
 - `taskstore_concurrent_contract(store: Arc<S>)` — concurrent-access contract
@@ -72,7 +87,7 @@ backend.
 | --- | --- |
 | `types.rs` | `GraphEventRecorder`, `StreamCollector`, `GraphRun`, `GraphAssertions`, `RetryCountingNode`. |
 | `mod.rs` | Node doubles, `run_recorded`, `assert_graph`. |
-| `conformance.rs` | `taskstore_contract`, `taskstore_concurrent_contract`, `taskstore_replay_contract`. |
+| `conformance.rs` | `checkpointer_contract`, `checkpointer_concurrent_contract`, `checkpointer_writes_contract`, `checkpointer_lineage_contract`, `taskstore_contract`, `taskstore_concurrent_contract`, `taskstore_replay_contract`. |
 | `test.rs` | Unit tests for the testkit itself (each double, recorder, assertion). |
 
 ## Operational constraints

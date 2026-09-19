@@ -277,7 +277,7 @@ pub fn prompt_cache_key(request: &ModelRequest) -> Option<String> {
 ///
 /// This is the *active* half of the prompt-cache tooling: until now the layout
 /// types only ever **observed** a prefix, while
-/// [`CachePolicy::protect_prompt_prefix`][super::CachePolicy::protect_prompt_prefix]
+/// [`CachePolicy::protect_prompt_prefix`](tinyinference_llm::cache::CachePolicy::protect_prompt_prefix)
 /// had no reader anywhere in the crate and so could not change any behaviour.
 ///
 /// Precedence follows the rest of the crate: a caller who already set

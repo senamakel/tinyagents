@@ -5,15 +5,15 @@
 //! # Why this exists
 //!
 //! [`CapabilityRegistry`](crate::CapabilityRegistry) and the harness
-//! [`ModelRegistry`](tinyagents_harness::runtime::ModelRegistry) resolve a model *by
+//! [`ModelRegistry`](tinyagents_harness::ModelRegistry) resolve a model *by
 //! name* and the agent loop can fail over across a
-//! [`FallbackPolicy`](tinyagents_harness::retry::FallbackPolicy) — but neither owns
+//! [`FallbackPolicy`] — but neither owns
 //! the *policy* that maps a host's **workload tiers** (`chat-v1`, `reasoning-v1`,
 //! `vision-v1`, …) onto concrete models, nor the per-tier capability gates and
 //! same-family fallback ordering that go with them. Hosts have historically
 //! re-implemented that projection by hand (OpenHuman's `RouterProvider` +
 //! `routes.rs`): register a model per tier alias, build a `FallbackPolicy`, stamp
-//! a required [`CapabilitySet`](tinyinference_llm::model::CapabilitySet) per turn.
+//! a required [`CapabilitySet`] per turn.
 //!
 //! [`ModelRouter`] is the crate-owned home for exactly that policy. A host
 //! *declares* its tier table once — each [`WorkloadRoute`] names the model an

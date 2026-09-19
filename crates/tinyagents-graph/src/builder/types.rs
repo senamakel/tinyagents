@@ -1,4 +1,11 @@
 //! Builder types for the durable graph.
+//!
+//! Everything here is data accumulated by a [`GraphBuilder`]; the behavior
+//! that acts on it (adding nodes/edges, validation, `compile`) lives in
+//! `builder/mod.rs`. [`GraphBuilder::compile`](super::GraphBuilder::compile)
+//! consumes a [`GraphBuilder`] and produces a [`crate::CompiledGraph`], whose
+//! own fields largely mirror the ones declared here (see
+//! `compiled::types::CompiledGraph`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;

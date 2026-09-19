@@ -35,7 +35,8 @@
 //! stable segment's text can no longer report "prefix stable".
 //! [`CacheLayoutEvent`] describes mutations, and
 //! [`CacheLayoutEvent::under_policy`] plus [`apply_prompt_cache_breakpoints`]
-//! make [`CachePolicy::protect_prompt_prefix`] load-bearing rather than inert.
+//! make [`CachePolicy::protect_prompt_prefix`](tinyinference_llm::cache::CachePolicy::protect_prompt_prefix)
+//! load-bearing rather than inert.
 //!
 //! ## 3. Stampede protection
 //! [`SingleFlight`] collapses concurrent identical misses into one provider

@@ -251,6 +251,27 @@ mod smoke {
     }
 
     #[test]
+    fn policy_charges_tool_schemas_against_the_trigger() {
+        let policy = SummarizationPolicy {
+            trigger_tokens: 20,
+            keep_last: 1,
+            ..Default::default()
+        };
+        // ~16 chars → 4 tokens: well under the trigger on its own.
+        let msgs = vec![Message::user("aaaaaaaaaaaaaaaa")];
+        assert!(!policy.should_summarize(&msgs));
+        assert!(!policy.should_summarize_with_tools(&msgs, &[]));
+
+        // A verbose schema pushes the same transcript over the line.
+        let tools = vec![tinyinference_llm::tool::ToolSchema::new(
+            "lookup",
+            "x".repeat(200),
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+        assert!(policy.should_summarize_with_tools(&msgs, &tools));
+    }
+
+    #[test]
     fn policy_plan_splits_keeping_system_and_recent() {
         let policy = SummarizationPolicy {
             trigger_tokens: 0,

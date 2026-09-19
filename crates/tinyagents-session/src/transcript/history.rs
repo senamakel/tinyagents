@@ -40,7 +40,7 @@ use crate::transcript::{
 /// the previously-persisted logical set in memory on `Agent`
 /// (`persisted_transcript_messages`) precisely so it never has to re-read a
 /// growing file, and a disk re-read is not a faithful substitute — see
-/// [`FileTranscriptHistory::write_logical_set`].
+/// `FileTranscriptHistory::write_logical_set`.
 pub struct TranscriptTurn<'a> {
     /// Logical message set already persisted, for the extension-vs-compaction diff.
     pub prev: &'a [TranscriptMessage],
@@ -163,6 +163,8 @@ pub struct FileTranscriptLocator {
 }
 
 impl FileTranscriptLocator {
+    /// Builds a locator rooted at `workspace_dir` (i.e. it resolves
+    /// `{workspace_dir}/session_raw/...`).
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),

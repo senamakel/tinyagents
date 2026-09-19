@@ -23,7 +23,7 @@
 //! and are separable so a caller can override one turn's limits without
 //! rebuilding the session.
 //!
-//! Everything here is inert — `serde` + `std` only, see [`types`]. Capabilities
+//! Everything here is inert — `serde` + `std` only, see `types`. Capabilities
 //! (memory, security, budget, progress) are trait objects supplied separately;
 //! nothing in this module is a behaviour seam.
 

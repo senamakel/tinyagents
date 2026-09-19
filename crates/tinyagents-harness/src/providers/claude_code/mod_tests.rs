@@ -1,3 +1,6 @@
+//! Unit tests for `thread_key_from_request` metadata precedence and
+//! `ClaudeCodeProvider`'s `ModelProfile` construction.
+
 use super::*;
 
 #[test]

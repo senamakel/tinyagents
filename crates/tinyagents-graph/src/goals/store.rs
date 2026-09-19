@@ -1,5 +1,5 @@
 //! Persistence for the thread-level goal, on the harness
-//! [`Store`](tinyagents_harness::store::Store).
+//! [`Store`].
 //!
 //! Each thread's goal is a single serialized [`ThreadGoal`] value under the
 //! [`GOALS_NAMESPACE`] namespace, keyed by the hex-encoded thread id. There is
@@ -7,7 +7,7 @@
 //!
 //! The [`Store`] trait offers no compare-and-set and no cross-key transaction,
 //! so every mutation runs `load → mutate → put` under a **per-thread async
-//! mutex** ([`thread_lock`]) — the process-local analogue of OpenHuman's
+//! mutex** (`thread_lock`) — the process-local analogue of OpenHuman's
 //! file-rename atomicity. Inside that lock the `goal_id` compare-and-set guard
 //! (see [`account_usage`] / [`set_continuation_suppressed_if`]) still rejects
 //! stale accounting from a replaced goal.

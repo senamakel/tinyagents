@@ -1,3 +1,14 @@
+//! Connection lifecycle for the session database: path resolution, pragma
+//! setup, and the autocommit/transaction entry points every other module in
+//! this crate opens the database through.
+//!
+//! Every caller in `super::ops`, `super::retention`, and `super::run_ledger`
+//! goes through [`with_connection`] or [`with_transaction`] rather than
+//! opening a [`Connection`] directly, so schema migrations
+//! ([`super::migrations`]) and the busy-timeout/WAL/foreign-key pragmas
+//! ([`prepare_connection`]) are applied uniformly on every path into the
+//! database.
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

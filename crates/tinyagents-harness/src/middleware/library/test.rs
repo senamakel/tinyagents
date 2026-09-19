@@ -1041,6 +1041,43 @@ async fn tool_policy_strict_hides_and_rejects_unclassified() {
     assert!(matches!(err, TinyAgentsError::Validation(_)));
 }
 
+/// Regression for the intrinsic `tool_search`/`tool_call` discovery bridge
+/// under a fail-closed `ToolPolicyMiddleware::strict()`: the bridge tools are
+/// never registered, so `require_classification` used to reject them as
+/// unclassified in `before_model`, stripping both schemas from every request
+/// and making every deferred tool undiscoverable in a strict deployment.
+#[tokio::test]
+async fn tool_policy_strict_preserves_the_discovery_bridge() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mut policies = std::collections::HashMap::new();
+    policies.insert("safe".to_string(), ToolPolicy::read_only());
+
+    let mw = ToolPolicyMiddleware::strict(policies);
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let schema = |name: &str| ToolSchema {
+        name: name.to_string(),
+        description: String::new(),
+        parameters: json!({}),
+        format: ToolFormat::Json,
+    };
+    let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
+        schema("safe"),
+        schema(crate::tool::discover::TOOL_SEARCH_NAME),
+        schema(crate::tool::discover::TOOL_CALL_NAME),
+    ]);
+    stack
+        .run_before_model(&mut ctx, &(), &mut request)
+        .await
+        .expect("exposure filter runs");
+    let names: std::collections::HashSet<_> =
+        request.tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains("safe"));
+    assert!(names.contains(crate::tool::discover::TOOL_SEARCH_NAME));
+    assert!(names.contains(crate::tool::discover::TOOL_CALL_NAME));
+}
+
 #[tokio::test]
 async fn tool_policy_denies_declared_side_effect() {
     let (mut ctx, _recorder) = ctx_with_recorder();

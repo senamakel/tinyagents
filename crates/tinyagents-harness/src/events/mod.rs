@@ -16,7 +16,7 @@
 //!   transition (run boundaries, model calls, tool invocations, middleware,
 //!   routing, retries, and state updates).
 //! - [`EventRecord`] — a monotonically-offset-keyed wrapper that pairs an
-//!   [`EventId`] with the raw event.
+//!   [`EventId`](crate::EventId) with the raw event.
 //! - [`EventListener`] — a `Send + Sync` trait for pluggable event observers.
 //! - [`EventSink`] — a cloneable, thread-safe fan-out bus that assigns ids and
 //!   offsets and notifies registered listeners.
@@ -89,7 +89,7 @@ impl EventSink {
     /// Creates a new, empty event sink with no registered listeners.
     ///
     /// The sink is given a process-unique stream prefix (`s<n>`), so distinct
-    /// sinks never mint colliding [`EventId`]s within one process. For ids that
+    /// sinks never mint colliding [`EventId`](crate::EventId)s within one process. For ids that
     /// stay unique *across process restarts* — the case that matters for a
     /// durable journal aggregating many runs — construct the sink with
     /// [`Self::with_stream_id`] seeded from a stable run/thread id instead.
@@ -97,7 +97,7 @@ impl EventSink {
         Self::with_stream_id(format!("s{}", crate::ids::next_seq()))
     }
 
-    /// Creates a new, empty event sink whose emitted [`EventId`]s are prefixed
+    /// Creates a new, empty event sink whose emitted [`EventId`](crate::EventId)s are prefixed
     /// with `stream_id`. Passing a stable, unique identifier (typically the
     /// run's or root run's id) makes event ids reproducible and collision-free
     /// across restarts: the same logical event re-emitted for the same
@@ -141,7 +141,7 @@ impl EventSink {
         lock_recovering(&self.inner).listeners.len()
     }
 
-    /// Emits an event, assigning a monotonic [`EventId`] and offset, then
+    /// Emits an event, assigning a monotonic [`EventId`](crate::EventId) and offset, then
     /// notifying all registered listeners in insertion order.
     ///
     /// Returns the [`EventRecord`] that was enqueued so the caller can record
@@ -157,7 +157,7 @@ impl EventSink {
     /// re-entrant record is queued and delivered by the active drain loop)
     /// when they guard against unbounded event recursion.
     /// A panicking listener does **not** wedge the sink: the `dispatching` flag
-    /// is released by a [`DispatchGuard`] on unwind, so later emits still
+    /// is released by an internal `DispatchGuard` on unwind, so later emits still
     /// dispatch (the panicking listener's own record is lost, and any records
     /// still queued behind it are delivered by whichever emitter drains next).
     pub fn emit(&self, event: AgentEvent) -> EventRecord {

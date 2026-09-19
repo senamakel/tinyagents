@@ -5,7 +5,7 @@
 //! is, transparently, a language model orchestrating *other models*. It is the
 //! concrete "agents calling agents" mechanism behind the crate's
 //! recursive-language-model framing — the in-harness analogue of the graph-side
-//! [`crate::graph::subgraph`] recursion.
+//! `subgraph` recursion (in `tinyagents-graph`).
 //!
 //! This module provides the agent-calling-agent compositional primitive:
 //!
@@ -65,7 +65,7 @@
 //!
 //! # Layout
 //!
-//! - [`types`] holds the public type definitions.
+//! - `types` holds the public type definitions.
 //! - This file holds the impls (constructors, the invoke methods, and the
 //!   typed-parent dispatcher).
 //! - `test.rs` holds focused tests.
