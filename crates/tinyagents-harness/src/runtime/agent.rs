@@ -12,7 +12,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use futures::{Stream, StreamExt};
+use futures::Stream;
 
 use crate::agent_loop::AgentStreamItem;
 use crate::context::RunContext;
