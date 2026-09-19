@@ -2,19 +2,17 @@
 //! catalog** that makes TinyAgents recursive.
 //!
 //! In the recursive architecture, a model, agent, or graph can reach for
-//! capabilities it never hardcoded: a `.rag` blueprint (or a host orchestration
-//! session) references a model/tool/agent/graph *by name*, and the registry is
+//! capabilities it never hardcoded: a host orchestration session references a
+//! model, tool, agent, or graph *by name*, and the registry is
 //! what resolves that name to a real, Rust-registered handle. By owning the set
-//! of legal names, the registry is also the boundary that makes agent-authored
-//! plans safe to compile — a self-authored workflow can only bind to
-//! capabilities a human explicitly registered and allowed.
+//! of legal names, the registry also provides an explicit capability allowlist.
 //!
 //! The registry owns named runtime components and local metadata catalogs, in
 //! two complementary pieces:
 //!
 //! - [`CapabilityRegistry`] ([`capability`]) — the name-addressable catalog of
-//!   models, tools, graph blueprints, routers, and reducers that `.rag`
-//!   sources bind against, plus the discovery [`component`] types
+//!   models, tools, agents, graph descriptors, routers, and reducers, plus the
+//!   discovery [`component`] types
 //!   ([`ComponentKind`]/[`ComponentId`]/[`ComponentMetadata`]) that describe
 //!   what is registered.
 //! - [`ModelCatalog`] ([`catalog`]) — a checked-in snapshot of provider model
@@ -41,22 +39,3 @@ pub use catalog::{
 pub use component::{ComponentId, ComponentKind, ComponentMetadata};
 pub use diagnostics::{AliasBinding, DiagnosticSeverity, RegistryDiagnostic, RegistrySnapshot};
 pub use router::{ModelRouter, WorkloadRoute};
-
-impl<State: Send + Sync> tinyagents_language::capability_resolver::CapabilitySource
-    for CapabilityRegistry<State>
-{
-    fn names(&self, kind: tinyagents_language::capability_resolver::CapabilityKind) -> Vec<String> {
-        use tinyagents_language::capability_resolver::CapabilityKind;
-
-        let kind = match kind {
-            CapabilityKind::Model => ComponentKind::Model,
-            CapabilityKind::Tool => ComponentKind::Tool,
-            CapabilityKind::Graph => ComponentKind::Graph,
-            CapabilityKind::Router => ComponentKind::Router,
-            CapabilityKind::Reducer => ComponentKind::Reducer,
-            CapabilityKind::Agent => ComponentKind::Agent,
-            CapabilityKind::Script => ComponentKind::Script,
-        };
-        self.names_including_aliases(kind)
-    }
-}

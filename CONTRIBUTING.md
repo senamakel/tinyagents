@@ -89,7 +89,7 @@ Use concise imperative commit subjects, for example:
 
 ```text
 Add graph route validation tests
-Document expressive language safety boundary
+Document graph runtime safety boundary
 ```
 
 Avoid mixing formatting, refactors, and behavior changes unless they are

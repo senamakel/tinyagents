@@ -5,9 +5,8 @@
 //! architecture: because a node can embed another compiled graph
 //! ([`subgraph`]) or invoke a sub-agent, **graphs run graphs** and orchestration
 //! recurses while every step stays typed, checkpointed, and observable. A
-//! workflow authored from a `.rag` blueprint or driven from a host orchestrator
-//! lowers into exactly these same types, so a model can describe, compile, and
-//! re-enter the very runtime it is executing inside.
+//! workflow driven from a host orchestrator lowers into exactly these same
+//! types.
 //!
 //! The pieces: partial updates and reducers ([`reducer`]), commands and
 //! interrupts ([`command`]), a builder/compile contract ([`builder`]), a
@@ -36,7 +35,6 @@ pub mod dag;
 pub mod delegation;
 pub mod export;
 pub mod goals;
-pub mod language;
 pub mod observability;
 pub mod orchestration;
 pub mod parallel;
@@ -79,8 +77,8 @@ pub use delegation::{
 };
 pub use export::{
     ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, NodeInfo,
-    NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, blueprint_to_json,
-    blueprint_to_mermaid, blueprint_to_topology, from_json, to_json, to_mermaid,
+    NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, from_json, to_json,
+    to_mermaid,
 };
 pub use goals::store as goal_store;
 pub use goals::{

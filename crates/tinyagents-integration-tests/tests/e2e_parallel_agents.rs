@@ -31,7 +31,6 @@ use tinyagents_graph::ClosureStateReducer;
 use tinyagents_graph::END;
 use tinyagents_graph::*;
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 
 /// Committed graph state. Every field is filled by branches merging through the

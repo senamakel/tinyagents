@@ -8,7 +8,7 @@ The executor emits a `GraphEvent` at every meaningful boundary — run
 start/end, superstep start/end, node lifecycle, retries, routing decisions,
 checkpoints, interrupts, subgraph enter/exit, forked branches, recursion depth
 changes, and arbitrary custom writes. Routing those events into a
-`GraphEventSink` is what lets a REPL, a UI, or an enclosing graph watch a
+`GraphEventSink` is what lets a UI or an enclosing graph watch a
 subgraph or sub-agent execute in real time; because every event carries its
 node/step, nested runs' streams can be merged and attributed back up the run
 tree. `observability` is what makes this same event vocabulary durable

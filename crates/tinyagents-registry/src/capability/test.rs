@@ -1,7 +1,7 @@
 //! Unit tests for the [`CapabilityRegistry`](super::CapabilityRegistry):
-//! registration and lookup of models/tools/graphs, kind-scoped namespacing,
+//! registration and lookup of models and tools, kind-scoped namespacing,
 //! duplicate rejection, `replace_*` overwrite semantics, alias resolution and
-//! validation, and the harness/`.rag` resolver hand-off builders.
+//! validation, and harness registry hand-off builders.
 
 use std::sync::Arc;
 
@@ -11,7 +11,6 @@ use serde_json::json;
 use super::*;
 use crate::component::ComponentKind;
 use tinyagents_definition::AgentDefinition;
-use tinyagents_language::Blueprint;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinytools::{Tool, ToolResult};
 
@@ -46,37 +45,21 @@ impl Tool for FakeTool {
     }
 }
 
-fn blueprint(id: &str) -> Blueprint {
-    Blueprint {
-        graph_id: id.to_owned(),
-        start: "a".to_owned(),
-        channels: Vec::new(),
-        nodes: Vec::new(),
-        edges: Vec::new(),
-        defaults: Vec::new(),
-        ..Blueprint::default()
-    }
-}
-
 #[test]
-fn registers_and_looks_up_models_tools_graphs() {
+fn registers_and_looks_up_models_and_tools() {
     let mut reg = CapabilityRegistry::<()>::new();
     reg.register_model("default", Arc::new(FakeModel("hi")))
         .unwrap();
     reg.register_tool(Arc::new(FakeTool("lookup_user")))
-        .unwrap();
-    reg.register_graph_blueprint("flow", blueprint("flow"))
         .unwrap();
     reg.register_router("classify").unwrap();
     reg.register_reducer("append").unwrap();
 
     assert!(reg.model("default").is_some());
     assert!(reg.tool("lookup_user").is_some());
-    assert!(reg.graph_blueprint("flow").is_some());
 
     assert!(reg.has(ComponentKind::Model, "default"));
     assert!(reg.has(ComponentKind::Tool, "lookup_user"));
-    assert!(reg.has(ComponentKind::Graph, "flow"));
     assert!(reg.has(ComponentKind::Router, "classify"));
     assert!(reg.has(ComponentKind::Reducer, "append"));
 
@@ -172,7 +155,7 @@ fn aliases_resolve_in_lookups() {
         .unwrap();
     reg.register_tool(Arc::new(FakeTool("lookup_user")))
         .unwrap();
-    reg.register_graph_blueprint("flow", blueprint("flow"))
+    reg.register_descriptor(ComponentKind::Graph, "flow")
         .unwrap();
 
     reg.alias(ComponentKind::Model, "default", "gpt-4o")
@@ -183,7 +166,7 @@ fn aliases_resolve_in_lookups() {
 
     assert!(reg.model("default").is_some());
     assert!(reg.tool("user").is_some());
-    assert!(reg.graph_blueprint("main").is_some());
+    assert!(reg.has(ComponentKind::Graph, "main"));
     assert!(reg.has(ComponentKind::Model, "default"));
     assert_eq!(
         reg.resolve_name(ComponentKind::Model, "default").as_deref(),
@@ -243,23 +226,6 @@ async fn builds_harness_registries_with_model_aliases() {
 
     let tools = reg.to_tool_registry::<()>();
     assert_eq!(tools.names(), vec!["lookup_user"]);
-}
-
-#[test]
-fn capability_resolver_includes_names_and_aliases() {
-    let mut reg = CapabilityRegistry::<()>::new();
-    reg.register_model("gpt-4o", Arc::new(FakeModel("m")))
-        .unwrap();
-    reg.register_tool(Arc::new(FakeTool("lookup_user")))
-        .unwrap();
-    reg.alias(ComponentKind::Model, "default", "gpt-4o")
-        .unwrap();
-
-    let resolver = reg.capability_resolver();
-    assert!(resolver.model_allowed("gpt-4o"));
-    assert!(resolver.model_allowed("default"));
-    assert!(resolver.tool_allowed("lookup_user"));
-    assert!(!resolver.tool_allowed("unknown"));
 }
 
 #[test]

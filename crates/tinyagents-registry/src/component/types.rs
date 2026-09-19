@@ -31,7 +31,7 @@ pub enum ComponentKind {
     Model,
     /// A callable tool.
     Tool,
-    /// A compiled graph blueprint.
+    /// A graph capability descriptor.
     Graph,
     /// A conditional-routing function descriptor (name-only for now).
     Router,
@@ -41,8 +41,6 @@ pub enum ComponentKind {
     Store,
     /// An executable agent configuration descriptor (name-only for now).
     Agent,
-    /// A REPL script descriptor a `repl_agent` node may reference (name-only).
-    Script,
     /// A middleware descriptor (name-only for now).
     Middleware,
     /// A graph/harness checkpointer descriptor (name-only for now).

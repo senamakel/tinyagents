@@ -85,21 +85,12 @@ async fn capability_registry_resolves_aliases_and_hands_off_runtime_registries()
     registry.replace_model("primary", Arc::new(MockModel::constant("new")));
     registry.replace_tool(Arc::new(FakeTool::returning("lookup", "new answer")));
     registry
-        .replace_graph_blueprint(
-            "notebook",
-            tinyagents_language::Blueprint {
-                graph_id: "notebook".into(),
-                start: "start".into(),
-                channels: Vec::new(),
-                nodes: Vec::new(),
-                edges: Vec::new(),
-                ..tinyagents_language::Blueprint::default()
-            },
-        )
+        .register_descriptor(ComponentKind::Graph, "notebook")
+        .unwrap()
         .alias(ComponentKind::Graph, "nb", "notebook")
         .unwrap();
 
-    assert!(registry.graph_blueprint("nb").is_some());
+    assert!(registry.has(ComponentKind::Graph, "nb"));
 
     let mut model_registry = registry.to_model_registry();
     model_registry.set_default("fast");
@@ -117,14 +108,6 @@ async fn capability_registry_resolves_aliases_and_hands_off_runtime_registries()
         .unwrap();
     assert_eq!(result.text(), "new answer");
 
-    let resolver = registry.capability_resolver();
-    assert!(resolver.model_allowed("fast"));
-    assert!(resolver.tool_allowed("search"));
-    assert!(resolver.subgraph_allowed("nb"));
-    assert!(resolver.router_allowed("router_alias"));
-    assert!(resolver.reducer_allowed("append"));
-    assert!(resolver.node_kind_allowed("model"));
-
     let debug = format!("{registry:?}");
     assert!(debug.contains("primary"));
     assert!(debug.contains("lookup"));
@@ -135,9 +118,8 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
     let id = ComponentId::new("researcher");
     assert_eq!(id.as_str(), "researcher");
     assert_eq!(id.to_string(), "researcher");
-    assert_eq!(ComponentKind::ALL.len(), 12);
+    assert_eq!(ComponentKind::ALL.len(), 11);
     assert_eq!(ComponentKind::Agent.as_str(), "agent");
-    assert_eq!(ComponentKind::Script.as_str(), "script");
     assert_eq!(ComponentKind::TaskStore.as_str(), "task_store");
     assert_eq!(ComponentKind::Tool.to_string(), "tool");
 

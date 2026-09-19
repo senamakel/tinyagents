@@ -113,7 +113,7 @@ harness choose the best registered executable model under policy.
 Resolution inputs:
 
 - explicit request override such as `model "anthropic/claude-sonnet"`
-- agent default model declared in agent registration or `.rag`
+- agent default model declared in agent registration
 - model hints from an orchestrator, task, middleware, or runtime context
 - required capabilities such as tool calling, streaming, native JSON schema,
   vision, long context, reasoning, or prompt caching

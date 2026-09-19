@@ -34,12 +34,8 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
   `tracing`.
-- **`tinyagents-language`** — the `.rag` blueprint format: a declarative,
-  side-effect-free workflow description that lexes, parses, and compiles into
-  the same graph and harness types as hand-written Rust.
 - **`tinyagents-registry`** — a named capability catalog (models, tools,
-  agents, graphs, routers) that `.rag` and application code bind against by
-  name, plus an offline model price/capability catalog.
+  agents, graphs, and routers), plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage.
 - **`tinyagents-runtime`** — host-neutral stateful turns over the harness and
@@ -59,7 +55,6 @@ None of the crates are published to crates.io (`publish = false` in every
 [dependencies]
 tinyagents-harness = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-harness" }
 tinyagents-graph = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-graph" }
-tinyagents-language = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-language" }
 tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-registry" }
 # The code samples below build `Message` and provider types directly from
 # TinyInference, the message/model crate TinyAgents is built on. It is a
@@ -166,22 +161,8 @@ See [the runtime module](docs/modules/runtime/README.md).
 ## Registry
 
 `tinyagents-registry` is a name-addressable catalog of models, tools, agents,
-graphs, and routers. `.rag` blueprints and application code both resolve
-capabilities by name against it rather than holding direct handles, which is
-what lets a blueprint be validated against exactly the capabilities a host
-chose to register.
-
-## `.rag` blueprint language
-
-`tinyagents-language` implements `.rag`: a declarative, side-effect-free
-format for describing a graph's state channels, nodes, routes, and named
-capability references. It compiles through a fixed pipeline —
-`source -> lexer -> tokens -> parser -> AST -> compiler -> Blueprint` — into
-the same `tinyagents-graph` and `tinyagents-harness` types produced by
-hand-written Rust. It can only reference capabilities by name; it has no way
-to embed arbitrary code, so a blueprint is bound and validated against a
-registry before it runs. See
-[`examples/rag_blueprint.rs`](crates/tinyagents-integration-tests/examples/rag_blueprint.rs).
+graphs, and routers. Application code resolves capabilities by name against it
+rather than holding direct handles.
 
 ## Providers
 
@@ -203,10 +184,6 @@ All live in
 - **`agent_loop_tools`** — the agent/tool loop the harness runs.
 - **`orchestrator_subagents`** — an orchestrator agent that resolves and calls
   sub-agents by name from the registry.
-- **`rag_blueprint`** — parse and compile a `.rag` workflow, then bind it
-  against a registry.
-- **`openai_self_blueprint`** — a model emits a `.rag` blueprint that is
-  compiled and run.
 - **`goals_and_todos`** — a durable goal driving a task-board kanban on one
   thread.
 - **`openai_chat`**, **`openai_tools`**, **`openai_structured`**,
@@ -220,7 +197,7 @@ All live in
 
 - [`docs/spec/README.md`](docs/spec/README.md) — architecture specification.
 - [Wiki](https://github.com/tinyhumansai/tinyagents/wiki) — Harness, Graph
-  Runtime, Registry, Expressive Language, Providers, Quick Start,
+  Runtime, Registry, Providers, Quick Start,
   Examples, Development.
 
 ## Development

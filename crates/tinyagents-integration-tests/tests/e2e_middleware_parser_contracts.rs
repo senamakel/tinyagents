@@ -14,7 +14,6 @@ use tinyagents_harness::middleware::{
     StructuredOutputValidatorMiddleware, TimeoutMiddleware, ToolAllowlistMiddleware, ToolBaseCall,
     ToolHandler, ToolInvocationIdentity, ToolMiddleware, TracingMiddleware,
 };
-use tinyagents_language::{lexer, parser};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse, ResponseFormat};
 use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolSchema};
@@ -347,67 +346,4 @@ async fn builtin_middleware_validates_structured_output_human_approval_and_wraps
         <TimeoutMiddleware as ModelMiddleware<(), ()>>::name(&timeout),
         "timeout"
     );
-}
-
-#[test]
-fn parser_accepts_full_language_shapes_and_reports_caret_errors() {
-    let source = r#"
-graph workflow {
-  defaults { mode "fast" retries 2 }
-  input { question string }
-  output { answer string }
-  checkpoint inherit
-  interrupt manual
-  channel messages append
-  channel facts aggregate "facts"
-  start plan
-  node plan {
-    kind agent
-    model "planner"
-    tools ["search"]
-    agent "researcher"
-    next decide
-  }
-  node decide {
-    routes {
-      ok -> answer
-      retry -> plan
-    }
-  }
-  node fanout {
-    sends [
-      send worker "a",
-      send worker "b"
-    ]
-  }
-  node answer {
-    command { goto END }
-  }
-  join [plan, fanout] -> answer
-  plan -> decide
-}
-"#;
-
-    let tokens = lexer::tokenize(source).unwrap();
-    let parsed_from_tokens = parser::parse(&tokens).unwrap();
-    let parsed = parser::parse_str(source).unwrap();
-    assert_eq!(parsed.graphs[0].name, "workflow");
-    assert_eq!(parsed.graphs[0].defaults.len(), 2);
-    assert_eq!(parsed.graphs[0].input[0].name, "question");
-    assert_eq!(parsed.graphs[0].checkpoint.as_deref(), Some("inherit"));
-    assert_eq!(parsed.graphs[0].interrupt.as_deref(), Some("manual"));
-    assert_eq!(parsed.graphs[0].channels.len(), 2);
-    assert_eq!(parsed.graphs[0].nodes.len(), 4);
-    assert_eq!(parsed.graphs[0].joins.len(), 1);
-    assert_eq!(parsed_from_tokens.graphs[0].name, parsed.graphs[0].name);
-
-    let err = parser::parse_str("graph broken { node x { route { ok -> } } }").unwrap_err();
-    let rendered = err.to_string();
-    assert!(rendered.contains("error:"));
-    assert!(rendered.contains("-->"));
-
-    let eof = parser::parse_str("graph broken { defaults { key").unwrap_err();
-    let eof_rendered = eof.to_string();
-    assert!(eof_rendered.contains("error:"));
-    assert!(eof_rendered.contains("-->"));
 }
