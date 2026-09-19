@@ -87,7 +87,25 @@ impl ToolPolicyMiddleware {
             require_approval: false,
             approved: std::collections::HashSet::new(),
             enforce_result_bytes: false,
+            exempt_discovery_bridge: false,
         }
+    }
+
+    /// Exempts the intrinsic `tool_search`/`tool_call` discovery-bridge names
+    /// from classification/side-effect checks whenever `policies` has no
+    /// entry for them. See the field doc on
+    /// [`ToolPolicyMiddleware::exempt_discovery_bridge`] for why this is
+    /// opt-in rather than automatic under [`strict`](Self::strict): it is
+    /// only safe when `policies` is a complete registry snapshot (typically
+    /// [`ToolRegistry::policies`][crate::tool::ToolRegistry::policies]), so
+    /// that "no entry for this name" reliably means "not a registered tool."
+    /// A host-registered tool under either reserved name still wins — the
+    /// intrinsic bridge only fills a name nobody registered — and is
+    /// evaluated by its own policy entry as normal, whether or not this is
+    /// enabled.
+    pub fn exempt_discovery_bridge(mut self, exempt: bool) -> Self {
+        self.exempt_discovery_bridge = exempt;
+        self
     }
 
     /// Requires every tool to carry a classified policy (fail closed on
