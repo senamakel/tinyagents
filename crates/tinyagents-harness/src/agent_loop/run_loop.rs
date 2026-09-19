@@ -908,11 +908,57 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
                 // Final response: optionally extract structured output using the
                 // resolved plan (provider-native schema or tool-call arguments).
+                //
+                // A3: extraction failure (schema-invalid/unparseable) or a
+                // registered `OutputValidator` rejecting an otherwise
+                // schema-valid value with `TinyAgentsError::ModelRetry` no
+                // longer immediately fails the run. Both feed the same
+                // output-validation retry loop — re-ask the model with the
+                // error as a repair prompt, bounded by
+                // `RunPolicy::output_retry.max_attempts` — because a
+                // schema-valid-but-wrong answer and a malformed one are the
+                // same failure from the caller's perspective: the model needs
+                // another turn to fix it.
                 if let Some((strategy, name, schema)) = &structured_plan {
                     let extractor =
-                        StructuredExtractor::new(*strategy, name.clone(), schema.clone());
-                    let output = extractor.extract(&response)?;
-                    run.structured = Some(output.value);
+                        StructuredExtractor::new(strategy.clone(), name.clone(), schema.clone());
+                    let outcome = extractor.extract_outcome(&response);
+                    let error = match outcome.value {
+                        Some(value) => match &self.output_validator {
+                            Some(validator) => match validator.validate(ctx, state, &value).await
+                            {
+                                Ok(()) => {
+                                    run.structured = Some(value);
+                                    None
+                                }
+                                Err(TinyAgentsError::ModelRetry(message)) => Some(message),
+                                Err(other) => return Err(other),
+                            },
+                            None => {
+                                run.structured = Some(value);
+                                None
+                            }
+                        },
+                        None => outcome.error,
+                    };
+                    if let Some(error) = error {
+                        if output_retry_attempts < self.policy.output_retry.max_attempts {
+                            output_retry_attempts += 1;
+                            let record = ctx.emit(AgentEvent::OutputRetry {
+                                attempt: output_retry_attempts,
+                                error: error.clone(),
+                            });
+                            status.set_last_event(record.id);
+                            let prompt = self
+                                .policy
+                                .output_retry
+                                .message_template
+                                .replace("{error}", &error);
+                            messages.push(Message::user(prompt));
+                            continue;
+                        }
+                        return Err(TinyAgentsError::StructuredOutput(error));
+                    }
                 }
                 // An empty provider completion — no text, no tool calls, and no
                 // structured output — must not silently become the terminal
