@@ -159,6 +159,7 @@ pub struct Settlement {
 pub trait LoopDriver<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     /// Drives one run to completion (or a deliberate pause/error), mirroring
     /// [`super::run_loop`]'s contract.
+    #[allow(clippy::too_many_arguments)]
     async fn drive(
         &self,
         harness: &AgentHarness<State, Ctx>,
