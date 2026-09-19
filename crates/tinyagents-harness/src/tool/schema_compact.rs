@@ -283,12 +283,15 @@ pub fn collapse_deep_objects(schema: Value, depth: usize) -> Value {
 pub fn drop_compositions(schema: Value) -> Value {
     match schema {
         Value::Object(mut object) => {
-            let had_composition = ["anyOf", "oneOf", "allOf"]
-                .iter()
-                .any(|key| object.remove(*key).is_some());
-            if had_composition && !object.contains_key("type") && !object.contains_key("properties")
-            {
-                object.insert("type".to_string(), Value::String("object".to_string()));
+            // As with `$ref` above, a composition (`anyOf`/`oneOf`/`allOf`)
+            // can describe a primitive or a union of types, not only an
+            // object. Dropping it must not force `type: "object"` — leave
+            // the schema unconstrained (whatever `type`/`properties` remain
+            // after the composition keys are gone, or nothing at all) so the
+            // model is never told to send a type the schema no longer
+            // constrains it to.
+            for key in ["anyOf", "oneOf", "allOf"] {
+                object.remove(key);
             }
             let rebuilt: Map<String, Value> = object
                 .into_iter()
