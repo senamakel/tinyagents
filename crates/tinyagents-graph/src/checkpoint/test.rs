@@ -7,22 +7,18 @@ use serde_json::json;
 use tinyagents_harness::ids::NodeId;
 
 fn checkpoint(thread: &str, id: &str, parent: Option<&str>, step: usize) -> Checkpoint<i32> {
-    Checkpoint {
-        thread_id: thread.to_string(),
-        checkpoint_id: id.to_string(),
-        run_id: None,
-        parent_checkpoint_id: parent.map(|s| s.to_string()),
-        namespace: vec![],
-        state: step as i32,
-        next_nodes: vec![NodeId::from("n")],
-        completed_tasks: vec![],
-        completed_routes: vec![],
-        pending_writes: vec![],
-        interrupts: vec![],
-        pending_activations: None,
-        barrier_arrivals: vec![],
-        metadata: json!({ "source": "loop", "step": step }),
-    }
+    Checkpoint::new(
+        step as i32,
+        vec![PendingActivation {
+            node: NodeId::from("n"),
+            send_arg: None,
+            task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+        }],
+    )
+    .with_thread_id(thread.to_string())
+    .with_checkpoint_id(id.to_string())
+    .with_parent_checkpoint_id(parent.map(|s| s.to_string()))
+    .with_metadata(json!({ "source": "loop", "step": step }))
 }
 
 #[tokio::test]
@@ -79,33 +75,25 @@ fn legacy_checkpoint_json_without_new_fields_still_loads() {
 
 #[test]
 fn pending_activation_send_arg_roundtrips() {
-    let cp = Checkpoint {
-        thread_id: "t".into(),
-        checkpoint_id: "c1".into(),
-        run_id: None,
-        parent_checkpoint_id: None,
-        namespace: vec![],
-        state: 1i32,
-        next_nodes: vec![NodeId::from("w")],
-        completed_tasks: vec![],
-        completed_routes: vec![],
-        pending_writes: vec![],
-        interrupts: vec![],
-        pending_activations: Some(vec![super::PendingActivation {
+    let cp = Checkpoint::new(
+        1i32,
+        vec![super::PendingActivation {
             node: NodeId::from("w"),
             send_arg: Some(json!({ "item": 42 })),
             task_id: tinyagents_harness::ids::TaskId::from("1:0:w"),
-        }]),
-        barrier_arrivals: vec![super::BarrierArrivals {
-            node: NodeId::from("join"),
-            arrived: vec![NodeId::from("p1")],
         }],
-        metadata: json!({ "source": "loop", "step": 1 }),
-    };
+    )
+    .with_thread_id("t")
+    .with_checkpoint_id("c1")
+    .with_barrier_arrivals(vec![super::BarrierArrivals {
+        node: NodeId::from("join"),
+        arrived: vec![NodeId::from("p1")],
+    }])
+    .with_metadata(json!({ "source": "loop", "step": 1 }));
     let round: Checkpoint<i32> =
         serde_json::from_str(&serde_json::to_string(&cp).unwrap()).unwrap();
-    let pa = round.pending_activations.unwrap();
-    assert_eq!(pa[0].send_arg, Some(json!({ "item": 42 })));
+    assert_eq!(round.version, super::CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(round.tasks[0].send_arg, Some(json!({ "item": 42 })));
     assert_eq!(round.barrier_arrivals[0].arrived, vec![NodeId::from("p1")]);
 }
 
@@ -591,22 +579,18 @@ mod file_backend {
         parent: Option<&str>,
         step: usize,
     ) -> Checkpoint<CountedState> {
-        Checkpoint {
-            thread_id: thread.to_string(),
-            checkpoint_id: id.to_string(),
-            run_id: None,
-            parent_checkpoint_id: parent.map(|s| s.to_string()),
-            namespace: vec![],
-            state: CountedState(step as i32),
-            next_nodes: vec![tinyagents_harness::ids::NodeId::from("n")],
-            completed_tasks: vec![],
-            completed_routes: vec![],
-            pending_writes: vec![],
-            interrupts: vec![],
-            pending_activations: None,
-            barrier_arrivals: vec![],
-            metadata: serde_json::json!({ "source": "loop", "step": step }),
-        }
+        Checkpoint::new(
+            CountedState(step as i32),
+            vec![PendingActivation {
+                node: tinyagents_harness::ids::NodeId::from("n"),
+                send_arg: None,
+                task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+            }],
+        )
+        .with_thread_id(thread.to_string())
+        .with_checkpoint_id(id.to_string())
+        .with_parent_checkpoint_id(parent.map(|s| s.to_string()))
+        .with_metadata(serde_json::json!({ "source": "loop", "step": step }))
     }
 
     #[tokio::test]
@@ -920,22 +904,18 @@ mod sqlite_backend {
         parent: Option<&str>,
         step: usize,
     ) -> crate::Checkpoint<CountingState> {
-        crate::Checkpoint {
-            thread_id: "t".to_string(),
-            checkpoint_id: id.to_string(),
-            run_id: None,
-            parent_checkpoint_id: parent.map(|s| s.to_string()),
-            namespace: vec![],
-            state: CountingState(step as i32),
-            next_nodes: vec![tinyagents_harness::ids::NodeId::from("n")],
-            completed_tasks: vec![],
-            completed_routes: vec![],
-            pending_writes: vec![],
-            interrupts: vec![],
-            pending_activations: None,
-            barrier_arrivals: vec![],
-            metadata: serde_json::json!({ "source": "loop", "step": step }),
-        }
+        crate::Checkpoint::new(
+            CountingState(step as i32),
+            vec![crate::PendingActivation {
+                node: tinyagents_harness::ids::NodeId::from("n"),
+                send_arg: None,
+                task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+            }],
+        )
+        .with_thread_id("t".to_string())
+        .with_checkpoint_id(id.to_string())
+        .with_parent_checkpoint_id(parent.map(|s| s.to_string()))
+        .with_metadata(serde_json::json!({ "source": "loop", "step": step }))
     }
 
     #[tokio::test]
