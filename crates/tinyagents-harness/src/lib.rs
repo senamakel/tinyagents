@@ -40,6 +40,7 @@
 
 pub mod agent_loop;
 pub mod artifacts;
+mod blocking;
 pub mod cache;
 pub mod cancel;
 pub mod config;
