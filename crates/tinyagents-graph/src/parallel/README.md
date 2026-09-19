@@ -29,7 +29,7 @@ quorum, best-effort). That is what [`map_reduce`] provides.
 - `claims` (re-exported): `WorkspaceClaim`, `DispatchPlan`, `DispatchMode`,
   `ClaimConflict`, `ClaimPathError`, `parse_relative_claim_paths`,
   `paths_overlap`, `writes_shared_workspace`,
-  `plan_shared_workspace_dispatch` — see `claims/` below.
+  `plan_shared_workspace_dispatch` — see `claims/README.md`.
 
 ## Files
 
