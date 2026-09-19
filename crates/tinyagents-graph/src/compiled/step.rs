@@ -380,8 +380,10 @@ where
         step: usize,
         visited: &mut Vec<NodeId>,
     ) -> StepRun<Update> {
-        let mut updates: Vec<Update> = Vec::new();
-        let mut goto_map: HashMap<usize, Vec<RouteTarget>> = HashMap::new();
+        let mut accum = FoldAccum {
+            updates: Vec::new(),
+            goto_map: HashMap::new(),
+        };
         let mut interrupt: Option<(usize, Interrupt)> = None;
         let mut failure: Option<StepFailure> = None;
 
@@ -403,23 +405,17 @@ where
                 }
             };
 
-            if let Some(found) = self.fold_result(
-                index,
-                node_id,
-                step,
-                result,
-                &mut updates,
-                &mut goto_map,
-                visited,
-            ) {
+            if let Some(found) =
+                self.fold_result(index, node_id, step, result, &mut accum, visited)
+            {
                 interrupt = Some(found);
                 break;
             }
         }
 
         StepRun {
-            updates,
-            goto_map,
+            updates: accum.updates,
+            goto_map: accum.goto_map,
             interrupt,
             failure,
         }
