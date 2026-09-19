@@ -1642,9 +1642,10 @@ async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
         .await
         .expect_err("a hidden registered tool still collides with the schema");
 
+    assert_eq!(error.kind, crate::runtime::HostedErrorKind::Policy);
     assert_eq!(
         error.to_string(),
-        "model error: hosted agent invocation failed"
+        "hosted agent invocation was rejected by policy"
     );
     assert!(model.requests().is_empty(), "provider was not contacted");
 }
