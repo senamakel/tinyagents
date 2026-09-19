@@ -69,6 +69,76 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
             .or_insert_with(|| ComponentMetadata::new(name, kind));
     }
 
+    /// Replaces the [`ComponentMetadata`] recorded for `(kind, name)`.
+    ///
+    /// Unlike [`record_meta`](Self::record_meta) (which only fills in a
+    /// default the first time a name is registered), this overwrites whatever
+    /// metadata is already there — so `with_description`/`with_tag` builders
+    /// (`crate::component::ComponentMetadata`) actually reach a registered
+    /// component instead of being dead on arrival for anything registered
+    /// through `register_*`/`replace_*` (see W-I8 in
+    /// `docs/runtime-comparison/code-review-workspace.md`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::Capability`] if `(kind, name)` is not a
+    /// registered component: setting metadata on a name nothing registered
+    /// would create a "component" with metadata but no backing value.
+    pub fn set_metadata(
+        &mut self,
+        kind: ComponentKind,
+        name: &str,
+        metadata: ComponentMetadata,
+    ) -> Result<&mut Self> {
+        if !self.meta.contains_key(&(kind, name.to_owned())) {
+            return Err(TinyAgentsError::Capability(format!(
+                "cannot set metadata for {kind} `{name}`: not registered"
+            )));
+        }
+        self.meta.insert((kind, name.to_owned()), metadata);
+        Ok(self)
+    }
+
+    /// Removes a registered component (and its metadata) by `(kind, name)`.
+    ///
+    /// Removing a component that other names alias makes those aliases
+    /// dangling, which [`Self::diagnostics`]'s `dangling_alias` check then
+    /// reports — this is the operation that makes that diagnostic reachable
+    /// through the public API (see W-I8). Aliases of `name` are left in place
+    /// (not cascaded), matching [`Self::alias`]'s "one alias hop" model:
+    /// callers that want a clean removal should also drop the alias entries
+    /// they know about.
+    ///
+    /// Returns `true` if a component was present and removed, `false` if
+    /// `(kind, name)` was not registered (a no-op, not an error).
+    pub fn remove(&mut self, kind: ComponentKind, name: &str) -> bool {
+        let key = (kind, name.to_owned());
+        if self.meta.remove(&key).is_none() {
+            return false;
+        }
+        match kind {
+            ComponentKind::Model => {
+                self.models.remove(name);
+                self.model_order.retain(|n| n != name);
+            }
+            ComponentKind::Tool => {
+                self.tools.remove(name);
+            }
+            ComponentKind::Graph => {
+                self.graphs.remove(name);
+            }
+            ComponentKind::Agent => {
+                self.agents.remove(name);
+            }
+            _ => {
+                // Router/Reducer/Store/Script/Middleware/Checkpointer/
+                // TaskStore/Listener are name-only descriptors: `meta`
+                // removal above is the whole registration.
+            }
+        }
+        true
+    }
+
     // -----------------------------------------------------------------------
     // Registration: models
     // -----------------------------------------------------------------------
