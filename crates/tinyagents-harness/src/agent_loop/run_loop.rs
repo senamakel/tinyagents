@@ -621,19 +621,46 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     );
                                 }
                             }
-                            // `for_profile` only ever returns these two; the
-                            // `Prompted`/`ToolCallUnion` strategies are
-                            // reached exclusively through the dedicated
-                            // `structured_strategy_override` arms above.
-                            StructuredStrategy::Prompted { .. }
-                            | StructuredStrategy::ToolCallUnion => unreachable!(
-                                "StructuredStrategy::for_profile never returns Prompted or \
-                                 ToolCallUnion"
+                            // A profile whose `default_structured_mode` is
+                            // `Prompted` reaches this arm too (not only
+                            // through the dedicated
+                            // `structured_strategy_override` arm above): the
+                            // schema goes into the system segment instead of
+                            // a provider API field, mirroring the override
+                            // arm's construction.
+                            StructuredStrategy::Prompted { ref template } => {
+                                request.response_format = Some(ResponseFormat::Text);
+                                let instructions = template.clone().unwrap_or_else(|| {
+                                    crate::structured::default_prompted_template().to_string()
+                                });
+                                let schema_text =
+                                    serde_json::to_string_pretty(&schema).unwrap_or_default();
+                                request.messages.insert(
+                                    0,
+                                    Message::system(format!(
+                                        "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
+                                    )),
+                                );
+                            }
+                            // `for_profile` never returns `ToolCallUnion`;
+                            // that strategy is reached exclusively through
+                            // the dedicated `structured_strategy_override`
+                            // arm above.
+                            StructuredStrategy::ToolCallUnion => unreachable!(
+                                "StructuredStrategy::for_profile never returns ToolCallUnion"
                             ),
                         }
                         Some((strategy, name, schema))
                     }
                     Some(ResponseFormat::JsonSchema { name, schema }) => {
+                        let schema = crate::tool::apply_profile_schema_transform(
+                            &schema,
+                            binding.model.profile(),
+                        );
+                        request.response_format = Some(ResponseFormat::JsonSchema {
+                            name: name.clone(),
+                            schema: schema.clone(),
+                        });
                         Some((StructuredStrategy::ProviderSchema, name, schema))
                     }
                     _ => None,
