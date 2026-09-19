@@ -567,8 +567,9 @@ where
         }
         ctx.steps += 1;
         for (index, activation) in active.iter_mut().enumerate() {
-            if activation.task_id.is_empty() {
-                activation.task_id = format!("{}:{}:{}", ctx.steps, index, activation.node);
+            if activation.task_id.as_str().is_empty() {
+                activation.task_id =
+                    TaskId::from(format!("{}:{}:{}", ctx.steps, index, activation.node));
             }
         }
         ctx.emit(GraphEvent::StepStarted {
