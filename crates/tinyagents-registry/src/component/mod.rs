@@ -49,7 +49,7 @@ impl From<String> for ComponentId {
 
 impl ComponentKind {
     /// All component kinds, in a stable order, for discovery iteration.
-    pub const ALL: [ComponentKind; 12] = [
+    pub const ALL: [ComponentKind; 13] = [
         ComponentKind::Model,
         ComponentKind::Tool,
         ComponentKind::Graph,
@@ -62,6 +62,7 @@ impl ComponentKind {
         ComponentKind::Checkpointer,
         ComponentKind::TaskStore,
         ComponentKind::Listener,
+        ComponentKind::Capability,
     ];
 
     /// Returns the lowercase string name of this kind, matching its serialized
