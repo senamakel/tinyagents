@@ -8,7 +8,7 @@
 use super::model_call::ModelCallBase;
 use super::*;
 
-impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Drives the loop body, returning `Ok(())` on a clean finish or the first
     /// error encountered. The caller owns lifecycle bookkeeping (final status
     /// transition, `RunFailed`/`on_error` on error).
@@ -150,9 +150,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // The tool set is fixed for the duration of a run, so build the sorted
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
-        let allowed_tools = self
-            .host_run_binding(ctx.instance_id())?
-            .map(|binding| binding.allowed_tools);
+        let allowed_tools =
+            Self::host_invocation_binding(ctx)?.map(|binding| binding.allowed_tools);
         let tool_schemas = self
             .tools
             .schemas()
@@ -436,7 +435,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // estimate. The permit remains alive through response accounting,
             // so cancellation or a provider error still releases it through
             // Drop.
-            let host_budget = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
+            let host_budget = if let Some(host_run) = Self::host_invocation_binding(ctx)? {
                 if let Some(budget) = host_run.host.budget.clone() {
                     let context_state = crate::host::ContextState {
                         message_count: request.messages.len(),

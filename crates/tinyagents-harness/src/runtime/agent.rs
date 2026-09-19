@@ -25,7 +25,7 @@ use crate::host::{
 use crate::ids::ThreadId;
 use crate::middleware::AgentRun;
 
-use super::{AgentHarness, HostRunBinding};
+use super::{AgentHarness, HostInvocationBinding};
 
 /// The exact host bundle that authorized the parent invocation.
 ///
@@ -35,7 +35,7 @@ use super::{AgentHarness, HostRunBinding};
 /// substitute an unhosted or differently-hosted child harness for the
 /// parent's policy.
 pub(crate) struct HostInvocationAuthority<State: Send + Sync> {
-    pub(crate) host: crate::host::HostCapabilities<State>,
+    pub(crate) binding: HostInvocationBinding<State>,
 }
 
 /// A host-owned turn request.
@@ -80,7 +80,7 @@ impl AgentTurnRequest {
 /// harness configuration.
 pub struct AgentInvocation<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// The host capability bundle authorizing this one recursive run tree.
-    pub host: crate::host::HostCapabilities<State>,
+    pub host: std::sync::Arc<crate::host::HostCapabilities<State>>,
     /// Definition identifier and input messages for the root turn.
     pub request: AgentTurnRequest,
     /// Live execution context for this root run.
@@ -95,6 +95,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
         context: RunContext<Ctx>,
     ) -> Self {
         Self {
+            host: std::sync::Arc::new(host),
+            request,
+            context,
+        }
+    }
+
+    /// Reuses the parent's exact live host bundle for a recursive child.
+    ///
+    /// This is crate-private because only the runtime can prove that a child
+    /// is authorized to inherit the parent invocation's authority.
+    pub(crate) fn from_shared_host(
+        host: std::sync::Arc<crate::host::HostCapabilities<State>>,
+        request: AgentTurnRequest,
+        context: RunContext<Ctx>,
+    ) -> Self {
+        Self {
             host,
             request,
             context,
@@ -104,8 +120,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
 
 /// A caller-consumable hosted stream.
 ///
-/// Dropping it removes the per-context host routing entry even when a caller
-/// stops listening before a terminal item.
+/// Dropping it cancels the live invocation context and drives its terminal
+/// observer even when a caller stops listening before a terminal item. The
+/// invocation's host authority is owned by that context, never by the harness.
 pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
     inner: Option<Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>>,
     cancellation: crate::CancellationToken,
@@ -219,13 +236,11 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, St
 }
 
 struct PreparedAgentTurn<State: Send + Sync> {
-    host: crate::host::HostCapabilities<State>,
-    agent_id: String,
+    binding: HostInvocationBinding<State>,
     thread_id: ThreadId,
     run_id: crate::ids::RunId,
     input_text: String,
     messages: Vec<tinyinference_llm::message::Message>,
-    progress: Option<ProgressSender>,
 }
 
 #[derive(Clone)]
@@ -252,18 +267,16 @@ impl ProgressSender {
 impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
     fn clone(&self) -> Self {
         Self {
-            host: self.host.clone(),
-            agent_id: self.agent_id.clone(),
+            binding: self.binding.clone(),
             thread_id: self.thread_id.clone(),
             run_id: self.run_id.clone(),
             input_text: self.input_text.clone(),
             messages: self.messages.clone(),
-            progress: self.progress.clone(),
         }
     }
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Runs an agent through this invocation's host-capability bundle.
     ///
     /// The invocation type requires the four mandatory capabilities at
@@ -300,15 +313,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let prepared = self
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
-        let context_id = context.instance_id();
-        let agent_id = prepared.agent_id.clone();
+        let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
-            host: prepared.host.clone(),
+            binding: prepared.binding.clone(),
         }));
-        self.install_host_terminal_observer(&mut context, context_id, prepared.clone());
-        self.emit_host_progress(
-            context_id,
+        self.install_host_terminal_observer(&mut context, prepared.clone());
+        Self::emit_host_progress(
+            &context,
             ProgressEvent::Started {
                 run: context.run_id().clone(),
                 thread: context.thread_id().cloned(),
@@ -398,17 +410,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let prepared = self
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
-        let context_id = context.instance_id();
-        let agent_id = prepared.agent_id.clone();
+        let agent_id = prepared.binding.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
-            host: prepared.host.clone(),
+            binding: prepared.binding.clone(),
         }));
         let cancellation = context.cancellation.clone();
-        let terminal_observer =
-            self.install_host_terminal_observer(&mut context, context_id, prepared.clone());
-        self.emit_host_progress(
-            context_id,
+        let terminal_observer = self.install_host_terminal_observer(&mut context, prepared.clone());
+        Self::emit_host_progress(
+            &context,
             ProgressEvent::Started {
                 run: context.run_id().clone(),
                 thread: context.thread_id().cloned(),
@@ -433,7 +443,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// may outlive a cancelled turn.
     async fn prepare_agent_turn_bounded(
         &self,
-        host: crate::host::HostCapabilities<State>,
+        host: std::sync::Arc<crate::host::HostCapabilities<State>>,
         request: AgentTurnRequest,
         context: &RunContext<Ctx>,
     ) -> Result<PreparedAgentTurn<State>> {
@@ -474,7 +484,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     async fn prepare_agent_turn(
         &self,
-        host: crate::host::HostCapabilities<State>,
+        host: std::sync::Arc<crate::host::HostCapabilities<State>>,
         mut request: AgentTurnRequest,
         context: &RunContext<Ctx>,
     ) -> Result<PreparedAgentTurn<State>> {
@@ -557,9 +567,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages.append(&mut preamble);
         messages.append(&mut request.messages);
         let progress = start_progress_dispatcher(host.progress.clone());
-        self.insert_host_run(
-            context.instance_id(),
-            HostRunBinding {
+        Ok(PreparedAgentTurn {
+            binding: HostInvocationBinding {
                 host: host.clone(),
                 agent_id: request.agent_id.clone(),
                 model_pin: definition.model,
@@ -567,55 +576,46 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 allowed_tools: definition.tools.into_iter().collect(),
                 progress: progress.clone(),
             },
-        )?;
-        Ok(PreparedAgentTurn {
-            host,
-            agent_id: request.agent_id,
             thread_id,
             run_id: context.run_id().clone(),
             input_text,
             messages,
-            progress,
         })
     }
 
-    pub(crate) fn host_run_binding(
-        &self,
-        context_id: u64,
-    ) -> Result<Option<HostRunBinding<State>>> {
-        self.host_runs
-            .lock()
-            .map_err(|_| TinyAgentsError::Validation("host run binding lock poisoned".into()))
-            .map(|runs| runs.get(&context_id).cloned())
-    }
-
-    fn insert_host_run(&self, context_id: u64, binding: HostRunBinding<State>) -> Result<()> {
-        self.host_runs
-            .lock()
-            .map_err(|_| TinyAgentsError::Validation("host run binding lock poisoned".into()))?
-            .insert(context_id, binding);
-        Ok(())
+    /// Returns this live context's host authorization, if it is a hosted run.
+    ///
+    /// The binding is carried by the non-serializable context rather than the
+    /// reusable harness, so concurrent roots have no shared mutable authority.
+    pub(crate) fn host_invocation_binding(
+        context: &RunContext<Ctx>,
+    ) -> Result<Option<HostInvocationBinding<State>>>
+    where
+        State: 'static,
+    {
+        let Some(authority) = context.host_authority.as_ref() else {
+            return Ok(None);
+        };
+        authority
+            .downcast_ref::<HostInvocationAuthority<State>>()
+            .map(|authority| Some(authority.binding.clone()))
+            .ok_or_else(|| {
+                TinyAgentsError::Validation(
+                    "hosted invocation authority has an incompatible state type".into(),
+                )
+            })
     }
 
     fn install_host_terminal_observer(
         &self,
         context: &mut RunContext<Ctx>,
-        context_id: u64,
         prepared: PreparedAgentTurn<State>,
     ) -> std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>
     where
         State: 'static,
     {
-        let runs = std::sync::Arc::clone(&self.host_runs);
         let observer = std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
             move |run, succeeded, error: Option<String>| {
-                if let Ok(mut runs) = runs.lock() {
-                    runs.remove(&context_id);
-                } else {
-                    tinyagents_tracing::warn!(
-                        "[host] host run binding lock poisoned during terminal cleanup"
-                    );
-                }
                 spawn_host_finalizer(
                     prepared,
                     run,
@@ -643,8 +643,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Best-effort progress projection. A host UI must never make the turn
     /// wait or fail, so delivery is detached and dropped when no Tokio runtime
     /// is available.
-    pub(crate) fn emit_host_progress(&self, context_id: u64, event: ProgressEvent) {
-        let Ok(Some(binding)) = self.host_run_binding(context_id) else {
+    pub(crate) fn emit_host_progress(context: &RunContext<Ctx>, event: ProgressEvent) {
+        let Ok(Some(binding)) = Self::host_invocation_binding(context) else {
             return;
         };
         let Some(progress) = binding.progress else {
@@ -692,7 +692,7 @@ async fn finish_host_turn<State: Send + Sync>(
 ) {
     // The per-turn queue preserves event order while keeping a slow progress
     // consumer completely outside the agent's critical path.
-    if let Some(progress) = &prepared.progress {
+    if let Some(progress) = &prepared.binding.progress {
         if let Some(message) = error {
             progress.send_terminal(ProgressEvent::Error {
                 run: prepared.run_id.clone(),
@@ -706,16 +706,16 @@ async fn finish_host_turn<State: Send + Sync>(
         }
     }
     let output = run.text().unwrap_or_default();
-    let mut summary = TurnSummary::new(prepared.thread_id.clone(), &prepared.agent_id)
+    let mut summary = TurnSummary::new(prepared.thread_id.clone(), &prepared.binding.agent_id)
         .with_text(&prepared.input_text, &output)
         .with_usage(run.usage.usage);
     for tool in &run.executed_tools {
         summary.record_tool(tool);
     }
-    if let Some(memory) = &prepared.host.memory {
+    if let Some(memory) = &prepared.binding.host.memory {
         let item = crate::host::NewMemory::new(&output)
             .with_thread(prepared.thread_id.clone())
-            .with_agent(&prepared.agent_id)
+            .with_agent(&prepared.binding.agent_id)
             .with_tag(if succeeded {
                 "turn_success"
             } else {
@@ -725,13 +725,14 @@ async fn finish_host_turn<State: Send + Sync>(
             tinyagents_tracing::warn!(%error, "[host] memory sink failed after terminal turn");
         }
     }
-    if let Some(learning) = &prepared.host.learning
+    if let Some(learning) = &prepared.binding.host.learning
         && let Err(error) = learning.on_turn_complete(&summary).await
     {
         tinyagents_tracing::warn!(%error, "[host] learning sink failed after terminal turn");
     }
-    if let Some(store) = &prepared.host.experience {
-        let mut experience = Experience::new(&prepared.agent_id, &prepared.input_text, &output);
+    if let Some(store) = &prepared.binding.host.experience {
+        let mut experience =
+            Experience::new(&prepared.binding.agent_id, &prepared.input_text, &output);
         if succeeded {
             experience = experience.succeeded();
         }

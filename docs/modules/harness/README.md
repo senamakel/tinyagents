@@ -250,11 +250,13 @@ let _run = harness.invoke_agent(invocation, state).await?;
 ```
 
 This prevents concurrent roots from replacing one another's progress,
-security, approval, or other host authority. The live invocation bundle is
-never serializable or checkpointed. Recursive children inherit the exact
-parent bundle through their live context and cannot select a bundle from their
-own harness. The lower-level explicit-model `invoke*` APIs remain separate for
-SDK callers that intentionally assemble a run without host capabilities.
+security, approval, or other host authority. The harness never stores a live
+capability bundle (not even in a run-id map): it lives only in the
+non-serializable `RunContext`, is never checkpointed, and is dropped with that
+invocation. Recursive children inherit the exact parent bundle through their
+live context and cannot select a bundle from their own harness. The lower-level
+explicit-model `invoke*` APIs remain separate for SDK callers that intentionally
+assemble a run without host capabilities.
 
 ### Tool timeout policy
 

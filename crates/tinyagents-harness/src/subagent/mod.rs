@@ -274,6 +274,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
                 )
             })?;
             let delegates = authority
+                .binding
                 .host
                 .definitions
                 .delegates_for(parent_agent)
@@ -301,8 +302,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         });
 
         let run = if let Some(authority) = parent_host {
-            let invocation = crate::runtime::AgentInvocation::new(
-                authority.host.clone(),
+            let invocation = crate::runtime::AgentInvocation::from_shared_host(
+                authority.binding.host.clone(),
                 crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
                 ctx,
             );
@@ -344,7 +345,7 @@ fn child_thread_id(parent: &ThreadId, child_run_id: &str) -> ThreadId {
     ThreadId::new(format!("{}-subagent-{child_run_id}", parent.as_str()))
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
     /// Creates a session that reuses `subagent` across turns.
     ///
     /// The child runs at depth `1` by default (caller `parent_depth = 0`); use

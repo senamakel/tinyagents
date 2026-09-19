@@ -8,10 +8,12 @@ use std::time::Duration;
 
 use crate::context::{RunConfig, RunContext};
 use crate::host::{
-    AgentMemory, AllowAllSecurityGate, BudgetGate, CallEstimate, CompressionHint, ContextState,
-    ErrorFieldClassifier, FixedModelResolver, GateDecision, InMemoryAgentMemory,
-    InMemoryExperienceStore, NoopLearningSink, Permit, RecordingProgressSink, ScreenOutcome,
-    SecurityGate, StaticContextComposer, ToolCallRequest, UnlimitedBudgetGate,
+    AgentMemory, AllowAllSecurityGate, BudgetGate, CallEstimate, CompressionHint, ContextComposer,
+    ContextState, ErrorFieldClassifier, ExperienceStore, FixedModelResolver, GateDecision,
+    InMemoryAgentMemory, InMemoryExperienceStore, LearningSink, MemoryId, ModelResolver,
+    NoopLearningSink, OutcomeClass, Permit, ProgressSink, RecordingProgressSink, ScreenOutcome,
+    SecurityGate, StaticContextComposer, ToolCallRequest, ToolOutcomeClassifier,
+    UnlimitedBudgetGate,
 };
 use crate::limits::RunLimits;
 use crate::middleware::{LoggingMiddleware, ModelFallbackMiddleware};
@@ -20,7 +22,9 @@ use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy}
 use crate::subagent::{ChildDataPolicy, SubAgent, SubAgentTool};
 use crate::testkit::ScriptedModel;
 use futures::StreamExt;
-use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
+use tinyagents_definition::{
+    AgentDefinition, DefinitionRegistry, DefinitionRegistryError, InMemoryDefinitionRegistry,
+};
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::{
     model::{ChatModel, ModelRequest, ModelResponse, ResponseFormat},
@@ -97,6 +101,265 @@ struct LeadRecordingResolver {
 struct RecordingBudget {
     hint: CompressionHint,
     records: Mutex<Vec<Usage>>,
+}
+
+/// Per-invocation trace used by the overlap test below.  Each adapter writes
+/// both its capability name and the identity-bearing value it received, so a
+/// capability bundle accidentally borrowed from the other root is observable
+/// rather than merely inferred from a final answer.
+#[derive(Debug)]
+struct TaggedTrace {
+    tag: &'static str,
+    events: Mutex<Vec<String>>,
+}
+
+impl TaggedTrace {
+    fn new(tag: &'static str) -> Self {
+        Self {
+            tag,
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn mark(&self, capability: &str, detail: impl std::fmt::Display) {
+        self.events
+            .lock()
+            .expect("tag trace lock")
+            .push(format!("{capability}:{detail}"));
+    }
+
+    fn has_capability(&self, capability: &str) -> bool {
+        self.events
+            .lock()
+            .expect("tag trace lock")
+            .iter()
+            .any(|event| event.starts_with(&format!("{capability}:")))
+    }
+
+    fn events(&self) -> Vec<String> {
+        self.events.lock().expect("tag trace lock").clone()
+    }
+}
+
+struct TaggedContext {
+    trace: Arc<TaggedTrace>,
+}
+
+#[async_trait]
+impl ContextComposer for TaggedContext {
+    async fn compose_system_prompt(
+        &self,
+        request: &crate::host::TurnContextRequest,
+    ) -> crate::error::Result<String> {
+        self.trace.mark("context", &request.user_text);
+        Ok(format!("system bundle {}", self.trace.tag))
+    }
+
+    async fn preamble(
+        &self,
+        request: &crate::host::TurnContextRequest,
+    ) -> crate::error::Result<Vec<tinyinference_llm::message::Message>> {
+        self.trace.mark("context-preamble", &request.user_text);
+        Ok(Vec::new())
+    }
+}
+
+struct TaggedDefinitions {
+    trace: Arc<TaggedTrace>,
+    inner: InMemoryDefinitionRegistry,
+}
+
+#[async_trait]
+impl DefinitionRegistry for TaggedDefinitions {
+    async fn resolve(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<AgentDefinition>, DefinitionRegistryError> {
+        self.trace.mark("definition", id);
+        self.inner.resolve(id).await
+    }
+
+    async fn list(&self) -> std::result::Result<Vec<AgentDefinition>, DefinitionRegistryError> {
+        self.trace.mark("definition-list", self.trace.tag);
+        self.inner.list().await
+    }
+
+    async fn delegates_for(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Vec<String>, DefinitionRegistryError> {
+        self.trace.mark("definition-delegates", id);
+        self.inner.delegates_for(id).await
+    }
+}
+
+struct TaggedSecurity {
+    trace: Arc<TaggedTrace>,
+    denials_remaining: AtomicUsize,
+}
+
+#[async_trait]
+impl SecurityGate for TaggedSecurity {
+    async fn authorize_tool(&self, call: &ToolCallRequest) -> crate::error::Result<GateDecision> {
+        if self
+            .denials_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            self.trace
+                .mark("security", format!("deny:{}", call.tool_name));
+            Ok(GateDecision::deny("tagged approval denied"))
+        } else {
+            self.trace
+                .mark("security", format!("allow:{}", call.tool_name));
+            Ok(GateDecision::Allow)
+        }
+    }
+
+    async fn screen_input(
+        &self,
+        text: &str,
+        _origin: crate::host::ContentOrigin,
+    ) -> crate::error::Result<ScreenOutcome> {
+        self.trace.mark("security-screen", text);
+        Ok(ScreenOutcome::Pass)
+    }
+}
+
+struct TaggedResolver {
+    trace: Arc<TaggedTrace>,
+    first_resolution_barrier: Arc<tokio::sync::Barrier>,
+    resolution_count: AtomicUsize,
+    model: Arc<dyn ChatModel<()>>,
+}
+
+#[async_trait]
+impl ModelResolver<()> for TaggedResolver {
+    async fn resolve(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        self.trace.mark("model", &request.agent_id);
+        // The first provider selection in each root waits for the other one.
+        // This makes the two invocations genuinely overlap at the exact point
+        // where a harness-level capability registry used to be consulted.
+        if self.resolution_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.first_resolution_barrier.wait().await;
+        }
+        Ok(self.model.clone())
+    }
+}
+
+struct TaggedMemory {
+    trace: Arc<TaggedTrace>,
+}
+
+#[async_trait]
+impl AgentMemory for TaggedMemory {
+    async fn recall(
+        &self,
+        request: crate::host::RecallRequest,
+    ) -> crate::error::Result<Vec<crate::host::MemoryItem>> {
+        self.trace
+            .mark("memory", format!("recall:{}", request.query));
+        Ok(Vec::new())
+    }
+
+    async fn remember(&self, _item: crate::host::NewMemory) -> crate::error::Result<MemoryId> {
+        self.trace.mark("memory", "remember");
+        Ok(MemoryId::new(self.trace.tag))
+    }
+
+    async fn thread_summary(
+        &self,
+        thread: &crate::ids::ThreadId,
+    ) -> crate::error::Result<Option<String>> {
+        self.trace.mark("memory", format!("summary:{thread}"));
+        Ok(None)
+    }
+}
+
+struct TaggedBudget {
+    trace: Arc<TaggedTrace>,
+}
+
+#[async_trait]
+impl BudgetGate for TaggedBudget {
+    async fn acquire(&self, _estimate: &CallEstimate) -> crate::error::Result<Permit> {
+        self.trace.mark("budget", "acquire");
+        Ok(Permit::unlimited())
+    }
+
+    async fn record(&self, _usage: &Usage) -> crate::error::Result<()> {
+        self.trace.mark("budget", "record");
+        Ok(())
+    }
+
+    fn compression_hint(&self, _state: &ContextState) -> CompressionHint {
+        self.trace.mark("budget", "hint");
+        CompressionHint::None
+    }
+}
+
+struct TaggedProgress {
+    trace: Arc<TaggedTrace>,
+}
+
+#[async_trait]
+impl ProgressSink for TaggedProgress {
+    async fn emit(&self, event: crate::host::ProgressEvent) {
+        self.trace.mark("progress", event.run_id());
+    }
+}
+
+struct TaggedLearning {
+    trace: Arc<TaggedTrace>,
+}
+
+#[async_trait]
+impl LearningSink for TaggedLearning {
+    async fn on_turn_complete(
+        &self,
+        summary: &crate::host::TurnSummary,
+    ) -> crate::error::Result<()> {
+        self.trace.mark("learning", &summary.input);
+        Ok(())
+    }
+}
+
+struct TaggedOutcomeClassifier {
+    trace: Arc<TaggedTrace>,
+}
+
+impl ToolOutcomeClassifier for TaggedOutcomeClassifier {
+    fn classify(&self, name: &str, _result: &ToolResult) -> OutcomeClass {
+        self.trace.mark("outcome", name);
+        OutcomeClass::Success
+    }
+}
+
+struct TaggedExperience {
+    trace: Arc<TaggedTrace>,
+}
+
+#[async_trait]
+impl ExperienceStore for TaggedExperience {
+    async fn record(&self, experience: &crate::host::Experience) -> crate::error::Result<()> {
+        self.trace
+            .mark("experience", format!("record:{}", experience.task));
+        Ok(())
+    }
+
+    async fn recall_for(
+        &self,
+        _agent_id: &str,
+        task: &str,
+    ) -> crate::error::Result<Vec<crate::host::Experience>> {
+        self.trace.mark("experience", format!("recall:{task}"));
+        Ok(Vec::new())
+    }
 }
 
 impl RecordingBudget {
@@ -1515,7 +1778,6 @@ async fn hosted_streams_finalize_success_failure_and_drop_with_terminal_host_rec
         let harness: AgentHarness<()> = AgentHarness::new();
 
         let context = RunContext::new(RunConfig::new(run_id), ());
-        let context_id = context.instance_id();
         let mut stream = harness
             .invoke_agent_stream(
                 AgentInvocation::new(
@@ -1541,13 +1803,6 @@ async fn hosted_streams_finalize_success_failure_and_drop_with_terminal_host_rec
             assert!(terminal.is_some(), "stream reaches terminal item");
         }
         drop(stream);
-        yield_until(|| {
-            harness
-                .host_run_binding(context_id)
-                .expect("binding lock")
-                .is_none()
-        })
-        .await;
         yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
         yield_until(|| experience.records.lock().expect("experience lock").len() == 1).await;
         yield_until(|| {
@@ -1870,50 +2125,7 @@ async fn retryable_classifier_changes_the_model_visible_result_without_redispatc
 }
 
 #[tokio::test]
-async fn poisoned_host_binding_fails_closed_before_any_model_fallback() {
-    let model = Arc::new(ScriptedModel::replies(vec!["must not be used"]));
-    let host = crate::host::HostCapabilities::new(
-        Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
-        Arc::new(AllowAllSecurityGate),
-        Arc::new(FixedModelResolver::new(model.clone())),
-    );
-    let harness: AgentHarness<()> = AgentHarness::new();
-
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = harness.host_runs.lock().expect("fresh lock");
-        panic!("poison host binding map");
-    }));
-    let error = harness
-        .invoke_agent(
-            AgentInvocation::new(
-                host,
-                AgentTurnRequest::new(
-                    "helper",
-                    vec![tinyinference_llm::message::Message::user("go")],
-                ),
-                RunContext::new(RunConfig::new("poisoned-binding"), ()),
-            ),
-            &(),
-        )
-        .await
-        .expect_err("poison must not fall back to an unbound model");
-    assert_eq!(
-        error.to_string(),
-        "model error: hosted agent invocation failed"
-    );
-    assert!(
-        model.requests().is_empty(),
-        "no provider request escaped host policy"
-    );
-}
-
-#[tokio::test]
-async fn concurrent_roots_keep_progress_and_security_capabilities_isolated() {
+async fn concurrent_roots_keep_every_invocation_capability_bundle_isolated() {
     fn tool_round(answer: &str) -> Vec<ModelResponse> {
         let mut tool_call = ModelResponse::assistant("");
         tool_call
@@ -1927,76 +2139,174 @@ async fn concurrent_roots_keep_progress_and_security_capabilities_isolated() {
         vec![tool_call, ModelResponse::assistant(answer)]
     }
 
-    let allowed_model = Arc::new(ScriptedModel::new(tool_round("allowed")));
-    let denied_model = Arc::new(ScriptedModel::new(tool_round("denied")));
-    let allowed_progress = Arc::new(RecordingProgressSink::new());
-    let denied_progress = Arc::new(RecordingProgressSink::new());
-    let allowed_host = crate::host::HostCapabilities::new(
-        Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
-        Arc::new(AllowAllSecurityGate),
-        Arc::new(FixedModelResolver::new(allowed_model)),
-    )
-    .with_progress(allowed_progress.clone());
-    let denied_host = crate::host::HostCapabilities::new(
-        Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
-        Arc::new(DenyToolGate),
-        Arc::new(FixedModelResolver::new(denied_model)),
-    )
-    .with_progress(denied_progress.clone());
+    fn bundle(
+        trace: Arc<TaggedTrace>,
+        barrier: Arc<tokio::sync::Barrier>,
+        model: Arc<dyn ChatModel<()>>,
+        denials: usize,
+    ) -> crate::host::HostCapabilities<()> {
+        crate::host::HostCapabilities::new(
+            Arc::new(TaggedContext {
+                trace: trace.clone(),
+            }),
+            Arc::new(TaggedDefinitions {
+                trace: trace.clone(),
+                inner: InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+                    "helper",
+                    "Helper",
+                    "test helper",
+                )]),
+            }),
+            Arc::new(TaggedSecurity {
+                trace: trace.clone(),
+                denials_remaining: AtomicUsize::new(denials),
+            }),
+            Arc::new(TaggedResolver {
+                trace: trace.clone(),
+                first_resolution_barrier: barrier,
+                resolution_count: AtomicUsize::new(0),
+                model,
+            }),
+        )
+        .with_memory(Arc::new(TaggedMemory {
+            trace: trace.clone(),
+        }))
+        .with_budget(Arc::new(TaggedBudget {
+            trace: trace.clone(),
+        }))
+        .with_progress(Arc::new(TaggedProgress {
+            trace: trace.clone(),
+        }))
+        .with_learning(Arc::new(TaggedLearning {
+            trace: trace.clone(),
+        }))
+        .with_tool_outcomes(Arc::new(TaggedOutcomeClassifier {
+            trace: trace.clone(),
+        }))
+        .with_experience(Arc::new(TaggedExperience { trace }))
+    }
+
+    let alpha_trace = Arc::new(TaggedTrace::new("alpha"));
+    let bravo_trace = Arc::new(TaggedTrace::new("bravo"));
+    let first_resolution_barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let alpha_host = bundle(
+        alpha_trace.clone(),
+        first_resolution_barrier.clone(),
+        Arc::new(ScriptedModel::new(tool_round("alpha answer"))),
+        0,
+    );
+    // Bravo first denies a tool, then permits the model's second attempt.  The
+    // differing security outcome proves that policy is invocation-local while
+    // still exercising the outcome classifier in both roots.
+    let mut bravo_round = tool_round("bravo answer");
+    bravo_round.insert(1, bravo_round[0].clone());
+    let bravo_host = bundle(
+        bravo_trace.clone(),
+        first_resolution_barrier,
+        Arc::new(ScriptedModel::new(bravo_round)),
+        1,
+    );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
 
     let first = harness.invoke_agent(
         AgentInvocation::new(
-            allowed_host,
+            alpha_host,
             AgentTurnRequest::new(
                 "helper",
-                vec![tinyinference_llm::message::Message::user("first")],
+                vec![tinyinference_llm::message::Message::user("alpha input")],
             ),
-            RunContext::new(RunConfig::new("root-allowed"), ()),
+            RunContext::new(RunConfig::new("root-alpha"), ()),
         ),
         &(),
     );
     let second = harness.invoke_agent(
         AgentInvocation::new(
-            denied_host,
+            bravo_host,
             AgentTurnRequest::new(
                 "helper",
-                vec![tinyinference_llm::message::Message::user("second")],
+                vec![tinyinference_llm::message::Message::user("bravo input")],
             ),
-            RunContext::new(RunConfig::new("root-denied"), ()),
+            RunContext::new(RunConfig::new("root-bravo"), ()),
         ),
         &(),
     );
     let (first, second) = tokio::join!(first, second);
-    let first = first.expect("allowed invocation succeeds");
-    let second = second.expect("denied invocation returns a recoverable tool result");
+    let first = first.expect("alpha invocation succeeds");
+    let second = second.expect("bravo invocation recovers from its one denial");
     assert_eq!(first.executed_tools, ["noop"]);
-    assert!(second.executed_tools.is_empty());
-    yield_until(|| allowed_progress.len() >= 2 && denied_progress.len() >= 2).await;
-    assert!(
-        allowed_progress
-            .events()
+    assert_eq!(second.executed_tools, ["noop"]);
+    assert_eq!(first.text().as_deref(), Some("alpha answer"));
+    assert_eq!(second.text().as_deref(), Some("bravo answer"));
+
+    // The terminal observer is asynchronous.  Wait until both roots have
+    // touched each of the ten concrete host adapters before inspecting their
+    // tags, rather than relying on scheduling luck or a sleep.
+    const ALL_CAPABILITIES: [&str; 10] = [
+        "context",
+        "definition",
+        "security",
+        "model",
+        "memory",
+        "budget",
+        "progress",
+        "learning",
+        "outcome",
+        "experience",
+    ];
+    yield_until(|| {
+        ALL_CAPABILITIES
             .iter()
-            .all(|event| event.run_id().as_str() == "root-allowed")
+            .all(|capability| alpha_trace.has_capability(capability))
+            && ALL_CAPABILITIES
+                .iter()
+                .all(|capability| bravo_trace.has_capability(capability))
+    })
+    .await;
+
+    let alpha_events = alpha_trace.events();
+    let bravo_events = bravo_trace.events();
+    assert!(
+        alpha_events
+            .iter()
+            .any(|event| event == "context:alpha input")
+            && alpha_events
+                .iter()
+                .any(|event| event == "progress:root-alpha")
+            && alpha_events
+                .iter()
+                .any(|event| event == "learning:alpha input")
+            && alpha_events
+                .iter()
+                .any(|event| event == "security:allow:noop"),
+        "alpha only used its own context, progress, learning, and security adapters: {alpha_events:?}"
     );
     assert!(
-        denied_progress
-            .events()
+        bravo_events
             .iter()
-            .all(|event| event.run_id().as_str() == "root-denied")
+            .any(|event| event == "context:bravo input")
+            && bravo_events
+                .iter()
+                .any(|event| event == "progress:root-bravo")
+            && bravo_events
+                .iter()
+                .any(|event| event == "learning:bravo input")
+            && bravo_events
+                .iter()
+                .any(|event| event == "security:deny:noop")
+            && bravo_events
+                .iter()
+                .any(|event| event == "security:allow:noop"),
+        "bravo retained its own deny-then-allow policy: {bravo_events:?}"
     );
-    assert!(harness.host_runs.lock().expect("binding lock").is_empty());
+    assert!(
+        alpha_events.iter().all(|event| !event.contains("bravo")),
+        "alpha must never receive data from bravo's invocation bundle: {alpha_events:?}"
+    );
+    assert!(
+        bravo_events.iter().all(|event| !event.contains("alpha")),
+        "bravo must never receive data from alpha's invocation bundle: {bravo_events:?}"
+    );
 }
 
 #[tokio::test]
@@ -2592,9 +2902,23 @@ async fn hosted_streaming_child_inherits_its_parents_bundle_and_cancellation() {
         .await
         .expect("stream starts");
 
-    tokio::select! {
-        _ = child_resolution_started.notified() => cancellation.cancel(),
-        item = stream.next() => panic!("stream ended before child resolution: {item:?}"),
+    // The hosted stream can legitimately yield lifecycle events before the
+    // child reaches its resolver. Keep consuming those events while retaining
+    // one notification future, so a scheduling change cannot turn this
+    // cancellation/inheritance assertion into a race.
+    let child_started = child_resolution_started.notified();
+    tokio::pin!(child_started);
+    loop {
+        tokio::select! {
+            _ = &mut child_started => {
+                cancellation.cancel();
+                break;
+            }
+            item = stream.next() => match item {
+                Some(crate::agent_loop::AgentStreamItem::Event(_)) => {}
+                other => panic!("stream ended before child resolution: {other:?}"),
+            },
+        }
     }
     let mut terminal = None;
     while let Some(item) = stream.next().await {

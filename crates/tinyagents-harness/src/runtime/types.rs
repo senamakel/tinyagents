@@ -17,8 +17,8 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::cache::ResponseCache;
 use crate::host::HostCapabilities;
@@ -30,16 +30,16 @@ use crate::tool::{ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::cache::CachePolicy;
 use tinyinference_llm::model::ResponseFormat;
 
-/// Model and identity selected by a host-driven invocation.
+/// Model and identity selected by one live host-driven invocation.
 ///
-/// This is deliberately keyed by [`RunContext`](crate::context::RunContext)'s
-/// process-local instance id, rather than its user-supplied run id: callers may
-/// legitimately run two turns with the same run id concurrently.
-pub(crate) struct HostRunBinding<State: Send + Sync> {
+/// This is held only in that invocation's non-serializable
+/// [`RunContext`](crate::context::RunContext). It is never stored on the
+/// reusable harness, keyed by a run id, or written to graph/checkpoint state.
+pub(crate) struct HostInvocationBinding<State: Send + Sync> {
     /// The capability bundle that prepared this exact invocation. This is
     /// per-run rather than read from the harness so a recursively invoked
     /// child cannot substitute its own installed (or missing) host policy.
-    pub(crate) host: HostCapabilities<State>,
+    pub(crate) host: Arc<HostCapabilities<State>>,
     pub(crate) agent_id: String,
     /// Definition-selected pin passed to the host resolver at every provider
     /// call. It is advisory; the host remains the routing authority.
@@ -53,7 +53,7 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
     pub(crate) progress: Option<super::agent::ProgressSender>,
 }
 
-impl<State: Send + Sync> Clone for HostRunBinding<State> {
+impl<State: Send + Sync> Clone for HostInvocationBinding<State> {
     fn clone(&self) -> Self {
         Self {
             host: self.host.clone(),
@@ -325,8 +325,4 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// into it. Because it is owned by the harness rather than a single run, a
     /// repeated identical request can be served from an earlier run's result.
     pub(crate) response_cache: Option<Arc<dyn ResponseCache>>,
-    /// Per-live-context host model selections. The entry points install and
-    /// remove these around a run so explicit-model SDK calls remain independent
-    /// of host routing.
-    pub(crate) host_runs: Arc<Mutex<HashMap<u64, HostRunBinding<State>>>>,
 }
