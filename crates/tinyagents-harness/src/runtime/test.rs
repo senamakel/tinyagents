@@ -2993,7 +2993,7 @@ async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(hosted_child_model.clone())),
     ));
-    let authorized = child
+    let _authorized = child
         .invoke_hosted_in_parent(&(), (), &hosted_parent_context(authorized_host), "delegate")
         .await
         .expect_err("a hosted child without the parent's invocation overlay fails closed");
