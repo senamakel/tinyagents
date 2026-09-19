@@ -263,26 +263,26 @@ and, on success, clear `invalid` and proceed to normal validation (emit `Invalid
 
 ## 3. Structural refactors worth doing
 
-1. **Turn-scoped request/response objects instead of `&mut` everything.** `run_loop_body` is 499 lines with 8 mutable locals
+1. **R-1. Turn-scoped request/response objects instead of `&mut` everything.** `run_loop_body` is 499 lines with 8 mutable locals
    threaded through 20 checkpoints. Introduce `struct Turn<'r> { request: ModelRequest, plan: Option<StructuredPlan>, recovery:
    TruncatedEmptyState, call_id, started_at }` built by `plan_turn()`, consumed by `call_model()`, `settle_response()`,
    `execute_tools()`. Rationale: makes I-10 fixable (build once, borrow), makes the exit paths testable without a harness, and
    gives the six copies of the `tokio::select! { biased; _ = cancel => …, r = timeout(remaining, fut) => … }` block
    (`run_loop.rs:488-507,926-939`; `model_call.rs:48-57`; `tools.rs:477-491,640-653`; `agent.rs:491-505`) one home:
    `RunContext::bounded(&self, what, fut) -> Result<T>`. Migration risk: low — internal only.
-2. **Replace type-erased host authority with a trait object.** `host_authority: Option<Arc<dyn HostAuthority<State>>>` where the
+2. **R-2. Replace type-erased host authority with a trait object.** `host_authority: Option<Arc<dyn HostAuthority<State>>>` where the
    trait exposes `agent_id()`, `allowed_tools()`, `host() -> &HostCapabilities<State>`, `runtime()`; `Ctx` is only needed for
    `InvocationRuntime<State,Ctx>` — store that as `Arc<dyn Any>` and downcast at the single site that needs it. Removes C-1's
    `unsafe` and I-11's clones. Risk: medium (touches `RunContext` layout, `subagent`, `runtime/agent.rs`); public surface unchanged.
-3. **Unify the four retry/fallback engines.** Loop retry (`invoke_model_resolving`), `RetryMiddleware`, `ModelFallbackMiddleware`,
+3. **R-3. Unify the four retry/fallback engines.** Loop retry (`invoke_model_resolving`), `RetryMiddleware`, `ModelFallbackMiddleware`,
    and `RunPolicy::fallback` all implement attempt loops with slightly different classification (I-1, I-7). Make the loop's engine
    the only one and turn the middlewares into thin policy overrides (`RunContext::override_retry_policy`). Risk: medium — public
    middleware types stay but their semantics become "configure", not "execute".
-4. **Split `TinyAgentsError`** into `HarnessError` (this crate) with graph/language variants moved to their crates, re-exported via
+4. **R-4. Split `TinyAgentsError`** into `HarnessError` (this crate) with graph/language variants moved to their crates, re-exported via
    `From`. Add `#[non_exhaustive]` to it and `AgentEvent` now (cheap, prevents the next break). Risk: medium for downstream matches.
-5. **Feature-gate heavy optional surfaces**: `claude-code` (subprocess driver + `uuid`, `tempfile`, `wait-timeout`, `dirs`),
+5. **R-5. Feature-gate heavy optional surfaces**: `claude-code` (subprocess driver + `uuid`, `tempfile`, `wait-timeout`, `dirs`),
    `langfuse` (`reqwest`), keep `tools` owning `chrono`. Risk: low; integration tests already gate `sqlite`/`tools`.
-6. **Move `handoff`, `run_queue`, `no_progress`, `artifacts`, `workspace/git` into a `tinyagents-host-utils` crate** or under a
+6. **R-6. Move `handoff`, `run_queue`, `no_progress`, `artifacts`, `workspace/git` into a `tinyagents-host-utils` crate** or under a
    `host-utils` feature. They are not on any loop path and carry product-specific heuristics (M-9).
 
 ---
