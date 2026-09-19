@@ -415,6 +415,56 @@ async fn host_registered_tool_search_wins_over_the_intrinsic_bridge() {
     assert_eq!(host_search.calls.lock().unwrap().len(), 1);
 }
 
+/// Regression: the collision check that decides whether to advertise an
+/// intrinsic bridge schema used to look only at `tool_schemas` (the `Direct`
+/// set), while admission's own collision check (`self.tools.dispatch`) sees
+/// every exposure. A `Hidden` tool registered as `tool_search` therefore used
+/// to be missed here: the loop still advertised the intrinsic `tool_search`
+/// schema, but admission suppressed the intrinsic handler for a name it
+/// recognized as registered, so a model that used the advertised bridge got
+/// an unknown-tool answer instead of a search result. Both paths must use the
+/// same collision rule.
+#[tokio::test]
+async fn hidden_registration_suppresses_the_matching_bridge_schema() {
+    let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
+    let hidden_search = ExposedTool::new(
+        TOOL_SEARCH_NAME,
+        "Host-internal, never model-visible.",
+        ToolExposure::Hidden,
+    );
+    let model = RecordingModel::new(vec![
+        tool_call(
+            "c1",
+            TOOL_CALL_NAME,
+            json!({"name": "stock_quote", "arguments": {}}),
+        ),
+        text("done"),
+    ]);
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(deferred.clone())
+        .register_tool(hidden_search.clone());
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("hi")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.text(), Some("done".to_string()));
+
+    // The intrinsic `tool_search` schema is suppressed (the registry already
+    // owns that name, even though it is Hidden and unreachable itself); only
+    // `tool_call` is advertised.
+    let tools = model.tools_seen()[0].clone();
+    assert_eq!(tool_names(&tools), vec![TOOL_CALL_NAME]);
+    // The deferred tool is still reachable directly through `tool_call`, and
+    // the hidden registration never ran.
+    assert_eq!(deferred.calls.lock().unwrap().len(), 1);
+    assert!(hidden_search.calls.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn tool_schemas_projection_applies_to_wire_and_catalog() {
     use tinyagents_harness::tool::{SchemaCompaction, SchemaPreparation};
