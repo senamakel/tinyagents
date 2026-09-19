@@ -253,6 +253,10 @@ impl<State: Send + Sync> ChatModel<State> for ScriptedModel {
                 )
             })
     }
+
+    fn profile(&self) -> Option<&tinyinference_llm::model::ModelProfile> {
+        self.profile.as_ref()
+    }
 }
 
 // ---------------------------------------------------------------------------
