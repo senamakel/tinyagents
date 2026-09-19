@@ -228,6 +228,7 @@ impl GraphEvent {
             | GraphEvent::NodeCompleted { step, .. }
             | GraphEvent::NodeFailed { step, .. }
             | GraphEvent::NodeRetryScheduled { step, .. }
+            | GraphEvent::TaskCompleted { step, .. }
             | GraphEvent::StateUpdated { step, .. }
             | GraphEvent::ContextForked { step, .. } => Some(*step),
             GraphEvent::RunCompleted { steps, .. } => Some(*steps),
