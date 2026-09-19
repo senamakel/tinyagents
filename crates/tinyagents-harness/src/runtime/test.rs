@@ -2795,10 +2795,14 @@ async fn host_delegate_registry_authorizes_recursive_children() {
     // The child deliberately has no host installed. A hosted parent must
     // propagate its own authority and bundle rather than falling back to this
     // child harness's configuration.
-    let child_harness = AgentHarness::new();
+    let child_harness: AgentHarness<()> = AgentHarness::new();
     let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
-    let mut parent_harness = AgentHarness::new();
-    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+    // The durable entry harness deliberately has no delegate tool. The only
+    // way the child can start is through the parent invocation's overlay, and
+    // the child must receive that same overlay rather than its local registry.
+    let parent_harness = AgentHarness::new();
+    let mut overlay = AgentHarness::new();
+    overlay.register_tool_dispatch(Arc::new(SubAgentTool::new(
         child,
         ChildDataPolicy::new(|_: &()| ()),
     )));
@@ -2812,7 +2816,8 @@ async fn host_delegate_registry_authorizes_recursive_children() {
                     vec![tinyinference_llm::message::Message::user("delegate")],
                 ),
                 RunContext::new(RunConfig::new("authorized-child"), ()),
-            ),
+            )
+            .with_runtime(crate::runtime::InvocationRuntime::new(overlay)),
             &(),
         )
         .await
@@ -2850,10 +2855,11 @@ async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
     let child = Arc::new(SubAgent::new(
         "worker",
         "child",
-        Arc::new(AgentHarness::new()),
+        Arc::new(AgentHarness::<()>::new()),
     ));
-    let mut parent_harness = AgentHarness::new();
-    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+    let parent_harness = AgentHarness::new();
+    let mut overlay = AgentHarness::new();
+    overlay.register_tool_dispatch(Arc::new(SubAgentTool::new(
         child,
         ChildDataPolicy::new(|_: &()| ()),
     )));
@@ -2867,7 +2873,8 @@ async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
                     vec![tinyinference_llm::message::Message::user("delegate")],
                 ),
                 RunContext::new(RunConfig::new("streaming-child"), ()),
-            ),
+            )
+            .with_runtime(crate::runtime::InvocationRuntime::new(overlay)),
             &(),
         )
         .await
@@ -3035,8 +3042,9 @@ async fn hosted_streaming_child_inherits_its_parents_bundle_and_cancellation() {
     let mut child_harness = AgentHarness::new();
     child_harness.register_model("local", local_child_model.clone());
     let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
-    let mut parent_harness = AgentHarness::new();
-    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+    let parent_harness = AgentHarness::new();
+    let mut overlay = AgentHarness::new();
+    overlay.register_tool_dispatch(Arc::new(SubAgentTool::new(
         child,
         ChildDataPolicy::new(|_: &()| ()),
     )));
@@ -3052,7 +3060,8 @@ async fn hosted_streaming_child_inherits_its_parents_bundle_and_cancellation() {
                 ),
                 RunContext::new(RunConfig::new("child-cancel"), ())
                     .with_cancellation(cancellation.clone()),
-            ),
+            )
+            .with_runtime(crate::runtime::InvocationRuntime::new(overlay)),
             &(),
         )
         .await
