@@ -204,9 +204,11 @@ impl StructuredStrategy {
                     StructuredStrategy::ProviderSchema
                 }
                 tinyinference_llm::model::StructuredMode::Tool => StructuredStrategy::ToolCall,
-                tinyinference_llm::model::StructuredMode::Prompted => StructuredStrategy::Prompted {
-                    template: profile.and_then(|p| p.prompted_output_template.clone()),
-                },
+                tinyinference_llm::model::StructuredMode::Prompted => {
+                    StructuredStrategy::Prompted {
+                        template: profile.and_then(|p| p.prompted_output_template.clone()),
+                    }
+                }
             };
         }
         match profile {

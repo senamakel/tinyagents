@@ -1151,25 +1151,25 @@ pub(super) fn split_thinking_tags(
     let mut rebuilt = Vec::with_capacity(response.message.content.len());
     for block in response.message.content.drain(..) {
         match block {
-            tinyinference_llm::message::ContentBlock::Text(text) => match split_one(
-                &text, open, close,
-            ) {
-                Some((before, thinking, after)) => {
-                    if !before.is_empty() {
-                        rebuilt.push(tinyinference_llm::message::ContentBlock::Text(before));
+            tinyinference_llm::message::ContentBlock::Text(text) => {
+                match split_one(&text, open, close) {
+                    Some((before, thinking, after)) => {
+                        if !before.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Text(before));
+                        }
+                        if !thinking.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Thinking {
+                                text: thinking,
+                                signature: None,
+                            });
+                        }
+                        if !after.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Text(after));
+                        }
                     }
-                    if !thinking.is_empty() {
-                        rebuilt.push(tinyinference_llm::message::ContentBlock::Thinking {
-                            text: thinking,
-                            signature: None,
-                        });
-                    }
-                    if !after.is_empty() {
-                        rebuilt.push(tinyinference_llm::message::ContentBlock::Text(after));
-                    }
+                    None => rebuilt.push(tinyinference_llm::message::ContentBlock::Text(text)),
                 }
-                None => rebuilt.push(tinyinference_llm::message::ContentBlock::Text(text)),
-            },
+            }
             other => rebuilt.push(other),
         }
     }

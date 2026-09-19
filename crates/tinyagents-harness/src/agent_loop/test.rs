@@ -5000,10 +5000,12 @@ impl Tool for DefsTool {
 async fn resolved_profile_schema_transform_is_applied_to_tool_schemas() {
     use crate::testkit::ScriptedModel;
 
-    let model = Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
-        schema_transform: Some(SchemaTransform::StripDefs),
-        ..ModelProfile::default()
-    }));
+    let model = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            schema_transform: Some(SchemaTransform::StripDefs),
+            ..ModelProfile::default()
+        }),
+    );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("mock", model.clone());
     harness.register_tool(Arc::new(DefsTool));
@@ -5158,10 +5160,12 @@ async fn thinking_level_map_resolves_a_named_reasoning_effort() {
             summary: None,
         },
     );
-    let model = Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
-        thinking_level_map,
-        ..ModelProfile::default()
-    }));
+    let model = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            thinking_level_map,
+            ..ModelProfile::default()
+        }),
+    );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("mock", model.clone());
     harness.push_middleware(Arc::new(RequestReasoningEffort(ReasoningEffort::High)));
@@ -5195,10 +5199,12 @@ async fn thinking_level_map_does_not_override_an_explicit_budget() {
             summary: None,
         },
     );
-    let model = Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
-        thinking_level_map,
-        ..ModelProfile::default()
-    }));
+    let model = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            thinking_level_map,
+            ..ModelProfile::default()
+        }),
+    );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("mock", model.clone());
 
