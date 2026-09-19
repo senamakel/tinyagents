@@ -376,9 +376,13 @@ where
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(io_err("open thread file", e)),
         };
-        decode_lines(&text, &format!("thread `{thread_id}`"), |line| {
+        let mut records = decode_lines(&text, &format!("thread `{thread_id}`"), |line| {
             serde_json::from_str::<Checkpoint<State>>(line)
-        })
+        })?;
+        for record in &mut records {
+            record.normalize();
+        }
+        Ok(records)
     }
 
     /// Loads a checkpoint for `thread_id`, optionally scoped to `namespace`.
