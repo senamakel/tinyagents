@@ -317,6 +317,13 @@ pub struct RunPolicy {
     /// `ResponseFormat::JsonSchema` always uses provider-native mode
     /// regardless of this field.
     pub structured_strategy_override: Option<StructuredStrategyOverride>,
+    /// How many queued messages the loop takes from a
+    /// [`crate::run_queue::RunQueue`] lane at each safe boundary (A4):
+    /// [`QueueMode::All`] (the default) applies every pending item at once,
+    /// [`QueueMode::OneAtATime`] applies the oldest and leaves the rest for
+    /// the next boundary. Only consulted when the run's
+    /// [`RunContext`][crate::context::RunContext] carries a queue.
+    pub queue_mode: QueueMode,
 }
 
 /// See [`RunPolicy::structured_strategy_override`].
@@ -465,6 +472,7 @@ impl Default for RunPolicy {
             output_retry: OutputRetryPolicy::default(),
             end_strategy: EndStrategy::default(),
             structured_strategy_override: None,
+            queue_mode: QueueMode::default(),
         }
     }
 }

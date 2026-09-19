@@ -554,6 +554,21 @@ pub enum AgentEvent {
         error: String,
     },
 
+    /// The agent loop appended one or more messages from a
+    /// [`crate::run_queue::RunQueue`] lane to the working transcript at a
+    /// safe turn boundary (A4): `Steer` after a tool batch or at a natural
+    /// finish, `Followup` at a natural finish. Emitted once per boundary
+    /// with the number of messages applied; `Collect` items never produce
+    /// this event because they are not applied to the transcript. Payload
+    /// text is deliberately not carried (events are payload-free by default).
+    QueuedMessageApplied {
+        /// Which lane the messages came from.
+        lane: crate::run_queue::QueueLane,
+        /// How many messages were appended at this boundary (`1` under
+        /// [`QueueMode::OneAtATime`][crate::run_queue::QueueMode::OneAtATime]).
+        count: usize,
+    },
+
     /// A graph routing decision produced a named route.
     RouteSelected {
         /// The route name chosen by the router.
@@ -770,6 +785,7 @@ impl AgentEvent {
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
             AgentEvent::OutputRetry { .. } => "output.retry",
+            AgentEvent::QueuedMessageApplied { .. } => "queue.applied",
             AgentEvent::RouteSelected { .. } => "route.selected",
             AgentEvent::UsageRecorded { .. } => "usage.recorded",
             AgentEvent::CostRecorded { .. } => "cost.recorded",

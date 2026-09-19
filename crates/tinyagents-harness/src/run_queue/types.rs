@@ -1,6 +1,19 @@
 //! Public types for the active-run queue.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
+use tinyinference_llm::message::Message;
+
+/// The shared queue the agent loop drains: a [`RunQueue`][super::RunQueue]
+/// of transcript-ready [`Message`]s.
+///
+/// Attach one to a run with
+/// [`RunContext::with_run_queue`][crate::context::RunContext::with_run_queue]
+/// and keep a clone to push into from outside the run. `Steer` and
+/// `Followup` items are appended to the transcript verbatim, so push them as
+/// [`Message::user`] (or [`Message::system`]) — the host chooses the role.
+pub type RunQueueHandle = Arc<super::RunQueue<Message>>;
 
 /// A queue lane consumed by the agent runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

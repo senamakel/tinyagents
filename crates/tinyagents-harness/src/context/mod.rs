@@ -298,6 +298,7 @@ impl<Ctx> RunContext<Ctx> {
             events,
             limits,
             steering: None,
+            run_queue: None,
             cancellation: CancellationToken::new(),
             control: std::sync::Arc::new(std::sync::Mutex::new(None)),
             state_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -624,6 +625,16 @@ impl<Ctx> RunContext<Ctx> {
     pub fn with_steering(mut self, steering: crate::steering::SteeringHandle) -> Self {
         let root_run_id = self.lineage().root_run_id.clone();
         self.steering = Some(steering.bind_root(root_run_id));
+        self
+    }
+
+    /// Attaches a [`crate::run_queue::RunQueueHandle`] so messages pushed
+    /// from outside the run reach the transcript at the loop's safe turn
+    /// boundaries (A4). See [`RunContext::run_queue`] for the drain points
+    /// and [`crate::runtime::RunPolicy::queue_mode`] for how many items each
+    /// boundary takes. Without this the loop consumes no queued messages.
+    pub fn with_run_queue(mut self, queue: crate::run_queue::RunQueueHandle) -> Self {
+        self.run_queue = Some(queue);
         self
     }
 

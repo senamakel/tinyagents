@@ -357,6 +357,15 @@ pub struct RunContext<Ctx = ()> {
     /// model call via
     /// [`crate::steering::apply_pending_steering`].
     pub steering: Option<SteeringHandle>,
+    /// Optional multi-lane message queue the agent loop drains at its turn
+    /// boundaries (A4): `Steer` after each tool batch and at a natural
+    /// finish, `Followup` at a natural finish only, `Collect` once at run
+    /// end onto [`crate::middleware::AgentRun::collected`]. `None` means the
+    /// loop consumes no queued messages. Attach one with
+    /// [`RunContext::with_run_queue`]; never inherited by a child context,
+    /// because a queue has no per-run addressing and a child draining its
+    /// parent's queue would steal the parent's messages.
+    pub run_queue: Option<crate::run_queue::RunQueueHandle>,
     /// Cooperative cancellation token for this run.
     ///
     /// Defaults to a fresh, never-cancelled [`CancellationToken`], so a run is

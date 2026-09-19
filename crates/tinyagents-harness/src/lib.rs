@@ -131,7 +131,7 @@ pub use observability::{
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
-pub use run_queue::{QueueLane, QueueStatus, RunQueue};
+pub use run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue, RunQueueHandle};
 pub use steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringOutcome, SteeringPolicy,
 };

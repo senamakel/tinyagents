@@ -131,6 +131,12 @@ pub struct AgentRun {
     /// resolve it into a [`crate::tool::DeferredToolResults`], and resume
     /// with [`crate::runtime::AgentHarness::resume_deferred`].
     pub deferred: Option<crate::tool::DeferredToolRequests>,
+    /// Messages the host pushed onto the run queue's `Collect` lane (A4),
+    /// drained once when the run ends — on every exit path, including
+    /// errors. They are delivered here for the host to act on and are
+    /// **never** appended to the transcript or sent to the model. Empty when
+    /// the run had no queue.
+    pub collected: Vec<tinyinference_llm::message::Message>,
 }
 
 // ── Middleware trait ──────────────────────────────────────────────────────────

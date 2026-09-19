@@ -20,7 +20,7 @@ mod types;
 
 use tokio::sync::Mutex;
 
-pub use types::{QueueLane, QueueMode, QueueStatus};
+pub use types::{QueueLane, QueueMode, QueueStatus, RunQueueHandle};
 
 /// Thread-safe FIFO queue split into steer, follow-up, and collect lanes.
 #[derive(Debug)]
