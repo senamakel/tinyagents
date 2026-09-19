@@ -157,7 +157,7 @@ impl EventSink {
     /// re-entrant record is queued and delivered by the active drain loop)
     /// when they guard against unbounded event recursion.
     /// A panicking listener does **not** wedge the sink: the `dispatching` flag
-    /// is released by a [`DispatchGuard`] on unwind, so later emits still
+    /// is released by an internal `DispatchGuard` on unwind, so later emits still
     /// dispatch (the panicking listener's own record is lost, and any records
     /// still queued behind it are delivered by whichever emitter drains next).
     pub fn emit(&self, event: AgentEvent) -> EventRecord {

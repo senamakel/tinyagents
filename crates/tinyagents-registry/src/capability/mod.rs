@@ -444,7 +444,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     // Introspection / diagnostics
     // -----------------------------------------------------------------------
 
-    /// Exports a serializable [`RegistrySnapshot`] of every registered
+    /// Exports a serializable [`RegistrySnapshot`](crate::RegistrySnapshot) of every registered
     /// component's metadata, sorted by `(kind, name)`.
     ///
     /// This is the machine-readable view a CLI or UI renders to show exactly

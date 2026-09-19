@@ -1,7 +1,7 @@
 //! Sub-agent nodes — the graph node that delegates to a harness *agent* (a
 //! model-driven agent loop) invoked through an explicit host capability.
 //!
-//! Where [`crate::subgraph`] embeds an entire [`CompiledGraph`] as a
+//! Where [`crate::subgraph`] embeds an entire [`CompiledGraph`](crate::CompiledGraph) as a
 //! node, this module embeds a *harness agent* as a node: a graph step hands its
 //! work to a host-selected, independently-observable agent and folds the agent's
 //! answer back into the parent graph state.
@@ -12,7 +12,7 @@
 //!   (parent `State` → [`SubAgentInput`]), an [`OutputMapper`]
 //!   ([`SubAgentOutput`] → parent `Update`), and a [`SubAgentPolicy`].
 //! - [`subagent_node`] lowers a [`SubAgentNode`] into an ordinary graph node
-//!   [`Handler`]: it obtains the carried [`AgentInvoker`], creates a distinct
+//!   `Handler`: it obtains the carried [`AgentInvoker`], creates a distinct
 //!   child `run_id` that preserves the run tree's `root_run_id` and is parented
 //!   to the enclosing graph run, applies timeout/retry/budget policy, maps the
 //!   child output into the parent update, records the child run (with its usage)

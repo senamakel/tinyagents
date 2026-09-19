@@ -18,7 +18,7 @@
 //!   the stack stays symmetric and always describes the path from the root run
 //!   to the current one.
 //!
-//! The executor ([`crate::CompiledGraph::execute`]) builds one stack per
+//! The executor (`CompiledGraph::execute`) builds one stack per
 //! run, tracks graph-call depth separately from node-loop visits, enforces the
 //! caps with clear recursion errors ([`crate::TinyAgentsError::SubAgentDepth`],
 //! [`crate::TinyAgentsError::NodeVisitLimit`],
