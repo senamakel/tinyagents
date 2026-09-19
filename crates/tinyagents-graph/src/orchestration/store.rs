@@ -491,6 +491,10 @@ fn run_blocking<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+/// Builds the standard "task does not exist" error for an unknown task id.
+///
+/// Shared across `store.rs` and `tool.rs` so lookups fail with a consistent
+/// message regardless of which control or store implementation raised it.
 pub(crate) fn orchestration_not_found(task_id: &TaskId) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("orchestration task `{task_id}` does not exist"))
 }
