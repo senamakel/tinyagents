@@ -1615,4 +1615,49 @@ mod canonical_result_tests {
         // serial execution or it would silently never run.
         assert!(!should_execute_tools_concurrently(2, true, 1));
     }
+
+    #[test]
+    fn map_tool_dispatch_error_preserves_sub_agent_depth_and_limit_exceeded() {
+        // M-3 regression: every non-cancel/timeout error used to collapse to
+        // a generic `Tool("tool dispatch failed")`, which `is_retryable`
+        // treats as unconditionally retryable. A `SubAgentDepth`/
+        // `LimitExceeded` escaping a nested sub-agent tool call is
+        // deterministic and will never succeed on retry, so it must keep its
+        // own classification instead of masquerading as a retryable tool
+        // error.
+        let depth_err = anyhow::Error::from(TinyAgentsError::SubAgentDepth(4));
+        assert!(matches!(
+            map_tool_dispatch_error(depth_err),
+            TinyAgentsError::SubAgentDepth(4)
+        ));
+
+        let limit_err = anyhow::Error::from(TinyAgentsError::LimitExceeded(
+            "some sensitive detail".to_string(),
+        ));
+        match map_tool_dispatch_error(limit_err) {
+            TinyAgentsError::LimitExceeded(message) => {
+                assert!(
+                    !message.contains("sensitive"),
+                    "the original message must still be redacted: {message}"
+                );
+            }
+            other => panic!("expected LimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_tool_dispatch_error_still_redacts_a_genuine_tool_error() {
+        // An ordinary tool-authored error (arbitrary text, possibly carrying
+        // secrets or user data) must still be collapsed to a generic message,
+        // unlike the structural errors above.
+        let tool_err = anyhow::Error::from(TinyAgentsError::Model(
+            "leaked api key sk-secret".to_string(),
+        ));
+        match map_tool_dispatch_error(tool_err) {
+            TinyAgentsError::Tool(message) => {
+                assert!(!message.contains("sk-secret"));
+            }
+            other => panic!("expected Tool, got {other:?}"),
+        }
+    }
 }
