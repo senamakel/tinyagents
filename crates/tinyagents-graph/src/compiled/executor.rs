@@ -497,7 +497,7 @@ where
                 Ok(outcome) => outcome,
                 Err(err) => return self.fail_and_return(&mut ctx, err).await,
             };
-            let step_run = runner.fold_step(outcome, ctx.steps, &mut ctx.visited);
+            let step_run = runner.fold_step(outcome, step, &mut ctx.visited);
 
             // Apply collected updates through the reducer at the boundary. A
             // reducer error here must still fail the run (not just unwind
