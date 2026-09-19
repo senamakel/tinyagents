@@ -536,14 +536,35 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         .await
         .expect("fallback trim runs");
 
+    // Strict `<`, not `<=`: the pre-fix implementation trimmed both requests
+    // to the full (schema-blind) `trigger_budget`, which — for this
+    // transcript, where every non-system message is the same size — would
+    // often keep the exact same number of messages in both cases and satisfy
+    // a merely-`<=` assertion despite not actually reserving anything for the
+    // schema. A `<` here is only possible because the schema budget was
+    // subtracted from the message budget before trimming.
     assert!(
-        request_with_tools.messages.len() <= request_no_tools.messages.len(),
-        "a request whose schemas already consume budget must trim at least as \
-         far as one with no schemas: with_tools={}, no_tools={}",
+        request_with_tools.messages.len() < request_no_tools.messages.len(),
+        "a request whose schemas already consume budget must trim strictly \
+         further than one with no schemas: with_tools={}, no_tools={}",
         request_with_tools.messages.len(),
         request_no_tools.messages.len()
     );
     assert!(matches!(request_with_tools.messages[0], Message::System(_)));
+
+    // Quantitative check: the trimmed messages plus the schema cost must fit
+    // within the policy's trigger budget — the property the reservation
+    // exists to guarantee, not just "fewer messages than before."
+    let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+        &request_with_tools.tools,
+        &crate::token_estimation::TokenCountOptions::default(),
+    );
+    let message_tokens = crate::token_estimation::estimate_slice_tokens(&request_with_tools.messages);
+    assert!(
+        message_tokens + schema_tokens <= trigger_budget,
+        "message_tokens ({message_tokens}) + schema_tokens ({schema_tokens}) must fit within \
+         trigger_budget ({trigger_budget})"
+    );
 
     // Extreme case: the schema cost alone exceeds the whole trigger budget.
     // The message budget must saturate to 0 (not underflow/panic), so the
