@@ -41,7 +41,9 @@ pub(super) struct StepOutcome<Update> {
 /// The folded result of running a superstep's active node set, ready to
 /// apply at the step boundary.
 pub(super) struct StepRun<Update> {
-    /// Branch updates in deterministic active-set index order.
+    /// Branch updates in deterministic active-set index order, from *every*
+    /// branch that produced one (an `Update` or a `Command` carrying one),
+    /// regardless of whether a lower-index sibling errored or interrupted.
     pub(super) updates: Vec<Update>,
     /// Explicit routing (plain `goto` nodes and/or [`Send`] packets) keyed by
     /// the producing branch's active-set index.
@@ -51,14 +53,31 @@ pub(super) struct StepRun<Update> {
     /// [`Command::goto`] — a node-keyed map would let a later activation's
     /// command clobber an earlier one's routing.
     pub(super) goto_map: HashMap<usize, Vec<RouteTarget>>,
+    /// Every branch that completed (produced an `Update`/`Command`, not an
+    /// error or interrupt), paired with its original active-set index —
+    /// needed so a later `route_completed` call can look its `goto_map`
+    /// entry back up by that same index. Superset of what the pre-C1/C2 fold
+    /// kept (the index-ascending prefix): a higher-index branch that
+    /// completed despite a lower-index sibling erroring/interrupting is
+    /// included here rather than dropped.
+    pub(super) completed: Vec<(usize, Activation)>,
+    /// Every branch that errored or interrupted this step, in ascending
+    /// original-index order — the boundary's `pending` set (re-run from
+    /// scratch on resume/retry). The first entry is always the branch named
+    /// by `interrupt`/`failure` below, when either is set.
+    pub(super) stalled: Vec<(usize, Activation)>,
     /// The lowest-index branch interrupt, if any (its active-set index +
-    /// value).
+    /// value). Other, higher-index branches that also interrupted this step
+    /// are still recorded in `stalled` (so they are not silently dropped or
+    /// mistaken for completed), but only this one's value is surfaced as
+    /// *the* step interrupt — surfacing more than one concurrently is not
+    /// modeled by [`GraphExecution::interrupts`](super::GraphExecution).
     pub(super) interrupt: Option<(usize, Interrupt)>,
-    /// A node-handler failure that survived the node-retry policy, if any.
-    /// When set, `updates` still carries the updates of the branches that
-    /// completed *before* the failing branch, so the executor can fold that
-    /// partial progress into committed state and persist a resumable
-    /// failure boundary.
+    /// A node-handler failure that survived the node-retry policy, if any —
+    /// always the lowest-index error this step. When set, `updates` still
+    /// carries the updates of every branch that completed (not just those
+    /// with a lower index), so the executor can fold that partial progress
+    /// into committed state and persist a resumable failure boundary.
     pub(super) failure: Option<StepFailure>,
 }
 
