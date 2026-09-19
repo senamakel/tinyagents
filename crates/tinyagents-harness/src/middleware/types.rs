@@ -780,15 +780,7 @@ pub struct ContextCompressionMiddleware {
     /// Optional hook consulted before every compaction (proactive or
     /// overflow-triggered) that can decline it or substitute a summary. See
     /// [`crate::summarization::CompactionDecision`].
-    pub(crate) before_compaction: Option<
-        std::sync::Arc<
-            dyn Fn(
-                    &crate::summarization::CompactionContext,
-                ) -> crate::summarization::CompactionDecision
-                + Send
-                + Sync,
-        >,
-    >,
+    pub(crate) before_compaction: Option<BeforeCompactionHook>,
 }
 
 // ── MicrocompactMiddleware ────────────────────────────────────────────────────
