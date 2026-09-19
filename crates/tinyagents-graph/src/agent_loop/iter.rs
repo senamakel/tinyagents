@@ -17,7 +17,7 @@ use tinyinference_llm::message::Message;
 use crate::command::NodeResult;
 
 use super::runtime::{self, LoopRuntime};
-use super::types::{node, LoopState};
+use super::types::{LoopState, node};
 
 /// One completed activation reported by [`LoopIter::next`].
 #[derive(Clone, Debug)]

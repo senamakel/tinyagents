@@ -12,7 +12,7 @@ use tinyagents_harness::error::Result;
 use tinyagents_harness::runtime::AgentHarness;
 
 use super::runtime::{self, LoopRuntime};
-use super::types::{node, LoopState, LoopUpdate};
+use super::types::{LoopState, LoopUpdate, node};
 
 /// Compiles the `plan -> model -> tools -> settle` agent loop into a
 /// [`CompiledGraph<LoopState, LoopUpdate>`] bound to `rt`.

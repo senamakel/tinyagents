@@ -18,7 +18,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use tinyagents_graph::agent_loop::{
-    compile_loop, node, AgentLoopGraphExt, GraphLoopDriver, LoopRuntime, LoopState,
+    AgentLoopGraphExt, GraphLoopDriver, LoopRuntime, LoopState, compile_loop, node,
 };
 use tinyagents_graph::{FileCheckpointer, InMemoryCheckpointer};
 use tinyagents_harness::TinyAgentsError;
@@ -48,12 +48,11 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
 }
 
 /// Builds a harness for `execution`, registering `model` as the default.
-fn harness_for(
-    execution: LoopExecution,
-    model: Arc<MockModel>,
-) -> AgentHarness<()> {
+fn harness_for(execution: LoopExecution, model: Arc<MockModel>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model).set_default_model("mock");
+    harness
+        .register_model("mock", model)
+        .set_default_model("mock");
     if matches!(execution, LoopExecution::Graph) {
         harness.with_loop_driver(Arc::new(GraphLoopDriver::new()));
     }
@@ -282,7 +281,10 @@ async fn steering_inject_scenario_matches_direct_and_graph() {
             .messages
             .iter()
             .any(|message| message.text().contains("ORCHESTRATOR"));
-        assert!(injected, "the injected steering message must reach the transcript");
+        assert!(
+            injected,
+            "the injected steering message must reach the transcript"
+        );
 
         match execution {
             LoopExecution::Direct => direct_messages = Some(run.messages),
@@ -365,10 +367,7 @@ mod pause_middleware {
             _state: &(),
             _response: &mut ModelResponse,
         ) -> tinyagents_harness::Result<()> {
-            if self
-                .0
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
+            if self.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 ctx.request_control(MiddlewareControl::Interrupt {
                     node: "review".into(),
                     message: "needs approval".into(),
@@ -384,9 +383,8 @@ mod pause_middleware {
 /// checkpoint/resume: A5 item 2's "approvals surfacing as graph interrupts".
 async fn checkpoint_resume_with<C>(checkpointer: Arc<C>)
 where
-    C: tinyagents_graph::checkpoint::Checkpointer<
-            tinyagents_graph::agent_loop::LoopState,
-        > + 'static,
+    C: tinyagents_graph::checkpoint::Checkpointer<tinyagents_graph::agent_loop::LoopState>
+        + 'static,
 {
     let model = Arc::new(MockModel::with_responses(vec![
         tool_call_response("call-1", "lookup", json!({})),
@@ -405,7 +403,9 @@ where
         Arc::new(()),
         RunContext::new(RunConfig::new("checkpoint-resume"), ()),
     ));
-    let graph = compile_loop(rt).expect("graph compiles").with_checkpointer(checkpointer);
+    let graph = compile_loop(rt)
+        .expect("graph compiles")
+        .with_checkpointer(checkpointer);
 
     let execution = graph
         .run_with_thread(
@@ -414,7 +414,11 @@ where
         )
         .await
         .expect("first leg completes to the interrupt");
-    assert_eq!(execution.interrupts.len(), 1, "run paused at the approval gate");
+    assert_eq!(
+        execution.interrupts.len(),
+        1,
+        "run paused at the approval gate"
+    );
     assert!(!execution.state.finished);
 
     let resumed = graph
@@ -494,7 +498,11 @@ async fn iter_steps_node_by_node_and_honors_override_next() {
     assert_eq!(step.node, node::PLAN);
     assert_eq!(step.next.as_deref(), Some(node::MODEL));
 
-    let step = iter.next().await.expect("model step").expect("not finished");
+    let step = iter
+        .next()
+        .await
+        .expect("model step")
+        .expect("not finished");
     assert_eq!(step.node, node::MODEL);
     assert_eq!(step.next.as_deref(), Some(node::TOOLS));
 
@@ -502,7 +510,11 @@ async fn iter_steps_node_by_node_and_honors_override_next() {
     // naturally-routed `tools` — exercising `override_next` — then let the
     // (now unoverridden) routing carry the run to completion.
     iter.override_next(node::PLAN);
-    let step = iter.next().await.expect("overridden step").expect("not finished");
+    let step = iter
+        .next()
+        .await
+        .expect("overridden step")
+        .expect("not finished");
     assert_eq!(step.node, node::PLAN);
     assert_eq!(step.next.as_deref(), Some(node::MODEL));
 

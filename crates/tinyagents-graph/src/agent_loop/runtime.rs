@@ -15,17 +15,15 @@ use tinyagents_harness::events::{AgentEvent, HarnessRunStatus};
 use tinyagents_harness::ids::{CallId, NodeId};
 use tinyagents_harness::middleware::{AgentRun, BoxModelFuture, ModelBaseCall};
 use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::steering::{apply_pending_steering, SteeringOutcome};
+use tinyagents_harness::steering::{SteeringOutcome, apply_pending_steering};
 use tinyagents_harness::structured::{StructuredExtractor, StructuredStrategy};
 
 use crate::command::Interrupt;
 use crate::{Command, NodeResult, RouteTarget};
 
-use super::types::{node, LoopState, PendingStructuredPlan};
+use super::types::{LoopState, PendingStructuredPlan, node};
 
-use tinyinference_llm::model::{
-    ModelRequest, ModelResponse, ResponseFormat, ToolChoice,
-};
+use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat, ToolChoice};
 use tinyinference_llm::tool::{ToolFormat, ToolSchema};
 
 /// Per-run state shared by every node closure [`super::compile_loop`]
@@ -90,8 +88,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> LoopRuntime<State, Ctx> {
         ctx: RunContext<Ctx>,
     ) -> Self {
         let run_id = ctx.run_id().clone();
-        let status =
-            HarnessRunStatus::new(run_id, tinyagents_harness::ids::ComponentId::new("agent_loop"));
+        let status = HarnessRunStatus::new(
+            run_id,
+            tinyagents_harness::ids::ComponentId::new("agent_loop"),
+        );
         Self::new(harness, app_state, ctx, AgentRun::default(), status, false)
     }
 }
@@ -111,7 +111,9 @@ struct DirectModelBase<'m, State: Send + Sync> {
     model: &'m dyn tinyinference_llm::model::ChatModel<State>,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx> for DirectModelBase<'_, State> {
+impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
+    for DirectModelBase<'_, State>
+{
     fn call<'a>(
         &'a self,
         _ctx: &'a mut RunContext<Ctx>,
@@ -139,10 +141,8 @@ fn resolve_structured_plan(
             let strategy = StructuredStrategy::for_profile(profile);
             match strategy {
                 StructuredStrategy::ProviderSchema => {
-                    request.response_format = Some(ResponseFormat::json_schema(
-                        name.clone(),
-                        schema.clone(),
-                    ));
+                    request.response_format =
+                        Some(ResponseFormat::json_schema(name.clone(), schema.clone()));
                 }
                 StructuredStrategy::ToolCall => {
                     let fallback_schema = ToolSchema {
@@ -167,7 +167,8 @@ fn resolve_structured_plan(
             })
         }
         Some(ResponseFormat::JsonSchema { name, schema }) => {
-            request.response_format = Some(ResponseFormat::json_schema(name.clone(), schema.clone()));
+            request.response_format =
+                Some(ResponseFormat::json_schema(name.clone(), schema.clone()));
             Some(PendingStructuredPlan {
                 strategy: StructuredStrategy::ProviderSchema,
                 schema_name: name,
@@ -313,7 +314,9 @@ where
         .models()
         .resolve_request(&request, None, None)
         .ok_or_else(|| {
-            TinyAgentsError::ModelNotFound(request.model.clone().unwrap_or_else(|| "<default>".into()))
+            TinyAgentsError::ModelNotFound(
+                request.model.clone().unwrap_or_else(|| "<default>".into()),
+            )
         })?;
     let model_name = binding.resolved.name.clone();
     let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
@@ -463,7 +466,11 @@ where
     Ctx: Send + Sync,
 {
     if let Some(plan) = loop_state.pending_structured.take() {
-        let extractor = StructuredExtractor::new(plan.strategy.clone(), &plan.schema_name, plan.schema.clone());
+        let extractor = StructuredExtractor::new(
+            plan.strategy.clone(),
+            &plan.schema_name,
+            plan.schema.clone(),
+        );
         let last_response = last_response_from_messages(&loop_state.messages);
         let outcome = extractor.extract_outcome(&last_response);
         let variant = outcome.variant.clone();
@@ -558,7 +565,10 @@ fn last_assistant_text(messages: &[tinyinference_llm::message::Message]) -> Stri
 /// call on the last assistant message, mirroring the direct loop's
 /// `close_unanswered_tool_calls` so a `JumpTo(Model)`/`JumpTo(End)`/
 /// `StopWithFinal` control leaves a replayable transcript.
-fn close_unanswered_tool_calls(messages: &mut Vec<tinyinference_llm::message::Message>, reason: &str) {
+fn close_unanswered_tool_calls(
+    messages: &mut Vec<tinyinference_llm::message::Message>,
+    reason: &str,
+) {
     let Some(tinyinference_llm::message::Message::Assistant(last)) = messages.last() else {
         return;
     };

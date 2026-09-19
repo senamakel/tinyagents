@@ -119,4 +119,4 @@ pub use compile::compile_loop;
 pub use driver::GraphLoopDriver;
 pub use iter::{AgentLoopGraphExt, LoopIter, LoopStep};
 pub use runtime::LoopRuntime;
-pub use types::{node, LoopState, LoopUpdate};
+pub use types::{LoopState, LoopUpdate, node};

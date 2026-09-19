@@ -25,7 +25,7 @@ use tinyinference_llm::message::Message;
 use crate::command::{NodeResult, RouteTarget};
 
 use super::runtime;
-use super::types::{node, LoopState};
+use super::types::{LoopState, node};
 
 /// Drives [`AgentHarness::invoke`] through the same node bodies
 /// [`super::compile_loop`] wires into a [`crate::CompiledGraph`], without
@@ -97,8 +97,12 @@ where
             run.messages = loop_state.messages.clone();
             let result = match current {
                 node::PLAN => runtime::plan_node(harness, ctx, loop_state).await,
-                node::MODEL => runtime::model_node(harness, state, ctx, run, status, loop_state).await,
-                node::TOOLS => runtime::tools_node(harness, state, ctx, run, status, loop_state).await,
+                node::MODEL => {
+                    runtime::model_node(harness, state, ctx, run, status, loop_state).await
+                }
+                node::TOOLS => {
+                    runtime::tools_node(harness, state, ctx, run, status, loop_state).await
+                }
                 node::SETTLE => runtime::settle_node(harness, run, loop_state).await,
                 other => {
                     break Err(TinyAgentsError::Validation(format!(
@@ -108,7 +112,9 @@ where
             };
 
             match result {
-                Ok(NodeResult::Interrupt(interrupt)) if interrupt.id.ends_with("-steering-pause") => {
+                Ok(NodeResult::Interrupt(interrupt))
+                    if interrupt.id.ends_with("-steering-pause") =>
+                {
                     // No `CompiledGraph` is in play here, so there is no
                     // checkpoint to pause against — mirror the direct loop's
                     // steering pause instead: latch `run.paused` and finish
@@ -192,7 +198,10 @@ where
         };
 
         status.mark_running(HarnessPhase::Middleware);
-        harness.middleware().run_after_agent(ctx, state, run).await?;
+        harness
+            .middleware()
+            .run_after_agent(ctx, state, run)
+            .await?;
 
         // `status.mark_completed`/`mark_interrupted`/`mark_failed` and (on
         // error) `AgentEvent::RunFailed` are applied centrally by
