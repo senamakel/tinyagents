@@ -106,6 +106,10 @@ pub struct StructuredOutcome {
     /// verbatim: it names the schema and, for a validation failure, the exact
     /// failing instance path.
     pub error: Option<String>,
+    /// Which schema variant matched, when extraction succeeded under
+    /// [`StructuredStrategy::ToolCallUnion`]. Mirrors
+    /// [`StructuredOutput::variant`].
+    pub variant: Option<String>,
 }
 
 impl StructuredOutcome {
