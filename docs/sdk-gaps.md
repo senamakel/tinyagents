@@ -312,12 +312,9 @@ policy tables.
 
 Acceptance criteria:
 
-- [x] Sub-agents inherit only the tools they are allowed to call — composable
-      via `FilteredToolSet`/`PrefixedToolSet` chains per sub-agent.
-- [x] Tool exposure decisions are visible in run events or observations —
-      `ToolExposureExplanation` on `AgentEvent::ToolsFiltered`.
-- [ ] OpenHuman can remove adapter-local allowlist enforcement from most call
-      paths — OpenHuman-side migration, not tracked here.
+- [x] Sub-agents inherit only the tools they are allowed to call (`FilteredToolSet`/`PrefixedToolSet` chains per sub-agent).
+- [x] Tool exposure decisions are visible in run events (`ToolExposureExplanation` on `AgentEvent::ToolsFiltered`).
+- [ ] OpenHuman can remove adapter-local allowlist enforcement from most call paths — OpenHuman-side migration, not tracked here.
 
 ### 10. Graph Fanout And Parallel Agent Ergonomics
 
