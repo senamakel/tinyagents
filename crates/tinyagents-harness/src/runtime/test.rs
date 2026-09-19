@@ -3024,6 +3024,115 @@ async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
     ));
 }
 
+/// C-1 regression: `host_invocation_binding` must fail closed, never
+/// reinterpret memory, when a hosted `RunContext` is read by a harness whose
+/// `State` differs from the one that installed the authority.
+///
+/// This is the reachable repro from the code review: nothing about
+/// `RunContext<Ctx>` tracks `State` at all, so a context built for one
+/// `State` type-checks fine against `host_invocation_binding::<OtherState,
+/// _>`. Before this fix that call cast the erased authority through an
+/// unchecked raw pointer, reading a `HostInvocationBinding<OtherState, _>`
+/// out of memory that actually held a `HostInvocationBinding<State, _>` —
+/// wrong `Arc<HostCapabilities<_>>` vtable and all. The fix (a `type_name`
+/// guard in front of the cast — see `ErasedHostAuthority`) turns that into a
+/// typed `Validation` error instead.
+#[test]
+fn host_invocation_binding_fails_closed_on_a_state_mismatch() {
+    struct OtherState;
+
+    let host = Arc::new(crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "parent",
+            "Parent",
+            "hosted",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::replies(
+            vec!["unused"],
+        )))),
+    ));
+    let mut context: RunContext<()> = RunContext::new(RunConfig::new("state-mismatch"), ());
+    context.host_agent_id = Some("parent".to_string());
+    context.host_authority = Some(Arc::new(
+        crate::runtime::HostInvocationAuthority::<(), ()> {
+            binding: Arc::new(crate::runtime::HostInvocationBinding {
+                host,
+                agent_id: "parent".to_string(),
+                model_pin: None,
+                role: None,
+                allowed_tools: HashSet::new(),
+                progress: None,
+                runtime: None,
+            }),
+        },
+    ));
+
+    // Reading it back with the *same* `State`/`Ctx` the authority was
+    // installed for succeeds.
+    assert!(
+        crate::runtime::host_invocation_binding::<(), ()>(&context)
+            .expect("matching State/Ctx must not be rejected")
+            .is_some()
+    );
+
+    // Reading the same context with a *different* `State` must fail closed
+    // rather than transmute the wrong `HostInvocationBinding<_>` out of the
+    // erased authority.
+    let mismatched = crate::runtime::host_invocation_binding::<OtherState, ()>(&context);
+    assert!(
+        matches!(mismatched, Err(crate::error::TinyAgentsError::Validation(_))),
+        "expected a fail-closed Validation error, got {mismatched:?}"
+    );
+}
+
+/// C-1 regression: `RunContext::child_with_data` (the only primitive that
+/// changes `Ctx`) must never propagate host authority, closing the other
+/// half of the C-1 repro (a child built with a different `Ctx` type
+/// inheriting a parent's hosted authority for the wrong `Ctx`).
+#[test]
+fn child_with_data_never_propagates_host_authority() {
+    let host = Arc::new(crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "parent",
+            "Parent",
+            "hosted",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::replies(
+            vec!["unused"],
+        )))),
+    ));
+    let mut parent: RunContext<()> = RunContext::new(RunConfig::new("ctx-change-parent"), ());
+    parent.host_authority = Some(Arc::new(
+        crate::runtime::HostInvocationAuthority::<(), ()> {
+            binding: Arc::new(crate::runtime::HostInvocationBinding {
+                host,
+                agent_id: "parent".to_string(),
+                model_pin: None,
+                role: None,
+                allowed_tools: HashSet::new(),
+                progress: None,
+                runtime: None,
+            }),
+        },
+    ));
+    assert!(parent.host_authority.is_some());
+
+    // Same-`Ctx` `child` propagates authority.
+    let same_ctx_child = parent.child(RunConfig::new("same-ctx"), ()).unwrap();
+    assert!(same_ctx_child.host_authority.is_some());
+
+    // Different-`Ctx` `child_with_data` never does, regardless of the
+    // authority the parent carries.
+    let different_ctx_child = parent
+        .child_with_data(RunConfig::new("different-ctx"), "child-data")
+        .unwrap();
+    assert!(different_ctx_child.host_authority.is_none());
+}
+
 #[tokio::test]
 async fn hosted_streaming_child_inherits_its_parents_bundle_and_cancellation() {
     let mut delegate = ModelResponse::assistant("");
