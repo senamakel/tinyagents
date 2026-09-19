@@ -23,7 +23,11 @@ pub struct RunId(pub(crate) String);
 pub struct ThreadId(pub(crate) String);
 
 /// Identifies an individual model or tool call inside a run.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Also `Ord`, so it can key the `BTreeMap`s in
+/// [`crate::tool::DeferredToolRequests`]/[`crate::tool::DeferredToolResults`]
+/// deterministically.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CallId(pub(crate) String);
 
 /// Identifies a single emitted harness event.
