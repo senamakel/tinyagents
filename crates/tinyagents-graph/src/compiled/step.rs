@@ -115,6 +115,11 @@ pub(super) struct StepRun<Update> {
     /// with a lower index), so the executor can fold that partial progress
     /// into committed state and persist a resumable failure boundary.
     pub(super) failure: Option<StepFailure>,
+    /// The replay memos of every *stalled* branch (durable-task writes plus
+    /// any deferred `interrupt_after` result), for the boundary to persist
+    /// next to the step's completion markers. A completed branch's memos are
+    /// dropped: the task will never re-run, so nothing needs replaying.
+    pub(super) task_writes: Vec<PendingWrite>,
 }
 
 /// The two accumulators [`StepRunner::fold_result`] fills in as it walks a
