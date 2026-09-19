@@ -376,7 +376,7 @@ where
         let id = checkpointer.put(forked).await?;
         self.emit_unscoped(GraphEvent::CheckpointSaved {
             checkpoint_id: id,
-            step,
+            step: Some(step),
         });
         Ok(config)
     }
