@@ -238,8 +238,12 @@ Acceptance criteria:
 Status: partially present.
 
 TinyAgents has `Usage`, `UsageTotals`, `CostTotals`, and accounting middleware.
-OpenHuman still owns richer budget behavior, global cost trackers, per-session
-rollups, budget stop hooks, and token/cost dashboard data.
+`ModelPricing` now supports context-size-tiered rates (`ModelPricing::tiers` /
+`PriceTier`, selected by `harness::cost::estimate_cost` against a call's
+input-token count) for providers that price differently above a context
+threshold (see `docs/modules/harness/cost.md`). OpenHuman still owns richer
+budget behavior, global cost trackers, per-session rollups, budget stop hooks,
+and token/cost dashboard data.
 
 Implement:
 
