@@ -9,9 +9,10 @@
 //! implementations — the production file-backed one and the in-memory test
 //! double — and both are certified here.
 
-use tinyagents_session::run_ledger::types::TranscriptMeta as _unused; // keep import list tidy below
 use tinyagents_session::testkit::InMemoryTranscriptHistory;
-use tinyagents_session::testkit::conformance::{run_ledger_conformance, transcript_history_conformance};
+use tinyagents_session::testkit::conformance::{
+    run_ledger_conformance, transcript_history_conformance,
+};
 use tinyagents_session::transcript::{FileTranscriptHistory, TranscriptMeta};
 
 #[test]
