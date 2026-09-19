@@ -441,6 +441,11 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// into it. Because it is owned by the harness rather than a single run, a
     /// repeated identical request can be served from an earlier run's result.
     pub(crate) response_cache: Option<Arc<dyn ResponseCache>>,
+    /// Optional validator consulted after the final turn's structured
+    /// extraction succeeds, driving the output-validation retry loop (A3).
+    /// See [`crate::structured::OutputValidator`] and
+    /// [`AgentHarness::with_output_validator`].
+    pub(crate) output_validator: Option<Arc<dyn crate::structured::OutputValidator<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.
