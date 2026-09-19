@@ -10,7 +10,7 @@
 //! per-request override, a reusable previous selection, priority-sorted
 //! runtime hints, the agent's own default, and finally the registry-wide
 //! default — returning the first candidate that is both registered and
-//! [`model_eligible`]. [`ModelRegistry::resolve_request`] is the common-case
+//! `model_eligible`. [`ModelRegistry::resolve_request`] is the common-case
 //! entry point that builds a [`ModelSelection`] from one
 //! [`ModelRequest`].
 
@@ -78,7 +78,7 @@ impl<State: Send + Sync> ModelRegistry<State> {
     /// Resolves a model using override, previous state, hints, and defaults.
     ///
     /// Tries each source in strict precedence order and returns the first
-    /// candidate that is both registered and [`model_eligible`] (capability
+    /// candidate that is both registered and `model_eligible` (capability
     /// match, and usable unless `selection.allow_retired`):
     ///
     /// 1. [`ModelSelection::requested`] — an explicit per-request override.
