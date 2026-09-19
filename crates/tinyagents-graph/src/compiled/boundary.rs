@@ -222,7 +222,8 @@ where
         } = fail;
         let failed_node = sb.active[failed_index].node.clone();
         let pending: Vec<Activation> = sb.stalled.iter().map(|(_, a)| a.clone()).collect();
-        let completed_tasks = self.merged_completed_tasks(ctx, sb.completed);
+        let (completed_tasks, completed_routes) =
+            self.merged_completed(ctx, sb.completed, sb.goto_map);
         // Settle any in-flight Async background writes before the
         // failure-boundary persist so earlier boundaries are durable when
         // the run aborts. Like the persist error below, a background write
@@ -239,6 +240,7 @@ where
                     state,
                     pending: &pending,
                     completed_tasks: &completed_tasks,
+                    completed_routes: &completed_routes,
                     child_runs: sb.child_runs_meta,
                 },
                 sb.step,
