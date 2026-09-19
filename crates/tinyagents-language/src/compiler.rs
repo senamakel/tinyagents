@@ -24,7 +24,7 @@
 //!    describes *topology*; runnable node behaviour comes entirely from the
 //!    Rust-side factory, never from the declarative source.
 
-use crate::capability_resolver::{CapabilitySource, bind_capabilities_with_registry};
+use crate::capability_resolver::CapabilitySource;
 use crate::parser::parse_str;
 use crate::types::{
     Blueprint, BlueprintProvenance, ChannelSpec, CommandSpec, END, EdgeSpan, EdgeSpec, IoFieldSpec,
