@@ -861,6 +861,39 @@ impl ChannelState {
     }
 }
 
+/// Extracts `(channel_versions, channel_deltas)` to embed into a freshly
+/// built [`crate::checkpoint::Checkpoint`], downcasting `state` to
+/// [`ChannelState`] when the graph uses the channel model.
+///
+/// For any other `State` type (a plain whole-state graph) a single
+/// `"state"` channel is reported at `fallback_version`, with no deltas — see
+/// the module docs on [`crate::checkpoint::Checkpoint::channel_versions`].
+///
+/// Shared by every checkpoint-construction call site (the executor's normal/
+/// failure/cancel boundaries in `compiled::boundary`, and
+/// `compiled::state_api`'s `update_state`) so a normal superstep boundary
+/// and a manual write can never disagree about what they persist here (the
+/// "one write path" contract — I5/R3).
+pub fn channel_bookkeeping<State: 'static>(
+    state: &State,
+    fallback_version: u64,
+) -> (
+    BTreeMap<String, u64>,
+    BTreeMap<String, Vec<serde_json::Value>>,
+) {
+    match (state as &dyn std::any::Any).downcast_ref::<ChannelState>() {
+        Some(channel_state) => (
+            channel_state.channel_versions().clone(),
+            channel_state.step_deltas().clone(),
+        ),
+        None => {
+            let mut versions = BTreeMap::new();
+            versions.insert("state".to_string(), fallback_version);
+            (versions, BTreeMap::new())
+        }
+    }
+}
+
 /// `ChannelState` is its own [`StateReducer`]: the `&self` receiver is unused
 /// (merge rules live in the running `state`'s [`ChannelSet`]), so any
 /// `ChannelState` may be passed to `set_reducer`.
