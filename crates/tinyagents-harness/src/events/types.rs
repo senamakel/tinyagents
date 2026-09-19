@@ -239,6 +239,24 @@ pub enum AgentEvent {
         error: String,
     },
 
+    /// A resumed run reconciled an unresolved tool-effect-ledger row left
+    /// behind by an interrupted prior attempt (B5).
+    ///
+    /// Emitted by
+    /// [`crate::runtime::AgentHarness::reconcile_tool_effects`] for each
+    /// `started`-but-never-settled effect belonging to the last assistant
+    /// tool-call turn, once it has decided what to do per the tool's
+    /// [`tinytools::ToolReplay`] declaration.
+    ToolEffectReconciled {
+        /// Identifier of the reconciled tool call.
+        call_id: CallId,
+        /// What the reconciliation did: `"re_execute"` when the call was left
+        /// pending for the loop to run again (`ToolReplay::Safe`), or
+        /// `"interrupted"` when a synthesized tool-error result was appended
+        /// instead (`ToolReplay::Never`).
+        action: String,
+    },
+
     /// A model call failed and the run is propagating the error.
     ///
     /// The terminal partner of [`AgentEvent::ModelStarted`] on the error path;
