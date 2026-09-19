@@ -145,19 +145,6 @@ async fn with_capability_composes_with_an_existing_toolset() {
     );
 
     let toolset = harness.toolset().expect("toolset installed").clone();
-    let names: Vec<&str> = toolset
-        .tools(&ctx())
-        .await
-        .expect("tools resolve")
-        .iter()
-        .map(|tool| tool.name().to_string())
-        .collect::<Vec<_>>()
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .collect();
-    // Re-derive owned names to avoid a borrow-lifetime tangle above.
     let names: Vec<String> = toolset
         .tools(&ctx())
         .await
@@ -165,14 +152,8 @@ async fn with_capability_composes_with_an_existing_toolset() {
         .iter()
         .map(|tool| tool.name().to_string())
         .collect();
-    let _ = names_as_str(&names);
     assert!(names.iter().any(|name| name == "base"));
     assert!(names.iter().any(|name| name == "extra-tool"));
-    let _ = names;
-}
-
-fn names_as_str(names: &[String]) -> Vec<&str> {
-    names.iter().map(String::as_str).collect()
 }
 
 #[tokio::test]
