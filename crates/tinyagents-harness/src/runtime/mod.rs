@@ -292,10 +292,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         self.capabilities.push(capability);
 
+        let capability_toolset = crate::capability::CapabilityToolSet::new(self.capabilities.clone());
+
+        // The `load_capability` tool needs no `RunContext`/`State` to run, so
+        // it is registered directly into `self.tools` — the one part of a
+        // capability's contribution that is callable, not just advertised,
+        // without a caller-supplied dispatch bridge (see the doc comment
+        // above). `Self::register_tool` silently replaces a prior
+        // registration under the same name, so re-registering on every call
+        // keeps it in sync with the full, still-accumulating capability list.
+        if let Some(load_tool) = capability_toolset.load_tool() {
+            self.register_tool(load_tool);
+        }
+
         let capability_toolset: Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>> =
-            Arc::new(crate::capability::CapabilityToolSet::new(
-                self.capabilities.clone(),
-            ));
+            Arc::new(capability_toolset);
         self.toolset = Some(match &self.capability_base_toolset {
             Some(base) => Arc::new(crate::tool::toolset::CombinedToolSet::new(vec![
                 base.clone(),
@@ -303,22 +314,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             ])),
             None => capability_toolset,
         });
-
-        // The `load_capability` tool needs no `RunContext`/`State` to run,
-        // so it is registered directly into `self.tools` — the one part of
-        // a capability's contribution that is callable, not just advertised,
-        // without a caller-supplied dispatch bridge (see the doc comment
-        // above). Re-registering on every call keeps it in sync with the
-        // full, still-accumulating capability list; `register_tool` errors
-        // on a duplicate name, so remove any earlier registration first.
-        self.tools.remove(crate::capability::LOAD_CAPABILITY_TOOL_NAME);
-        if let Some(load_tool) = crate::capability::CapabilityToolSet::<State, Ctx>::new(
-            self.capabilities.clone(),
-        )
-        .load_tool()
-        {
-            self.register_tool(load_tool);
-        }
 
         self
     }
