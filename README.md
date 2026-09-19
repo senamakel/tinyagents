@@ -42,8 +42,6 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   name, plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage.
-- **`tinyagents-tracing`** — the `tracing` macros the other crates gate behind
-  their `tracing` feature. Compiled out by default.
 - **`tinyagents-integration-tests`** — cross-crate tests and the runnable
   examples referenced below (not published, workspace-internal).
 
