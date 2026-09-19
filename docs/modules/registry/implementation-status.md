@@ -127,7 +127,7 @@ membership in the host-registered capability allowlist
 
 On the harness side, `AgentHarness::with_capability(capability)` installs a
 bundle: its middleware is appended in installation order, its model defaults
-are applied onto the harness's `ModelRequestPolicy`, and its toolset is
+are applied onto the harness's `RunPolicy`, and its toolset is
 folded into a `CapabilityToolSet` combined with whatever toolset was already
 installed via `with_toolset` before the first `with_capability` call. When
 any installed capability has `defer_loading: true`, a synthetic
