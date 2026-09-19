@@ -28,25 +28,40 @@ LangChain v1 implements structured output with provider and tool strategies:
 
 ## Strategies
 
-```rust
-pub enum ResponseFormat {
-    Auto(ResponseSchema),
-    Provider(ProviderStructuredOutput),
-    Tool(ToolStructuredOutput),
-    JsonSchema(JsonSchema),
-}
+`StructuredStrategy` (`crates/tinyagents-harness/src/structured/types.rs`) has
+four variants:
 
-pub struct ResponseSchema {
-    pub name: String,
-    pub description: Option<String>,
-    pub schema: JsonSchema,
-    pub strict: Option<bool>,
+```rust
+pub enum StructuredStrategy {
+    ProviderSchema,
+    ToolCall,
+    Prompted { template: Option<String> },
+    ToolCallUnion,
 }
 ```
 
-`Auto` should choose provider-native mode only when the selected model profile
-declares support. Otherwise it should fall back to tool strategy when the model
-supports tool calling.
+`StructuredStrategy::for_profile` resolves `ResponseFormat::Auto` to
+`ProviderSchema` (native structured output + JSON Schema support, or no
+profile) or `ToolCall` (tool-calling model without native structured output);
+it never returns `Prompted`/`ToolCallUnion` — those two are reached only
+through `RunPolicy::structured_strategy_override`
+(`StructuredStrategyOverride::{Prompted { template }, ToolCallUnion {
+variants }}`), which bypasses the profile-based heuristic outright when set.
+
+- **`Prompted`** (A6) — for a model with no native schema or tool-calling
+  support to lean on: the schema is injected into a leading system message
+  instead of a provider API field (`default_prompted_template()`'s wording, or
+  a caller-supplied `template`), and extraction reuses the same
+  `ProviderSchema` code path (parse response text through the repair ladder).
+  Mirrors Pydantic AI's `PromptedOutput`.
+- **`ToolCallUnion`** (A6) — one synthetic tool per `(name, schema)` variant
+  instead of a single schema tool; extraction
+  (`StructuredExtractor::extract_tool_call_union`) scans the response's tool
+  calls for the first one matching *any* variant, validates its arguments
+  against *that variant's* schema, and records which one matched on
+  `StructuredOutput::variant` / `AgentRun::structured_variant`. Build the
+  extractor directly with `StructuredExtractor::new_union(label, variants)`
+  when driving extraction outside the agent loop.
 
 ## Provider Strategy
 
