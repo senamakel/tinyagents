@@ -151,7 +151,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// [`tinyinference_llm::model::ModelResponse`] is reused; on a miss the
     /// provider is called and the successful response is stored back. Whether
     /// caching is active for a given call is governed by the effective
-    /// [`CachePolicy`][crate::cache::CachePolicy] (the per-request
+    /// [`CachePolicy`](tinyinference_llm::cache::CachePolicy) (the per-request
     /// [`tinyinference_llm::model::ModelRequest::cache_policy`] overriding
     /// [`RunPolicy::cache`]).
     ///

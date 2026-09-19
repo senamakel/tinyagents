@@ -69,7 +69,7 @@ pub struct MessagesTemplate {
     pub entries: Vec<(TemplateRole, PromptTemplate)>,
 }
 
-/// Assembles a [`ModelRequest`] while tracking prompt-cache segments.
+/// Assembles a [`ModelRequest`](tinyinference_llm::model::ModelRequest) while tracking prompt-cache segments.
 ///
 /// Callers push segments in logical order — system, tools, instructions (all
 /// cacheable), then history and volatile context (not cacheable).  The stable
