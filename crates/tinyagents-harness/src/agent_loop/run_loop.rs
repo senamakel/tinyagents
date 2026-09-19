@@ -546,10 +546,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         };
                         request.response_format = Some(ResponseFormat::Text);
                         for (variant_name, variant_schema) in &variants {
+                            let variant_schema = crate::tool::apply_profile_schema_transform(
+                                variant_schema,
+                                binding.model.profile(),
+                            );
                             let schema_tool = ToolSchema {
                                 name: variant_name.clone(),
                                 description: format!("Return the result as `{variant_name}`."),
-                                parameters: variant_schema.clone(),
+                                parameters: variant_schema,
                                 format: tinyinference_llm::tool::ToolFormat::Json,
                             };
                             request.tools.push(match &self.policy.tool_schemas {
