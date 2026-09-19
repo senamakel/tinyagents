@@ -1,3 +1,11 @@
+//! Workflow execution engine: orchestrates phase scheduling, task spawning,
+//! and result collection.
+//!
+//! [`WorkflowEngine`] drives the scheduler, manages child task creation and
+//! claim-based assignment, handles phase state persistence and transitions,
+//! and enforces bounded concurrency. It is generic over a host-supplied
+//! [`WorkflowExecutor`] that creates and monitors actual work.
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

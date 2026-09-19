@@ -14,7 +14,7 @@
 //! - [`RunContext`] is the live handle bundling that config with the run's
 //!   stores, event sink, limit tracker, and arbitrary user data.
 //!
-//! See [`types`] for the field-level definitions.
+//! See `types` for the field-level definitions.
 //!
 //! # Example
 //!
@@ -315,8 +315,10 @@ impl<Ctx> RunContext<Ctx> {
     /// slot, and instance id.  It deliberately shares the capabilities that
     /// describe one recursive operation: cancellation, events, stores,
     /// workspace policy, steering, streaming mode, thread identity, output
-    /// cap, and depth cap.  The child starts with the parent's metadata; use
-    /// [`Self::child_with_metadata`] to shallowly overlay child-specific keys.
+    /// cap, and depth cap.  Metadata is shallow-merged automatically: any key
+    /// set on `child_config.metadata` overlays the parent's metadata object
+    /// (see `shallow_merge_metadata`), so callers only need to pass the
+    /// child-specific keys.
     pub fn child<ChildCtx>(
         &self,
         child_config: RunConfig,
@@ -524,7 +526,11 @@ impl<Ctx> RunContext<Ctx> {
     }
 }
 
-/// Applies the child metadata semantics used by [`RunContext::child_with_metadata`].
+/// Applies the child metadata semantics used by [`RunContext::child`]: an
+/// object-valued child metadata shallow-merges onto (and overrides) the
+/// parent's object, a non-null non-object child metadata replaces the
+/// parent's wholesale, and a `null` child metadata inherits the parent's
+/// unchanged.
 fn shallow_merge_metadata(
     parent: &serde_json::Value,
     child: serde_json::Value,

@@ -14,7 +14,7 @@
 //!
 //! # Layout
 //!
-//! - [`types`] holds every public type (the [`Middleware`] trait, [`AgentRun`],
+//! - `types` holds every public type (the [`Middleware`] trait, [`AgentRun`],
 //!   [`MiddlewareStack`], and the built-in middleware).
 //! - This file holds the impls: trait default bodies live with the trait in
 //!   `types.rs`; here are the [`AgentRun`] helpers, the stack runner, and the

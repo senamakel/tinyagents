@@ -1,3 +1,6 @@
+//! Tests for team service: creation, member lifecycle, task coordination,
+//! and messaging flow.
+
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 

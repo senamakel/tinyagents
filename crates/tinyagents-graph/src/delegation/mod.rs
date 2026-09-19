@@ -25,7 +25,7 @@
 //!   [`Interrupt`](crate::Interrupt) that survives a process restart and
 //!   is released by [`resume_delegation`];
 //! - **cooperative cancellation** — a
-//!   [`CancellationToken`](crate::CancellationToken) short-circuits the pipeline
+//!   [`CancellationToken`](tinyagents_harness::cancel::CancellationToken) short-circuits the pipeline
 //!   to `finalize` at the next node boundary.
 //!
 //! # The per-stage worker is injected

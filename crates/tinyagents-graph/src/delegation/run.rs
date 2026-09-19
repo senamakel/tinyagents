@@ -71,7 +71,7 @@ where
 /// durable human-approval interrupt.
 ///
 /// When [`DelegationConfig::require_review_approval`] is set and the reviewer
-/// approves, the `approval` node emits [`NodeResult::Interrupt`]; the executor
+/// approves, the `approval` node emits [`NodeResult::Interrupt`](crate::NodeResult::Interrupt); the executor
 /// persists a checkpoint (Sync durability — the crate default) and returns
 /// control here with the interrupt in [`DelegationOutcome::pending`]. Deliver the
 /// approver's decision later with [`resume_delegation`] — it may run after a
@@ -139,9 +139,9 @@ where
 ///
 /// The graph is rebuilt (its node closures are not serializable — only the typed
 /// state is checkpointed) with the same checkpointer + `thread_id`, then
-/// re-entered at the interrupted node via [`CompiledGraph::resume`] (the
+/// re-entered at the interrupted node via [`CompiledGraph::resume`](crate::CompiledGraph::resume) (the
 /// `ResumeTarget::Latest` checkpoint). `decision` maps to approve/deny via
-/// [`decision_is_approve`], so passing the approval RPC's `ApprovalDecision`
+/// `decision_is_approve`, so passing the approval RPC's `ApprovalDecision`
 /// (serialized with its stable `as_str()` wire value — `approve_once` /
 /// `approve_always_for_tool` / `deny`) routes the existing decision contract
 /// into the resume **without changing that contract**.
@@ -217,9 +217,9 @@ where
 ///
 /// Classifies the thread's latest checkpoint and routes accordingly:
 /// - **resumable** (a crash/failure left a mid-run boundary) → re-run only the
-///   not-yet-completed nodes from that boundary via [`CompiledGraph::resume`]
+///   not-yet-completed nodes from that boundary via [`CompiledGraph::resume`](crate::CompiledGraph::resume)
 ///   with an empty command — never restarting from `plan`, and never re-running
-///   an already-completed step (its [`StepRecord`] is restored from the state);
+///   an already-completed step (its [`StepRecord`](crate::StepRecord) is restored from the state);
 /// - **terminal** (already finalized/cancelled) → return the stored final state
 ///   without re-running (idempotent re-invocation of a stable thread);
 /// - **absent** (no checkpoint) → a fresh durable run;

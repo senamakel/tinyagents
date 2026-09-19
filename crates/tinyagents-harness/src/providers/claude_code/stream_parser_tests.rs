@@ -1,3 +1,6 @@
+//! Unit tests for `StreamJsonParser`: line buffering across partial reads,
+//! event-type dispatch, and malformed-line handling.
+
 use super::*;
 
 #[test]

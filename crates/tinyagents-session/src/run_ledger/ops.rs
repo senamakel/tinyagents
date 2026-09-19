@@ -1,3 +1,19 @@
+//! CRUD, listing, and coordination primitives for the run ledger tables:
+//! agent runs, workflow runs (with a compare-and-swap driver lease), run
+//! events, run telemetry, and agent-team coordination (teams, members,
+//! tasks with claim/completion).
+//!
+//! Every entry point opens its own connection or transaction via
+//! `crate::store::with_connection` / `crate::store::with_transaction`
+//! (aliased here through `init_run_ledger_schema`, now a no-op kept as the
+//! conventional call site — see `super::store`). Anything that reads state
+//! and then acts on it (an upsert reading its own write back, a claim, a
+//! compare-and-swap) uses `with_transaction`; plain single-statement reads
+//! and writes use `with_connection`. The `*_inner` helpers take an open
+//! [`Connection`] directly so an upsert can read back the row it just wrote
+//! inside the same transaction rather than reopening a connection and
+//! possibly observing a concurrent writer's state instead of its own.
+
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -18,8 +34,21 @@ use super::types::{
     WorkflowRunUpsert,
 };
 
+/// Grep prefix for run-ledger logging.
 const LOG_PREFIX: &str = "[session_db:run_ledger]";
 
+/// Inserts a new [`AgentRun`] or merges fields into an existing one with the
+/// same id, returning the row as stored.
+///
+/// Most fields are `COALESCE`d against the existing row on conflict, so
+/// passing `None` leaves them unchanged rather than clearing them — except
+/// `status` and `updated_at`, which are always overwritten, and `metadata`,
+/// which only replaces the stored value when the incoming JSON is non-empty
+/// (`{}` is treated as "no metadata supplied"). `kind` additionally refuses
+/// to downgrade a `worker_thread` run back to `subagent`, since a run that
+/// has already been promoted to a worker thread should not silently revert.
+/// Use [`transition_agent_run_status`] instead when a caller needs to
+/// *clear* `error` or `completed_at`.
 pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<AgentRun> {
     let now = Utc::now();
     let started_at = upsert.started_at.unwrap_or(now);
@@ -104,6 +133,17 @@ pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<
     })
 }
 
+/// Inserts a new [`WorkflowRun`] or merges fields into an existing one with
+/// the same id, returning the row as stored.
+///
+/// Bumps `revision` on every call, including the first insert, so
+/// [`compare_and_swap_workflow_run`] callers always have a fresh fencing
+/// token. When `status` transitions to a terminal value the driver lease
+/// (`lease_owner` / `lease_expires_at`) is cleared, since a finished run has
+/// nothing left to drive. Prefer [`compare_and_swap_workflow_run`] or
+/// [`compare_and_swap_workflow_run_lifecycle`] for a driver actively holding
+/// a lease — this plain upsert has no revision fencing of its own and can
+/// clobber a concurrent driver's write.
 pub fn upsert_workflow_run(workspace_dir: &Path, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
     let now = Utc::now();
     let started_at = upsert.started_at.unwrap_or(now);
@@ -319,6 +359,13 @@ pub fn compare_and_swap_workflow_run_lifecycle(
     })
 }
 
+/// Appends a new [`RunEvent`] to a run's event log, allocating its sequence
+/// number atomically.
+///
+/// `sequence` is `MAX(sequence) + 1` for the run, computed by the same
+/// `INSERT ... SELECT` statement that writes the row (see the inline comment
+/// at the call site) so two connections appending concurrently cannot
+/// compute the same next value and lose one event to a primary-key conflict.
 pub fn append_run_event(workspace_dir: &Path, event: RunEventAppend) -> Result<RunEvent> {
     let now = Utc::now();
     let payload_json =
@@ -360,6 +407,13 @@ pub fn append_run_event(workspace_dir: &Path, event: RunEventAppend) -> Result<R
     })
 }
 
+/// Inserts a new [`RunTelemetry`] row or merges partial fields into an
+/// existing one, returning the row as stored.
+///
+/// Every counter field is `Option`, and `None` means "leave this field
+/// unchanged" rather than "reset to zero" — see the inline comment at the
+/// call site for why the insert and update sides need different `COALESCE`
+/// targets to make that true on first insert as well as on later updates.
 pub fn upsert_run_telemetry(
     workspace_dir: &Path,
     upsert: RunTelemetryUpsert,
@@ -417,6 +471,7 @@ pub fn upsert_run_telemetry(
     })
 }
 
+/// Fetches a single [`AgentRun`] by id, or `None` if no row matches.
 pub fn get_agent_run(workspace_dir: &Path, id: &str) -> Result<Option<AgentRun>> {
     crate::store::with_connection(workspace_dir, |conn| {
         init_run_ledger_schema(conn)?;
@@ -510,6 +565,10 @@ pub fn interrupt_orphaned_agent_runs(workspace_dir: &Path) -> Result<usize> {
     })
 }
 
+/// Lists agent runs, most-recently-updated first, with optional filters
+/// (status, kind, parent run, parent thread) and pagination.
+///
+/// `limit` is capped at 500 regardless of the requested value.
 pub fn list_agent_runs(
     workspace_dir: &Path,
     request: &AgentRunListRequest,
@@ -584,6 +643,10 @@ pub fn list_agent_runs(
     })
 }
 
+/// Lists a run's events in `sequence` order, optionally starting after a
+/// given cursor (`after_sequence`), for polling "what's new" incrementally.
+///
+/// `limit` is capped at 1000 regardless of the requested value.
 pub fn list_recent_run_events(
     workspace_dir: &Path,
     request: &RunEventListRequest,
@@ -625,6 +688,7 @@ fn get_workflow_run_inner(conn: &Connection, id: &str) -> Result<Option<Workflow
         .optional()?)
 }
 
+/// Fetches a single [`WorkflowRun`] by id, or `None` if no row matches.
 pub fn get_workflow_run(workspace_dir: &Path, id: &str) -> Result<Option<WorkflowRun>> {
     tinyagents_tracing::debug!("{LOG_PREFIX} get_workflow_run.entry id={id}");
     crate::store::with_connection(workspace_dir, |conn| {
@@ -1538,6 +1602,8 @@ pub fn release_agent_team_task(workspace_dir: &Path, team_id: &str, task_id: &st
     })
 }
 
+/// Connection-scoped team lookup, so an upsert can read its own write back
+/// inside the same transaction.
 fn get_agent_team_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeam>> {
     let mut stmt = conn.prepare(
         "SELECT id, parent_thread_id, lead_agent_id, status, summary,
@@ -1549,6 +1615,8 @@ fn get_agent_team_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeam>
         .map_err(Into::into)
 }
 
+/// Connection-scoped member lookup, so an upsert can read its own write back
+/// inside the same transaction.
 fn get_agent_team_member_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeamMember>> {
     let mut stmt = conn.prepare(
         "SELECT id, team_id, name, agent_id, member_status,
@@ -1560,6 +1628,8 @@ fn get_agent_team_member_inner(conn: &Connection, id: &str) -> Result<Option<Age
         .map_err(Into::into)
 }
 
+/// Connection-scoped task lookup, so a claim/completion transaction can read
+/// its own write back inside the same transaction.
 fn get_agent_team_task_inner(conn: &Connection, id: &str) -> Result<Option<AgentTeamTask>> {
     let mut stmt = conn.prepare(
         "SELECT id, team_id, title, objective, status, owner_member_id,
@@ -1622,6 +1692,8 @@ fn map_agent_team_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentTea
     })
 }
 
+/// Connection-scoped agent-run lookup, so an upsert can read its own write
+/// back inside the same transaction.
 fn get_agent_run_inner(conn: &Connection, id: &str) -> Result<Option<AgentRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, parent_run_id, parent_thread_id, agent_id, status,
@@ -1635,6 +1707,9 @@ fn get_agent_run_inner(conn: &Connection, id: &str) -> Result<Option<AgentRun>> 
         .map_err(Into::into)
 }
 
+/// Connection-scoped telemetry lookup that errors when the row is absent —
+/// used right after [`upsert_run_telemetry`] writes it, where a miss means
+/// the write silently failed.
 fn get_run_telemetry_inner(conn: &Connection, run_id: &str) -> Result<RunTelemetry> {
     let mut stmt = conn.prepare(
         "SELECT run_id, input_tokens, output_tokens, cached_input_tokens, cost_usd,
@@ -1645,6 +1720,9 @@ fn get_run_telemetry_inner(conn: &Connection, run_id: &str) -> Result<RunTelemet
         .storage_context("run telemetry missing after upsert")
 }
 
+/// Connection-scoped telemetry lookup used when joining telemetry onto an
+/// [`AgentRun`], where no telemetry row yet existing is a normal `None`
+/// rather than an error.
 fn get_optional_run_telemetry(
     conn: &Connection,
     run_id: &str,

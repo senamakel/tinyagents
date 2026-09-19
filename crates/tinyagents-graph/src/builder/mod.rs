@@ -8,7 +8,7 @@
 //! both hand-written Rust and model-authored `.rag` programs lower into
 //! when they assemble a workflow that may recurse into sub-workflows.
 //!
-//! See [`types`] for the builder data types. `compile` validates the topology
+//! See `types` for the builder data types. `compile` validates the topology
 //! and freezes it into an immutable [`crate::CompiledGraph`].
 
 mod types;

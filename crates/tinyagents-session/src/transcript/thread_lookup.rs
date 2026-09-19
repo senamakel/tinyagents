@@ -51,6 +51,13 @@ pub fn find_root_transcript_for_thread_scoped(
     matches.pop()
 }
 
+/// Finds every root transcript whose metadata declares `thread_id`, oldest
+/// first by `meta.created`.
+///
+/// Underlies [`find_root_transcript_for_thread`] (which takes the newest) and
+/// [`super::history::TranscriptLocator::root_for_thread_scoped`]'s
+/// agent-id filtering; exposed directly for callers that need the full
+/// ordered history rather than just the latest match.
 pub fn find_root_transcripts_for_thread(workspace_dir: &Path, thread_id: &str) -> Vec<PathBuf> {
     let mut matches = Vec::new();
     matches.extend(root_transcripts_for_thread_in_dir(
@@ -65,10 +72,6 @@ pub fn find_root_transcripts_for_thread(workspace_dir: &Path, thread_id: &str) -
         (created, path.clone())
     });
     matches
-}
-
-pub fn find_root_transcript_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> Option<PathBuf> {
-    root_transcripts_for_thread_in_dir(raw_dir, thread_id).pop()
 }
 
 fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> Vec<PathBuf> {

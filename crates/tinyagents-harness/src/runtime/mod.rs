@@ -21,7 +21,7 @@
 //!
 //! # Layout
 //!
-//! - [`types`] holds the public type definitions ([`RunPolicy`] and
+//! - `types` holds the public type definitions ([`RunPolicy`] and
 //!   [`AgentHarness`]).
 //! - This file holds the builder, registration, and accessor methods.
 //! - `test.rs` holds focused tests for construction and registration.
@@ -29,8 +29,10 @@
 mod agent;
 mod types;
 
+#[cfg(test)]
+pub(crate) use agent::HostInvocationAuthority;
 pub use agent::{AgentInvocation, AgentStream, AgentTurnRequest};
-pub(crate) use agent::{HostInvocationAuthority, emit_host_progress, host_invocation_binding};
+pub(crate) use agent::{emit_host_progress, host_invocation_binding};
 pub use types::*;
 
 use std::sync::Arc;
@@ -149,7 +151,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// [`tinyinference_llm::model::ModelResponse`] is reused; on a miss the
     /// provider is called and the successful response is stored back. Whether
     /// caching is active for a given call is governed by the effective
-    /// [`CachePolicy`][crate::cache::CachePolicy] (the per-request
+    /// [`CachePolicy`](tinyinference_llm::cache::CachePolicy) (the per-request
     /// [`tinyinference_llm::model::ModelRequest::cache_policy`] overriding
     /// [`RunPolicy::cache`]).
     ///

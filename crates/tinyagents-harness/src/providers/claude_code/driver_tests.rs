@@ -1,3 +1,6 @@
+//! Unit tests for `driver` helpers: turn timeout resolution, permission
+//! posture, PATH construction, and bounded stderr accumulation.
+
 use super::*;
 
 #[test]

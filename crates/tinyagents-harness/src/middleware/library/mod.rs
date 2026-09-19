@@ -13,7 +13,7 @@
 //!   [`DynamicPromptMiddleware`], [`RedactionMiddleware`], and
 //!   [`TracingMiddleware`] implement the lifecycle [`Middleware`] trait.
 //!
-//! Type definitions live in [`types`]; this file holds the constructors and
+//! Type definitions live in `types`; this file holds the constructors and
 //! trait impls. Tests live in `test.rs`.
 //!
 //! # Testability

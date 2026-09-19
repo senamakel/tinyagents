@@ -29,7 +29,7 @@ pub const SUBAGENT_INPUT_FIELD: &str = "input";
 
 /// Typed policy that constructs a child's user data from its parent data.
 ///
-/// Recursive capabilities are inherited by [`RunContext::child`]; this policy
+/// Recursive capabilities are inherited by [`RunContext::child`](crate::context::RunContext::child); this policy
 /// makes the separate application-data decision explicit instead of silently
 /// substituting `Default` or reaching for task-local state.
 #[derive(Clone)]
@@ -93,7 +93,7 @@ pub struct SubAgent<State: Send + Sync, Ctx: Send + Sync = ()> {
 /// 1. `send` the first input (e.g. a user question). The session appends it to
 ///    the retained transcript, runs the sub-agent over the full transcript, and
 ///    folds the resulting assistant (and any tool) messages back in.
-/// 2. Inspect the returned [`AgentRun`] and obtain human input out-of-band.
+/// 2. Inspect the returned [`AgentRun`](crate::middleware::AgentRun) and obtain human input out-of-band.
 /// 3. Wrap that human input as a [`Message::user`] and `send` it again. Because
 ///    the prior turn's messages are still in the transcript, the sub-agent
 ///    answers *with full context* — without being killed and restarted.

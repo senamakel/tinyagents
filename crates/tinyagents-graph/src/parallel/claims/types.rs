@@ -148,6 +148,7 @@ impl DispatchPlan {
         self.indices_matching(DispatchMode::Serial)
     }
 
+    /// Input indices of workers scheduled in `wanted` mode.
     fn indices_matching(&self, wanted: DispatchMode) -> Vec<usize> {
         self.modes
             .iter()

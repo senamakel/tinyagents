@@ -4,7 +4,7 @@
 //! exactly what changed: nodes added, removed, or field-changed; channels added,
 //! removed, or reducer-changed; static edges added or removed; and graph-level
 //! identity (`graph_id`, `start`) changes. The result is both a serializable
-//! data structure ([`BlueprintDiff`]) and a renderable summary (its [`Display`]).
+//! data structure ([`BlueprintDiff`]) and a renderable summary (its [`std::fmt::Display`]).
 //!
 //! This backs generated-workflow review — comparing a model-authored plan
 //! against the version it replaces — and the future REPL `graph_diff` builtin

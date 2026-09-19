@@ -106,7 +106,7 @@ pub struct DelegationState {
     pub denied: bool,
     /// On-disk schema version, stamped [`CURRENT_SCHEMA_VERSION`] on a fresh run
     /// and defaulting to `0` for pre-versioned checkpoints.
-    /// [`run_or_resume_delegation`] expires any checkpoint whose version is below
+    /// [`run_or_resume_delegation`](crate::run_or_resume_delegation) expires any checkpoint whose version is below
     /// `CURRENT_SCHEMA_VERSION` (and any that fails to deserialize) instead of
     /// resuming or returning it — so a shape change that stays structurally
     /// decodable is still not misread.
@@ -171,7 +171,7 @@ pub struct DelegationConfig {
     /// When set, an approved review does not finalize directly: the run reaches
     /// a durable **human-approval** interrupt (`NodeResult::Interrupt`) that is
     /// persisted via the checkpointer (Sync durability) and survives a process
-    /// restart. The pause is only released by [`resume_delegation`] carrying the
+    /// restart. The pause is only released by [`resume_delegation`](crate::resume_delegation) carrying the
     /// approver's decision. Requires `checkpointer` + `thread_id` (interrupts
     /// require durability).
     ///
@@ -208,7 +208,7 @@ impl Default for DelegationConfig {
 /// Produced when a run reaches the `approval` interrupt (see
 /// [`DelegationConfig::require_review_approval`]). The pause is already
 /// persisted as a checkpoint keyed by `thread_id`; the approver's decision is
-/// delivered later via [`resume_delegation`], which survives a process restart.
+/// delivered later via [`resume_delegation`](crate::resume_delegation), which survives a process restart.
 #[derive(Debug, Clone)]
 pub struct PendingApproval {
     /// Stable id of the emitted interrupt (matches a resume value to this pause).

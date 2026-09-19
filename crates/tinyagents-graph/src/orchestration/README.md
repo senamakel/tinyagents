@@ -67,15 +67,47 @@ call `orchestration_tools` to build the full set, or call
     it for tests.
   - `JsonlTaskStore` — append-only JSONL-backed implementation;
     `JsonlTaskStore::open(path)`.
+- `TaskStoreRegistry<K>` (`store_registry.rs`) — process-wide cache mapping a
+  host-defined scope key to a lazily-opened `Arc<dyn TaskStore>`, so a
+  multi-tenant host keeps exactly one store per scope. `get_or_open` /
+  `get` / `values` / `len` / `is_empty` / `clear`.
+  `open_jsonl_task_store_or_memory(path)` is the standard opener: it degrades
+  to an `InMemoryTaskStore` if the durable log can't be created or read.
+
+### Process-local runtime (`runtime.rs`)
+
+- `DetachedTaskRegistry<Metadata, Status>` — tracks the executor-only pieces
+  of a detached task that cannot survive a process restart: status watch
+  channel, cancellation token, abort handle, owner id, and live steering
+  lookup. `TaskStore` remains the durable source of lifecycle truth; this
+  registry is what an executor consults to `wait`, `cancel`, `cancel_where`,
+  `cancel_all`, `snapshot(s)`, or fetch a `steering_handle` for a task it
+  still owns in-process. `sweep_terminal` / the `soft_cap` passed to `new`
+  bound unbounded growth from tasks nobody ever waited on.
+
+### Orphan reconciliation (`reconcile.rs`)
+
+- `reconcile_orphaned_tasks(store, filter, reason)` — settles every live task
+  matching `filter` into a terminal state (`Cancelled` if a cancellation was
+  already requested, otherwise `Failed` with the caller-supplied `reason`).
+  Meant to run once at host startup against a `TaskStore` whose executor
+  process may have died since the last run, before any `DetachedTaskRegistry`
+  is repopulated.
+- `ReconcileReport` / `ReconciledTask` / `ReconcileOutcome` — the sweep's
+  per-task and aggregate results; `task_status_label(status)` gives the
+  stable lowercase label used in logs.
 
 ## Files
 
 | File | Role |
 | --- | --- |
-| `types.rs` | Task kind/status/spec/result/record/filter types, `OrchestrationToolKind`, `OrchestrationControlOutcome`. |
+| `types.rs` | Task kind/status/spec/result/record/filter types, `OrchestrationToolKind`, `OrchestrationControlOutcome`, and the `DetachedTaskRegistry` snapshot/error types. |
 | `tool.rs` | `OrchestrationTool`, `SteeringRegistry`, tool constructors and schemas. |
 | `store.rs` | `TaskStore` trait, `InMemoryTaskStore`, `JsonlTaskStore`. |
-| `test.rs` | Unit tests (spawn/await/cancel/timeout/race semantics, store round-trips, filters). |
+| `store_registry.rs` | `TaskStoreRegistry<K>`, `open_jsonl_task_store_or_memory`. |
+| `runtime.rs` | `DetachedTaskRegistry<Metadata, Status>` — process-local executor handles keyed by task id. |
+| `reconcile.rs` | `reconcile_orphaned_tasks` and its report types, for settling orphans left by a dead executor. |
+| `test.rs` | Unit tests (spawn/await/cancel/timeout/race semantics, store round-trips, filters, reconciliation, detached-task registry). |
 
 ## Operational constraints
 

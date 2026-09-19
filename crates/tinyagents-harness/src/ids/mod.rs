@@ -8,7 +8,7 @@
 //! generated for each newtype by a single macro so the ids stay cheap to clone,
 //! log, and serialize.
 //!
-//! See [`types`] for the type definitions. This module provides the shared
+//! See `types` for the type definitions. This module provides the shared
 //! constructors, accessors, and conversions for every id newtype.
 
 mod types;

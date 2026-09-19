@@ -1,4 +1,14 @@
 //! Subprocess lifecycle for the Claude Agent SDK provider.
+//!
+//! [`ClaudeAgentSdkProvider`] implements `ChatModel<()>` by shelling out to
+//! `claude -p --output-format stream-json` once per [`invoke`][ChatModel::invoke]
+//! call: the harness never links against the Claude Agent SDK directly, it
+//! only speaks the CLI's stdin/stdout contract. This is the "prompt-guided"
+//! sibling of [`crate::providers::claude_code`], which drives the same CLI in
+//! full agentic (multi-turn, tool-using) mode via a long-lived session
+//! instead of a single stateless invocation; use this module when a plain
+//! one-shot completion is enough. Wire message shapes for the NDJSON stream
+//! live in `protocol`.
 
 mod protocol;
 
@@ -43,11 +53,19 @@ pub struct ClaudeAgentSdkProvider {
     profile: ModelProfile,
 }
 
+/// Fully-formed CLI arguments and stdin payload for one `claude -p` call.
 struct ClaudeInvocation {
     args: Vec<String>,
     stdin: String,
 }
 
+/// Builds the argv and stdin payload for one `claude -p` invocation.
+///
+/// The system prompt, when present, is wrapped in `[SYSTEM]...[/SYSTEM]`
+/// tags and prepended to stdin rather than passed as a CLI flag, keeping the
+/// full request off argv (see [`ClaudeAgentSdkProvider::invoke_cli`]). A
+/// `max_budget_usd` also pins `--max-turns 10` so a budget-capped run cannot
+/// wander indefinitely before the budget check kicks in.
 fn build_invocation(
     system_prompt: Option<&str>,
     message: &str,
@@ -108,17 +126,23 @@ fn render_transcript(messages: &[Message]) -> String {
         .join("\n\n")
 }
 
+/// Wraps a subprocess spawn failure with the binary name for a legible error.
 fn spawn_error(binary: &str, source: std::io::Error) -> anyhow::Error {
     let message = format!("failed to spawn claude binary '{binary}': {source}");
     anyhow::Error::new(source).context(message)
 }
 
 impl ClaudeAgentSdkProvider {
+    /// Creates a provider that defaults to `config.default_model` for every
+    /// call.
     pub fn new(config: ClaudeAgentSdkConfig) -> Self {
         let model = config.default_model.clone();
         Self::for_model(config, model)
     }
 
+    /// Creates a provider pinned to `model`, overriding `config.default_model`
+    /// for this instance's [`ModelProfile`]. A `model` set explicitly on a
+    /// given [`ModelRequest`] still takes precedence over both.
     pub fn for_model(config: ClaudeAgentSdkConfig, model: impl Into<String>) -> Self {
         Self {
             config,
@@ -130,6 +154,17 @@ impl ClaudeAgentSdkProvider {
         }
     }
 
+    /// Spawns `claude -p`, streams and decodes its NDJSON stdout, and
+    /// returns the assembled response text.
+    ///
+    /// The request body goes over stdin rather than argv (see
+    /// [`build_invocation`]) so large prompts do not hit OS argv-length
+    /// limits. Stderr is drained on a concurrent task while stdout is read,
+    /// because leaving either pipe unread while the other fills can deadlock
+    /// the child process. Reading stdout is bounded by a 120s timeout and
+    /// waiting for process exit by a separate 30s timeout; either firing
+    /// kills the child and returns an error. When the CLI streams no final
+    /// `Result` message, the joined `Text` chunks are used as a fallback.
     async fn invoke_cli(
         &self,
         system_prompt: Option<&str>,

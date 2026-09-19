@@ -1,3 +1,5 @@
+//! Tests for member worker graph execution.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -14,7 +14,7 @@
 //!
 //! 1. The orchestrator builds a [`SteeringPolicy`] allowlist and a
 //!    [`SteeringHandle`], and attaches the handle to the run's
-//!    [`RunContext`][crate::context::RunContext] via
+//!    [`RunContext`] via
 //!    [`RunContext::with_steering`][crate::context::RunContext::with_steering].
 //! 2. While the run executes, the orchestrator calls
 //!    [`SteeringHandle::send`] to enqueue [`SteeringCommand`]s.

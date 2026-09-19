@@ -139,15 +139,6 @@ pub use writer::{
     write_transcript,
 };
 
-// Private helpers the colocated tests exercise directly.
-#[cfg(test)]
-use jsonl::build_message_line;
-#[cfg(test)]
-use paths::{
-    latest_in_dir, md_companion_path, next_index, raw_session_dir, resolve_new_transcript_path,
-    sanitize_agent_name,
-};
-
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
