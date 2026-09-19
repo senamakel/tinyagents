@@ -892,32 +892,22 @@ mod sqlite_backend {
 
     #[tokio::test]
     async fn wal_and_synchronous_pragmas_are_set_on_open() {
-        // WAL mode is stored in the database file's header, so any connection
-        // opened against the same path observes it — this checks what the
-        // file was actually left in, independent of which handle asks.
-        // (`:memory:` databases always report `journal_mode = memory`
-        // regardless of the pragma, so this needs a real file.)
+        // `:memory:` databases always report `journal_mode = memory`
+        // regardless of the pragma, so this needs a real file — WAL mode is
+        // stored in the database file's header.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("checkpoints.db");
-        let _cp = SqliteCheckpointer::<i32>::open(&path).unwrap();
+        let cp = SqliteCheckpointer::<i32>::open(&path).unwrap();
 
-        let conn = rusqlite::Connection::open(&path).unwrap();
-        let journal_mode: String = conn
-            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .unwrap();
+        let journal_mode = cp.journal_mode().unwrap();
         assert_eq!(journal_mode.to_lowercase(), "wal");
 
-        // `synchronous` is per-connection, not persisted in the file, so this
-        // only reflects what `_cp`'s own connection was set to — read it back
-        // through `from_connection` on the same in-process handle instead of
-        // a second, freshly opened connection (which would default to FULL).
-        drop(_cp);
-        let conn2 = rusqlite::Connection::open(&path).unwrap();
-        conn2
-            .execute_batch("PRAGMA synchronous = NORMAL;")
-            .unwrap();
-        let cp2 = SqliteCheckpointer::<i32>::from_connection(conn2).unwrap();
-        cp2.put(checkpoint("t", "c1", None, 1)).await.unwrap();
-        assert!(cp2.get("t", None).await.unwrap().is_some());
+        // NORMAL == 1 (OFF = 0, FULL = 2, EXTRA = 3).
+        assert_eq!(cp.synchronous().unwrap(), 1);
+
+        // The pragmas don't just read back cleanly — the checkpointer still
+        // works normally under them.
+        cp.put(checkpoint("t", "c1", None, 1)).await.unwrap();
+        assert!(cp.get("t", None).await.unwrap().is_some());
     }
 }
