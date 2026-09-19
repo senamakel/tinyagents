@@ -252,6 +252,10 @@ impl Channel for Barrier {
         Ok(Value::Array(list))
     }
 
+    fn config(&self) -> Value {
+        serde_json::json!({ "expected": self.expected })
+    }
+
     fn allows_concurrent(&self) -> bool {
         true
     }
