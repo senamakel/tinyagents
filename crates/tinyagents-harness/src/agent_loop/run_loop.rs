@@ -487,9 +487,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             _ => unreachable!("guarded by the match arm above"),
                         };
                         request.response_format = Some(ResponseFormat::Text);
-                        let instructions = template
-                            .clone()
-                            .unwrap_or_else(|| StructuredStrategy_default_prompted_template());
+                        let instructions = template.clone().unwrap_or_else(|| {
+                            crate::structured::default_prompted_template().to_string()
+                        });
                         let schema_text = serde_json::to_string_pretty(&schema).unwrap_or_default();
                         request.messages.insert(
                             0,
