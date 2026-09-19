@@ -72,6 +72,97 @@ where
             .base_status(&self.run_id, &self.thread_id, self.started_at)
     }
 
+    /// Builds this run's `RunCtx`: constructs the recursion stack from the
+    /// inherited parent frames and pushes the frame for this graph call (a
+    /// push that would exceed `max_depth` fails the run — emitting
+    /// `RunStarted` and a terminal `Failed` status — before any node
+    /// executes), then emits `RunStarted`/`RecursionDepthChanged` for a
+    /// successful push.
+    pub(super) async fn start(
+        graph: &'a CompiledGraph<State, Update>,
+        run_id: RunId,
+        thread_id: Option<ThreadId>,
+        resume_map: HashMap<NodeId, serde_json::Value>,
+        initial_barriers: HashMap<NodeId, HashSet<NodeId>>,
+        initial_parent: Option<String>,
+        binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    ) -> Result<Self> {
+        let started_at = SystemTime::now();
+        // Graph-call depth (the stack) is tracked separately from node-loop
+        // visits (`node_visits`, below).
+        let mut recursion =
+            RecursionStack::with_frames(graph.recursion_frames.clone(), graph.recursion_policy);
+        let root_run_id = graph
+            .recursion_frames
+            .first()
+            .map(|f| f.run_id.clone())
+            .unwrap_or_else(|| run_id.clone());
+        let parent_run_id = graph.recursion_frames.last().map(|f| f.run_id.clone());
+        let this_frame = RecursionFrame {
+            graph_id: graph.graph_id.clone(),
+            node_id: graph.recursion_node.clone(),
+            run_id: run_id.clone(),
+            task_id: None,
+            namespace: graph.namespace.clone(),
+            depth: recursion.depth(),
+            parent: parent_run_id.clone(),
+        };
+        if let Err(err) = recursion.push(this_frame) {
+            graph.emit(GraphEvent::RunStarted {
+                run_id: run_id.clone(),
+            });
+            graph
+                .fail_run(&run_id, &thread_id, started_at, 0, &err, None)
+                .await;
+            return Err(err);
+        }
+        // Serialized once per run for embedding in every checkpoint's metadata.
+        let recursion_meta =
+            serde_json::to_value(recursion.frames()).unwrap_or(serde_json::Value::Null);
+        let live_frames = recursion.frames().to_vec();
+
+        let ctx = Self {
+            graph,
+            run_id,
+            thread_id,
+            root_run_id,
+            parent_run_id,
+            started_at,
+            live_frames,
+            recursion_meta,
+            recursion,
+            binding,
+            child_sink: ChildRunSink::new(),
+            node_visits: HashMap::new(),
+            barrier_arrivals: initial_barriers,
+            async_writes: AsyncCheckpointWrites::default(),
+            resume_map,
+            visited: Vec::new(),
+            all_child_runs: Vec::new(),
+            steps: 0,
+            last_checkpoint: None,
+            parent_checkpoint: initial_parent,
+        };
+        ctx.emit(GraphEvent::RunStarted {
+            run_id: ctx.run_id.clone(),
+        });
+        // Surface this run's recursion depth so observers can attribute
+        // nested runs without reconstructing the tree from logs.
+        ctx.emit(GraphEvent::RecursionDepthChanged {
+            depth: ctx.recursion.depth(),
+        });
+        Ok(ctx)
+    }
+
+    /// Drains this step's child-run sink into `all_child_runs` and returns
+    /// its serialized form for embedding into this boundary's checkpoint
+    /// metadata.
+    pub(super) fn take_step_child_runs(&mut self) -> serde_json::Value {
+        let step_child_runs = self.child_sink.drain();
+        self.all_child_runs.extend(step_child_runs.iter().cloned());
+        serde_json::to_value(&step_child_runs).unwrap_or(serde_json::Value::Null)
+    }
+
     /// Builds the per-task [`NodeContext`] for `node_id`, consuming its entry
     /// from `resume_map` (a node can only be handed its resume value once).
     ///
