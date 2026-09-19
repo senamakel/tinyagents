@@ -36,42 +36,62 @@ pub use library::*;
 
 use std::sync::Arc;
 
-use crate::context::RunContext;
+use crate::context::{MiddlewareControl, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
 use tinyinference_llm::tool::{ToolCall, ToolDelta};
 use tinytools::ToolResult;
 
-/// Runs one per-middleware lifecycle hook across the whole stack, bracketing
-/// each call with `MiddlewareStarted`/`MiddlewareCompleted` events and fanning
-/// `on_error` out to every middleware on the first failure (so the originating
-/// error is never masked).
+/// Runs one per-middleware **control-outcome** hook across the whole stack,
+/// bracketing each *actually invoked* call with
+/// `MiddlewareStarted`/`MiddlewareCompleted` events, fanning `on_error` out to
+/// every middleware on the first failure, and resolving the phase's
+/// [`MiddlewareControl`] per the precedence rule documented on
+/// [`Middleware::is_observer`]: the first non-[`MiddlewareControl::Continue`]
+/// outcome wins; every hook after it is skipped unless
+/// [`Middleware::is_observer`] returns `true` for it, in which case it still
+/// runs (for observation) but its own control outcome is discarded. The
+/// winning control (if any) is installed via
+/// [`RunContext::request_control`], exactly as if a hook had called it
+/// directly — this macro is the single place that bridges "hook returned a
+/// control" and "hook called `request_control`" into one mechanism.
 ///
-/// This is factored as a macro rather than an async helper because each hook
-/// takes different arguments and borrows `ctx` mutably across its `await`, which
-/// a closure-based helper cannot express without heap-boxing every call.
-///
-/// Crucially, `MiddlewareCompleted` is emitted on *both* the success and error
-/// paths: a hook that returns `Err` can no longer leave a dangling
-/// `MiddlewareStarted` with no matching `Completed` in the event stream. `$iter`
-/// selects registration order (`.iter()`) or reverse order (`.iter().rev()`);
-/// `$call` is the (un-awaited) hook invocation on `$mw`.
+/// Factored as a macro (not an async helper) for the same reason as before
+/// control outcomes existed: each hook takes different arguments and borrows
+/// `ctx` mutably across its `await`, which a closure-based helper cannot
+/// express without heap-boxing every call. `$iter` selects registration order
+/// (`.iter()`) or reverse order (`.iter().rev()`); `$call` is the (un-awaited)
+/// `_control` hook invocation on `$mw`.
 macro_rules! run_stack_hook {
     ($self:ident, $ctx:ident, $iter:expr, |$mw:ident| $call:expr) => {{
+        let mut winning: Option<MiddlewareControl> = None;
         for $mw in $iter {
+            if winning.is_some() && !$mw.is_observer() {
+                continue;
+            }
             let name = $mw.name().to_string();
             $ctx.emit(AgentEvent::MiddlewareStarted { name: name.clone() });
             let result = $call.await;
             $ctx.emit(AgentEvent::MiddlewareCompleted { name: name.clone() });
-            if let Err(e) = result {
-                $ctx.emit(AgentEvent::MiddlewareFailed {
-                    name,
-                    error: e.to_string(),
-                });
-                $self.fan_out_on_error($ctx, &e).await;
-                return Err(e);
+            match result {
+                Ok(control) => {
+                    if winning.is_none() && !matches!(control, MiddlewareControl::Continue) {
+                        winning = Some(control);
+                    }
+                }
+                Err(e) => {
+                    $ctx.emit(AgentEvent::MiddlewareFailed {
+                        name,
+                        error: e.to_string(),
+                    });
+                    $self.fan_out_on_error($ctx, &e).await;
+                    return Err(e);
+                }
             }
+        }
+        if let Some(control) = winning {
+            $ctx.request_control(control);
         }
         Ok(())
     }};
