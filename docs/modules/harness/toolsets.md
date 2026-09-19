@@ -67,8 +67,10 @@ content parts (see `docs/runtime-comparison/pydantic-ai.md` §3.5 and
 
 `AgentHarness::with_toolset(toolset)` installs a toolset chain that is
 resolved into the per-turn advertised catalogue automatically. Composing
-adaptors — e.g. `CombinedToolSet::new(vec![a, b]).prefixed_on_collision()`
-wrapped in `FilteredToolSet::allowing([...])` — builds the exact per-run
+adaptors — e.g. wrapping two colliding member toolsets in their own
+`PrefixedToolSet::new(member, "prefix")` before combining them with
+`CombinedToolSet::new(vec![...])`, then wrapping the result in
+`FilteredToolSet::new(combined, predicate)` — builds the exact per-run
 exposure policy declaratively instead of through middleware ordering.
 
 Dispatch (as opposed to advertisement) for a toolset-only tool — one not
