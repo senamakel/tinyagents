@@ -474,7 +474,14 @@ impl<Ctx> RunContext<Ctx> {
     /// request. This gives competing middleware layers a deterministic outcome
     /// instead of last-writer-wins — e.g. a pause request is never downgraded to
     /// a stop by a later, weaker request.
+    ///
+    /// [`MiddlewareControl::Continue`] is never installed: it carries no
+    /// instruction, so requesting it is a no-op regardless of what (if
+    /// anything) is already pending.
     pub fn request_control(&self, control: MiddlewareControl) {
+        if matches!(control, MiddlewareControl::Continue) {
+            return;
+        }
         if let Ok(mut guard) = self.control.lock() {
             let replace = match guard.as_ref() {
                 Some(existing) => control.precedence() > existing.precedence(),
@@ -489,6 +496,30 @@ impl<Ctx> RunContext<Ctx> {
     /// Takes any pending [`MiddlewareControl`] request, clearing it.
     pub fn take_control(&self) -> Option<MiddlewareControl> {
         self.control.lock().ok().and_then(|mut guard| guard.take())
+    }
+
+    /// Queues a [`StateUpdate`] for the host to apply.
+    ///
+    /// The agent loop only ever holds `state: &State` (a shared reference), so
+    /// [`MiddlewareControl::UpdateState`] cannot be applied in place; the loop
+    /// pushes it here instead of discarding it. Called by
+    /// [`crate::agent_loop`]'s control-checkpoint handling; a host drains the
+    /// queue with [`Self::take_state_updates`] and applies each update against
+    /// its own `&mut State` between runs (or between turns, via its own
+    /// checkpoint).
+    pub fn push_state_update(&self, update: StateUpdate) {
+        if let Ok(mut guard) = self.state_updates.lock() {
+            guard.push(update);
+        }
+    }
+
+    /// Drains every [`StateUpdate`] queued so far, in request order.
+    pub fn take_state_updates(&self) -> Vec<StateUpdate> {
+        self.state_updates
+            .lock()
+            .ok()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or_default()
     }
 
     /// Attaches a [`CancellationToken`] so an orchestrator can request that this
