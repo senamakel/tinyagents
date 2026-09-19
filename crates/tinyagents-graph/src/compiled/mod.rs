@@ -145,7 +145,10 @@ fn snapshot_from_tuple<State>(tuple: CheckpointTuple<State>) -> StateSnapshot<St
         ..
     } = tuple;
     let metadata = checkpoint.to_metadata();
-    let next_nodes = checkpoint.next_nodes.clone();
+    // `checkpoint` was normalized on read, so `.tasks` is the single source
+    // of truth here regardless of the stored record's original format
+    // version.
+    let next_nodes: Vec<NodeId> = checkpoint.tasks.iter().map(|t| t.node.clone()).collect();
     StateSnapshot {
         values: checkpoint.state,
         tasks: next_nodes.clone(),
