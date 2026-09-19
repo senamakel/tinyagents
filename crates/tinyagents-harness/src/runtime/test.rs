@@ -2614,9 +2614,10 @@ async fn hard_budget_compression_fails_closed_when_only_system_instructions_rema
         )
         .await
         .expect_err("hard pressure cannot discard sole system instructions");
+    assert_eq!(error.kind, crate::runtime::HostedErrorKind::Policy);
     assert_eq!(
         error.to_string(),
-        "model error: hosted agent invocation failed",
+        "hosted agent invocation was rejected by policy",
         "hosted callers receive no internal budget diagnostic"
     );
     assert!(model.requests().is_empty(), "provider was never called");
