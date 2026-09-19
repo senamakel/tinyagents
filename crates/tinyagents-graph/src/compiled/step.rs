@@ -405,8 +405,7 @@ where
                 }
             };
 
-            if let Some(found) =
-                self.fold_result(index, node_id, step, result, &mut accum, visited)
+            if let Some(found) = self.fold_result(index, node_id, step, result, &mut accum, visited)
             {
                 interrupt = Some(found);
                 break;
