@@ -216,7 +216,7 @@ where
         drop((ctx_guard, run_guard, status_guard));
 
         match result {
-            NodeResult::Interrupt(interrupt) => Ok(Some(LoopStep {
+            NodeResult::Interrupt(_interrupt) => Ok(Some(LoopStep {
                 node: current.clone(),
                 // The interrupted node is the natural resume target: calling
                 // `next()` again re-runs it, mirroring
