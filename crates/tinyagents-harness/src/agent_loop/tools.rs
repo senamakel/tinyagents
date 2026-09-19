@@ -218,11 +218,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         match crate::tool::discover::unwrap_tool_call(&call.arguments) {
             Ok((name, arguments)) => {
-                let record = ctx.emit(AgentEvent::DeferredToolCall {
-                    call_id: CallId::new(call.id.clone()),
-                    tool_name: name.clone(),
-                });
-                status.set_last_event(record.id);
+                // `unwrap_tool_call` accepts any non-empty `name` — it only
+                // validates the wrapper's shape, not that `name` is actually
+                // in the deferred catalogue. A model can wrap a direct,
+                // hidden, or entirely fabricated name in a `tool_call`
+                // payload just as validly, and admission (via
+                // `model_dispatch`/the unknown-tool policy below) decides
+                // what happens to it next. Emitting `DeferredToolCall`
+                // unconditionally would misrepresent that outcome to an
+                // audit consumer — recording "a deferred call happened" for
+                // a call that admission is about to execute as a direct
+                // tool or reject as unknown/hidden. Only emit it when the
+                // target is actually in the catalogue this bridge searched.
+                if catalog.get(&name).is_some() {
+                    let record = ctx.emit(AgentEvent::DeferredToolCall {
+                        call_id: CallId::new(call.id.clone()),
+                        tool_name: name.clone(),
+                    });
+                    status.set_last_event(record.id);
+                }
                 call.name = name;
                 call.arguments = arguments;
                 Ok(None)
