@@ -28,6 +28,10 @@ pub(super) struct RunSeed<State, Update> {
     pub(super) barriers: HashMap<NodeId, HashSet<NodeId>>,
     pub(super) parent: Option<String>,
     pub(super) binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    /// Resume-only seeding (step/node-visit continuation, carried-forward
+    /// mid-step completions) — see [`ResumeSeed`]. Left at its `Default`
+    /// (empty/zero) for a fresh run.
+    pub(super) resume_seed: ResumeSeed,
     pub(super) _update: std::marker::PhantomData<Update>,
 }
 
@@ -45,6 +49,7 @@ impl<State, Update> RunSeed<State, Update> {
             barriers: HashMap::new(),
             parent: None,
             binding: None,
+            resume_seed: ResumeSeed::default(),
             _update: std::marker::PhantomData,
         }
     }
