@@ -33,8 +33,13 @@ Superstep lifecycle:
 4. Run active tasks under concurrency, timeout, retry, and cancellation policy.
 5. Collect writes, commands, sends, interrupts, and errors.
 6. Persist task writes as pending writes when checkpointing supports it.
-7. Apply channel reducers at the step boundary.
-8. Select next active tasks from channel version changes and routing commands.
+7. Apply channel reducers at the step boundary. (**Target:** there is no
+   generalized per-channel reducer model today — `Checkpoint::state` is a
+   single typed `State` value updated by whole-state or `Update` merges, not
+   a set of independently versioned channels.)
+8. Select next active tasks from routing commands and `Send` fan-out.
+   (**Target:** selection by "channel version changes" specifically does not
+   apply without a channel model — see above.)
 9. Persist the checkpoint according to durability mode.
 10. Emit checkpoint, update, task, and step completion events.
 
