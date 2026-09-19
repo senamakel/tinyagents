@@ -951,6 +951,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             self.execute_tools(state, ctx, run, status, messages, real_tool_calls)
                 .await?;
 
+            // Turn boundary: give every middleware a chance to end the run
+            // based on the whole turn's tool results rather than any single
+            // call (see `Middleware::should_stop_after_turn`). A `Middleware`
+            // hook could already have requested `JumpTo(End)` from
+            // `after_tool_control`; this is the aggregate counterpart for a
+            // decision that only makes sense once the whole turn has settled.
+            if self.middleware.any_should_stop_after_turn(ctx, run) {
+                ctx.request_control(MiddlewareControl::JumpTo(LoopTarget::End));
+            }
+
             // Safe checkpoint: honor a control requested from `after_tool` /
             // `wrap_tool` at the edge it was raised on, rather than a model
             // call later.
