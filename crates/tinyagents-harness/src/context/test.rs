@@ -439,6 +439,7 @@ fn token_estimation_includes_structured_blocks_for_every_role() {
     let messages = vec![
         Message::System(SystemMessage {
             content: vec![ContentBlock::ProviderExtension(json.clone())],
+            ..Default::default()
         }),
         Message::User(UserMessage {
             content: vec![ContentBlock::Json(json.clone())],
