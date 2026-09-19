@@ -3053,6 +3053,9 @@ async fn per_model_call_ceiling_times_out_a_slow_call_with_run_time_left() {
     // ceiling (20ms) is tighter than the model's 200ms sleep, so the ceiling
     // interrupts the call — and the error must name the ceiling, not the run's
     // remaining budget, so triage can tell a wedged call from an exhausted run.
+    // A per-call ceiling is a `CallTimeout`, not a `Timeout`: it is retryable
+    // and must not skip the fallback chain the way a run-deadline timeout
+    // does (I-1). One retry attempt is enough to prove that here.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
         "slow",
@@ -3060,6 +3063,9 @@ async fn per_model_call_ceiling_times_out_a_slow_call_with_run_time_left() {
     );
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(20)),
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
         ..RunPolicy::default()
     });
 
@@ -3070,11 +3076,55 @@ async fn per_model_call_ceiling_times_out_a_slow_call_with_run_time_left() {
         .expect_err("a call slower than the per-call ceiling must time out");
 
     match &err {
-        TinyAgentsError::Timeout(msg) => {
+        TinyAgentsError::CallTimeout(msg) => {
             assert!(msg.contains("per-model-call ceiling"), "{msg}");
         }
-        other => panic!("expected Timeout, got {other:?}"),
+        other => panic!("expected CallTimeout, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting() {
+    use std::time::Duration;
+
+    use crate::testkit::SlowModel;
+
+    // Same setup as `per_model_call_ceiling_times_out_a_slow_call_with_run_time_left`,
+    // but with a fallback model registered. Before the fix, the per-call
+    // ceiling produced a plain `Timeout`, which the fallback gate in
+    // `invoke_model_resolving` treats as terminal ("the run itself is out of
+    // wall-clock budget") and returns immediately — the fallback model is
+    // never even consulted, let alone called. With the fix, a `CallTimeout`
+    // falls through to the fallback walk, so the run succeeds on the
+    // fallback model instead of failing.
+    let slow = Arc::new(SlowModel::new(Duration::from_millis(200), "too late"));
+    let fallback = Arc::new(ScriptedModel::replies(vec!["fallback answer"]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("slow", slow.clone());
+    harness.register_model("fallback", fallback.clone());
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_model_call_ms(Some(20)),
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
+        fallback: Some(FallbackPolicy {
+            models: vec!["fallback".to_string()],
+        }),
+        ..RunPolicy::default()
+    });
+
+    let config = RunConfig::new("per-call-cap-fallback").with_timeout_ms(60_000);
+    let run = harness
+        .invoke(&(), (), config, vec![Message::user("hi")])
+        .await
+        .expect("a retryable CallTimeout must fall back instead of aborting the run");
+
+    assert_eq!(run.text().as_deref(), Some("fallback answer"));
+    assert_eq!(
+        fallback.requests().len(),
+        1,
+        "the fallback chain must actually have been consulted and called"
+    );
 }
 
 #[tokio::test]
