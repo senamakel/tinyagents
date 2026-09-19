@@ -488,7 +488,7 @@ fn remove_makes_alias_shadows_component_and_dangling_alias_reachable() {
     assert!(
         diags
             .iter()
-            .any(|d| d.message.contains("dangling") || d.message.to_lowercase().contains("target")),
+            .any(|d| d.name == "default" && d.message.contains("not a registered")),
         "{diags:#?}"
     );
 
