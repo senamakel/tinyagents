@@ -17,6 +17,7 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
+pub use crate::config::ToolDispatcher;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -238,6 +239,24 @@ pub struct RunPolicy {
     /// rely on empty finals; opt in to turn a silent blank success into a typed
     /// error the caller can re-prompt on.
     pub error_on_empty_response: bool,
+    /// How tools are spoken to the model: through the provider's native
+    /// channel, or through one of the text protocols owned by
+    /// `tinytools-agent`.
+    ///
+    /// [`ToolDispatcher::Auto`] (the default) sends tool schemas on the wire
+    /// and lets the provider adapter decide — the OpenAI-compatible adapter
+    /// switches to the JSON-in-tag protocol by itself for a profile without
+    /// native tool calling. [`ToolDispatcher::Xml`] and
+    /// [`ToolDispatcher::Pformat`] force a text protocol regardless of
+    /// provider: the schemas are rendered into the system prompt, nothing goes
+    /// on the wire as `tools`, and the answer is parsed here. P-Format is the
+    /// cheapest on tokens and the most demanding on the model, which is why
+    /// it is opt-in only.
+    ///
+    /// Whatever the dispatcher, a response with no structured calls is still
+    /// read through every text grammar, because native models narrate calls
+    /// as text often enough to matter.
+    pub tool_dialect: ToolDispatcher,
     /// Number of automatic retries when a model call returns a *truncated
     /// empty* completion — `finish_reason == "length"` with no visible text, no
     /// tool calls, and no structured output.
@@ -277,6 +296,7 @@ impl Default for RunPolicy {
             },
             // Opt-in: preserve the historical blank-final behavior by default.
             error_on_empty_response: false,
+            tool_dialect: ToolDispatcher::Auto,
             // On by default: a truncated-empty completion is useless to every
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
