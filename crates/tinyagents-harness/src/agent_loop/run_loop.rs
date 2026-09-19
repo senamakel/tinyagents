@@ -203,6 +203,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // records the original cap so growth stays clamped at 4x, and the counter
         // bounds how many times we re-issue the call.
         let mut truncated_empty_retries_used: u32 = 0;
+        // Consecutive "you said tool_calls but sent none" re-prompts
+        // (see `RunPolicy::dropped_tool_call_nudges`).
+        let mut dropped_tool_call_nudges_used: u32 = 0;
         let mut boosted_max_tokens: Option<u32> = None;
         let mut truncation_base: Option<u32> = None;
 
@@ -759,6 +762,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     continue;
                 }
 
+                // Dropped tool call: the provider says the model stopped to
+                // call a tool, but nothing arrived — structured or in text.
+                // A bounded re-prompt asks for the call itself. The assistant
+                // row stays on the transcript so the model sees what it did.
+                if tool_calls.is_empty()
+                    && response.finish_reason.as_deref() == Some("tool_calls")
+                    && dropped_tool_call_nudges_used < self.policy.dropped_tool_call_nudges
+                {
+                    dropped_tool_call_nudges_used += 1;
+                    messages.push(Message::user(DROPPED_TOOL_CALL_NUDGE));
+                    let record = ctx.emit(AgentEvent::RetryScheduled {
+                        call_id: call_id.clone(),
+                        attempt: dropped_tool_call_nudges_used as usize,
+                    });
+                    status.set_last_event(record.id);
+                    continue;
+                }
+                dropped_tool_call_nudges_used = 0;
+
                 // This turn resolved without scheduling a truncated-empty
                 // retry, so the recovery state must not leak into later turns:
                 // a stale `boosted_max_tokens` would override the caller's
@@ -1003,6 +1025,13 @@ fn apply_host_budget_compression<Ctx>(
     });
     Ok(())
 }
+
+/// The re-prompt sent when a model signalled a tool call it did not make.
+/// Deliberately terse and instruction-free beyond the one thing needed: the
+/// task and the tools are already in the transcript.
+const DROPPED_TOOL_CALL_NUDGE: &str = "Your previous turn indicated a tool call but none was \
+     included. If you meant to call a tool, issue the actual tool call now; otherwise answer \
+     directly.";
 
 /// Resolves one run-scoped call cap from the per-run [`RunConfig`] value and
 /// the harness-wide [`crate::runtime::RunPolicy`] value.

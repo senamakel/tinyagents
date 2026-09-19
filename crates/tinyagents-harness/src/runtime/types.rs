@@ -257,6 +257,17 @@ pub struct RunPolicy {
     /// read through every text grammar, because native models narrate calls
     /// as text often enough to matter.
     pub tool_dialect: ToolDispatcher,
+    /// Maximum consecutive re-prompts when a model signals a tool call it did
+    /// not make: `finish_reason == "tool_calls"` with no structured call and
+    /// no text-recoverable one.
+    ///
+    /// Some routers rewrite finish reasons, and some models emit the
+    /// intention without the call. Treating that as the final answer ends the
+    /// turn on an empty promise; re-prompting once with "issue the actual
+    /// tool call now" recovers it far more often than not. Each re-prompt is a
+    /// model call and counts against `limits.max_model_calls`. Defaults to
+    /// `3`; `0` disables it.
+    pub dropped_tool_call_nudges: u32,
     /// Number of automatic retries when a model call returns a *truncated
     /// empty* completion — `finish_reason == "length"` with no visible text, no
     /// tool calls, and no structured output.
@@ -297,6 +308,7 @@ impl Default for RunPolicy {
             // Opt-in: preserve the historical blank-final behavior by default.
             error_on_empty_response: false,
             tool_dialect: ToolDispatcher::Auto,
+            dropped_tool_call_nudges: 3,
             // On by default: a truncated-empty completion is useless to every
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
