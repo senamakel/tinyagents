@@ -3108,7 +3108,7 @@ async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting(
             .with_max_attempts(1)
             .with_backoff_sleep(false),
         fallback: Some(FallbackPolicy {
-            models: vec!["fallback".to_string()],
+            models: vec!["slow".to_string(), "fallback".to_string()],
         }),
         ..RunPolicy::default()
     });
