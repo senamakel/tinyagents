@@ -235,6 +235,14 @@ pub enum AgentEvent {
         /// event itself rather than a live outcome side-channel.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// Host-only metadata the tool attached to its result
+        /// (`tinytools::ToolResult::metadata`, B2). Carried here and on
+        /// [`crate::middleware::AgentRun::tool_metadata`] for events,
+        /// persistence, and telemetry; **never** rendered into the transcript
+        /// the model sees. Present regardless of payload capture: it is the
+        /// tool's deliberate host-facing channel, not captured I/O.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<serde_json::Value>,
     },
 
     /// A tool invocation failed and the run is propagating the error rather
@@ -675,6 +683,22 @@ pub enum AgentEvent {
         message: String,
     },
 
+    /// An application-defined event a tool (or any holder of the run's
+    /// [`EventSink`][crate::events::EventSink]) emitted through
+    /// [`ToolExecutionContext::custom`][crate::tool::ToolExecutionContext::custom]
+    /// (B1). The harness attaches no meaning to `payload`; it exists so a
+    /// tool can report structured progress — a download percentage, an
+    /// intermediate finding, a UI hint — on the same ordered stream as the
+    /// loop's own events, without the harness growing a variant per use.
+    Custom {
+        /// The tool call the event was emitted from, when it came from a
+        /// tool; `None` when emitted outside a call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<CallId>,
+        /// Application-defined payload, passed through verbatim.
+        payload: serde_json::Value,
+    },
+
     /// A middleware hook reported a failure.
     ///
     /// Emitted by the lifecycle-hook driver ([`crate::middleware`]'s
@@ -793,6 +817,7 @@ impl AgentEvent {
             AgentEvent::MemoryLoaded => "memory.loaded",
             AgentEvent::MemorySaved => "memory.saved",
             AgentEvent::ToolProgress { .. } => "tool.progress",
+            AgentEvent::Custom { .. } => "custom",
             AgentEvent::MiddlewareFailed { .. } => "middleware.failed",
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
