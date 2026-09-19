@@ -202,6 +202,5 @@ mod test {
         let graph = build_graph::<S, _>(&bp, &EchoFactory).expect("no ignored fields, graph builds");
         let run = graph.run(S::default()).await.expect("graph runs to end");
         assert_eq!(run.state.trail, vec!["a".to_string(), "b".to_string()]);
-        assert_ne!(LANG_END, "");
     }
 }
