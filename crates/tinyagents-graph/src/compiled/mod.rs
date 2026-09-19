@@ -112,7 +112,7 @@ use crate::command::{Command, Interrupt, NodeResult, RouteTarget};
 use crate::recursion::{ChildRun, ChildRunSink, RecursionFrame, RecursionPolicy, RecursionStack};
 use crate::reducer::StateReducer;
 use crate::status::GraphRunStatus;
-use crate::stream::{GraphEvent, GraphEventSink};
+use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
 use crate::{Result, TinyAgentsError};
 use tinyagents_harness::ids::{
     CheckpointId, ExecutionStatus, GraphId, InterruptId, NodeId, RunId, TaskId, ThreadId,
