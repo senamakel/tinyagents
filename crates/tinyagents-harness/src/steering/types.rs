@@ -34,7 +34,12 @@ pub enum SteeringTarget {
     Root,
     /// A specific run, named by [`RunId`].
     Run(RunId),
-    /// Every run currently draining this handle (root and every descendant).
+    /// Matched by any run sharing this handle (root or any descendant).
+    ///
+    /// Delivery is still pull-and-consume-once, exactly like every other
+    /// target: whichever run's checkpoint drains the queue first removes the
+    /// entry, so `All` is not a broadcast to every run in the tree — it only
+    /// widens *which* run may claim the command, not how many do.
     All,
 }
 
