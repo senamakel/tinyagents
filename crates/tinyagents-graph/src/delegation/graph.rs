@@ -275,9 +275,14 @@ where
         .mark_command_routing("finalize");
 
     if require_review_approval {
+        // `approval` pauses *itself* (its handler returns the interrupt
+        // carrying the review payload), so it must not also be an
+        // `interrupt_before` node — `mark_interrupt` is that selector now,
+        // and would pause a second time ahead of the handler with a bare
+        // `{"phase": "before"}` payload. Annotate it for the export instead.
         builder = builder
             .mark_command_routing("approval")
-            .mark_interrupt("approval");
+            .with_node_metadata("approval", "interrupt", "node-emitted");
     }
 
     let graph = builder
