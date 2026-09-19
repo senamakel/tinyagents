@@ -548,7 +548,7 @@ impl StructuredExtractor {
 /// response format is plain text because the structure arrives via tool
 /// arguments.
 pub fn response_format_for_strategy(
-    strategy: &StructuredStrategy,
+    strategy: StructuredStrategy,
     name: impl Into<String>,
     schema: Value,
 ) -> ResponseFormat {
