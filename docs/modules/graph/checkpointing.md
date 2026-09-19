@@ -174,13 +174,38 @@ Every field is also directly `pub`, but the fluent `with_*` setters
 (`with_thread_id`, `with_checkpoint_id`, `with_run_id`,
 `with_parent_checkpoint_id`, `with_namespace`, `with_tasks`,
 `with_completed`, `with_pending_writes`, `with_interrupts`,
-`with_barrier_arrivals`, `with_metadata`) are what every checkpoint
+`with_barrier_arrivals`, `with_metadata`, `with_channel_versions`,
+`with_versions_seen`, `with_channel_deltas`) are what every checkpoint
 construction site in this crate uses (`boundary::{advance,
 handle_failure_boundary, handle_interrupt_boundary, persist_cancel_checkpoint,
 persist_failure_checkpoint, build_loop_checkpoint}`,
 `state_api::{update_state, fork_state}`, the conformance suite) instead of a
 ~15-field struct literal repeating the same four-projection duplication at
 every call site.
+
+### Channel bookkeeping fields (I5/R3)
+
+Three fields round out the v2 record, all `#[serde(default)]` so an older
+checkpoint decodes with them empty:
+
+- `channel_versions: BTreeMap<String, u64>` — cumulative per-channel write
+  counters as of this boundary. For a `channel::ChannelState` graph this is
+  `ChannelState::channel_versions()` verbatim; for a plain whole-`State`
+  graph it is a single `{"state": n}` entry, bumped once per checkpoint.
+- `versions_seen: BTreeMap<String, BTreeMap<String, u64>>` — per-node
+  snapshot of `channel_versions` as of the last time each node ran (keyed by
+  node id string — `NodeId` has no `Ord` impl to key a `BTreeMap` directly).
+  Backs `NodeContext::changed_since_last_run`.
+- `channel_deltas: BTreeMap<String, Vec<serde_json::Value>>` — this
+  checkpoint's own step's raw writes to every
+  `channel::ChannelSet::with_delta`-tracked channel (not cumulative — see
+  `docs/modules/graph/state-channels.md`'s "Delta-channel history" section).
+  Replayed across a lineage by `Checkpointer::delta_history`.
+
+Every checkpoint-construction call site fills these through one shared
+function, `channel::channel_bookkeeping(state, fallback_version)`, so a normal
+superstep boundary and a manual `update_state`/`fork_state` write can never
+disagree about what they persist here.
 
 Durability modes:
 
