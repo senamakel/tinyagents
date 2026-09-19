@@ -35,7 +35,7 @@ use super::{AgentHarness, HostInvocationBinding, InvocationRuntime};
 /// substitute an unhosted or differently-hosted child harness for the
 /// parent's policy.
 pub(crate) struct HostInvocationAuthority<State: Send + Sync, Ctx: Send + Sync> {
-    pub(crate) binding: HostInvocationBinding<State, Ctx>,
+    pub(crate) binding: std::sync::Arc<HostInvocationBinding<State, Ctx>>,
 }
 
 /// A host-owned turn request.
