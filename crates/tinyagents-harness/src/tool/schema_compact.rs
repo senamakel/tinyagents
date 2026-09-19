@@ -299,7 +299,15 @@ pub fn clip_bytes(text: &str, max_bytes: usize) -> String {
         return text.to_string();
     }
     const MARK: &str = "…";
-    let budget = max_bytes.saturating_sub(MARK.len());
+    // The `…` marker alone is `MARK.len()` (3) bytes. A budget smaller than
+    // that cannot contain even the marker, so the only value that respects
+    // `max_bytes` is the empty string — returning the marker anyway (as
+    // `saturating_sub` plus a bare `format!` would) silently exceeds the
+    // configured `max_description_bytes`.
+    if max_bytes < MARK.len() {
+        return String::new();
+    }
+    let budget = max_bytes - MARK.len();
     let mut end = budget.min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
