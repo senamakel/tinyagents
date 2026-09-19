@@ -529,3 +529,35 @@ fn tool_completed_metadata_is_optional_and_round_trips() {
     let back: AgentEvent = serde_json::from_value(json).unwrap();
     assert_eq!(back, event);
 }
+
+// ── EventSink::emit zero-listener fast path ─────────────────────────────────
+
+#[test]
+fn emit_with_no_listeners_still_mints_ids_in_offset_order() {
+    let sink = EventSink::new();
+    assert_eq!(sink.len(), 0);
+
+    let first = sink.emit(AgentEvent::StateUpdate);
+    let second = sink.emit(AgentEvent::StateUpdate);
+
+    assert_eq!(first.offset, 0);
+    assert_eq!(second.offset, 1);
+    assert_ne!(first.id, second.id);
+}
+
+#[test]
+fn emit_delivers_normally_once_a_listener_subscribes_after_a_quiet_run() {
+    let sink = EventSink::new();
+    // Emitted while nobody is listening: takes the fast path.
+    sink.emit(AgentEvent::StateUpdate);
+
+    let recorder = Arc::new(RecordingListener::new());
+    sink.subscribe(recorder.clone());
+
+    // Emitted once a listener exists: should be delivered and continue the
+    // same offset sequence rather than resetting or skipping an id.
+    let delivered = sink.emit(AgentEvent::StateUpdate);
+    assert_eq!(delivered.offset, 1);
+    assert_eq!(recorder.records().len(), 1);
+    assert_eq!(recorder.records()[0].offset, 1);
+}
