@@ -175,15 +175,16 @@ where
             recursion,
             binding,
             child_sink: ChildRunSink::new(),
-            node_visits: HashMap::new(),
+            node_visits: initial_node_visits,
             barrier_arrivals: initial_barriers,
             async_writes: AsyncCheckpointWrites::default(),
             resume_map,
             visited: Vec::new(),
             all_child_runs: Vec::new(),
-            steps: 0,
+            steps: initial_steps,
             last_checkpoint: None,
             parent_checkpoint: initial_parent,
+            carried_completed,
         };
         ctx.emit(GraphEvent::RunStarted {
             run_id: ctx.run_id.clone(),
