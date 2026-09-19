@@ -283,7 +283,7 @@ where
         match decode(line) {
             Ok(record) => out.push(record),
             Err(e) if !complete && i == last_index => {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     "[checkpoint:file] {what}: discarding torn trailing line \
                      ({} bytes, no terminating newline): {e}",
                     line.len()
@@ -554,7 +554,7 @@ where
                 // and therefore every operation built on it — globally.
                 match serde_json::from_str::<Checkpoint<serde::de::IgnoredAny>>(&first) {
                     Ok(record) => threads.push(record.thread_id),
-                    Err(e) => tinyagents_tracing::warn!(
+                    Err(e) => tracing::warn!(
                         "[checkpoint:file] list_threads: skipping unreadable thread file {}: {e}",
                         path.display()
                     ),
@@ -651,7 +651,7 @@ where
         }
         fs::create_dir_all(&self.base_dir).map_err(|e| io_err("create base dir", e))?;
         write_atomic(&path, buf.as_bytes())?;
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[checkpoint:file] put_writes thread={} checkpoint={checkpoint_id} offered={} stored={changed}",
             config.thread_id,
             writes.len()

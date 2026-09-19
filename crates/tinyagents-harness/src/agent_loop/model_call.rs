@@ -57,7 +57,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
         }.map_err(|error| match error {
             TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
-            _ => { tinyagents_tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
+            _ => { tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
         })?;
         let name = model
             .profile()
@@ -158,14 +158,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
 
         if side_effecting_provider {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 provider = "claude-code",
                 "[cache] response cache disabled for side-effecting provider"
             );
         } else if decision.is_none() {
             let reason = self.cache_skip_reason(request);
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 reason = reason.as_str(),
                 "[cache] response cache not consulted for this model call"
@@ -180,7 +180,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let looked_up = match cache.get(key).await {
                 Ok(hit) => hit,
                 Err(error) => {
-                    tinyagents_tracing::warn!(
+                    tracing::warn!(
                         call_id = %call_id.as_str(),
                         %error,
                         "[cache] response-cache lookup failed; treating as a miss"
@@ -240,7 +240,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             let injected =
                 policy.protect_prompt_prefix && apply_prompt_cache_breakpoints(&mut breakpointed);
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 protect_prompt_prefix = policy.protect_prompt_prefix,
                 prompt_cache_key_injected = injected,
@@ -268,7 +268,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .as_ref()
                 .map(|resolved| resolved.name.as_str());
             if served_by.is_some_and(|name| name != primary_name) {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     call_id = %call_id.as_str(),
                     primary = %primary_name,
                     served_by = served_by.unwrap_or_default(),
@@ -281,7 +281,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // The provider call already succeeded and was paid for.
                 // Discarding its answer because the cache is unavailable would
                 // be strictly worse than not caching.
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     call_id = %call_id.as_str(),
                     %error,
                     "[cache] response-cache write failed; returning the response uncached"
@@ -343,7 +343,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<ModelResponse> {
         let content = cached.message.content.clone();
         let tool_calls = cached.tool_calls().to_vec();
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             call_id = %call_id.as_str(),
             text_len = cached.text().len(),
             tool_calls = tool_calls.len(),
@@ -583,7 +583,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 // for a streaming call *is* the signal that
                                 // every delta seen so far for this `call_id`
                                 // must be dropped.
-                                tinyagents_tracing::warn!(
+                                tracing::warn!(
                                     call_id = %call_id.as_str(),
                                     discarded_deltas = deltas_emitted,
                                     attempt,
@@ -1062,7 +1062,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 if binding.resolved.source == ModelResolutionSource::RequestOverride
                     && binding.resolved.name == requested =>
             {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     call_id = %self.call_id.as_str(),
                     from = %self.resolved.name,
                     to = %binding.resolved.name,
@@ -1071,7 +1071,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 Ok(binding)
             }
             _ => {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     call_id = %self.call_id.as_str(),
                     requested = %requested,
                     resolved = %self.resolved.name,

@@ -148,7 +148,7 @@ impl LimitTracker {
     fn exhausted(&self, kind: LimitKind, cap: usize) -> Result<LimitOutcome> {
         match self.limits.behavior {
             LimitBehavior::Error => {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     target: "tinyagents::limits",
                     limit_kind = kind.as_str(),
                     cap,
@@ -163,7 +163,7 @@ impl LimitTracker {
                 )))
             }
             LimitBehavior::StopWithPartial => {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     target: "tinyagents::limits",
                     limit_kind = kind.as_str(),
                     cap,
@@ -286,7 +286,7 @@ impl LimitTracker {
     /// defaulted. See the note on [`LimitTracker::tighten_call_limits`] for what
     /// the agent loop has to do about it.
     pub fn sync_call_limits(&mut self, max_model_calls: usize, max_tool_calls: usize) {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::limits",
             from_model_calls = self.limits.max_model_calls,
             from_tool_calls = self.limits.max_tool_calls,
@@ -330,7 +330,7 @@ impl LimitTracker {
     pub fn tighten_call_limits(&mut self, max_model_calls: usize, max_tool_calls: usize) {
         let model = self.limits.max_model_calls.min(max_model_calls);
         let tool = self.limits.max_tool_calls.min(max_tool_calls);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::limits",
             from_model_calls = self.limits.max_model_calls,
             from_tool_calls = self.limits.max_tool_calls,

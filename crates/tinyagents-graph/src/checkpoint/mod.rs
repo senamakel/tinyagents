@@ -346,7 +346,7 @@ where
                 break;
             };
             if !visited.insert(tuple.checkpoint.checkpoint_id.clone()) {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     "[checkpoint] state_history: lineage cycle at checkpoint `{}` \
                      (thread `{thread_id}`); truncating the walk",
                     tuple.checkpoint.checkpoint_id
@@ -688,7 +688,7 @@ where
         let mut map = self.writes.lock().map_err(|_| lock_err())?;
         let slot = map.entry(key).or_default();
         let changed = merge_writes(slot, writes);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[checkpoint:memory] put_writes thread={} checkpoint={:?} offered={} stored={}",
             config.thread_id,
             config.checkpoint_id,

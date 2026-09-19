@@ -120,7 +120,7 @@ pub fn with_transaction<T>(
                 // reporting, and a failed rollback (connection already gone)
                 // must not mask it.
                 if let Err(rollback_err) = conn.execute_batch("ROLLBACK") {
-                    tinyagents_tracing::warn!(
+                    tracing::warn!(
                         "[session] rollback after error failed: {rollback_err} (original: {err})"
                     );
                 }

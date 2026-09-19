@@ -602,7 +602,7 @@ where
         }
         tx.commit()
             .map_err(|e| sqlite_err("commit put_writes", e))?;
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[checkpoint:sqlite] put_writes thread={} checkpoint={checkpoint_id} offered={} stored={stored}",
             config.thread_id,
             writes.len()

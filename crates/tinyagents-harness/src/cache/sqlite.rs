@@ -94,7 +94,7 @@ impl SqliteResponseCache {
     /// not a correctness one.
     pub fn from_connection(conn: Connection) -> Result<Self> {
         if let Err(error) = conn.pragma_update(None, "journal_mode", "WAL") {
-            tinyagents_tracing::debug!(%error, "[cache] sqlite WAL unavailable; continuing with the default journal mode");
+            tracing::debug!(%error, "[cache] sqlite WAL unavailable; continuing with the default journal mode");
         }
         conn.execute_batch(SCHEMA)
             .map_err(|e| sqlite_err("create schema", e))?;
@@ -155,7 +155,7 @@ impl ResponseCache for SqliteResponseCache {
                 params![self.namespace, key],
             )
             .map_err(|e| sqlite_err("purge expired entry", e))?;
-            tinyagents_tracing::debug!(key = %key, "[cache] sqlite entry expired; treating as miss");
+            tracing::debug!(key = %key, "[cache] sqlite entry expired; treating as miss");
             return Ok(None);
         }
         let response: ModelResponse =
@@ -193,7 +193,7 @@ impl ResponseCache for SqliteResponseCache {
                 params![self.namespace],
             )
             .map_err(|e| sqlite_err("clear namespace", e))?;
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             namespace = %self.namespace,
             dropped,
             "[cache] cleared the sqlite response cache namespace"

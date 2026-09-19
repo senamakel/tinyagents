@@ -191,7 +191,7 @@ impl SteeringHandle {
             reason,
             paused_at_checkpoint: checkpoint,
         });
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::steering",
             checkpoint = state.paused_at_checkpoint,
             reason = state.reason.as_deref(),
@@ -208,7 +208,7 @@ impl SteeringHandle {
     pub fn resume(&self) -> Option<PauseState> {
         let cleared = self.lock_paused().take();
         if cleared.is_some() {
-            tinyagents_tracing::debug!(target: "tinyagents::steering", "[steering] pause cleared by resume");
+            tracing::debug!(target: "tinyagents::steering", "[steering] pause cleared by resume");
         }
         cleared
     }
@@ -294,7 +294,7 @@ pub fn apply_pending_steering<Ctx>(
         .map(SteeringCommand::kind)
         .find(|kind| !handle.policy().is_allowed(*kind))
     {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::steering",
             checkpoint,
             command_kind = rejected.as_str(),
@@ -312,7 +312,7 @@ pub fn apply_pending_steering<Ctx>(
     }
 
     // ── Phase 2: apply ──────────────────────────────────────────────────────
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         target: "tinyagents::steering",
         checkpoint,
         batch_size = commands.len(),

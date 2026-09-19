@@ -252,7 +252,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // they answer the model and let it try again, so counting them is what
         // bounds the correction loop.
         if let Err(err) = self.middleware.run_before_tool(ctx, state, call).await {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 "[agent_loop::tools] `before_tool` refused `{}` (call `{}`); \
                  releasing its tool-call slot: {err}",
                 call.name,
@@ -570,7 +570,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) {
         release_active_tool_call(status, call_id);
         let duration_ms = crate::ids::now_ms().saturating_sub(started_at_ms);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[agent_loop::tools] tool `{tool_name}` call `{}` failed after {duration_ms} ms: \
              {error}",
             call_id.as_str()
@@ -690,7 +690,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     result.markdown_formatted = None;
                 }
             }
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 tool = %prepared.tool_name,
                 agent = %binding.agent_id,
                 ?outcome,
@@ -852,7 +852,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         call: &ToolCall,
         message: String,
     ) -> Result<()> {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[agent_loop::tools] recovering call `{}` for `{}` without executing a tool",
             call.id,
             call.name

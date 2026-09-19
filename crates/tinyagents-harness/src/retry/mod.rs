@@ -178,7 +178,7 @@ impl RetryPolicy {
     /// Shared sleep body: logs the decision, then waits when enabled.
     async fn sleep_for(&self, attempt: usize, backoff: Duration, hint: Option<Duration>) {
         if !self.backoff_sleep {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 target: "tinyagents::retry",
                 attempt,
                 backoff_ms = backoff.as_millis() as u64,
@@ -187,7 +187,7 @@ impl RetryPolicy {
             return;
         }
         if backoff > Duration::ZERO {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 target: "tinyagents::retry",
                 attempt,
                 backoff_ms = backoff.as_millis() as u64,

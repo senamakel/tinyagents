@@ -132,7 +132,7 @@ pub fn apply_handoff(
         let pre_len = result_text.len();
         let cleaned = clean_tool_output(&result_text);
         if cleaned.len() < pre_len {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 tool = %tool_name,
                 before_bytes = pre_len,
                 after_bytes = cleaned.len(),
@@ -146,7 +146,7 @@ pub fn apply_handoff(
     if !skip_cleaning && tokens > threshold_tokens {
         let id = cache.store(tool_name.to_string(), cleaned.clone());
         let placeholder = build_handoff_placeholder(tool_name, &id, &cleaned);
-        tinyagents_tracing::info!(
+        tracing::info!(
             task_id = %task_id,
             agent_id = %agent_id,
             tool = %tool_name,

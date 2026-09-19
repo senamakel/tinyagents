@@ -538,7 +538,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             .await
             .map_err(|error| {
                 let _ = error;
-                tinyagents_tracing::warn!(agent_id = %request.agent_id, "[host] definition lookup failed");
+                tracing::warn!(agent_id = %request.agent_id, "[host] definition lookup failed");
                 TinyAgentsError::Validation("agent definition lookup failed".to_string())
             })?
             .ok_or_else(|| {
@@ -639,7 +639,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                     succeeded,
                     error.map(|error| {
                         let _ = error;
-                        tinyagents_tracing::warn!("[host] agent run failed");
+                        tracing::warn!("[host] agent run failed");
                         "agent run failed".to_string()
                     }),
                 );
@@ -733,7 +733,7 @@ fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.spawn(async move { finish_host_turn(prepared, run, succeeded, error).await });
     } else {
-        tinyagents_tracing::warn!(
+        tracing::warn!(
             run_id = %prepared.run_id,
             "[host] no Tokio runtime during terminal cleanup; starting fallback finalizer"
         );
@@ -785,13 +785,13 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
                 "turn_failure"
             });
         if let Err(error) = memory.remember(item).await {
-            tinyagents_tracing::warn!(%error, "[host] memory sink failed after terminal turn");
+            tracing::warn!(%error, "[host] memory sink failed after terminal turn");
         }
     }
     if let Some(learning) = &prepared.binding.host.learning
         && let Err(error) = learning.on_turn_complete(&summary).await
     {
-        tinyagents_tracing::warn!(%error, "[host] learning sink failed after terminal turn");
+        tracing::warn!(%error, "[host] learning sink failed after terminal turn");
     }
     if let Some(store) = &prepared.binding.host.experience {
         let mut experience =
@@ -800,7 +800,7 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
             experience = experience.succeeded();
         }
         if let Err(error) = store.record(&experience).await {
-            tinyagents_tracing::warn!(%error, "[host] experience store failed after terminal turn");
+            tracing::warn!(%error, "[host] experience store failed after terminal turn");
         }
     }
 }

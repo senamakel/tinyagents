@@ -35,7 +35,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let exit = match outcome {
             Ok(exit) => exit,
             Err(error) => {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     target: "tinyagents::agent_loop",
                     run_id = %ctx.run_id(),
                     messages = run.messages.len(),
@@ -51,7 +51,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         match exit {
             LoopExit::Finished | LoopExit::LimitStop(_) => {
                 if let LoopExit::LimitStop(kind) = &exit {
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         target: "tinyagents::agent_loop",
                         run_id = %ctx.run_id(),
                         limit_kind = ?kind,
@@ -77,7 +77,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     }),
                 });
                 status.set_last_event(record.id);
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     target: "tinyagents::agent_loop",
                     run_id = %ctx.run_id(),
                     checkpoint = pause.paused_at_checkpoint,
@@ -128,7 +128,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         );
         let effective_tool_calls =
             resolve_call_cap(ctx.config.max_tool_calls, self.policy.limits.max_tool_calls);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::agent_loop",
             run_id = %ctx.run_id(),
             config_model_calls = ?ctx.config.max_model_calls,
@@ -265,7 +265,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ctx.emit(AgentEvent::LimitReached {
                         kind: LimitKind::ModelCalls,
                     });
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         target: "tinyagents::agent_loop",
                         run_id = %ctx.run_id(),
                         "[agent_loop] model-call cap reached; stopping with the partial run"
@@ -285,7 +285,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         self.policy.limits.behavior,
                         crate::limits::LimitBehavior::StopWithPartial
                     ) {
-                        tinyagents_tracing::debug!(
+                        tracing::debug!(
                             target: "tinyagents::agent_loop",
                             run_id = %ctx.run_id(),
                             "[agent_loop] model-call cap reached; policy asks to stop with the \
@@ -424,7 +424,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 if tool_schemas.is_empty() {
                                     request.tool_choice = ToolChoice::Tool(name.clone());
                                 } else {
-                                    tinyagents_tracing::debug!(
+                                    tracing::debug!(
                                         target: "tinyagents::agent_loop",
                                         run_id = %ctx.run_id(),
                                         schema_name = %name,
@@ -466,7 +466,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     };
                     let hint = budget.compression_hint(&context_state);
                     if hint.is_advised() {
-                        tinyagents_tracing::debug!(
+                        tracing::debug!(
                             ?hint,
                             "[host] budget gate advised context compression"
                         );
@@ -578,7 +578,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // buried in the spend total.
             if let Some(usage) = response.usage {
                 if response.served_from_cache {
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         target: "tinyagents::agent_loop",
                         run_id = %ctx.run_id(),
                         call_id = %call_id,
@@ -671,7 +671,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         StructuredExtractor::new(*strategy, name.clone(), schema.clone());
                     match extractor.extract(&response) {
                         Ok(output) => run.structured = Some(output.value),
-                        Err(error) => tinyagents_tracing::debug!(
+                        Err(error) => tracing::debug!(
                             target: "tinyagents::agent_loop",
                             run_id = %ctx.run_id(),
                             %error,

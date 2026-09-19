@@ -281,7 +281,7 @@ pub(super) fn apply(conn: &Connection) -> Result<()> {
     if current >= latest {
         return Ok(());
     }
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "{LOG_PREFIX} applying migrations from version {current} to {latest}"
     );
 
@@ -329,13 +329,13 @@ pub(super) fn apply_one(conn: &Connection, version: i64, sql: &str) -> Result<bo
             conn.execute_batch("COMMIT")
                 .storage_context("commit migration transaction")?;
             if did_apply {
-                tinyagents_tracing::debug!("{LOG_PREFIX} applied migration {version}");
+                tracing::debug!("{LOG_PREFIX} applied migration {version}");
             }
             Ok(did_apply)
         }
         Err(err) => {
             if let Err(rollback) = conn.execute_batch("ROLLBACK") {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     "{LOG_PREFIX} rollback of migration {version} failed: {rollback} (original: {err})"
                 );
             }

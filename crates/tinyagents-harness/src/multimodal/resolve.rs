@@ -374,7 +374,7 @@ async fn build_file_payload(
         });
     }
 
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         target: "multimodal",
         file = %name,
         mime = %mime,
@@ -393,7 +393,7 @@ async fn build_file_payload(
         match extractor.extract(&mime, &bytes).await {
             Ok(text) => Some(text),
             Err(reason) => {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     target: "multimodal",
                     file = %name,
                     mime = %mime,
@@ -415,7 +415,7 @@ async fn build_file_payload(
     } = &payload
         && *truncated_chars > 0
     {
-        tinyagents_tracing::info!(
+        tracing::info!(
             target: "multimodal",
             file = %name,
             truncated_chars,

@@ -333,7 +333,7 @@ where
                 // Every pending node claims to have run. Trust the pending set
                 // rather than turning a resumable checkpoint into a hard error:
                 // a wrong re-run is recoverable, a stuck thread is not.
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     "[graph:resume] every pending node of checkpoint `{}` has a completion \
                      marker; resuming them anyway rather than stranding the thread",
                     checkpoint.checkpoint_id
@@ -341,7 +341,7 @@ where
                 active
             } else {
                 if filtered.len() != active.len() {
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         "[graph:resume] checkpoint `{}`: skipping {} already-completed task(s)",
                         checkpoint.checkpoint_id,
                         active.len() - filtered.len()

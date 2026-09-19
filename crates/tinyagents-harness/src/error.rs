@@ -305,7 +305,7 @@ impl TinyAgentsError {
         if error.code.as_deref()
             == Some(tinyinference_llm::providers::openai::CONTEXT_OVERFLOW_CODE)
         {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 "[error] promoting provider `{}` context-overflow code to a typed error",
                 error.provider
             );

@@ -66,14 +66,9 @@ impl<State: Send + Sync> ChatModel<State> for CountingModel<State> {
 }
 
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn live_openai_response_cache_hits_on_repeated_question() {
-    // Load .env so `cargo test` picks up local credentials.
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!(
-            "skipping live_openai_response_cache_hits_on_repeated_question: \
-             OPENAI_API_KEY is not set"
-        );
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 
