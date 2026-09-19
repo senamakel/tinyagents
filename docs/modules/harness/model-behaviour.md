@@ -4,10 +4,10 @@ New `tinyinference-llm` capabilities that let an adapter's behaviour — not jus
 
 ### `ModelProfile` as behaviour (implemented)
 
-The struct above is aspirational; the real `tinyinference_llm::model::ModelProfile`
-(`vendor/tinyinference/crates/tinyinference-llm/src/model/types.rs`) now also
-carries fields that let an adapter's *behaviour* — not just its advertised
-capabilities — be driven by data:
+`tinyinference_llm::model::ModelProfile`
+(`vendor/tinyinference/crates/tinyinference-llm/src/model/types.rs`) carries
+fields that let an adapter's *behaviour* — not just its advertised
+capabilities (see [model.md](model.md)) — be driven by data:
 
 - `schema_transform: Option<SchemaTransform>` — a serializable, named JSON-schema
   transform (`StripDefs`, `InlineRefs`, `NoAdditionalProperties`, `GeminiCompat`,
