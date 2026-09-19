@@ -766,6 +766,8 @@ pub(super) fn index_fts_tool(conn: &Connection, session_id: &str, tool_name: &st
     Ok(())
 }
 
+/// Maps one `sessions` row (columns in the fixed order every query in this
+/// module selects them) into a [`SessionRecord`].
 pub(super) fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
     let started_at_raw: String = row.get(15)?;
     let ended_at_raw: Option<String> = row.get(16)?;

@@ -537,6 +537,7 @@ async fn fetch_remote_file(
     Ok((bytes.to_vec(), name, content_type))
 }
 
+/// Rejects `size_bytes` over `max_bytes` as [`MultimodalError::FileTooLarge`].
 fn check_file_size(source: &str, size_bytes: usize, max_bytes: usize) -> Result<()> {
     if size_bytes > max_bytes {
         return Err(MultimodalError::FileTooLarge {
