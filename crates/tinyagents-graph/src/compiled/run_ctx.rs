@@ -16,6 +16,8 @@
 
 use super::*;
 
+use crate::observability::GraphStatusStore;
+
 /// Run-scoped state for one `execute_run` call.
 ///
 /// Fields fall into three groups: identity that never changes for the run
