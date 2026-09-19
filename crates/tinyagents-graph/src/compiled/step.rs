@@ -287,7 +287,12 @@ where
             });
 
             let fork = Some(ForkId::new(index, node_id.clone()));
-            let node_ctx = ctx.node_context(node_id, step, fork, activation.send_arg.clone());
+            let node_ctx = ctx.node_context(
+                activation,
+                step,
+                fork,
+                siblings.get(node_id).copied().unwrap_or(1),
+            );
             let handler = node.handler.clone();
             let owned_node = node_id.clone();
             // Box each branch future behind a concrete `Send` bound. This
