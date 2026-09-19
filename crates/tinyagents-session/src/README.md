@@ -137,10 +137,13 @@ gate fails — otherwise a retry after fixing an unrelated gate would fail
 
 | File | Role |
 | --- | --- |
-| `mod.rs` | module docs and public surface |
-| `types.rs` | serde record types |
-| `store.rs` | connection/transaction helpers and schema init |
-| `ops.rs` | recording and querying |
+| `lib.rs` | crate docs and public surface |
+| `types.rs` | serde record types for sessions/messages/tool calls |
+| `store.rs` | connection/transaction helpers and pragma setup |
+| `migrations.rs` | versioned, append-only schema migration list |
+| `ops.rs` | session recording and querying |
+| `retention.rs` | pruning, trimming, and FTS index repair |
 | `context.rs` | `StorageContext`, the error-context shim |
-| `run_ledger/` | background run + team coordination |
+| `run_ledger/` | background run + team coordination — see its own [README](./run_ledger/README.md) |
+| `transcript.rs` + `transcript/` | durable, provider-neutral transcripts for KV-cache-stable resume — see its own [README](./transcript/README.md) |
 | `test.rs` | module-local unit tests |
