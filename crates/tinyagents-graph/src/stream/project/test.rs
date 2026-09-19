@@ -108,6 +108,7 @@ fn stream_projection_folds_failed_tool_completion_as_failed_phase() {
         duration_ms: None,
         output_bytes: None,
         error: Some("boom".into()),
+        metadata: None,
     });
     assert_eq!(
         projection.tool_calls[0].value.phase,
