@@ -204,6 +204,10 @@ impl std::fmt::Debug for BinaryAggregate {
 pub struct ChannelSet {
     pub(crate) channels: HashMap<String, Box<dyn Channel>>,
     pub(crate) values: HashMap<String, Value>,
+    /// Delta-tracked channels registered via [`ChannelSet::with_delta`]:
+    /// name -> how often (in writes to that channel) a full-value snapshot
+    /// marker is additionally recorded alongside the per-write delta.
+    pub(crate) delta_channels: HashMap<String, u32>,
 }
 
 impl Clone for ChannelSet {
@@ -215,6 +219,7 @@ impl Clone for ChannelSet {
                 .map(|(k, v)| (k.clone(), v.clone_box()))
                 .collect(),
             values: self.values.clone(),
+            delta_channels: self.delta_channels.clone(),
         }
     }
 }
