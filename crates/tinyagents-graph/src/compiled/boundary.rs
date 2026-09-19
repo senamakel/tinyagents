@@ -27,12 +27,20 @@ pub(super) struct BoundaryCheckpoint<'a, State> {
 }
 
 /// The transient data one superstep's boundary handling needs: the step's
-/// active set, its folded routing (`goto_map`), the step's child-run
-/// metadata, and the step number. Shared by the normal, failure, and
-/// interrupt boundaries so none of them re-take these as separate
-/// parameters.
+/// active set, its fold outcome (`completed`/`stalled`, per [`StepRun`]),
+/// its folded routing (`goto_map`), the step's child-run metadata, and the
+/// step number. Shared by the normal, failure, and interrupt boundaries so
+/// none of them re-take these as separate parameters.
 pub(super) struct StepBoundary<'a> {
     pub(super) active: &'a [Activation],
+    /// Every branch of this step that completed, original-index-paired (see
+    /// [`crate::compiled::step::StepRun::completed`]) — used both to build
+    /// the persisted `completed_tasks` and, at the normal boundary, as the
+    /// routing input.
+    pub(super) completed: &'a [(usize, Activation)],
+    /// Every branch of this step that errored or interrupted — the
+    /// `pending` set at a failure/interrupt boundary.
+    pub(super) stalled: &'a [(usize, Activation)],
     pub(super) goto_map: &'a HashMap<usize, Vec<RouteTarget>>,
     pub(super) child_runs_meta: &'a serde_json::Value,
     pub(super) step: usize,
@@ -58,6 +66,19 @@ where
     /// persists a boundary checkpoint per the configured
     /// [`DurabilityMode`], updating `ctx.last_checkpoint`/`parent_checkpoint`
     /// when one is written. Returns the next active set.
+    ///
+    /// When this run was resumed from a mid-step checkpoint (an
+    /// interrupt/failure boundary whose completed siblings were never
+    /// routed — see [`Self::handle_interrupt_boundary`] /
+    /// [`Self::handle_failure_boundary`]), `ctx.carried_completed` carries
+    /// those siblings' node ids forward. The *first* `advance` call of the
+    /// resumed run consumes it (`take`) and routes it together with this
+    /// step's own `sb.completed`, so every branch of the original step is
+    /// routed in one pass against one committed state — matching what an
+    /// uninterrupted run would have done (the C2 fix). Those carried
+    /// branches have no persisted `goto_map` entry (a `Command`'s explicit
+    /// `goto` is not durable across the boundary), so they route via
+    /// static/conditional edges only; see the module and `RunCtx` docs.
     pub(super) async fn advance(
         &self,
         ctx: &mut RunCtx<'_, State, Update>,
@@ -67,8 +88,31 @@ where
         // Select the next active set from commands or static/conditional
         // edges, evaluated against the freshly-committed state. Barrier
         // arrivals accumulate into `ctx.barrier_arrivals` (persisted below).
-        let next =
-            self.route_completed(sb.active, sb.goto_map, state, &mut ctx.barrier_arrivals)?;
+        let carried = ctx.carried_completed.take();
+        let mut completed_tasks: Vec<Activation>;
+        let next = match &carried {
+            Some(carried_nodes) => {
+                // Reserve an index range that cannot collide with `sb`'s own
+                // (0-based) active-set indices, so `goto_map.get(&index)`
+                // correctly misses for every carried entry instead of
+                // aliasing onto this step's own routing.
+                let offset = sb.active.len().max(sb.completed.len()) + 1;
+                let mut pairs: Vec<(usize, Activation)> = carried_nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, node)| (offset + i, Activation::node(node.clone())))
+                    .collect();
+                pairs.extend(sb.completed.iter().cloned());
+                let next =
+                    self.route_completed(&pairs, sb.goto_map, state, &mut ctx.barrier_arrivals)?;
+                completed_tasks = pairs.into_iter().map(|(_, a)| a).collect();
+                next
+            }
+            None => {
+                completed_tasks = sb.completed.iter().map(|(_, a)| a.clone()).collect();
+                self.route_completed(sb.completed, sb.goto_map, state, &mut ctx.barrier_arrivals)?
+            }
+        };
 
         // Persist a boundary checkpoint. Under `Exit` durability only the
         // terminal boundary (the step that empties the active set) is
