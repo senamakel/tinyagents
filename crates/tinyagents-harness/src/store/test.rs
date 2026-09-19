@@ -1,8 +1,13 @@
 //! Tests for the harness store backends.
 //!
-//! Cover [`super::InMemoryStore`] put/get/delete/list round-tripping and that
-//! [`super::StoreRegistry`] provides a working default store plus named
-//! registration and lookup.
+//! Cover [`super::InMemoryStore`] and [`super::FileStore`] put/get/delete/list
+//! round-tripping and namespace isolation, [`super::FileStore`] name
+//! sanitization and atomic-write guarantees, [`super::StoreRegistry`] default
+//! and named-store lookup/replacement, and both [`super::AppendStore`]
+//! backends ([`super::InMemoryAppendStore`], [`super::JsonlAppendStore`]) for
+//! offset monotonicity, `read_from` tailing, per-stream isolation, retention
+//! eviction, and — for the JSONL backend specifically — cross-instance offset
+//! correctness and recovery from a write torn mid-character or mid-line.
 
 use std::sync::Arc;
 
