@@ -187,6 +187,8 @@ impl InMemoryNamespacedStore {
         self
     }
 
+    /// Locks the item map, converting mutex poisoning into a
+    /// [`TinyAgentsError::Validation`] instead of panicking.
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<(Namespace, String), Item>>> {
         self.items
             .lock()

@@ -58,6 +58,9 @@ model is allowed to see.
 
 `tool::select` is re-exported from `tool/mod.rs` (`pub mod select` / `pub use
 select::*`) and has no dependency on the rest of `tool/` or on `tinytools`
-beyond the `SelectableTool` view a caller constructs. It is consumed by
-sub-agent tooling that binds a large third-party tool catalogue and needs to
-narrow it before advertising it to a model (see `harness::subagent`).
+beyond the `SelectableTool` view a caller constructs. Its intended consumer
+is a host that binds a large third-party tool catalogue (e.g. a sub-agent
+scoped to hundreds of external actions) and needs to narrow it before
+advertising it to a model; the `tinyagents-graph` crate's todo-dispatch
+module (`crates/tinyagents-graph/src/todos/dispatch/`) is the current
+caller.
