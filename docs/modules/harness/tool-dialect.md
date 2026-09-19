@@ -1,6 +1,66 @@
 # Tool Dialects
 
-Canonical API: `tinytools_agent::dialect` from the vendored TinyTools workspace.
+Canonical API: `tinytools_agent` from the vendored TinyTools workspace —
+`parse`, `repair`, `stream`, `render`, and `dialect`. The harness owns only the
+host half, in `agent_loop/dialect.rs`.
+
+## Who owns what
+
+| Concern | Owner |
+| --- | --- |
+| Grammars a model may write a call in (`<tool_call>` spellings, Claude / DeepSeek DSML `<invoke>`, DeepSeek-R1 and Kimi sentinel tokens, gpt-oss Harmony, Mistral `[TOOL_CALLS]`, GLM lines, bare JSON, P-Format) | `tinytools_agent::parse` — one file per grammar under `parse/grammar/` |
+| JSON, tool-name, and argument-shape repair | `tinytools_agent::repair` |
+| Scrubbing markup from a live text stream | `tinytools_agent::stream::StreamScrubber` |
+| Protocol block, catalogue, `<tool_result>` envelope, replay | `tinytools_agent::render` |
+| Mapping `tinyinference_llm::Message` onto the text protocol; the OpenAI-compatible adapter's own prompt-guided mode | `tinyinference_llm::prompt_tools` |
+| Which dialect a run speaks, minting call ids, argument validation policy, the unknown-tool policy, re-prompt nudges | `tinyagents_harness` (`agent_loop/dialect.rs`, `RunPolicy`) |
+
+A model-specific marker string appears in exactly one grammar file. If a
+consumer finds itself matching one, that is a bug to fix in `tinytools-agent`,
+where every consumer — this harness, the inference adapters, any host loop —
+picks the fix up.
+
+## Selecting a dialect
+
+`RunPolicy::tool_dialect` (a `ToolDispatcher`) is resolved once per run:
+
+| Value | Request | Response |
+| --- | --- | --- |
+| `Auto` / `Native` | schemas on the wire; the provider adapter decides (the OpenAI-compatible adapter switches to the JSON protocol by itself for a profile without native tool calling, or after a "tools unsupported" 400) | structured calls, else every text grammar as a fallback |
+| `Xml` | the transcript is folded into text forms (assistant calls → `<tool_call>` markup, `tool` results → one `[Tool results]` turn), a continuation user turn is inserted when no user query is resolvable, the JSON protocol block plus catalogue goes into the system prompt, **no** schema goes on the wire | every text grammar |
+| `Pformat` | as `Xml`, with the P-Format block and signature catalogue | every text grammar, with the positional registry built from the run's schemas |
+
+Whatever the dialect, a response carrying no structured call is read through
+every grammar with the offered tool names supplied, so a damaged name
+(`terminal" parameter=…`, `functions.read_file`, `Read File`) resolves to the
+offered tool and an unknown one reaches the unknown-tool policy as written.
+
+## Ids and streaming
+
+`tinytools-agent` never mints call ids. The harness mints
+`{model_call_id}-tool-{n}` for every call recovered from text — unique per run
+by construction and visibly distinct from any provider's. (The
+OpenAI-compatible adapter mints `text-{seq}-{slot}` for calls it recovers
+itself; the harness leaves those alone.)
+
+Streamed visible text passes through a `StreamScrubber` whenever tools were
+offered, so a consumer of `AgentEvent::ModelDelta` never sees a partial
+`<tool_call>`. Calls the scrubber completes surface on the terminal response,
+exactly once; the reconciled terminal text is the scrubbed text.
+
+## Dropped tool calls
+
+A response with `finish_reason == "tool_calls"` and no call — structured or
+recoverable — is re-prompted with a one-line nudge, at most
+`RunPolicy::dropped_tool_call_nudges` (default 3) times in a row. Each nudge is
+a model call and counts against `RunLimits::max_model_calls`.
+
+## Two pairing repairs, deliberately
+
+`tinytools_agent::dialect::pair_tool_cycles` drops incomplete tool cycles at
+wire-replay time for hosts using `TranscriptEntry`. The harness's
+`summarization/pairing.rs` chooses a compaction cut-off that does not bisect a
+cycle. They answer different questions and are not duplicates.
 
 ## What a dialect is
 
