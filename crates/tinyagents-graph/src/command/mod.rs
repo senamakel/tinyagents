@@ -101,14 +101,23 @@ impl<Update> Default for Command<Update> {
 
 impl Interrupt {
     /// Creates an interrupt with an auto-generated unique id.
+    ///
+    /// I7 (`docs/runtime-comparison/code-review-graph.md`): built from
+    /// [`tinyagents_harness::ids::process_nonce`] +
+    /// [`tinyagents_harness::ids::next_seq`] — the same restart-safe scheme
+    /// [`tinyagents_harness::ids::new_checkpoint_id`] uses — rather than a
+    /// bare process-local counter. A bare counter restarts at `0` in every
+    /// new process, so two pauses minted in different process lifetimes
+    /// could collide on `(node, seq)` and conflate two distinct interrupts
+    /// in `GraphRunStatus::pending_interrupts` or a UI keyed on interrupt id.
     pub fn new(node: impl Into<NodeId>, payload: serde_json::Value) -> Self {
         let node = node.into();
-        let seq = INTERRUPT_SEQ.fetch_add(1, Ordering::Relaxed);
-        Self {
-            id: format!("interrupt-{node}-{seq}"),
-            node,
-            payload,
-        }
+        let id = format!(
+            "interrupt-{node}-{}-{}",
+            tinyagents_harness::ids::process_nonce(),
+            tinyagents_harness::ids::next_seq()
+        );
+        Self { id, node, payload }
     }
 
     /// Creates an interrupt with a caller-supplied id.
