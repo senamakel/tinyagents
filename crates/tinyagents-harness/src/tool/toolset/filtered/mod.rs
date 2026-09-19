@@ -30,8 +30,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> FilteredToolSet<State, Ctx> {
     ) -> Self {
         let allowed: std::collections::HashSet<String> =
             names.into_iter().map(Into::into).collect();
-        Self::new(inner, Arc::new(move |tool: &dyn Tool| allowed.contains(tool.name())))
+        Self::new(inner, Arc::new(move |tool: &dyn Tool| tool_name_allowed(&allowed, tool.name())))
     }
+}
+
+/// Shared allowlist membership test: `true` when `name` is in `allowed`.
+///
+/// Pulled out of [`FilteredToolSet::allowing`]'s predicate so
+/// [`crate::middleware::library::ToolAllowlistMiddleware`] (whose own
+/// `HashSet<String>`-based check historically duplicated this exact test —
+/// `docs/runtime-comparison/pydantic-ai.md` §4 calls this duplication out
+/// directly) can share the one implementation instead of a second copy that
+/// could drift from it.
+pub(crate) fn tool_name_allowed(allowed: &std::collections::HashSet<String>, name: &str) -> bool {
+    allowed.contains(name)
 }
 
 #[async_trait]
