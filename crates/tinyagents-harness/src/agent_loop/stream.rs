@@ -182,22 +182,55 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         ctx: RunContext<Ctx>,
         input: Vec<Message>,
     ) -> impl futures::Stream<Item = AgentStreamItem> + Send + 'a {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        // Subscribe before driving so no event (starting with `RunStarted`) is
-        // missed. The listener rides the run's `EventSink`, which sub-agents
-        // clone, so their lifecycle events reach this stream too.
-        let listener: Arc<dyn EventListener> = Arc::new(ChannelListener { tx });
-        ctx.events.subscribe(listener.clone());
-        let listener_guard = ChannelListenerGuard {
-            events: ctx.events.clone(),
-            listener,
-        };
+        invoke_stream_with_runner(StreamRunner::Borrowed(self), state, ctx, input)
+    }
+}
 
-        // Preserve partial work for a failed streamed run. The event stream
-        // remains unchanged, but terminal host capabilities need honest usage
-        // and executed-tool summaries for error and cancellation paths too.
-        let run_fut: Pin<Box<dyn Future<Output = PartialRunOutcome> + Send + 'a>> =
-            Box::pin(self.invoke_streaming_in_context_collecting_partial(state, ctx, input));
+/// Builds the caller-consumable event stream for either an ordinary
+/// (borrowed-harness) or a hosted (owned-runtime) invocation.
+///
+/// `runner` is moved into the driving future itself rather than dereferenced
+/// up front, so an owned [`InvocationRuntime`] carried by `runner` lives
+/// exactly as long as the future that needs it — no separate field, drop
+/// order, or lifetime extension required on the caller's stream wrapper.
+pub(crate) fn invoke_stream_with_runner<'a, State, Ctx>(
+    runner: StreamRunner<'a, State, Ctx>,
+    state: &'a State,
+    ctx: RunContext<Ctx>,
+    input: Vec<Message>,
+) -> impl futures::Stream<Item = AgentStreamItem> + Send + 'a
+where
+    State: Send + Sync + 'static,
+    Ctx: Send + Sync + 'static,
+{
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    // Subscribe before driving so no event (starting with `RunStarted`) is
+    // missed. The listener rides the run's `EventSink`, which sub-agents
+    // clone, so their lifecycle events reach this stream too.
+    let listener: Arc<dyn EventListener> = Arc::new(ChannelListener { tx });
+    ctx.events.subscribe(listener.clone());
+    let listener_guard = ChannelListenerGuard {
+        events: ctx.events.clone(),
+        listener,
+    };
+
+    // Preserve partial work for a failed streamed run. The event stream
+    // remains unchanged, but terminal host capabilities need honest usage
+    // and executed-tool summaries for error and cancellation paths too.
+    //
+    // `runner` is moved into this async block rather than dereferenced
+    // beforehand: the generated state machine owns it (and, for the hosted
+    // `Owned` variant, the `Arc<InvocationRuntime>` inside it) for exactly as
+    // long as the future borrows from it across the `.await` below, which is
+    // what async/await's normal self-referential generator lowering makes
+    // sound without any unsafe code.
+    let run_fut: Pin<Box<dyn Future<Output = PartialRunOutcome> + Send + 'a>> =
+        Box::pin(async move {
+            let runner = runner;
+            runner
+                .invoke_streaming_in_context_collecting_partial(state, ctx, input)
+                .await
+        });
 
         futures::stream::unfold(
             (
