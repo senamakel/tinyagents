@@ -347,6 +347,9 @@ pub struct ModelCatalogEntry {
     /// Announced deprecation date, when the provider has published one.
     #[serde(default)]
     pub deprecation_date: Option<String>,
+    /// Date the model was released, when known.
+    #[serde(default)]
+    pub release_date: Option<String>,
     /// Per-token pricing for the model.
     #[serde(default)]
     pub pricing: ModelPricing,
