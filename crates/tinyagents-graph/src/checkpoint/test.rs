@@ -584,7 +584,12 @@ mod file_backend {
         }
     }
 
-    fn counted_checkpoint(thread: &str, id: &str, parent: Option<&str>, step: usize) -> Checkpoint<CountedState> {
+    fn counted_checkpoint(
+        thread: &str,
+        id: &str,
+        parent: Option<&str>,
+        step: usize,
+    ) -> Checkpoint<CountedState> {
         Checkpoint {
             thread_id: thread.to_string(),
             checkpoint_id: id.to_string(),
@@ -623,7 +628,11 @@ mod file_backend {
         STATE_DECODE_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
 
         let list = cp.list("t").await.unwrap();
-        assert_eq!(list.len(), 200, "list still returns every record's metadata");
+        assert_eq!(
+            list.len(),
+            200,
+            "list still returns every record's metadata"
+        );
         assert_eq!(list[0].checkpoint_id, "c0");
         assert_eq!(list[199].checkpoint_id, "c199");
         assert_eq!(
