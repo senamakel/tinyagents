@@ -78,6 +78,15 @@ fn cache_identity_includes_project_scope() {
     assert_ne!(first.cache_identity(), second.cache_identity());
 }
 
+fn lookup_schema() -> tinyinference_llm::tool::ToolSchema {
+    tinyinference_llm::tool::ToolSchema {
+        name: "lookup".into(),
+        description: "look something up".into(),
+        parameters: serde_json::json!({"type": "object"}),
+        format: Default::default(),
+    }
+}
+
 #[test]
 fn prompt_guided_tool_response_is_exposed_to_the_harness() {
     let response = model_response_with_tools(
@@ -88,7 +97,7 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
             ),
             usage: None,
         },
-        true,
+        &[lookup_schema()],
     );
     assert_eq!(response.text(), "before");
     assert_eq!(response.message.tool_calls.len(), 1);
@@ -145,7 +154,7 @@ fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
             text: Some(fragments.concat()),
             usage: None,
         },
-        true,
+        &[lookup_schema()],
     );
     assert_eq!(response.text(), "before  after");
     assert_eq!(response.message.tool_calls.len(), 1);
