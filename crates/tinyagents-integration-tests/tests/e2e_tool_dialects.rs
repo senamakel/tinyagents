@@ -20,9 +20,11 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
-    ChatModel, ModelDelta, ModelRequest, ModelResponse, ModelStreamItem, ToolChoice,
+    ChatModel, ModelDelta, ModelProfile, ModelRequest, ModelResponse, ModelStreamItem,
+    ResponseFormat, ToolChoice,
 };
 use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
 use tinytools::{Tool, ToolResult};
 
 struct CaptureMiddleware {
