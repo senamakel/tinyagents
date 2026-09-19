@@ -85,11 +85,7 @@ where
         &self,
         ctx: &RunCtx<'_, State, Update>,
         state: &State,
-    ) -> (
-        BTreeMap<String, u64>,
-        BTreeMap<String, Vec<serde_json::Value>>,
-        BTreeMap<String, BTreeMap<String, u64>>,
-    ) {
+    ) -> ChannelCheckpointFields {
         let (channel_versions, channel_deltas) =
             crate::channel::channel_bookkeeping(state, ctx.steps as u64);
         let versions_seen = ctx.versions_seen.clone().into_iter().collect();
