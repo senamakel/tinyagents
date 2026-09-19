@@ -564,16 +564,15 @@ where
         };
 
         // Cache-miss branches (not the already-replayed hits above) store
-        // their result now that every branch has settled.
+        // their result now that every branch has settled, reusing the key
+        // computed for each activation's lookup above.
         for (index, activation) in active.iter().enumerate() {
             if cache_hits[index] {
                 continue;
             }
-            if let Some((key, value, ttl)) = self.prepare_cache_put(
-                &activation.node,
-                state,
-                activation.send_arg.as_ref(),
-                &results[index],
+            if let (Some(key), Some((value, ttl))) = (
+                &cache_keys[index],
+                self.prepare_cache_put(&activation.node, &results[index]),
             ) {
                 self.store_cache_entry(key, value, ttl, &activation.node, step)
                     .await;
