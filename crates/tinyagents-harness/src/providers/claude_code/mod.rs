@@ -412,11 +412,10 @@ impl ChatModel<()> for ClaudeCodeProvider {
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
         let thread_id = thread_key_from_request(&request);
-        let has_tools = !request.tools.is_empty();
         let messages = request_messages(&request);
         self.run_chat(&messages, None, request.model.as_deref(), thread_id)
             .await
-            .map(|response| model_response_with_tools(response, has_tools))
+            .map(|response| model_response_with_tools(response, &request.tools))
             .map_err(map_error)
     }
     async fn stream(

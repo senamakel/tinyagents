@@ -1670,6 +1670,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.20",
  "tinyinference-core",
+ "tinytools-agent",
  "tokio",
  "tracing",
  "url",
