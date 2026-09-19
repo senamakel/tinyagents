@@ -390,6 +390,53 @@ async fn no_deferred_tools_means_no_bridge() {
     assert_eq!(tool_names(&model.tools_seen()[0]), vec!["read_file"]);
 }
 
+/// Regression: `ToolSearched.query` used to be recorded verbatim regardless
+/// of `RunPolicy::capture.tool_io`, so a run left at the payload-free default
+/// still journaled/exported the model's raw search text — the same privacy
+/// class as a normal tool call's arguments, which *do* honor that gate. With
+/// the default (disabled) capture policy the query must come through empty.
+#[tokio::test]
+async fn tool_searched_query_is_payload_free_by_default() {
+    let listener = Arc::new(RecordingListener::new());
+    let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
+    let model = RecordingModel::new(vec![
+        tool_call(
+            "c1",
+            TOOL_SEARCH_NAME,
+            json!({"query": "sensitive tenant text"}),
+        ),
+        text("done"),
+    ]);
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(deferred)
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }));
+    // No `RunPolicy` override: default `capture.tool_io` is `false`.
+
+    harness
+        .invoke_default(&(), vec![Message::user("hi")])
+        .await
+        .expect("run succeeds");
+
+    let events: Vec<AgentEvent> = listener.events().into_iter().map(|r| r.event).collect();
+    let searched = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::ToolSearched { query, .. } => Some(query.clone()),
+            _ => None,
+        })
+        .expect("a ToolSearched event was emitted");
+    assert_eq!(
+        searched, "",
+        "the query must not be captured under the payload-free default policy"
+    );
+}
+
 #[tokio::test]
 async fn host_registered_tool_search_wins_over_the_intrinsic_bridge() {
     let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
