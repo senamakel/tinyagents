@@ -5,7 +5,7 @@
 //! standing inside the harness. It walks a parsed [`Program`] (or a compiled
 //! [`Blueprint`]) and binds **every** reference — models, tools, agents,
 //! subgraphs, route functions, reducers, and node kinds — by name against a live
-//! [`CapabilityRegistry`]. A reference may only resolve to a capability that Rust
+//! `CapabilityRegistry`. A reference may only resolve to a capability that Rust
 //! has already registered and allowed; anything unknown or disallowed is
 //! reported as a [`Diagnostic`] pointing at the offending source span with a
 //! clear "not registered / not allowed" message.
@@ -56,7 +56,7 @@ const CODE_INVALID_NODE_KIND: &str = "E-rag-invalid-node-kind";
 /// The single registry-backed binding gate for `.rag` source.
 ///
 /// A `Resolver` holds the set of capability names the host has registered and
-/// allowed, keyed by kind. It is built from a live [`CapabilityRegistry`] with
+/// allowed, keyed by kind. It is built from a live `CapabilityRegistry` with
 /// [`Resolver::from_registry`] (or from an existing
 /// [`CapabilityResolver`]/allowlist via [`Resolver::from_capabilities`]), then
 /// asked to resolve a [`Program`] or [`Blueprint`]. Resolution never mutates the
@@ -70,7 +70,7 @@ pub struct Resolver {
 }
 
 impl Resolver {
-    /// Builds a resolver from a live [`CapabilityRegistry`].
+    /// Builds a resolver from a live `CapabilityRegistry`.
     ///
     /// Every registered model, tool, graph blueprint, router, reducer, agent,
     /// and script name — including aliases — populates the corresponding

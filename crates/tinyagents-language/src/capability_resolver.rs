@@ -176,7 +176,7 @@ impl CapabilityResolver {
         }
     }
 
-    /// Builds a fully populated resolver from a live [`CapabilityRegistry`].
+    /// Builds a fully populated resolver from a live `CapabilityRegistry`.
     ///
     /// Every registered model, tool, graph blueprint, router, and reducer name
     /// — including their aliases — is added to the corresponding allowlist, and
@@ -487,7 +487,7 @@ pub fn bind_capabilities(blueprint: &Blueprint, allow: &CapabilityResolver) -> R
     Ok(())
 }
 
-/// Validates `blueprint` against a live [`CapabilityRegistry`].
+/// Validates `blueprint` against a live `CapabilityRegistry`.
 ///
 /// This is the registry → language binding gate. It builds a fully populated
 /// [`CapabilityResolver`] from `registry` (models, tools, subgraphs, routers,

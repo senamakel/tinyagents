@@ -1720,6 +1720,9 @@ fn get_run_telemetry_inner(conn: &Connection, run_id: &str) -> Result<RunTelemet
         .storage_context("run telemetry missing after upsert")
 }
 
+/// Connection-scoped telemetry lookup used when joining telemetry onto an
+/// [`AgentRun`], where no telemetry row yet existing is a normal `None`
+/// rather than an error.
 fn get_optional_run_telemetry(
     conn: &Connection,
     run_id: &str,
