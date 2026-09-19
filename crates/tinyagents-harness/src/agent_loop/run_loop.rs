@@ -513,6 +513,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
             status.mark_running(HarnessPhase::Model);
             status.active_model_call = Some(call_id.clone());
+            // Mirrored onto the context so `ModelMiddleware` (e.g.
+            // `RetryMiddleware`) can correlate its own events with the exact
+            // call id the loop uses instead of deriving an uncorrelated one
+            // (I-7). Cleared right after the wrap onion returns, below.
+            ctx.active_model_call = Some(call_id.clone());
             // Captured here (where the call actually starts) so the completed
             // event carries a real start time for duration-aware exporters.
             let model_started_at_ms = crate::ids::now_ms();
