@@ -372,6 +372,7 @@ where
             barriers: initial_barriers,
             parent: initial_parent,
             binding,
+            resume_seed,
             ..
         } = seed;
 
@@ -383,6 +384,7 @@ where
             initial_barriers,
             initial_parent,
             binding,
+            resume_seed,
         )
         .await?;
         let runner = StepRunner { graph: self };
