@@ -238,6 +238,9 @@ where
         Ok(())
     }
 
+    /// Checks the precondition for emitting an [`Interrupt`]: a checkpointer
+    /// and a thread id must both be present, since an interrupt is only
+    /// resumable if it can be persisted and later addressed by thread.
     pub(super) fn require_interrupt_durability(&self, thread_id: &Option<ThreadId>) -> Result<()> {
         if self.checkpointer.is_none() {
             return Err(TinyAgentsError::Resume(

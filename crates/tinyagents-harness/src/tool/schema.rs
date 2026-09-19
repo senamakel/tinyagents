@@ -230,6 +230,10 @@ impl SchemaCleanr {
         Value::Object(cleaned)
     }
 
+    /// Inlines a local `$ref` by looking it up in `defs` and recursively
+    /// cleaning the target. A ref already on `ref_stack` (a cycle) or one
+    /// that cannot be resolved locally degrades to an empty object rather
+    /// than erroring, since providers reject `$ref` outright anyway.
     fn resolve_ref(
         ref_value: &str,
         obj: &Map<String, Value>,
@@ -244,6 +248,9 @@ impl SchemaCleanr {
         if let Some(def_name) = Self::parse_local_ref(ref_value)
             && let Some(definition) = defs.get(def_name.as_str())
         {
+            // Push/pop around the recursive clean so a self-referential or
+            // mutually-referential def is detected via `ref_stack.contains`
+            // above instead of recursing forever.
             ref_stack.insert(ref_value.to_string());
             let cleaned = Self::clean_with_defs(definition.clone(), defs, strategy, ref_stack);
             ref_stack.remove(ref_value);
@@ -253,6 +260,10 @@ impl SchemaCleanr {
         Self::preserve_meta(obj, Value::Object(Map::new()))
     }
 
+    /// Extracts the def name from a local `#/$defs/<name>` or
+    /// `#/definitions/<name>` pointer, decoding it per RFC 6901. Returns
+    /// `None` for any non-local (external/remote) ref, which this cleaner
+    /// does not attempt to resolve.
     fn parse_local_ref(ref_value: &str) -> Option<String> {
         ref_value
             .strip_prefix("#/$defs/")
@@ -260,6 +271,7 @@ impl SchemaCleanr {
             .map(Self::decode_json_pointer)
     }
 
+    /// Decodes the `~0`/`~1` escapes JSON Pointer uses for literal `~`/`/`.
     fn decode_json_pointer(segment: &str) -> String {
         if !segment.contains('~') {
             return segment.to_string();

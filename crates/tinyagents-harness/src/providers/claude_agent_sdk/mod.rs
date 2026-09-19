@@ -126,17 +126,24 @@ fn render_transcript(messages: &[Message]) -> String {
         .join("\n\n")
 }
 
+/// Wraps a subprocess spawn failure with the binary name for a legible error.
 fn spawn_error(binary: &str, source: std::io::Error) -> anyhow::Error {
     let message = format!("failed to spawn claude binary '{binary}': {source}");
     anyhow::Error::new(source).context(message)
 }
 
 impl ClaudeAgentSdkProvider {
+    /// Creates a provider that defaults to `config.default_model` for every
+    /// call.
     pub fn new(config: ClaudeAgentSdkConfig) -> Self {
         let model = config.default_model.clone();
         Self::for_model(config, model)
     }
 
+    /// Creates a provider pinned to `model`, overriding `config.default_model`
+    /// for this instance's [`ModelProfile`] (a per-request `model` on
+    /// [`ModelRequest`] still takes precedence — see
+    /// [`ChatModel::invoke`][crate::providers::claude_agent_sdk::ClaudeAgentSdkProvider]).
     pub fn for_model(config: ClaudeAgentSdkConfig, model: impl Into<String>) -> Self {
         Self {
             config,
@@ -148,6 +155,17 @@ impl ClaudeAgentSdkProvider {
         }
     }
 
+    /// Spawns `claude -p`, streams and decodes its NDJSON stdout, and
+    /// returns the assembled response text.
+    ///
+    /// The request body goes over stdin rather than argv (see
+    /// [`build_invocation`]) so large prompts do not hit OS argv-length
+    /// limits. Stderr is drained on a concurrent task while stdout is read,
+    /// because leaving either pipe unread while the other fills can deadlock
+    /// the child process. Reading stdout is bounded by a 120s timeout and
+    /// waiting for process exit by a separate 30s timeout; either firing
+    /// kills the child and returns an error. When the CLI streams no final
+    /// `Result` message, the joined `Text` chunks are used as a fallback.
     async fn invoke_cli(
         &self,
         system_prompt: Option<&str>,
