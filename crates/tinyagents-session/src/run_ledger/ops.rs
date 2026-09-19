@@ -688,6 +688,7 @@ fn get_workflow_run_inner(conn: &Connection, id: &str) -> Result<Option<Workflow
         .optional()?)
 }
 
+/// Fetches a single [`WorkflowRun`] by id, or `None` if no row matches.
 pub fn get_workflow_run(workspace_dir: &Path, id: &str) -> Result<Option<WorkflowRun>> {
     tinyagents_tracing::debug!("{LOG_PREFIX} get_workflow_run.entry id={id}");
     crate::store::with_connection(workspace_dir, |conn| {
