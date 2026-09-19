@@ -47,6 +47,16 @@ const THREAD_EXT: &str = "jsonl";
 /// file keeps the checkpoint log exactly as it was.
 const WRITES_SUFFIX: &str = ".writes.jsonl";
 
+/// Filename suffix for a thread's execution-lease sidecar (C3/R4).
+const LEASE_SUFFIX: &str = ".lease";
+
+/// One thread's execution lease, as persisted in its `.lease` sidecar.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct LeaseRecord {
+    owner: String,
+    expires_at_ms: u64,
+}
+
 /// Process-wide counter making temp-file names unique so concurrent atomic
 /// rewrites of the same thread never collide on their scratch file.
 static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
