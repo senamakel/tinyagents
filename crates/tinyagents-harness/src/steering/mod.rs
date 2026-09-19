@@ -323,13 +323,16 @@ impl SteeringHandle {
 ///
 /// - When `ctx` has no [`SteeringHandle`], returns
 ///   [`SteeringOutcome::Continue`] without emitting anything.
-/// - The batch is **validated in full before anything is applied**. If any
-///   command is disallowed, an [`AgentEvent::Steered`] with `accepted = false`
-///   is emitted for it and [`TinyAgentsError::Steering`] is returned — with the
-///   working transcript and run metadata completely untouched. (It used to
-///   validate lazily while applying, so a rejected command at position *n* left
-///   commands `0..n` already applied, commands after it dropped, and the run
-///   erroring: a partially-steered run and no way to reason about its state.)
+/// - Only commands addressed to this run are drained: see
+///   [`SteeringHandle::drain`] and [`SteeringHandle::for_child`]. Commands
+///   addressed to a different run stay queued for it.
+/// - Each command is checked **individually** against the run's
+///   [`SteeringPolicy`]. A disallowed command is rejected on its own — an
+///   [`AgentEvent::Steered`] with `accepted = false` is emitted for it, and the
+///   checkpoint moves on to the next command in the batch — rather than
+///   aborting the whole batch or the run. (It used to reject the entire batch,
+///   including commands the policy *did* permit, whenever one command in it
+///   was disallowed.)
 /// - [`SteeringCommand::Cancel`] takes precedence: it is applied (emitting an
 ///   accepted event) and the function returns [`SteeringOutcome::Cancel`]
 ///   immediately, ignoring the rest of the batch.
@@ -344,9 +347,9 @@ impl SteeringHandle {
 ///
 /// # Errors
 ///
-/// Returns [`TinyAgentsError::Steering`] when any drained command is not
-/// permitted by the run's [`SteeringPolicy`]. No command in the batch is
-/// applied in that case.
+/// This function no longer errors on a policy-disallowed command — see above.
+/// It returns `Err` only if a future extension needs to signal a checkpoint
+/// failure that is not representable as a rejected command.
 pub fn apply_pending_steering<Ctx>(
     ctx: &mut RunContext<Ctx>,
     messages: &mut Vec<Message>,
@@ -359,34 +362,6 @@ pub fn apply_pending_steering<Ctx>(
     let checkpoint = handle.advance_checkpoint();
     let commands = handle.drain();
 
-    // ── Phase 1: validate the whole batch, mutating nothing ─────────────────
-    //
-    // A policy violation must abort the checkpoint *atomically*. Checking as we
-    // apply means the run dies with some of the batch already in the
-    // transcript.
-    if let Some(rejected) = commands
-        .iter()
-        .map(SteeringCommand::kind)
-        .find(|kind| !handle.policy().is_allowed(*kind))
-    {
-        tracing::debug!(
-            target: "tinyagents::steering",
-            checkpoint,
-            command_kind = rejected.as_str(),
-            batch_size = commands.len(),
-            "[steering] batch rejected by policy; nothing applied"
-        );
-        ctx.emit(AgentEvent::Steered {
-            command_kind: rejected.as_str().to_string(),
-            accepted: false,
-        });
-        return Err(TinyAgentsError::Steering(format!(
-            "steering command `{}` is not permitted by the run policy",
-            rejected.as_str()
-        )));
-    }
-
-    // ── Phase 2: apply ──────────────────────────────────────────────────────
     tracing::debug!(
         target: "tinyagents::steering",
         checkpoint,
@@ -396,6 +371,23 @@ pub fn apply_pending_steering<Ctx>(
     );
     for command in commands {
         let kind = command.kind();
+
+        // Each command is validated on its own: a disallowed command is
+        // rejected individually (I-5/M-7) rather than voiding the whole
+        // batch or killing the run.
+        if !handle.policy().is_allowed(kind) {
+            tracing::debug!(
+                target: "tinyagents::steering",
+                checkpoint,
+                command_kind = kind.as_str(),
+                "[steering] command rejected by policy; skipped"
+            );
+            ctx.emit(AgentEvent::Steered {
+                command_kind: kind.as_str().to_string(),
+                accepted: false,
+            });
+            continue;
+        }
 
         match command {
             SteeringCommand::Pause => {
