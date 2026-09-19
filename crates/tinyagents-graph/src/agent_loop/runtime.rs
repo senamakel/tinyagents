@@ -61,7 +61,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> LoopRuntime<State, Ctx> {
     /// see its module doc for why it drives the same node bodies directly
     /// over borrowed `&mut` state instead of through an owned
     /// `LoopRuntime`/`CompiledGraph`.
-    pub(crate) fn new(
+    pub fn new(
         harness: Arc<AgentHarness<State, Ctx>>,
         app_state: Arc<State>,
         ctx: RunContext<Ctx>,
