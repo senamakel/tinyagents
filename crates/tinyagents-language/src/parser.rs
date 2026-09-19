@@ -613,8 +613,17 @@ impl Parser<'_> {
                 input,
                 span,
             });
+            // Same comma-separated-with-optional-trailing-comma rule as
+            // `parse_ident_list`/`parse_string_list`: a comma is required
+            // between entries, but the last entry may omit it. Previously
+            // this block made the comma optional even *between* entries
+            // (`[send a send b]` parsed the same as `[send a, send b]`),
+            // one separator rule per list production instead of one shared
+            // rule (M2 in `docs/runtime-comparison/code-review-workspace.md`).
             if matches!(self.current().token, Token::Comma) {
                 self.advance();
+            } else {
+                break;
             }
         }
         self.expect(&Token::RBracket)?;
