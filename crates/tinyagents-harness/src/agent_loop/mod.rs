@@ -98,7 +98,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cache::{ResponseCache, cache_key};
-use crate::context::{MiddlewareControl, RunConfig, RunContext};
+use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, HarnessRunStatus, LimitKind};
 use crate::ids::{CallId, ComponentId, HarnessPhase};
