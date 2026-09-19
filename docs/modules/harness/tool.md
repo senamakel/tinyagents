@@ -225,6 +225,17 @@ Provider-supplied tool calls must fail closed:
 - allowlist violations emit events and append repairable tool-result messages
   only when the agent loop policy allows recovery
 
+A hosted run's tool allow-list is fail-closed by default. The resolved
+`AgentDefinition.tools` list is collapsed to `Option<HashSet<String>>` at the
+host boundary: a declared, non-empty list is enforced by plain membership,
+and an empty or absent list means "the definition declared nothing" rather
+than "unrestricted" — under `HostCapabilities::fail_closed_tool_allowlist`
+(default `true`), that denies every registered tool. A host that relied on
+the old fail-open behavior (empty list = every tool) must opt back in
+explicitly via `HostCapabilities::with_legacy_unrestricted_tool_allowlist`.
+Explicit-model (non-hosted) runs have no allow-list concept and are
+unaffected.
+
 ## Unknown-tool recovery
 
 When the model calls a tool that is not registered, the agent loop's behavior is
