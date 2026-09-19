@@ -1,4 +1,4 @@
-//! Declarative types for the high-level [`ModelRouter`](super::ModelRouter): a
+//! Declarative types for the high-level [`WorkloadRouter`](super::WorkloadRouter): a
 //! [`WorkloadRoute`] (one named tier) and the router that owns an ordered set of
 //! them.
 
