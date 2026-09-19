@@ -904,6 +904,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut transformed_tools = StreamAccumulator::new();
         let mut saw_tool_delta = false;
 
+        // Some providers pad the very first streamed text chunk with
+        // whitespace that is a wire-format artifact, not content (see
+        // `ModelProfile::ignore_streamed_leading_whitespace`). Stripped once,
+        // on the first delta that actually carries non-whitespace text;
+        // deltas consisting only of leading whitespace are dropped outright
+        // rather than surfaced empty.
+        let mut strip_leading_whitespace = model
+            .profile()
+            .map(|profile| profile.ignore_streamed_leading_whitespace)
+            .unwrap_or(false);
+
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
         // `&mut ctx` for events and middleware).
