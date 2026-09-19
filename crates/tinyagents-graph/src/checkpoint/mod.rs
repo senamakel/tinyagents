@@ -723,7 +723,11 @@ where
         // Single-pass bulk read: clone the thread's records in insertion
         // order, instead of the default's one `get` per listed id.
         let map = self.inner.lock().map_err(|_| lock_err())?;
-        Ok(map.get(thread_id).cloned().unwrap_or_default())
+        let mut records = map.get(thread_id).cloned().unwrap_or_default();
+        for record in &mut records {
+            record.normalize();
+        }
+        Ok(records)
     }
 
     async fn list_threads(&self) -> Result<Vec<String>> {
