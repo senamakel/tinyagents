@@ -12,7 +12,9 @@ use tinyagents_graph::reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 use tinyagents_graph::status::GraphRunStatus;
-use tinyagents_graph::stream::{CollectingSink, GraphEvent, GraphEventSink, NoopSink, StreamMode};
+use tinyagents_graph::stream::{
+    CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
+};
 use tinyagents_graph::{Command, Interrupt, NodeResult, Send};
 use tinyagents_harness::ids::{
     CheckpointId, ExecutionStatus, GraphId, InterruptId, NodeId, RunId, ThreadId, new_call_id,
