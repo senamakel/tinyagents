@@ -21,6 +21,58 @@ use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache
 use tinyinference_llm::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    pub(super) async fn resolve_host_model(
+        &self,
+        ctx: &RunContext<Ctx>,
+        request: &ModelRequest,
+    ) -> Result<Option<ResolvedModelBinding<State>>> {
+        let Some(host_run) = self.host_run_binding(ctx.instance_id())? else {
+            return Ok(None);
+        };
+        let mut resolve = crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
+        if ctx.depth() == 0 {
+            resolve = resolve.as_team_lead();
+        }
+        if let Some(role) = host_run.role.clone() {
+            resolve = resolve.with_role(role);
+        }
+        if let Some(pin) = request.model.clone().or(host_run.model_pin.clone()) {
+            resolve = resolve.with_model_pin(pin);
+        }
+        if let Some(capabilities) = request.required_capabilities.clone() {
+            resolve = resolve.with_required_capabilities(capabilities);
+        }
+        let resolution = host_run.host.models.resolve(&resolve);
+        let model = match self.call_budget(ctx) {
+            Some(remaining) => tokio::select! {
+                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its remaining wall-clock budget", ctx.run_id())))?,
+            },
+            None => tokio::select! {
+                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                result = resolution => result,
+            },
+        }.map_err(|error| match error {
+            TinyAgentsError::Timeout(_) => error,
+            _ => { tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
+        })?;
+        let name = model
+            .profile()
+            .and_then(|profile| profile.model.clone())
+            .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
+        Ok(Some(ResolvedModelBinding {
+            resolved: ResolvedModel {
+                name,
+                requested: resolve.model_pin,
+                source: if request.model.is_some() {
+                    ModelResolutionSource::RequestOverride
+                } else {
+                    ModelResolutionSource::AgentDefault
+                },
+            },
+            model,
+        }))
+    }
     /// Invokes a model, consulting the local response cache around the
     /// retry/fallback path.
     ///
@@ -838,36 +890,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         let Some(requested) = request.model.as_deref() else {
             return Ok(captured());
         };
-        if let Some(host_run) = self.harness.host_run_binding(ctx.instance_id())? {
-            let mut resolve = crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
-            if ctx.depth() == 0 {
-                resolve = resolve.as_team_lead();
-            }
-            if let Some(role) = host_run.role.clone() {
-                resolve = resolve.with_role(role);
-            }
-            if let Some(pin) = request.model.clone().or(host_run.model_pin.clone()) {
-                resolve = resolve.with_model_pin(pin);
-            }
-            if let Some(capabilities) = request.required_capabilities.clone() {
-                resolve = resolve.with_required_capabilities(capabilities);
-            }
-            let model = host_run.host.models.resolve(&resolve).await.map_err(|error| {
-                tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] wrap model resolution failed");
-                TinyAgentsError::Model("host model resolution failed".to_string())
-            })?;
-            let name = model
-                .profile()
-                .and_then(|profile| profile.model.clone())
-                .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
-            return Ok(ResolvedModelBinding {
-                resolved: ResolvedModel {
-                    name,
-                    requested: resolve.model_pin,
-                    source: ModelResolutionSource::RequestOverride,
-                },
-                model,
-            });
+        if let Some(binding) = self.harness.resolve_host_model(ctx, request).await? {
+            return Ok(binding);
         }
         if requested == self.resolved.name {
             return Ok(captured());

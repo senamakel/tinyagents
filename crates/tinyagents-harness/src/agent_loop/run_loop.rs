@@ -345,7 +345,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `RunContext`; explicit-model SDK calls continue to resolve only
             // through the local registry. Context-instance identity keeps two
             // same-id concurrent runs from borrowing each other's model.
-            let binding = if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
+            let binding = if let Some(binding) = self.resolve_host_model(ctx, &request).await? {
+                binding
+            } else if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
                 let mut resolve_request =
                     crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
                 if ctx.depth() == 0 {
