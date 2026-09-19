@@ -210,25 +210,12 @@ where
         let mid_step = source_is_loop
             && (checkpoint.metadata.get("interrupted_nodes").is_some()
                 || checkpoint.metadata.get("failed_node").is_some());
-        let carried_completed = if mid_step && !checkpoint.completed_tasks.is_empty() {
-            // Positionally pair each carried node with its persisted
-            // `Command::goto` (R1): `completed_routes` is `#[serde(default)]`
-            // and may be shorter than `completed_tasks` for a checkpoint
-            // written before this field existed, so pad the tail with empty
-            // routing (falls back to static/conditional edges, the
-            // pre-field behavior).
+        let carried_completed = if mid_step && !checkpoint.completed.is_empty() {
             Some(
                 checkpoint
-                    .completed_tasks
+                    .completed
                     .iter()
-                    .cloned()
-                    .zip(
-                        checkpoint
-                            .completed_routes
-                            .iter()
-                            .cloned()
-                            .chain(std::iter::repeat(Vec::new())),
-                    )
+                    .map(|c| (c.node.clone(), c.routes.clone()))
                     .collect(),
             )
         } else {
