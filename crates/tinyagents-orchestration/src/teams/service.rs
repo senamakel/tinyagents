@@ -21,13 +21,22 @@ use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamErro
 /// than introducing another task store. Hosts can substitute a fake ledger in
 /// tests or select their own durable implementation.
 pub trait TeamLedger: Send + Sync {
+    /// Upserts a team row: creates if absent, updates if present.
     fn upsert_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam>;
+    /// Retrieves a team by id.
     fn get_team(&self, id: &str) -> Result<Option<AgentTeam>>;
+    /// Lists teams according to the request filters.
     fn list_teams(&self, request: &AgentTeamListRequest) -> Result<AgentTeamListResponse>;
+    /// Upserts a team member: creates if absent, updates if present.
     fn upsert_member(&self, upsert: AgentTeamMemberUpsert) -> Result<AgentTeamMember>;
+    /// Lists members of a team in creation order.
     fn list_members(&self, team_id: &str) -> Result<Vec<AgentTeamMember>>;
+    /// Lists tasks assigned to a team in creation order.
     fn list_tasks(&self, team_id: &str) -> Result<Vec<AgentTeamTask>>;
+    /// Upserts a task: creates if absent, updates if present.
     fn upsert_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask>;
+    /// Attempts to claim a task for a member using an atomic CAS operation.
+    /// Returns the claim outcome (success, already claimed, not found).
     fn claim_task(
         &self,
         team_id: &str,
@@ -35,6 +44,8 @@ pub trait TeamLedger: Send + Sync {
         member_id: &str,
         claim_token: &str,
     ) -> Result<ClaimOutcome>;
+    /// Records a task completion with optional evidence, atomically advancing
+    /// the task status and optionally validating evidence before transition.
     fn complete_task(
         &self,
         team_id: &str,
@@ -43,12 +54,16 @@ pub trait TeamLedger: Send + Sync {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
+    /// Stops a member and releases its claimed tasks, returning the stopped
+    /// member and the released task ids.
     fn shutdown_member(
         &self,
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>>;
+    /// Appends an event to the durable run event log.
     fn append_event(&self, event: RunEventAppend) -> Result<RunEvent>;
+    /// Lists events from the run event log according to the request filters.
     fn list_events(&self, request: &RunEventListRequest) -> Result<Vec<RunEvent>>;
 }
 
