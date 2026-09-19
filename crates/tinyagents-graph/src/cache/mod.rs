@@ -9,16 +9,12 @@
 //! plus [`CompiledGraph::with_cached_node`](crate::CompiledGraph::with_cached_node).
 //!
 //! Two backends ship here: [`InMemoryTaskCache`] (process-local, TTL-aware)
-//! and, behind the `sqlite` feature, [`SqliteTaskCache`].
+//! and, behind the `sqlite` feature, `SqliteTaskCache`.
 
-
-#[cfg(feature = "sqlite")]
-mod sqlite;
+mod memory;
 mod types;
 
-
-#[cfg(feature = "sqlite")]
-pub use sqlite::SqliteTaskCache;
+pub use memory::InMemoryTaskCache;
 pub use types::{TaskCache, TaskCacheKey};
 
 #[cfg(test)]
