@@ -498,6 +498,7 @@ fn model_catalog_loads_seed_and_custom_snapshots() {
             max_input_tokens: Some(1024),
             max_output_tokens: Some(256),
             deprecation_date: None,
+            release_date: None,
             pricing: ModelPricing {
                 input_per_token: Some(0.1),
                 output_per_token: Some(0.2),
