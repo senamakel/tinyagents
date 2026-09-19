@@ -6,6 +6,7 @@
 //! the full loop lifecycle, limits, and backoff design.
 
 use super::model_call::ModelCallBase;
+use super::tool_changes;
 use super::*;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
