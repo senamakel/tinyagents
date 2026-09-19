@@ -79,23 +79,66 @@ Tool strategy must handle:
 The artificial tool should not execute application side effects. It is a parse
 carrier only.
 
-## Error Policy
+## Error Policy: the output-validation retry loop (A3)
 
-**Planned (see [`docs/runtime-comparison/plan.md`](../../runtime-comparison/plan.md)
-Phase 2, "Output-validation retry loop").** No `StructuredOutputErrorPolicy`
-type, retry loop, or structured-output retry events exist yet. What exists
-today is one-shot extraction: `StructuredExtractor::extract(&response)`
-(`crates/tinyagents-harness/src/structured/mod.rs`) parses and validates a
-single completed `ModelResponse` and returns `Result<StructuredOutput>` —
-climbing a local repair ladder (code fence, prose slice, relaxed JSON,
-truncation close) and validating against the declared schema, but never
-re-asking the model. `StructuredExtractor::extract_outcome` is the
-non-fatal sibling: it returns a `StructuredOutcome` recording a failure as
-data instead of an `Err`, so a caller can inspect and decide what to do, but
-it still does not issue another model call. The planned retry loop
-(`OutputRetryPolicy`, `OutputValidator`, `AgentEvent::OutputRetry`,
-`run.structured_as::<T>()`) would add that re-ask behavior on top of this
-one-shot extractor.
+Extraction itself is `StructuredExtractor::extract(&response)`
+(`crates/tinyagents-harness/src/structured/mod.rs`): it parses and validates a
+single completed `ModelResponse` into `Result<StructuredOutput>`, climbing a
+local repair ladder (code fence, prose slice, relaxed JSON, truncation close)
+and validating against the declared schema.
+`StructuredExtractor::extract_outcome` is the non-fatal sibling — it returns a
+`StructuredOutcome { value, raw, error, variant }` recording a failure as data
+instead of an `Err`.
+
+The agent loop's **final turn** wraps that non-fatal extraction in a retry
+loop instead of propagating the first failure. Two things can trigger a retry:
+
+- **Extraction failure** — `extract_outcome`'s `error` is `Some` (schema-
+  invalid or unparseable text).
+- **Validator rejection** — a registered `OutputValidator<State, Ctx>`
+  (`AgentHarness::with_output_validator`) is called once extraction *did*
+  succeed, and returns `Err(TinyAgentsError::ModelRetry(message))`. Any other
+  `Err` variant fails the run immediately, exactly like an error from any
+  other fallible call in the loop.
+
+```rust
+#[async_trait]
+pub trait OutputValidator<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
+    async fn validate(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        output: &serde_json::Value,
+    ) -> Result<()>;
+}
+```
+
+Either failure pushes `RunPolicy::output_retry.message_template` (default
+`"{error}\n\nFix the errors and try again."`, with `{error}` substituted) onto
+the transcript as a `Message::user` turn, emits
+`AgentEvent::OutputRetry { attempt, error }`, and `continue`s the loop — so the
+retry costs one more model call and counts against
+`RunLimits::max_model_calls` like any other. `RunPolicy::output_retry` is an
+`OutputRetryPolicy { max_attempts: u8, message_template: String }`, default
+`max_attempts = 1` (one retry, two attempts total); `max_attempts = 0`
+disables the loop entirely, reproducing the pre-A3 one-shot behavior.
+Exhausting the budget fails the run with
+`TinyAgentsError::StructuredOutput`, same as before A3 existed.
+
+Tool-level vocabulary mirrors this: a tool that wants "ask the model to try
+again" returns `Err(TinyAgentsError::ModelRetry(msg).into())` from
+`Tool::execute` instead of `Ok(ToolResult::error(..))`; the harness folds it
+into a recoverable `ToolResult::retry(msg)` instead of aborting the run (see
+`agent_loop/tools.rs::execute_tool_recovering_model_retry`).
+`TinyAgentsError::ToolFailed` is the permanent counterpart
+(`ToolResult::failed(msg)`) and `crate::retry::is_retryable` treats it as
+non-retryable, so `RetryMiddleware` does not re-attempt a call a tool has
+explicitly marked permanent.
+
+`AgentRun::structured_as::<T: DeserializeOwned>()` is the typed convenience
+over `run.structured` (`Result<T>`, erroring with
+`TinyAgentsError::StructuredOutput` when the run produced no structured value
+or `T` does not deserialize).
 
 ## Return Shape
 
