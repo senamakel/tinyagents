@@ -123,6 +123,7 @@ impl tinytools::Tool for AddTool {
 /// is classified read-only, so the run completes. If the model happens to call
 /// the tool it executes (recorded), but we tolerate it not calling it.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn live_tool_policy_exposes_classified_tool() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -133,9 +134,7 @@ async fn live_tool_policy_exposes_classified_tool() {
     use tinyinference_llm::model::ChatModel;
     use tinyinference_llm::providers::openai::OpenAiModel;
 
-    let _ = dotenvy::dotenv();
-    if std::env::var("OPENAI_API_KEY").is_err() {
-        eprintln!("skipping live_tool_policy_exposes_classified_tool: OPENAI_API_KEY is not set");
+    if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
     }
 
