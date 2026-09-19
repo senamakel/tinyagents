@@ -9,12 +9,13 @@ use futures::StreamExt;
 use crate::events::AgentEvent;
 use crate::ids::{CallId, RunId};
 use crate::testkit::{
-    DeterministicClock, DeterministicIds, EventRecorder, FakeTool, ScriptedModel, StreamingMock,
-    Trajectory,
+    DeterministicClock, DeterministicIds, EventRecorder, FakeTool, SchemaDrivenModel,
+    ScriptedModel, StreamingMock, Trajectory, generate_args_from_schema,
 };
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStreamItem, collect_model_stream,
 };
+use tinyinference_llm::tool::ToolSchema;
 use tinyinference_llm::usage::Usage;
 use tinytools::Tool;
 
