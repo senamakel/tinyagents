@@ -1,5 +1,6 @@
 //! Tests for the [`AgentHarness`] builder and [`RunPolicy`].
 
+use std::collections::HashSet;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -2898,6 +2899,104 @@ async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
         }
         other => panic!("expected completed parent stream, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn direct_parent_subagent_entry_fails_closed_for_hosted_authority() {
+    fn hosted_parent_context(host: Arc<crate::host::HostCapabilities<()>>) -> RunContext<()> {
+        let mut context = RunContext::new(RunConfig::new("hosted-direct-parent"), ());
+        context.host_agent_id = Some("parent".to_string());
+        context.host_authority = Some(Arc::new(crate::runtime::HostInvocationAuthority {
+            binding: crate::runtime::HostInvocationBinding {
+                host,
+                agent_id: "parent".to_string(),
+                model_pin: None,
+                role: None,
+                allowed_tools: HashSet::new(),
+                progress: None,
+            },
+        }));
+        context
+    }
+
+    let local_child_model = Arc::new(ScriptedModel::replies(vec!["local bypass"]));
+    let hosted_child_model = Arc::new(ScriptedModel::replies(vec!["child answer"]));
+    let mut child_harness = AgentHarness::new();
+    child_harness.register_model("local", local_child_model.clone());
+    let child = SubAgent::new("worker", "child", Arc::new(child_harness));
+
+    let denied_host = Arc::new(crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("parent", "Parent", "does not delegate"),
+            AgentDefinition::new("worker", "Worker", "child"),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(hosted_child_model.clone())),
+    ));
+    let denied = child
+        .invoke_in_parent(&(), (), &hosted_parent_context(denied_host), "delegate")
+        .await
+        .expect_err("the explicit parent entry rejects hosted authority");
+    assert!(matches!(
+        denied,
+        crate::error::TinyAgentsError::Validation(_)
+    ));
+    assert!(
+        hosted_child_model.requests().is_empty(),
+        "a hosted parent cannot bypass delegate authorization through the explicit entry"
+    );
+
+    let undelegated_host = Arc::new(crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("parent", "Parent", "does not delegate"),
+            AgentDefinition::new("worker", "Worker", "child"),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(hosted_child_model.clone())),
+    ));
+    let undelegated = child
+        .invoke_hosted_in_parent(
+            &(),
+            (),
+            &hosted_parent_context(undelegated_host),
+            "delegate",
+        )
+        .await
+        .expect_err("the hosted entry enforces the parent delegate allowlist");
+    assert!(matches!(
+        undelegated,
+        crate::error::TinyAgentsError::Validation(_)
+    ));
+    assert!(
+        hosted_child_model.requests().is_empty(),
+        "an undelegated hosted child must not resolve or execute a model"
+    );
+
+    let authorized_host = Arc::new(crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("parent", "Parent", "delegates").with_subagents(["worker"]),
+            AgentDefinition::new("worker", "Worker", "child"),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(hosted_child_model.clone())),
+    ));
+    let authorized = child
+        .invoke_hosted_in_parent(&(), (), &hosted_parent_context(authorized_host), "delegate")
+        .await
+        .expect("the dedicated hosted entry authorizes the declared child");
+    assert_eq!(authorized.text().as_deref(), Some("child answer"));
+    assert_eq!(
+        hosted_child_model.requests().len(),
+        1,
+        "the authorized child resolves through the parent host bundle, not its local harness"
+    );
+    assert!(
+        local_child_model.requests().is_empty(),
+        "the child harness's local model cannot replace hosted parent authority"
+    );
 }
 
 #[tokio::test]

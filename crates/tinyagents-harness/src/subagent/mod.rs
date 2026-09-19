@@ -222,6 +222,17 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         parent: &RunContext<Ctx>,
         input: impl Into<String>,
     ) -> Result<AgentRun> {
+        // This is the generic explicit-model entry point, intentionally kept
+        // available to borrowed `State` callers. A hosted parent must enter
+        // through `invoke_hosted_in_parent` below, where the `State: 'static`
+        // bound makes the invocation authority type-safe. Falling through to
+        // the explicit loop here would discard the parent's definition and
+        // approval authority, so reject it before constructing a child.
+        if parent.host_authority.is_some() {
+            return Err(TinyAgentsError::Validation(
+                "hosted parent delegation requires invoke_hosted_in_parent".into(),
+            ));
+        }
         // The child harness may tighten the tree cap, but it may never widen
         // the explicit parent lineage cap. `RunContext::child` is the one
         // place that copies the live recursive capabilities and creates the
@@ -281,6 +292,34 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
 }
 
 impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
+    /// Runs this child under the exact host authority installed on `parent`.
+    ///
+    /// Unlike [`Self::invoke_in_parent`], this path resolves the parent's
+    /// delegate allowlist and re-enters the child through the parent's shared
+    /// invocation bundle. A context that is not hosted fails closed rather
+    /// than silently acquiring an unrelated harness configuration.
+    pub async fn invoke_hosted_in_parent(
+        &self,
+        state: &State,
+        ctx_data: Ctx,
+        parent: &RunContext<Ctx>,
+        input: impl Into<String>,
+    ) -> Result<AgentRun> {
+        if parent.host_authority.is_none() {
+            return Err(TinyAgentsError::Validation(
+                "hosted subagent invocation requires parent host authority".into(),
+            ));
+        }
+        let config = self.child_config(
+            parent.depth(),
+            parent.thread_id(),
+            parent.config.max_turn_output_tokens,
+        )?;
+        let child = parent.child(config, ctx_data)?;
+        self.run_hosted_child(state, child, input.into(), parent.streaming)
+            .await
+    }
+
     /// Hosted recursive driver. Kept separate from the generic explicit-model
     /// path so a borrowed `State` never has to interact with live host
     /// authority stored on a `RunContext`.
