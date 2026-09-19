@@ -12,18 +12,28 @@ adapter subgraph
 parent State -> child Input -> child Output -> parent Update
 ```
 
-Subgraph requirements:
+Subgraph requirements (implemented unless marked target; verified against
+`crates/tinyagents-graph/src/subgraph/`):
 
 - namespace checkpoint ids
 - preserve `root_run_id`
 - set child `parent_run_id`
 - propagate thread id by default
-- allow isolated child thread ids by explicit configuration
-- inherit, override, or disable the parent checkpointer
+- **Target (not implemented):** allow isolated child thread ids by explicit
+  configuration — today an embedded child always runs on the parent's thread
+  when one is set, or unthreaded (no checkpoints) when it is not; there is no
+  opt-in for a child to have its own independent thread id
+- **Target (not implemented):** inherit, override, or disable the parent
+  checkpointer per subgraph — today the child always inherits the parent's
+  checkpointer
 - emit nested events with parent node id and namespace
 - stream child values, updates, messages, tasks, and checkpoints when requested
-- allow `Command::Parent` handoff from child graph to parent graph
-- expose child state in parent checkpoint task metadata
+- **Target (not implemented):** allow `Command::Parent` handoff from child
+  graph to parent graph — no `Parent` variant exists on `Command`
+- **Target (not implemented):** expose child state in parent checkpoint task
+  metadata — today the parent tracks only lineage (`ChildRun` entries: child
+  run id, node, and a `child_runs` array in boundary-checkpoint metadata),
+  not the child's state
 
 Subgraph persistence must be explicit. Inherited checkpointing is convenient for
 shared-state subgraphs; isolated checkpointing is safer for reusable child
