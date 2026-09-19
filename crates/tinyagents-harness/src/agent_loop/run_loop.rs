@@ -207,11 +207,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
         }
         // Fail closed on a structured-output schema whose name collides with a
-        // registered tool. Under the tool-call strategy the schema is sent as an
-        // extra `function` entry, so a collision puts two identically-named
-        // functions in one request — which OpenAI rejects outright — and makes
-        // "was this the schema or the real tool?" unanswerable for every
-        // returned call.
+        // registered tool *or* the intrinsic discovery bridge. Under the
+        // tool-call strategy the schema is sent as an extra `function` entry,
+        // so a collision puts two identically-named functions in one request
+        // — which OpenAI rejects outright — and makes "was this the schema or
+        // the real tool?" unanswerable for every returned call. Checking
+        // against `tool_schemas` (the fully assembled set, direct plus
+        // bridge) rather than only `self.tools.names()` is required: a
+        // response format named `tool_search`/`tool_call` collides with the
+        // *intrinsic* bridge schema too, which has no registry entry to be
+        // found by a registered-names-only check.
         if let Some(name) = self
             .policy
             .default_response_format
@@ -222,15 +227,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 _ => None,
             })
-            && self
-                .tools
-                .names()
-                .iter()
-                .any(|registered| registered == name)
+            && tool_schemas.iter().any(|schema| &schema.name == name)
         {
             return Err(TinyAgentsError::Validation(format!(
-                "structured-output schema name `{name}` collides with a registered tool of the \
-                 same name; rename one of them"
+                "structured-output schema name `{name}` collides with a registered tool (or the \
+                 intrinsic discovery bridge) of the same name; rename one of them"
             )));
         }
 
