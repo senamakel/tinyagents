@@ -262,7 +262,9 @@ async fn steer_accepted(
         .into_iter()
         .find_map(|block| match block {
             ToolContent::Json { data } => data.get("accepted").and_then(|value| value.as_bool()),
-            ToolContent::Text { .. } => None,
+            ToolContent::Text { .. }
+            | ToolContent::Image { .. }
+            | ToolContent::File { .. } => None,
         })
         .unwrap_or_else(|| panic!("steer result missing `accepted` boolean"))
 }
@@ -419,7 +421,9 @@ async fn list_records(tool: &OrchestrationTool, args: serde_json::Value) -> Vec<
         .into_iter()
         .find_map(|block| match block {
             ToolContent::Json { data } => data.as_array().cloned(),
-            ToolContent::Text { .. } => None,
+            ToolContent::Text { .. }
+            | ToolContent::Image { .. }
+            | ToolContent::File { .. } => None,
         })
         .expect("orchestrate_list returns a JSON array of records")
 }
