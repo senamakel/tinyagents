@@ -135,20 +135,14 @@ derivation, and true mid-execution *tool* progress streaming — `tinytools::Too
 has no progress-callback surface, so `run_on_tool_delta`/`ToolProgress` still
 have no real caller; that needs a `tinytools` capability, not a harness change.
 
-Implement:
+Remaining work:
 
-- Extend streaming deltas with explicit channels:
-  - visible text delta
-  - reasoning/thinking delta
-  - tool call start
-  - tool call argument delta
-  - tool call completed/assembled
-  - provider metadata/raw event summary
-- Keep channel semantics provider-neutral.
-- Emit the same data through `AgentEvent`, `AgentObservation`, journals, and live
-  stream items.
-- Attribute every delta to run id, model call id, optional thread id, parent run
-  id, and root run id.
+- Derive `BlockStart`/`BlockEnd` for the OpenAI chat-completions adapter from
+  its delta shape (Anthropic already emits them 1:1).
+- Give `tinytools::Tool` a progress-callback surface so `run_on_tool_delta`/
+  `ToolProgress` have a real, mid-execution caller.
+- Attribute every delta to run id, model call id, optional thread id, parent
+  run id, and root run id (partially covered by `ModelStreamMetadata`).
 
 Acceptance criteria:
 
