@@ -522,7 +522,9 @@ impl ChatModel<()> for PFormatStructuredModel {
             .lock()
             .expect("PFormatStructuredModel received lock poisoned")
             .push(request);
-        Ok(ModelResponse::assistant("answer[0|viatool|1|7]"))
+        Ok(ModelResponse::assistant(
+            "<tool_call>answer[0|viatool|1|7]</tool_call>",
+        ))
     }
 }
 
