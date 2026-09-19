@@ -1005,6 +1005,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) call_id: CallId,
     pub(super) resolved: ResolvedModel,
     pub(super) model: Arc<dyn ChatModel<State>>,
+    pub(super) required_capabilities: Option<tinyinference_llm::model::CapabilitySet>,
     pub(super) streaming: bool,
 }
 
@@ -1038,11 +1039,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
             return Ok(captured());
         }
         let requested = request.model.as_deref();
-        if request.required_capabilities.is_none()
-            && requested.is_some_and(|requested| {
-                self.resolved.source == ModelResolutionSource::RequestOverride
-                    && self.resolved.requested.as_deref() == Some(requested)
-            })
+        if request.required_capabilities == self.required_capabilities
+            && (requested.is_none()
+                || requested.is_some_and(|requested| {
+                    self.resolved.source == ModelResolutionSource::RequestOverride
+                        && self.resolved.requested.as_deref() == Some(requested)
+                }))
         {
             return Ok(captured());
         }

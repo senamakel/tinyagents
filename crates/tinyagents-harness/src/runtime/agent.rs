@@ -287,8 +287,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             None => Ok(outcome.run),
             Some(TinyAgentsError::Cancelled) => Err(TinyAgentsError::Cancelled),
             Some(TinyAgentsError::Timeout(message)) => Err(TinyAgentsError::Timeout(message)),
-            Some(error @ TinyAgentsError::Validation(_))
-            | Some(error @ TinyAgentsError::Tool(_)) => Err(error),
             Some(_) => Err(TinyAgentsError::Model(
                 "hosted agent invocation failed".to_string(),
             )),

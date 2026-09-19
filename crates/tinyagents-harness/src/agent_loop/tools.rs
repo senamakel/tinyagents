@@ -473,7 +473,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 binding.agent_id,
             )
             .with_call_id(CallId::new(call.id.clone()));
-            let decision = binding.host.security.authorize_tool(&request).await?;
+            let cancellation = ctx.cancellation.clone();
+            let authorization = binding.host.security.authorize_tool(&request);
+            let decision = match self.call_budget(ctx) {
+                Some(remaining) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                    result = tokio::time::timeout(remaining, authorization) => result.map_err(|_| TinyAgentsError::Timeout(format!(
+                        "tool authorization for run `{}` exceeded its remaining wall-clock budget",
+                        ctx.run_id()
+                    )))?,
+                },
+                None => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                    result = authorization => result,
+                },
+            }?;
             if !decision.is_allowed() {
                 let reason = decision
                     .denial_reason()

@@ -1285,10 +1285,9 @@ async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
         .await
         .expect_err("a hidden registered tool still collides with the schema");
 
-    assert!(
-        error
-            .to_string()
-            .contains("collides with a registered tool")
+    assert_eq!(
+        error.to_string(),
+        "model error: hosted agent invocation failed"
     );
     assert!(model.requests().is_empty(), "provider was not contacted");
 }
@@ -2081,10 +2080,10 @@ async fn hard_budget_compression_fails_closed_when_only_system_instructions_rema
         )
         .await
         .expect_err("hard pressure cannot discard sole system instructions");
-    assert!(
-        error
-            .to_string()
-            .contains("reducible conversational context")
+    assert_eq!(
+        error.to_string(),
+        "model error: hosted agent invocation failed",
+        "hosted callers receive no internal budget diagnostic"
     );
     assert!(model.requests().is_empty(), "provider was never called");
 }
@@ -2455,7 +2454,10 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_differently_hosted_child()
         )
         .await
         .expect_err("parent policy denies the child before its host can run");
-    assert_eq!(error.to_string(), "tool error: tool dispatch failed");
+    assert_eq!(
+        error.to_string(),
+        "model error: hosted agent invocation failed"
+    );
     assert!(
         child_model.requests().is_empty(),
         "the differently-hosted child was never allowed to select its own policy"

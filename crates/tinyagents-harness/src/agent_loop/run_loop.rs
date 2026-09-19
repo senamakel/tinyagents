@@ -519,6 +519,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 call_id: call_id.clone(),
                 resolved: binding.resolved,
                 model: binding.model,
+                required_capabilities: request.required_capabilities.clone(),
                 streaming,
             };
             // Snapshot the request messages for observability before `request`
