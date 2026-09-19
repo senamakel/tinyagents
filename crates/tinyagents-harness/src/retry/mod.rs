@@ -361,6 +361,10 @@ pub fn is_retryable(err: &TinyAgentsError) -> bool {
         // guessing. Callers that know better narrow this with
         // [`RetryPolicy::retry_on`].
         TinyAgentsError::Tool(_) => true,
+        // A per-model-call ceiling firing means this one call wedged, with
+        // run time still left — retryable, unlike a run-deadline `Timeout`
+        // (see that variant's own retryability rationale above).
+        TinyAgentsError::CallTimeout(_) => true,
         _ => false,
     }
 }
