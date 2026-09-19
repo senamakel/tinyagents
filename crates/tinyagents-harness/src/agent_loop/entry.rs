@@ -303,17 +303,50 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
-        match self
-            .run_loop(
-                state,
-                &mut ctx,
-                &mut terminal.run,
-                &mut status,
-                input,
-                streaming,
-            )
-            .await
-        {
+        // A5: `RunPolicy::execution` selects the loop engine. `Direct` (the
+        // default) is the built-in `run_loop` below, unchanged from every
+        // release before A5. `Graph` delegates to the installed
+        // `LoopDriver` (see `agent_loop::phases::LoopDriver`) — typically
+        // `tinyagents-graph`'s `GraphLoopDriver` — which owns this same
+        // contract (RunStarted..RunCompleted/RunFailed/pause, writing every
+        // produced message onto `run.messages` on every exit path).
+        // Selecting `Graph` with no driver installed fails closed rather than
+        // silently falling back to `Direct`.
+        let outcome = match self.policy.execution {
+            crate::runtime::LoopExecution::Graph => match self.loop_driver.clone() {
+                Some(driver) => {
+                    driver
+                        .drive(
+                            self,
+                            state,
+                            &mut ctx,
+                            &mut terminal.run,
+                            &mut status,
+                            input,
+                            streaming,
+                        )
+                        .await
+                }
+                None => Err(TinyAgentsError::Validation(
+                    "RunPolicy::execution is LoopExecution::Graph but no LoopDriver is \
+                     installed; call AgentHarness::with_loop_driver first"
+                        .to_string(),
+                )),
+            },
+            crate::runtime::LoopExecution::Direct => {
+                self.run_loop(
+                    state,
+                    &mut ctx,
+                    &mut terminal.run,
+                    &mut status,
+                    input,
+                    streaming,
+                )
+                .await
+            }
+        };
+
+        match outcome {
             Ok(()) => {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical
