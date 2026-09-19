@@ -407,15 +407,17 @@ async fn journal_sink_used_directly_forwards_to_inner() {
     let sink = JournalGraphSink::new(journal.clone(), RunId::new("fixed-run"), GraphId::new("g"))
         .with_inner(collector.clone());
 
-    sink.emit(GraphEvent::StepStarted {
+    sink.emit(GraphEventEnvelope::for_test(GraphEvent::StepStarted {
         step: 1,
         active: Vec::new(),
-    });
-    sink.emit(GraphEvent::RouteSelected {
+    }));
+    sink.emit(GraphEventEnvelope::for_test(GraphEvent::RouteSelected {
         node: "a".into(),
         target: "b".into(),
-    });
-    sink.emit(GraphEvent::StepCompleted { step: 1 });
+    }));
+    sink.emit(GraphEventEnvelope::for_test(GraphEvent::StepCompleted {
+        step: 1,
+    }));
 
     // Forwarded to the live sink.
     assert_eq!(collector.len(), 3);
