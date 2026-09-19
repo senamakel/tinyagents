@@ -229,6 +229,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
     }
 
+    /// Collects a hosted turn through the streaming driver while preserving the
+    /// parent's exact capability bundle. Recursive streaming delegation uses
+    /// this rather than the unary entry point so model deltas and delta
+    /// middleware remain part of the shared parent event stream.
+    pub(crate) async fn invoke_agent_streaming_with_host_capabilities(
+        &self,
+        host: crate::host::HostCapabilities<State>,
+        request: AgentTurnRequest,
+        context: RunContext<Ctx>,
+        state: &State,
+    ) -> Result<AgentRun>
+    where
+        Ctx: 'static,
+        State: 'static,
+    {
+        let stream = self
+            .invoke_agent_stream_with_host_capabilities(host, request, context, state)
+            .await?;
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item {
+                AgentStreamItem::Completed(run) => return Ok(*run),
+                AgentStreamItem::Failed { error, .. } => return Err(TinyAgentsError::Model(error)),
+                AgentStreamItem::Event(_) => {}
+            }
+        }
+        Err(TinyAgentsError::Model(
+            "hosted stream ended without a terminal result".to_string(),
+        ))
+    }
+
     /// Starts a hosted streaming turn.
     ///
     /// The returned stream is the existing event projection, so host-driven
@@ -598,7 +629,10 @@ async fn screen_user_messages<State: Send + Sync>(
                             return Err(TinyAgentsError::Validation(reason));
                         }
                     }
-                } else if let tinyinference_llm::message::ContentBlock::Json(value) = block {
+                } else if let tinyinference_llm::message::ContentBlock::Json(value)
+                | tinyinference_llm::message::ContentBlock::ProviderExtension(value) =
+                    block
+                {
                     let rendered = value.to_string();
                     match host
                         .security

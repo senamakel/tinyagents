@@ -88,7 +88,7 @@ use crate::runtime::AgentHarness;
 use crate::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgent<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// Creates a sub-agent wrapping `harness` with a stable `name` and
     /// `description`.
     pub fn new(
@@ -306,9 +306,25 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgent<State, Ctx> {
             // capability bundle. The child harness's installed host (including
             // no host at all) is intentionally irrelevant here: allowing it
             // to decide policy would make delegation authorization bypassable.
-            self.harness
-                .invoke_agent_with_host_capabilities(authority.host.clone(), request, ctx, state)
-                .await?
+            if streaming {
+                self.harness
+                    .invoke_agent_streaming_with_host_capabilities(
+                        authority.host.clone(),
+                        request,
+                        ctx,
+                        state,
+                    )
+                    .await?
+            } else {
+                self.harness
+                    .invoke_agent_with_host_capabilities(
+                        authority.host.clone(),
+                        request,
+                        ctx,
+                        state,
+                    )
+                    .await?
+            }
         } else if streaming {
             self.harness
                 .invoke_streaming_in_context(state, ctx, messages)
@@ -486,7 +502,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<State, Ctx> {
     /// Default JSON Schema for a sub-agent tool: an object with one required
     /// string field named [`SUBAGENT_INPUT_FIELD`].
     fn default_parameters() -> Value {
@@ -620,7 +636,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
 impl<State, Ctx> ToolDispatch<State, Ctx> for SubAgentTool<State, Ctx>
 where
     State: Send + Sync + 'static,
-    Ctx: Send + Sync,
+    Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
         Arc::new(SubAgentToolDeclaration {
