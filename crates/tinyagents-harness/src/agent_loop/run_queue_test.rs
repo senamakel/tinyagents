@@ -387,19 +387,24 @@ async fn collect_lane_lands_on_the_run_and_never_reaches_the_model() {
 // ── Boundary semantics ──────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn steer_arriving_after_the_final_answer_still_gets_one_more_turn() {
+async fn steer_arriving_after_the_final_answer_is_applied_before_any_followup() {
     // A steer that lands once the model has already answered is not lost:
-    // the natural-finish boundary applies it (before any follow-up) and runs
-    // another turn, matching pi's "poll steering after each completed turn".
+    // the natural-finish boundary applies it first (pi polls steering after
+    // every completed turn), and only a boundary with no pending steer
+    // takes a follow-up. Each gets its own turn, in that order.
     let fx = fixture(
-        vec![final_turn("first answer"), final_turn("steered answer")],
+        vec![
+            final_turn("first answer"),
+            final_turn("steered answer"),
+            final_turn("followed-up answer"),
+        ],
         QueueMode::All,
     );
     fx.queue
-        .push(QueueLane::Steer, Message::user("actually, shorter"))
+        .push(QueueLane::Followup, Message::user("follow-up"))
         .await;
     fx.queue
-        .push(QueueLane::Followup, Message::user("unused follow-up"))
+        .push(QueueLane::Steer, Message::user("actually, shorter"))
         .await;
 
     let ctx = fx.ctx("steer-at-finish");
@@ -409,8 +414,8 @@ async fn steer_arriving_after_the_final_answer_still_gets_one_more_turn() {
         .await
         .expect("run succeeds");
 
-    assert_eq!(run.model_calls, 2);
-    assert_eq!(run.text().as_deref(), Some("steered answer"));
+    assert_eq!(run.model_calls, 3);
+    assert_eq!(run.text().as_deref(), Some("followed-up answer"));
     assert_eq!(
         shape(&run.messages),
         vec![
@@ -418,13 +423,15 @@ async fn steer_arriving_after_the_final_answer_still_gets_one_more_turn() {
             "assistant:first answer",
             "user:actually, shorter",
             "assistant:steered answer",
+            "user:follow-up",
+            "assistant:followed-up answer",
         ]
     );
     assert_eq!(
         queued_applied(&fx.recorder.events()),
-        vec![(QueueLane::Steer, 1)],
-        "the steer wins the first finish boundary"
+        vec![(QueueLane::Steer, 1), (QueueLane::Followup, 1)]
     );
+    assert_eq!(fx.queue.status().await.total, 0);
 }
 
 /// Requests `StopWithFinal` after any tool result.
