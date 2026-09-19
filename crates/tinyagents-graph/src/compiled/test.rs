@@ -413,7 +413,7 @@ async fn resume_emits_restore_not_save_for_the_loaded_checkpoint() {
     assert!(
         !resume_events.iter().any(|e| matches!(
             e,
-            GraphEvent::CheckpointSaved { checkpoint_id } if *checkpoint_id == loaded
+            GraphEvent::CheckpointSaved { checkpoint_id, .. } if *checkpoint_id == loaded
         )),
         "loading a checkpoint on resume must not re-emit it as saved"
     );
