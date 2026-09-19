@@ -380,6 +380,9 @@ fn resolve_fresh_base(repo_top: &Path) -> String {
     "main".to_string()
 }
 
+/// Parses `git status --porcelain` for `worktree_path` into a dirty flag plus
+/// the sorted, deduplicated list of changed paths (rename entries `a -> b` are
+/// reduced to `b`).
 fn dirty_state(worktree_path: &Path) -> GitResult<(bool, Vec<PathBuf>)> {
     let porcelain = git_raw(worktree_path, &["status", "--porcelain"])?;
     let mut changed = Vec::new();

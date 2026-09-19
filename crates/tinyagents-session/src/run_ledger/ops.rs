@@ -359,6 +359,13 @@ pub fn compare_and_swap_workflow_run_lifecycle(
     })
 }
 
+/// Appends a new [`RunEvent`] to a run's event log, allocating its sequence
+/// number atomically.
+///
+/// `sequence` is `MAX(sequence) + 1` for the run, computed by the same
+/// `INSERT ... SELECT` statement that writes the row (see the inline comment
+/// at the call site) so two connections appending concurrently cannot
+/// compute the same next value and lose one event to a primary-key conflict.
 pub fn append_run_event(workspace_dir: &Path, event: RunEventAppend) -> Result<RunEvent> {
     let now = Utc::now();
     let payload_json =
