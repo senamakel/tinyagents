@@ -54,10 +54,11 @@ use serde_json::{Map, Value, json};
 
 use super::schema::{CleaningStrategy, SchemaCleanr};
 use super::schema_compact::{SchemaCompaction, compact_tool_schema};
+use tinyinference_llm::model::{ModelProfile, SchemaTransform};
 use tinyinference_llm::tool::ToolSchema;
 
 /// How a [`ToolSchema`] should be projected for a specific provider.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SchemaPreparation {
     /// Which keyword subset the target provider accepts.
     pub strategy: CleaningStrategy,
@@ -73,6 +74,10 @@ pub struct SchemaPreparation {
     /// [`SchemaCompaction`]). Off by default: compaction is lossy, so it is a
     /// deliberate choice for schemas a host does not author itself.
     pub compaction: SchemaCompaction,
+    /// A resolved [`ModelProfile`]'s [`SchemaTransform`], applied last (after
+    /// cleaning and the strict sanitizer) as the final, model-specific wire
+    /// adjustment. `None` when no profile-level transform applies.
+    pub schema_transform: Option<SchemaTransform>,
 }
 
 impl SchemaPreparation {
