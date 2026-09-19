@@ -441,6 +441,7 @@ graph ok {
             model: Some("missing".into()),
             prompt: None,
             tools: Vec::new(),
+            capability: None,
             routing: Routing::Terminal,
             agent: None,
             subgraph: None,
