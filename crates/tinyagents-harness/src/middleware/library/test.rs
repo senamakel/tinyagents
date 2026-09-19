@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
-use crate::context::{RunConfig, RunContext};
+use crate::context::{MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
