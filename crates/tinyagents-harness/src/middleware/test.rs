@@ -533,8 +533,8 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         .expect("fallback trim runs");
 
     // Same transcript, but the request also carries a moderate tool schema
-    // that eats into the same 50-token trigger budget without consuming all
-    // of it, so the system prompt still survives trimming.
+    // that eats into the same trigger budget without consuming all of it, so
+    // the system prompt still survives trimming.
     let moderate_schema_text = "p".repeat(60);
     let mut request_with_tools = ModelRequest {
         messages: before.clone(),
