@@ -49,7 +49,10 @@ fn chain(
         .add_sequence(["a", "b", "c"])
         .set_entry("a")
         .set_finish("c");
-    configure(builder).compile().unwrap().with_checkpointer(memory())
+    configure(builder)
+        .compile()
+        .unwrap()
+        .with_checkpointer(memory())
 }
 
 fn phase(interrupt: &Interrupt) -> &str {
@@ -67,7 +70,10 @@ async fn interrupt_before_pauses_without_running_the_handler_and_resume_runs_it_
     assert_eq!(paused.interrupts.len(), 1);
     assert_eq!(paused.interrupts[0].node.as_str(), "b");
     assert_eq!(phase(&paused.interrupts[0]), "before");
-    assert!(paused.interrupts[0].task_id.is_some(), "stamped with its task id");
+    assert!(
+        paused.interrupts[0].task_id.is_some(),
+        "stamped with its task id"
+    );
     // `a` committed; `b` never ran.
     assert_eq!(paused.state, 1);
     assert_eq!(b_runs.load(AtomicOrdering::SeqCst), 0);
@@ -77,7 +83,11 @@ async fn interrupt_before_pauses_without_running_the_handler_and_resume_runs_it_
     assert!(history[0].metadata.has_interrupts);
     assert_eq!(history[0].pending_interrupts.len(), 1);
     assert_eq!(
-        history[0].next_nodes.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        history[0]
+            .next_nodes
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>(),
         vec!["b"]
     );
     assert_eq!(history[0].values, 1);
@@ -132,7 +142,11 @@ async fn interrupt_after_runs_the_handler_once_and_holds_its_update_until_resume
     assert_eq!(snapshot.values, 1);
     assert!(snapshot.metadata.has_interrupts);
     assert_eq!(
-        snapshot.next_nodes.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        snapshot
+            .next_nodes
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>(),
         vec!["b"]
     );
     let tuple = graph
@@ -173,7 +187,9 @@ async fn interrupt_after_replays_the_deferred_command_goto_on_resume() {
             let runs = runs.clone();
             async move {
                 runs.fetch_add(1, AtomicOrdering::SeqCst);
-                Ok(NodeResult::Command(Command::update(s + 10).with_goto(["d"])))
+                Ok(NodeResult::Command(
+                    Command::update(s + 10).with_goto(["d"]),
+                ))
             }
         })
         .add_node("c", |s, _c: NodeContext| async move {
@@ -200,7 +216,11 @@ async fn interrupt_after_replays_the_deferred_command_goto_on_resume() {
     // `b`'s +10 applied, and its explicit `goto d` honoured (not `c`).
     assert_eq!(resumed.state, 1 + 10 + 1000);
     assert_eq!(
-        resumed.visited.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        resumed
+            .visited
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>(),
         vec!["b", "d"]
     );
     assert_eq!(b_runs.load(AtomicOrdering::SeqCst), 1);
@@ -238,11 +258,13 @@ async fn interrupt_after_in_a_parallel_step_defers_every_branch() {
     let r1 = runs.clone();
     let r2 = runs.clone();
     let graph = GraphBuilder::<i32, i32>::new()
-        .set_reducer(crate::reducer::ClosureStateReducer::new(|s: i32, u: i32| {
-            Ok(s + u)
-        }))
+        .set_reducer(crate::reducer::ClosureStateReducer::new(
+            |s: i32, u: i32| Ok(s + u),
+        ))
         .with_parallel(true)
-        .add_node("fan", |_s, _c: NodeContext| async move { Ok(NodeResult::Update(0)) })
+        .add_node("fan", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(0))
+        })
         .add_node("x", move |_s, _c: NodeContext| {
             let r1 = r1.clone();
             async move {
@@ -282,13 +304,18 @@ async fn interrupt_after_in_a_parallel_step_defers_every_branch() {
 #[test]
 fn interrupt_selectors_must_name_real_nodes() {
     let err = GraphBuilder::<i32, i32>::overwrite()
-        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s)) })
+        .add_node("a", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s))
+        })
         .set_entry("a")
         .set_finish("a")
         .interrupt_before(["ghost"])
         .compile()
         .unwrap_err();
-    assert!(matches!(err, TinyAgentsError::MissingNode(n) if n == "ghost"), "got {err:?}");
+    assert!(
+        matches!(err, TinyAgentsError::MissingNode(n) if n == "ghost"),
+        "got {err:?}"
+    );
 }
 
 // ── Interrupt::response_schema ───────────────────────────────────────────
@@ -329,7 +356,10 @@ fn approval_graph() -> CompiledGraph<i32, i32> {
 async fn response_schema_accepts_a_conforming_resume_value() {
     let graph = approval_graph();
     let paused = graph.run_with_thread("ok", 10).await.unwrap();
-    assert_eq!(paused.interrupts[0].response_schema, Some(approval_schema()));
+    assert_eq!(
+        paused.interrupts[0].response_schema,
+        Some(approval_schema())
+    );
     let resumed = graph
         .resume("ok", Command::resume(json!({ "approved": true })))
         .await

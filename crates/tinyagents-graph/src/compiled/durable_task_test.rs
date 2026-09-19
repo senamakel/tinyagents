@@ -132,7 +132,11 @@ async fn durable_task_is_memoised_across_a_failure_and_retry() {
     assert_eq!(resumed.status.status, ExecutionStatus::Completed);
     assert_eq!(resumed.state, 101);
     assert_eq!(effects.load(AtomicOrdering::SeqCst), 1);
-    assert_eq!(fails.load(AtomicOrdering::SeqCst), 2, "handler itself ran twice");
+    assert_eq!(
+        fails.load(AtomicOrdering::SeqCst),
+        2,
+        "handler itself ran twice"
+    );
 }
 
 #[tokio::test]
@@ -173,12 +177,24 @@ async fn durable_task_keys_are_memoised_independently() {
 
     graph.run_with_thread("keys", 0).await.unwrap_err();
     assert_eq!(a_effects.load(AtomicOrdering::SeqCst), 1);
-    assert_eq!(b_effects.load(AtomicOrdering::SeqCst), 0, "`b` never reached");
+    assert_eq!(
+        b_effects.load(AtomicOrdering::SeqCst),
+        0,
+        "`b` never reached"
+    );
 
     let resumed = graph.retry("keys").await.unwrap();
     assert_eq!(resumed.state, 30);
-    assert_eq!(a_effects.load(AtomicOrdering::SeqCst), 1, "`a` replayed from memo");
-    assert_eq!(b_effects.load(AtomicOrdering::SeqCst), 1, "`b` ran fresh once");
+    assert_eq!(
+        a_effects.load(AtomicOrdering::SeqCst),
+        1,
+        "`a` replayed from memo"
+    );
+    assert_eq!(
+        b_effects.load(AtomicOrdering::SeqCst),
+        1,
+        "`b` ran fresh once"
+    );
 }
 
 #[tokio::test]

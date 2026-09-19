@@ -353,11 +353,12 @@ where
             None => serde_json::Value::Null,
         };
         let payload = serde_json::json!({ "update": encoded, "goto": goto });
-        ctx.lock_durable_writes().push(PendingWrite::interrupt_after(
-            node_id.clone(),
-            ctx.task_id.clone(),
-            payload,
-        ));
+        ctx.lock_durable_writes()
+            .push(PendingWrite::interrupt_after(
+                node_id.clone(),
+                ctx.task_id.clone(),
+                payload,
+            ));
         Ok(NodeResult::Interrupt(injected_interrupt(node_id, "after")))
     }
 
@@ -378,7 +379,9 @@ where
         })?;
         let update = match payload.get("update") {
             None | Some(serde_json::Value::Null) => None,
-            Some(value) => Some((codec.decode)(value.clone()).map_err(TinyAgentsError::Serialization)?),
+            Some(value) => {
+                Some((codec.decode)(value.clone()).map_err(TinyAgentsError::Serialization)?)
+            }
         };
         let goto: Vec<RouteTarget> = match payload.get("goto") {
             None | Some(serde_json::Value::Null) => Vec::new(),
@@ -674,8 +677,7 @@ where
         let results = match self.graph.max_concurrency {
             Some(limit) if limit < futures.len() => {
                 let total = futures.len();
-                let mut slots: Vec<Option<TaskOutput<Update>>> =
-                    (0..total).map(|_| None).collect();
+                let mut slots: Vec<Option<TaskOutput<Update>>> = (0..total).map(|_| None).collect();
                 let mut source = futures.into_iter().enumerate();
                 let mut running = Vec::with_capacity(limit);
                 let mut running_index = Vec::with_capacity(limit);

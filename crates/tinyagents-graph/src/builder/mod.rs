@@ -516,10 +516,7 @@ where
     /// value on [`NodeContext::resume`]. Requires a checkpointer and a
     /// thread, like any interrupt. Nodes are validated at [`Self::compile`];
     /// the export marks them as interrupt points.
-    pub fn interrupt_before(
-        mut self,
-        nodes: impl IntoIterator<Item = impl Into<NodeId>>,
-    ) -> Self {
+    pub fn interrupt_before(mut self, nodes: impl IntoIterator<Item = impl Into<NodeId>>) -> Self {
         for node in nodes {
             let node = node.into();
             self.node_meta.entry(node.clone()).or_default().interrupt = true;
@@ -543,10 +540,7 @@ where
     /// A node that itself returns `NodeResult::Interrupt` is not paused a
     /// second time. Requires `Update: Serialize + DeserializeOwned` (the
     /// codec for the deferred write), plus a checkpointer and a thread.
-    pub fn interrupt_after(
-        mut self,
-        nodes: impl IntoIterator<Item = impl Into<NodeId>>,
-    ) -> Self
+    pub fn interrupt_after(mut self, nodes: impl IntoIterator<Item = impl Into<NodeId>>) -> Self
     where
         Update: serde::Serialize + serde::de::DeserializeOwned,
     {

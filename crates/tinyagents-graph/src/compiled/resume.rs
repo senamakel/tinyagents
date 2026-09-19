@@ -89,8 +89,7 @@ where
             .filter(|w| !w.is_task_replay())
             .map(|w| w.task_id.as_str().to_string())
             .collect();
-        let mut task_writes: HashMap<String, Vec<crate::checkpoint::PendingWrite>> =
-            HashMap::new();
+        let mut task_writes: HashMap<String, Vec<crate::checkpoint::PendingWrite>> = HashMap::new();
         for write in ledger.iter().filter(|w| w.is_task_replay()) {
             task_writes
                 .entry(write.task_id.as_str().to_string())
@@ -109,9 +108,11 @@ where
                     return None;
                 }
                 let task_id = interrupt.task_id.as_ref()?;
-                Some(crate::compiled::run_ctx::RunCtx::<State, Update>::interrupt_ack_key(
-                    phase, task_id,
-                ))
+                Some(
+                    crate::compiled::run_ctx::RunCtx::<State, Update>::interrupt_ack_key(
+                        phase, task_id,
+                    ),
+                )
             })
             .collect();
         let active: Vec<Activation> = if done.is_empty() {

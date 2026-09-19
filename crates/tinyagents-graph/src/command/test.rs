@@ -75,8 +75,8 @@ fn interrupt_ids_embed_the_process_nonce_and_never_collide() {
 #[test]
 fn interrupt_response_schema_round_trips_and_defaults_to_none() {
     let schema = json!({ "type": "object", "required": ["approved"] });
-    let interrupt = Interrupt::new("approve", json!({ "ask": "ok?" }))
-        .with_response_schema(schema.clone());
+    let interrupt =
+        Interrupt::new("approve", json!({ "ask": "ok?" })).with_response_schema(schema.clone());
     assert_eq!(interrupt.response_schema, Some(schema.clone()));
     let encoded = serde_json::to_value(&interrupt).unwrap();
     assert_eq!(encoded["response_schema"], schema);

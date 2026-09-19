@@ -15,10 +15,7 @@ use tinyagents_harness::ids::ExecutionStatus;
 /// Three sequential supersteps `a (+1) -> b (+10) -> c (+100)`, each node
 /// counted; `a` raises `drain` (when given) from inside its handler, i.e.
 /// while step 1 is in flight.
-fn chain(
-    counts: [Arc<AtomicUsize>; 3],
-    drain: Option<DrainHandle>,
-) -> CompiledGraph<i32, i32> {
+fn chain(counts: [Arc<AtomicUsize>; 3], drain: Option<DrainHandle>) -> CompiledGraph<i32, i32> {
     let [a, b, c] = counts;
     GraphBuilder::<i32, i32>::overwrite()
         .add_node("a", move |s, _c: NodeContext| {
@@ -83,7 +80,11 @@ async fn drain_finishes_the_in_flight_step_and_stops_before_the_next() {
     assert_eq!(counts[1].load(AtomicOrdering::SeqCst), 0);
     assert_eq!(counts[2].load(AtomicOrdering::SeqCst), 0);
     assert_eq!(
-        run.status.active_nodes.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        run.status
+            .active_nodes
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>(),
         vec!["b"]
     );
     assert!(run.checkpoint_id.is_some());
@@ -96,14 +97,20 @@ async fn drain_finishes_the_in_flight_step_and_stops_before_the_next() {
     )));
     assert!(!events.iter().any(|e| matches!(
         e,
-        GraphEvent::RunCompleted { .. } | GraphEvent::RunCancelled { .. } | GraphEvent::RunFailed { .. }
+        GraphEvent::RunCompleted { .. }
+            | GraphEvent::RunCancelled { .. }
+            | GraphEvent::RunFailed { .. }
     )));
 
     // The checkpoint names `b` as the pending work and is marked drained.
     let snapshot = graph.get_state("drain", None).await.unwrap().unwrap();
     assert_eq!(snapshot.values, 1);
     assert_eq!(
-        snapshot.next_nodes.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        snapshot
+            .next_nodes
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>(),
         vec!["b"]
     );
     assert!(!snapshot.metadata.has_interrupts);
@@ -115,7 +122,10 @@ async fn drain_finishes_the_in_flight_step_and_stops_before_the_next() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(tuple.checkpoint.metadata["drained"], serde_json::json!(true));
+    assert_eq!(
+        tuple.checkpoint.metadata["drained"],
+        serde_json::json!(true)
+    );
 }
 
 #[tokio::test]
@@ -142,7 +152,11 @@ async fn resume_after_drain_reaches_the_same_state_as_an_undrained_run() {
     assert_eq!(resumed.state, reference.state);
     assert_eq!(resumed.state, 111);
     assert_eq!(
-        resumed.visited.iter().map(|n| n.as_str()).collect::<Vec<_>>(),
+        resumed
+            .visited
+            .iter()
+            .map(|n| n.as_str())
+            .collect::<Vec<_>>(),
         vec!["b", "c"]
     );
     assert_eq!(counts[0].load(AtomicOrdering::SeqCst), 1);
@@ -155,8 +169,8 @@ async fn drain_requested_before_the_run_starts_runs_nothing() {
     let counts = counters();
     let (handle, signal) = DrainSignal::new();
     handle.drain();
-    let graph = chain(counts.clone(), None)
-        .with_checkpointer(Arc::new(InMemoryCheckpointer::<i32>::new()));
+    let graph =
+        chain(counts.clone(), None).with_checkpointer(Arc::new(InMemoryCheckpointer::<i32>::new()));
     let run = graph
         .run_with_thread_options("early", 5, RunOptions::with_drain(signal))
         .await
