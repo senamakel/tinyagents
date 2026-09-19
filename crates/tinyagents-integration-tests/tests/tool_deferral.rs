@@ -277,17 +277,19 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
     let tool_messages: Vec<String> = run
         .messages
         .iter()
-        .filter_map(|message| match message {
-            Message::Tool(tool) => Some(tool.content.iter().map(|b| b.to_string()).collect()),
-            _ => None,
-        })
+        .filter(|message| matches!(message, Message::Tool(_)))
+        .map(Message::text)
         .collect();
     assert!(tool_messages[0].contains("\"name\": \"stock_quote\""));
     assert!(tool_messages[0].contains("\"symbol\""));
     assert!(tool_messages[1].contains("stock_quote → ACME"));
     assert!(tool_messages[3].contains("unknown tool `internal_step`"));
     assert!(tool_messages[3].contains("stock_quote"));
-    assert!(!tool_messages[3].contains("internal_step`, ") && !tool_messages[3].contains("[internal_step"));
+    let listed = tool_messages[3]
+        .split("valid tools: [")
+        .nth(1)
+        .expect("valid tool listing");
+    assert!(!listed.contains("internal_step"));
 
     // Events make the surface auditable.
     let events: Vec<AgentEvent> = listener.events().into_iter().map(|r| r.event).collect();
@@ -346,10 +348,8 @@ async fn disabled_discovery_drops_the_bridge_and_keeps_direct_calls_working() {
     let first_tool_message = run
         .messages
         .iter()
-        .find_map(|message| match message {
-            Message::Tool(tool) => Some(tool.content.iter().map(|b| b.to_string()).collect::<String>()),
-            _ => None,
-        })
+        .find(|message| matches!(message, Message::Tool(_)))
+        .map(Message::text)
         .unwrap();
     assert!(first_tool_message.contains("unknown tool `tool_search`"));
     // … but a deferred tool called by name still runs: deferral only subtracts
