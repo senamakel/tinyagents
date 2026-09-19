@@ -1179,10 +1179,15 @@ async fn middleware_rebinding_cancels_a_pending_host_resolver() {
 
 #[tokio::test]
 async fn middleware_rebinding_applies_the_host_resolution_deadline() {
+    // `assert_rebound_host_resolution_stops` round-trips through the hosted
+    // entry point (`AgentHarness::invoke_agent`), which now classifies and
+    // sanitizes via `HostedError` (I-6) before converting back to
+    // `TinyAgentsError` for this helper's declared return type — so the
+    // detailed "host model resolution ... remaining wall-clock budget" text
+    // is intentionally no longer observable here; only the `Timeout`
+    // classification survives the round trip.
     let error = assert_rebound_host_resolution_stops(None, Some(5)).await;
     assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)));
-    assert!(error.to_string().contains("host model resolution"));
-    assert!(error.to_string().contains("remaining wall-clock budget"));
 }
 
 #[tokio::test]
