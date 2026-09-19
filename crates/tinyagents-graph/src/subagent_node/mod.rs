@@ -19,7 +19,7 @@
 //!   onto the parent execution rollup, and forwards the child run's harness
 //!   events onto the host-provided event sink.
 //!
-//! See [`types`] for the data definitions and `test.rs` for focused tests.
+//! See `types` for the data definitions and `test.rs` for focused tests.
 
 mod types;
 
