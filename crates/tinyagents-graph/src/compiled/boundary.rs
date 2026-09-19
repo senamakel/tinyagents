@@ -540,36 +540,28 @@ where
         let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &ctx.thread_id) else {
             return Ok(None);
         };
-        let checkpoint = Checkpoint {
-            thread_id: thread.to_string(),
-            checkpoint_id: next_checkpoint_id(),
-            run_id: Some(ctx.run_id.to_string()),
-            parent_checkpoint_id: ctx.parent_checkpoint.clone(),
-            namespace: self.namespace.clone(),
-            state: boundary.state.clone(),
-            next_nodes: activation_nodes(boundary.pending),
-            completed_tasks: activation_nodes(boundary.completed_tasks),
-            completed_routes: boundary.completed_routes.to_vec(),
-            pending_writes: Self::completion_writes(boundary.completed_tasks),
-            interrupts: Vec::new(),
-            pending_activations: Some(
-                boundary
-                    .pending
-                    .iter()
-                    .map(PendingActivation::from)
-                    .collect(),
-            ),
-            barrier_arrivals: barriers_to_persisted(&ctx.barrier_arrivals),
-            metadata: serde_json::json!({
-                "source": "loop",
-                "step": step,
-                "recursion": ctx.recursion_meta,
-                "child_runs": boundary.child_runs,
-                "failed_node": failed_node.as_str(),
-                "error": error.to_string(),
-                "node_visits": node_visits_to_json(&ctx.node_visits),
-            }),
-        };
+        let pending_writes = Self::completion_writes(&boundary.completed);
+        let checkpoint = Checkpoint::new(
+            boundary.state.clone(),
+            boundary.pending.iter().map(PendingActivation::from).collect(),
+        )
+        .with_thread_id(thread.to_string())
+        .with_checkpoint_id(next_checkpoint_id())
+        .with_run_id(ctx.run_id.to_string())
+        .with_parent_checkpoint_id(ctx.parent_checkpoint.clone())
+        .with_namespace(self.namespace.clone())
+        .with_completed(boundary.completed)
+        .with_pending_writes(pending_writes)
+        .with_barrier_arrivals(barriers_to_persisted(&ctx.barrier_arrivals))
+        .with_metadata(serde_json::json!({
+            "source": "loop",
+            "step": step,
+            "recursion": ctx.recursion_meta,
+            "child_runs": boundary.child_runs,
+            "failed_node": failed_node.as_str(),
+            "error": error.to_string(),
+            "node_visits": node_visits_to_json(&ctx.node_visits),
+        }));
         let writes = checkpoint.pending_writes.clone();
         let config = CheckpointConfig {
             thread_id: checkpoint.thread_id.clone(),
