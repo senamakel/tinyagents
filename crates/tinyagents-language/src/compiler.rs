@@ -333,17 +333,23 @@ declarative steering lowering lands.",
             })
             .collect();
 
+        // A dedicated `router "name"` source item (M4) folds into `model`,
+        // the field `router` nodes already used before that item existed, so
+        // `NodeSpec`'s shape is unchanged. `model` still wins when both are
+        // somehow present, matching every other "dedicated field falls back
+        // to `model`" convention in this compiler (`graph`, `script`, …).
+        let model = node.model.clone().or_else(|| node.router.clone());
+
         nodes.push(NodeSpec {
             name: node.name.clone(),
             kind: node.kind.clone().unwrap_or_else(|| "model".to_string()),
-            model: node.model.clone(),
+            model,
             prompt: node.prompt.clone(),
             tools: node.tools.clone(),
             routing,
             agent: node.agent.clone(),
             subgraph: node.graph.clone(),
             script: node.script.clone(),
-            router: node.router.clone(),
             input: node.input.clone(),
             command,
             sends,
