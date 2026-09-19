@@ -11,6 +11,7 @@
 
 pub mod ops;
 pub mod store;
+pub mod tool_effects;
 pub mod types;
 
 pub use ops::{
