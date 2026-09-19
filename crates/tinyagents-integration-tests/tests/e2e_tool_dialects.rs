@@ -851,6 +851,61 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
 }
 
 #[tokio::test]
+async fn auto_dialect_falls_back_to_xml_for_a_model_that_cannot_make_native_tool_calls() {
+    // `ToolDispatcher::Auto` is documented as "provider-native tool calls
+    // when the provider supports them, otherwise Xml". Resolving Auto to the
+    // host-side no-op `RunDialect::Native` unconditionally (regardless of
+    // the resolved model's capability) left that fallback unenforced: a
+    // model with `tool_calling: false` would receive a request that kept
+    // depending on provider-native tools, with no host-rendered text
+    // protocol to fall back to.
+    let model = Arc::new(ProfiledScriptedModel::new(
+        ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        vec![
+            ModelResponse::assistant(
+                "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
+            ),
+            ModelResponse::assistant("done"),
+        ],
+    ));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }));
+    // Default policy: `tool_dialect` defaults to `Auto`.
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+
+    let requests = model.requests();
+    assert!(!requests.is_empty());
+    let first = &requests[0];
+    assert!(
+        first.tools.is_empty(),
+        "Auto must fall back to the text dialect (no schema on the wire) \
+         for a model that cannot make native tool calls"
+    );
+    let system = first
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("a system turn carries the protocol")
+        .text();
+    assert!(system.contains("Tool Use Protocol"), "{system}");
+}
+
+#[tokio::test]
 async fn a_terminal_only_stream_with_no_preceding_deltas_still_recovers_the_call() {
     // A provider may emit a single `Completed` item with no preceding
     // `MessageDelta`s at all (e.g. a short response sent in one frame). The
