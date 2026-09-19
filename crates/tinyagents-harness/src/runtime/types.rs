@@ -517,6 +517,16 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// See [`crate::structured::OutputValidator`] and
     /// [`AgentHarness::with_output_validator`].
     pub(crate) output_validator: Option<Arc<dyn crate::structured::OutputValidator<State, Ctx>>>,
+    /// Optional composable [`crate::tool::toolset::ToolSet`] chain
+    /// (gap B3) consulted for the model-visible tool catalogue and, when a
+    /// call is not owned by [`Self::tools`], for dispatch.
+    ///
+    /// `None` (the default) preserves every existing harness's behavior
+    /// unchanged: the loop resolves tools from [`Self::tools`] alone, exactly
+    /// as before this field existed. Set with
+    /// [`AgentHarness::with_toolset`]. See that method's doc comment for
+    /// exactly which turn behavior this changes.
+    pub(crate) toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.
