@@ -744,6 +744,7 @@ impl AgentEvent {
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",
             AgentEvent::ToolFailed { .. } => "tool.failed",
+            AgentEvent::ToolEffectReconciled { .. } => "tool.effect_reconciled",
             AgentEvent::ModelFailed { .. } => "model.failed",
             AgentEvent::SubAgentFailed { .. } => "subagent.failed",
             AgentEvent::UnknownToolCall { .. } => "tool.unknown",
