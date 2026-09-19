@@ -4972,3 +4972,402 @@ async fn echo_unwrap_is_skipped_when_the_inner_value_is_still_invalid() {
         "the tool must not run with arguments that never validated"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tool-effect ledger (B5)
+// ---------------------------------------------------------------------------
+
+mod tool_effects_test {
+    use super::*;
+    use crate::ids::{CallId, RunId};
+    use crate::tool::{
+        LedgerFailure, ToolEffect, ToolEffectLedger, ToolEffectSettle, ToolEffectStart,
+        ToolEffectStatus,
+    };
+    use std::collections::HashMap;
+    use tokio::sync::Notify;
+
+    /// In-memory [`ToolEffectLedger`] test double. Optionally fails every
+    /// `started` write (`fail_started`) and/or signals a [`Notify`] the
+    /// instant a `started` write lands (`on_started`), so a test can await
+    /// "the ledger has recorded this call as in flight" before acting.
+    #[derive(Clone, Default)]
+    struct InMemoryToolEffectLedger {
+        inner: Arc<Mutex<HashMap<(String, String), ToolEffect>>>,
+        fail_started: bool,
+        on_started: Option<Arc<Notify>>,
+    }
+
+    impl InMemoryToolEffectLedger {
+        fn get(&self, run_id: &str, call_id: &str) -> Option<ToolEffect> {
+            self.inner
+                .lock()
+                .unwrap()
+                .get(&(run_id.to_string(), call_id.to_string()))
+                .cloned()
+        }
+    }
+
+    #[async_trait]
+    impl ToolEffectLedger for InMemoryToolEffectLedger {
+        async fn started(&self, start: ToolEffectStart) -> Result<()> {
+            if self.fail_started {
+                return Err(TinyAgentsError::Tool("ledger unavailable".to_string()));
+            }
+            let effect = ToolEffect {
+                run_id: start.run_id.as_str().to_string(),
+                call_id: start.call_id.as_str().to_string(),
+                tool: start.tool,
+                status: ToolEffectStatus::Started,
+                idempotency_key: Some(start.idempotency_key),
+                effect_summary: start.effect_summary,
+                started_at: chrono::Utc::now(),
+                settled_at: None,
+            };
+            self.inner
+                .lock()
+                .unwrap()
+                .insert((effect.run_id.clone(), effect.call_id.clone()), effect);
+            if let Some(notify) = &self.on_started {
+                notify.notify_one();
+            }
+            Ok(())
+        }
+
+        async fn settled(&self, settle: ToolEffectSettle) -> Result<()> {
+            let run_id = settle.run_id.as_str().to_string();
+            let call_id = settle.call_id.as_str().to_string();
+            let mut guard = self.inner.lock().unwrap();
+            let entry = guard
+                .entry((run_id.clone(), call_id.clone()))
+                .or_insert_with(|| ToolEffect {
+                    run_id,
+                    call_id,
+                    tool: String::new(),
+                    status: ToolEffectStatus::Started,
+                    idempotency_key: None,
+                    effect_summary: None,
+                    started_at: chrono::Utc::now(),
+                    settled_at: None,
+                });
+            entry.status = settle.status;
+            entry.settled_at = Some(chrono::Utc::now());
+            if let Some(summary) = settle.effect_summary {
+                entry.effect_summary = Some(summary);
+            }
+            Ok(())
+        }
+
+        async fn unresolved(&self, run_id: &str) -> Result<Vec<ToolEffect>> {
+            Ok(self
+                .inner
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|effect| effect.run_id == run_id && effect.status == ToolEffectStatus::Started)
+                .cloned()
+                .collect())
+        }
+    }
+
+    /// A tool that never returns, used to prove an interrupted call (dropped
+    /// mid-flight, after its `started` ledger row landed) leaves that row
+    /// unresolved.
+    struct NeverFinishesTool {
+        notify: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl Tool for NeverFinishesTool {
+        fn name(&self) -> &str {
+            "hang"
+        }
+        fn description(&self) -> &str {
+            "never returns"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+            // Never notified by the test, so this hangs until the caller
+            // drops/aborts the run future.
+            self.notify.notified().await;
+            Ok(ToolResult::success("unreachable"))
+        }
+    }
+
+    /// A tool that declares an explicit [`tinytools::ToolReplay`] policy, used
+    /// to drive [`AgentHarness::reconcile_tool_effects`] down each branch.
+    struct ReplayTool {
+        name: &'static str,
+        replay: tinytools::ToolReplay,
+    }
+
+    #[async_trait]
+    impl Tool for ReplayTool {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn description(&self) -> &str {
+            "replay-classified tool"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        fn policy(&self) -> tinytools::ToolPolicy {
+            tinytools::ToolPolicy::default().with_runtime(tinytools::ToolRuntime {
+                replay: self.replay,
+                ..tinytools::ToolRuntime::default()
+            })
+        }
+        async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::success("re-executed"))
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_loop_writes_started_then_completed_around_a_tool_call() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("call-1", "lookup", json!({"q": "x"})),
+                text_response("done", 4, 2),
+            ])),
+        );
+        harness.register_tool(Arc::new(FakeTool::new("lookup", "tool-output")));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger::default());
+        let ctx: RunContext<()> =
+            RunContext::new(RunConfig::new("run-1"), ()).with_tool_effect_ledger(ledger.clone());
+
+        harness
+            .invoke_in_context(&(), ctx, vec![Message::user("please look up")])
+            .await
+            .expect("run succeeds");
+
+        let effect = ledger
+            .get("run-1", "call-1")
+            .expect("ledger recorded the call");
+        assert_eq!(effect.tool, "lookup");
+        assert_eq!(effect.status, ToolEffectStatus::Completed);
+        assert!(effect.settled_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn crash_between_started_and_settled_leaves_an_unresolved_row() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![tool_call_response(
+                "call-1",
+                "hang",
+                json!({}),
+            )])),
+        );
+        let hang_notify = Arc::new(Notify::new());
+        harness.register_tool(Arc::new(NeverFinishesTool {
+            notify: hang_notify.clone(),
+        }));
+
+        let started_signal = Arc::new(Notify::new());
+        let ledger = Arc::new(InMemoryToolEffectLedger {
+            on_started: Some(started_signal.clone()),
+            ..Default::default()
+        });
+        let ctx: RunContext<()> =
+            RunContext::new(RunConfig::new("run-crash"), ()).with_tool_effect_ledger(ledger.clone());
+
+        let harness = Arc::new(harness);
+        let run_harness = harness.clone();
+        let handle = tokio::spawn(async move {
+            let _ = run_harness
+                .invoke_in_context(&(), ctx, vec![Message::user("go")])
+                .await;
+        });
+
+        // Wait for the ledger to observe the `started` write, then drop the
+        // run future (abort) before the tool — which never resolves on its
+        // own — could possibly settle it. This simulates a process crash
+        // between admission and settlement (TOOL-effect equivalent of a
+        // mid-flight kill).
+        started_signal.notified().await;
+        handle.abort();
+        let _ = handle.await;
+
+        let unresolved = ledger
+            .unresolved("run-crash")
+            .await
+            .expect("ledger read succeeds");
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].call_id, "call-1");
+        assert_eq!(unresolved[0].status, ToolEffectStatus::Started);
+    }
+
+    #[tokio::test]
+    async fn reconcile_leaves_a_safe_replay_call_pending_for_re_execution() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_tool(Arc::new(ReplayTool {
+            name: "safe_tool",
+            replay: tinytools::ToolReplay::Safe,
+        }));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger::default());
+        ledger
+            .started(ToolEffectStart {
+                run_id: RunId::new("run-1"),
+                call_id: CallId::new("call-1"),
+                tool: "safe_tool".to_string(),
+                idempotency_key: "key".to_string(),
+                effect_summary: None,
+            })
+            .await
+            .unwrap();
+
+        let recorder = crate::testkit::EventRecorder::new();
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_events(recorder.sink())
+            .with_tool_effect_ledger(ledger.clone());
+
+        let mut messages = vec![
+            Message::user("go"),
+            Message::Assistant(AssistantMessage {
+                id: None,
+                content: Vec::new(),
+                tool_calls: vec![ToolCall::new("call-1", "safe_tool", json!({}))],
+                usage: None,
+                origin: None,
+            }),
+        ];
+
+        let synthesized = harness
+            .reconcile_tool_effects(&ctx, "run-1", &mut messages)
+            .await
+            .unwrap();
+
+        assert!(synthesized.is_empty());
+        assert_eq!(
+            messages.len(),
+            2,
+            "no tool answer appended for a Safe-replay call — the loop must \
+             re-execute it"
+        );
+        assert!(recorder.kinds().contains(&"tool.effect_reconciled".to_string()));
+        // The ledger row is untouched (still `started`): re-execution will
+        // settle it normally through the ordinary started/settled path.
+        assert_eq!(
+            ledger.get("run-1", "call-1").unwrap().status,
+            ToolEffectStatus::Started
+        );
+    }
+
+    #[tokio::test]
+    async fn reconcile_synthesizes_an_interrupted_result_for_a_never_replay_call() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_tool(Arc::new(ReplayTool {
+            name: "risky_tool",
+            replay: tinytools::ToolReplay::Never,
+        }));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger::default());
+        ledger
+            .started(ToolEffectStart {
+                run_id: RunId::new("run-1"),
+                call_id: CallId::new("call-1"),
+                tool: "risky_tool".to_string(),
+                idempotency_key: "key".to_string(),
+                effect_summary: None,
+            })
+            .await
+            .unwrap();
+
+        let recorder = crate::testkit::EventRecorder::new();
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_events(recorder.sink())
+            .with_tool_effect_ledger(ledger.clone());
+
+        let mut messages = vec![
+            Message::user("go"),
+            Message::Assistant(AssistantMessage {
+                id: None,
+                content: Vec::new(),
+                tool_calls: vec![ToolCall::new("call-1", "risky_tool", json!({}))],
+                usage: None,
+                origin: None,
+            }),
+        ];
+
+        let synthesized = harness
+            .reconcile_tool_effects(&ctx, "run-1", &mut messages)
+            .await
+            .unwrap();
+
+        assert_eq!(synthesized.len(), 1);
+        assert!(matches!(synthesized[0], Message::Tool(_)));
+        assert_eq!(
+            synthesized[0].text(),
+            "interrupted before settlement"
+        );
+        assert_eq!(messages.len(), 3, "an interrupted answer was appended");
+        assert_eq!(
+            ledger.get("run-1", "call-1").unwrap().status,
+            ToolEffectStatus::Interrupted
+        );
+        assert!(recorder.kinds().contains(&"tool.effect_reconciled".to_string()));
+    }
+
+    #[tokio::test]
+    async fn ledger_started_failure_aborts_the_run_under_the_default_policy() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![tool_call_response(
+                "call-1",
+                "lookup",
+                json!({}),
+            )])),
+        );
+        harness.register_tool(Arc::new(FakeTool::new("lookup", "tool-output")));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger {
+            fail_started: true,
+            ..Default::default()
+        });
+        let ctx: RunContext<()> =
+            RunContext::new(RunConfig::new("run-1"), ()).with_tool_effect_ledger(ledger);
+
+        let err = harness
+            .invoke_in_context(&(), ctx, vec![Message::user("go")])
+            .await
+            .expect_err("LedgerFailure::Abort (the default) must fail the call");
+        assert!(matches!(err, TinyAgentsError::Tool(_)));
+    }
+
+    #[tokio::test]
+    async fn ledger_started_failure_is_ignored_under_the_continue_policy() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("call-1", "lookup", json!({})),
+                text_response("done", 4, 2),
+            ])),
+        );
+        let tool = Arc::new(FakeTool::new("lookup", "tool-output"));
+        harness.register_tool(tool.clone());
+
+        let ledger = Arc::new(InMemoryToolEffectLedger {
+            fail_started: true,
+            ..Default::default()
+        });
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_tool_effect_ledger(ledger)
+            .with_tool_effect_ledger_failure(LedgerFailure::Continue);
+
+        let run = harness
+            .invoke_in_context(&(), ctx, vec![Message::user("go")])
+            .await
+            .expect("LedgerFailure::Continue must not fail the run");
+        assert_eq!(run.tool_calls, 1);
+    }
+}
