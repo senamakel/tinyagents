@@ -163,7 +163,7 @@ where
     /// or interrupt (later nodes in the step are not started), exactly
     /// preserving milestone-1 semantics: `outcome.results` ends at that
     /// branch.
-    pub(super) async fn run_sequential(
+    async fn run_sequential(
         &self,
         ctx: &mut RunCtx<'_, State, Update>,
         active: &[Activation],
@@ -214,7 +214,7 @@ where
     /// or interrupted — `outcome.results` always covers the whole active
     /// set; [`Self::fold_step`] is what stops at the lowest-index
     /// error/interrupt.
-    pub(super) async fn run_parallel(
+    async fn run_parallel(
         &self,
         ctx: &mut RunCtx<'_, State, Update>,
         active: &[Activation],
