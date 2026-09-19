@@ -1137,7 +1137,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 ///
 /// [`ContentBlock::Thinking`]: tinyinference_llm::message::ContentBlock::Thinking
 /// [`ModelProfile::thinking_tags`]: tinyinference_llm::model::ModelProfile::thinking_tags
-fn split_thinking_tags(
+pub(super) fn split_thinking_tags(
     response: &mut tinyinference_llm::model::ModelResponse,
     profile: Option<&tinyinference_llm::model::ModelProfile>,
 ) {
