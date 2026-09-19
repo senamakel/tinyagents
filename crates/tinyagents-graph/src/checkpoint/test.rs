@@ -910,4 +910,35 @@ mod sqlite_backend {
         cp.put(checkpoint("t", "c1", None, 1)).await.unwrap();
         assert!(cp.get("t", None).await.unwrap().is_some());
     }
+
+    #[tokio::test]
+    async fn put_with_writes_persists_both_in_one_call() {
+        use crate::checkpoint::PendingWrite;
+        use tinyagents_harness::ids::{NodeId, TaskId};
+
+        let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
+        let cfg = CheckpointConfig {
+            thread_id: "t".to_string(),
+            checkpoint_id: Some("c1".to_string()),
+            namespace: vec![],
+        };
+        let writes = vec![PendingWrite {
+            node: NodeId::from("n"),
+            task_id: TaskId::from("task-1"),
+            idx: 0,
+            channel: "out".to_string(),
+            payload: serde_json::json!("hi"),
+        }];
+
+        let id = cp
+            .put_with_writes(checkpoint("t", "c1", None, 1), &writes)
+            .await
+            .unwrap();
+        assert_eq!(id.as_str(), "c1");
+
+        assert!(cp.get("t", Some("c1")).await.unwrap().is_some());
+        let stored = cp.get_writes(&cfg).await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].channel, "out");
+    }
 }
