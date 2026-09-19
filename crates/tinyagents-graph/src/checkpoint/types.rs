@@ -669,6 +669,22 @@ pub const WRITES_IDX_ERROR: i64 = -2;
 /// The `idx` reserved for a task's **interrupt** control-plane write.
 pub const WRITES_IDX_INTERRUPT: i64 = -3;
 
+/// The `idx` reserved for a task's **deferred result** control-plane write:
+/// the `Update`/`Command::goto` a node produced but that an
+/// [`interrupt_after`](crate::GraphBuilder::interrupt_after) pause held back
+/// from committed state. At most one per task (a task completes once), and
+/// re-put on a repeated pause replaces it — the control-plane upsert rule.
+/// Replayed by the executor on resume instead of re-running the handler.
+pub const WRITES_IDX_INTERRUPT_AFTER: i64 = -4;
+
+/// Channel prefix for a [`crate::NodeContext::durable_task`] memo write:
+/// the full channel is this prefix followed by the caller's `key`.
+pub const DURABLE_TASK_CHANNEL_PREFIX: &str = "__durable_task__:";
+
+/// Channel of a task's deferred `interrupt_after` result write (see
+/// [`WRITES_IDX_INTERRUPT_AFTER`]).
+pub const INTERRUPT_AFTER_CHANNEL: &str = "__interrupt_after__";
+
 /// A partial write produced by a completed task, preserved across reruns.
 ///
 /// # Why writes are recorded separately from the checkpoint
@@ -771,10 +787,81 @@ impl PendingWrite {
         }
     }
 
+    /// Builds a [`crate::NodeContext::durable_task`] memo write: the
+    /// serialized output of the task's durable sub-step `key`, stored as an
+    /// ordinary data write (`idx >= 1`, append-once) on the
+    /// [`DURABLE_TASK_CHANNEL_PREFIX`]`key` channel. `idx` must be unique
+    /// among the task's writes (the executor allocates it past every write
+    /// the task already holds); `0` is reserved for the completion marker.
+    pub fn durable_task(
+        node: impl Into<NodeId>,
+        task_id: impl Into<TaskId>,
+        idx: i64,
+        key: &str,
+        payload: serde_json::Value,
+    ) -> Self {
+        debug_assert!(idx >= 1, "durable-task writes use idx >= 1");
+        Self {
+            node: node.into(),
+            task_id: task_id.into(),
+            idx,
+            channel: format!("{DURABLE_TASK_CHANNEL_PREFIX}{key}"),
+            payload,
+        }
+    }
+
+    /// Builds a task's deferred `interrupt_after` result write (see
+    /// [`WRITES_IDX_INTERRUPT_AFTER`]): `payload` is
+    /// `{"update": <encoded update or null>, "goto": [<RouteTarget>...]}`.
+    pub fn interrupt_after(
+        node: impl Into<NodeId>,
+        task_id: impl Into<TaskId>,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self {
+            node: node.into(),
+            task_id: task_id.into(),
+            idx: WRITES_IDX_INTERRUPT_AFTER,
+            channel: INTERRUPT_AFTER_CHANNEL.to_string(),
+            payload,
+        }
+    }
+
     /// Whether this is a control-plane write (`idx < 0`), which upserts rather
     /// than appends. See the type docs.
     pub fn is_control_plane(&self) -> bool {
         self.idx < 0
+    }
+
+    /// Whether this is a [`crate::NodeContext::durable_task`] memo write
+    /// (see [`Self::durable_task`]).
+    pub fn is_durable_task(&self) -> bool {
+        self.channel.starts_with(DURABLE_TASK_CHANNEL_PREFIX)
+    }
+
+    /// The caller's `key` of a durable-task memo write, or `None` for any
+    /// other write.
+    pub fn durable_task_key(&self) -> Option<&str> {
+        self.channel.strip_prefix(DURABLE_TASK_CHANNEL_PREFIX)
+    }
+
+    /// Whether this is a task's deferred `interrupt_after` result write (see
+    /// [`Self::interrupt_after`]).
+    pub fn is_interrupt_after(&self) -> bool {
+        self.idx == WRITES_IDX_INTERRUPT_AFTER && self.channel == INTERRUPT_AFTER_CHANNEL
+    }
+
+    /// Whether this write is a per-task *replay memo* — a durable-task memo
+    /// or a deferred `interrupt_after` result — that a re-run of the same
+    /// (still pending) task consumes, as opposed to a completion marker or
+    /// any other write that records the task as already done.
+    ///
+    /// Resume keys "which pending tasks already ran" off the writes that are
+    /// *not* replay memos: a replay memo belongs to a task that has *not*
+    /// completed yet (that is the whole point of memoising it), so counting
+    /// it as a completion marker would wrongly skip the task.
+    pub fn is_task_replay(&self) -> bool {
+        self.is_durable_task() || self.is_interrupt_after()
     }
 
     /// The `(task_id, idx)` identity pair this write is deduplicated on within
