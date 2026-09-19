@@ -110,14 +110,18 @@ pub enum AgentEvent {
     /// event for the ceiling the run started with, not for what a specific
     /// request actually sent.
     ToolsAdvertised {
-        /// Schemas assembled before per-turn middleware runs (direct tools
-        /// plus the bridge tools when any tool is deferred).
+        /// Count of `Direct`-exposure tool schemas assembled before per-turn
+        /// middleware runs. Does **not** include the two intrinsic
+        /// `tool_search`/`tool_call` bridge schemas added to the wire set
+        /// when `deferred > 0` — those are implied by `deferred` being
+        /// nonzero, not double-counted here.
         direct: usize,
         /// Tools reachable only through `tool_search` / `tool_call`.
         deferred: usize,
-        /// Compact-JSON size of the pre-middleware schemas above, not of
-        /// whatever a specific request's `before_model` pass narrows or grows
-        /// it to.
+        /// Compact-JSON size of the actual pre-middleware wire schema set
+        /// (the `direct` schemas plus the two bridge schemas when
+        /// `deferred > 0`), not of whatever a specific request's
+        /// `before_model` pass narrows or grows it to.
         schema_bytes: usize,
     },
 
