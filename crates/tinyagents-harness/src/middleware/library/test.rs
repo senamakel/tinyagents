@@ -116,6 +116,51 @@ async fn retry_middleware_retries_then_succeeds() {
     assert_eq!(scheduled, 2);
 }
 
+#[tokio::test]
+async fn retry_middleware_correlates_retry_scheduled_with_the_loops_call_id() {
+    // R-3: the loop's `invoke_model_resolving` mirrors its own call id onto
+    // `ctx.active_model_call` specifically so a retrying middleware's
+    // `RetryScheduled` events carry the same id as that attempt's
+    // `ModelStarted`/`ModelCompleted` pair, letting a consumer join retries to
+    // the call they belong to instead of only to the run.
+    let (mut ctx, recorder) = ctx_with_recorder();
+    let call_id = crate::ids::CallId::new("run-model-3");
+    ctx.active_model_call = Some(call_id.clone());
+
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(Arc::new(RetryMiddleware::new(
+        RetryPolicy::default().with_max_attempts(3),
+    )));
+
+    let base = FakeModelBase::new(|n, _req| {
+        if n < 2 {
+            Err(TinyAgentsError::Model("transient".to_string()))
+        } else {
+            Ok(ok_response())
+        }
+    });
+
+    stack
+        .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &base)
+        .await
+        .expect("retry should eventually succeed");
+
+    let scheduled: Vec<_> = events(&recorder)
+        .into_iter()
+        .filter_map(|e| match e {
+            AgentEvent::RetryScheduled { call_id, attempt } => Some((call_id, attempt)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scheduled.len(), 2);
+    for (event_call_id, _attempt) in &scheduled {
+        assert_eq!(
+            *event_call_id, call_id,
+            "RetryScheduled must carry the same call id as the attempt it retries"
+        );
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn retry_middleware_sleeps_the_documented_backoff_schedule() {
     // Regression test: the middleware used to compute the backoff from the
