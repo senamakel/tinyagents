@@ -2081,6 +2081,40 @@ async fn run_limits_max_retries_per_call_caps_a_looser_retry_policy() {
 }
 
 #[tokio::test]
+async fn retry_middleware_and_run_policy_retry_do_not_multiply_attempts() {
+    // Regression test (I-7): `RetryMiddleware::wrap_model` retries the whole
+    // wrap onion, and `invoke_model_resolving` (the loop's own base call) had
+    // its own independent retry loop; with both configured the worst case was
+    // `mw.max_attempts x policy.retry.max_attempts` provider calls for one
+    // logical failure. A registered `RetryMiddleware` must make the base call
+    // skip its own retry loop, so the total attempt count is bounded by the
+    // middleware's `max_attempts` alone.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    let failing = Arc::new(FailingModel {
+        attempts: Mutex::new(0),
+    });
+    harness.register_model("primary", failing.clone());
+    // The middleware allows 3 attempts; the loop's own retry (if it fired
+    // too) would allow another 5 — 15 total if the two layers multiplied.
+    harness.push_model_middleware(Arc::new(crate::middleware::library::RetryMiddleware::new(
+        RetryPolicy::default().with_max_attempts(3),
+    )));
+    harness.with_policy(RunPolicy {
+        retry: RetryPolicy::default().with_max_attempts(5),
+        ..RunPolicy::default()
+    });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("hi")])
+        .await
+        .expect_err("FailingModel never succeeds");
+    assert!(matches!(err, TinyAgentsError::Model(_)), "got {err:?}");
+
+    // Bounded by the middleware's max_attempts (3), not 3 x 5.
+    assert_eq!(*failing.attempts.lock().unwrap(), 3);
+}
+
+#[tokio::test]
 async fn provider_error_401_is_not_retried() {
     // Regression test: before `ProviderError` was preserved structurally, a
     // 401 flattened into `Model(String)` was retried like any other model

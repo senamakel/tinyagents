@@ -186,6 +186,35 @@ where
         Ok(())
     }
 
+    /// Persists `checkpoint` and its `writes` together, at a superstep
+    /// boundary where both are produced at once.
+    ///
+    /// The default body is composed from [`Checkpointer::put`] followed by
+    /// [`Checkpointer::put_writes`] — two independent calls, so a crash
+    /// between them can leave the checkpoint durable with its writes lost.
+    /// That is no worse than calling the two methods separately (which is
+    /// what every caller did before this method existed), so every backend
+    /// keeps compiling and behaving exactly as before without overriding it.
+    ///
+    /// A backend that can share one transaction across both statements
+    /// should override this to do so — [`SqliteCheckpointer`] does, so a
+    /// crash between the two writes is impossible rather than merely
+    /// unlikely: either both are durable or neither is.
+    async fn put_with_writes(
+        &self,
+        checkpoint: Checkpoint<State>,
+        writes: &[PendingWrite],
+    ) -> Result<CheckpointId> {
+        let config = CheckpointConfig {
+            thread_id: checkpoint.thread_id.clone(),
+            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+            namespace: checkpoint.namespace.clone(),
+        };
+        let id = self.put(checkpoint).await?;
+        self.put_writes(&config, writes).await?;
+        Ok(id)
+    }
+
     /// Reads back the writes recorded against the checkpoint addressed by
     /// `config`, in insertion order.
     ///
