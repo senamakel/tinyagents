@@ -8,7 +8,10 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, RecordingListener};
-use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
+use crate::summarization::{
+    CompactionContext, CompactionDecision, CompactionRecord, CompactionSink, SummarizationPolicy,
+    Summarizer, SummaryRecord, TrimStrategy,
+};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, UserMessage};
 use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
 use tinyinference_llm::tool::ToolCall;
