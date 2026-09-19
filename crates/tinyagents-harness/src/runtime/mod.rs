@@ -44,7 +44,7 @@ use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
     /// middleware registered.
     pub fn new() -> Self {
@@ -190,7 +190,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> Default for AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> Default for AgentHarness<State, Ctx> {
     fn default() -> Self {
         Self::new()
     }

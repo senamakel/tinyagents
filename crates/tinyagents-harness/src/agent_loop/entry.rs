@@ -45,7 +45,7 @@ impl Drop for TerminalRunGuard {
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Runs the default agent loop and returns the accumulated [`AgentRun`].
     ///
     /// `state` is shared, read-only application data passed to every model and

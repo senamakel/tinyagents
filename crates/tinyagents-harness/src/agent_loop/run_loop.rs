@@ -8,7 +8,7 @@
 use super::model_call::ModelCallBase;
 use super::*;
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Drives the loop body, returning `Ok(())` on a clean finish or the first
     /// error encountered. The caller owns lifecycle bookkeeping (final status
     /// transition, `RunFailed`/`on_error` on error).
