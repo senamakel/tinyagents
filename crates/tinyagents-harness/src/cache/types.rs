@@ -267,7 +267,7 @@ pub struct CacheLayoutEvent {
     /// changed — an edit that leaves the ids matching while destroying the
     /// provider's cached bytes.
     pub content_only_change: bool,
-    /// `true` if a [`CachePolicy::protect_prompt_prefix`] was in force and this
+    /// `true` if a [`CachePolicy::protect_prompt_prefix`](tinyinference_llm::cache::CachePolicy::protect_prompt_prefix) was in force and this
     /// change violates it. Always `false` for the policy-free
     /// [`CacheLayoutEvent::new`] constructor.
     pub violates_policy: bool,

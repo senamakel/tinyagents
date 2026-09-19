@@ -4,7 +4,7 @@
 //! Each thread's board is a single serialized [`TaskBoard`] value under the
 //! [`TODOS_NAMESPACE`] namespace, keyed by the hex-encoded thread id. Every
 //! mutation runs `load → mutate → normalise → put` under a **per-thread async
-//! mutex** ([`thread_lock`]) so the read-modify-write is atomic within the
+//! mutex** (`thread_lock`) so the read-modify-write is atomic within the
 //! process (the same single-process caveat as
 //! [`graph::goals::store`](crate::goals::store)).
 //!
