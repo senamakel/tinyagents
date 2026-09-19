@@ -522,6 +522,72 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Appends `bytes` to `path` (creating it if necessary) and fsyncs, without
+/// the temp-file-plus-rename dance [`write_atomic`] pays for a full rewrite.
+///
+/// `put_writes` used to be read-modify-**rewrite**: every superstep re-read
+/// the whole sidecar, merged in the new writes, and rewrote the entire file
+/// through `write_atomic` — one fsync'd temp file and rename per superstep,
+/// no matter how small the delta. The sidecar is append-only content by
+/// construction (each line is independently addressed by the
+/// `(namespace, checkpoint_id, task_id, idx)` it carries), so a superstep
+/// only ever needs to add lines, never touch existing ones — appending is
+/// the same `OpenOptions::append(true)` + single `write_all` + `sync_all`
+/// shape [`Checkpointer::put`] already uses for the (also append-only)
+/// checkpoint log itself, and carries the same durability guarantee: the
+/// fsync means a "persisted" write is durable on stable storage before this
+/// returns, not just sitting in the page cache.
+///
+/// Safe to call repeatedly within this process: POSIX/Windows both make a
+/// single `write_all` under `O_APPEND`/`FILE_APPEND_DATA` atomic with respect
+/// to other appenders (no line here ever exceeds a few hundred bytes, well
+/// under any platform's atomic-write threshold), so concurrent in-process
+/// callers interleave whole lines, never partial ones — the same assumption
+/// `read_lines`'s [`decode_lines`] torn-trailing-line tolerance already
+/// covers for a genuine crash mid-write.
+fn append_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| io_err("create base dir", e))?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| io_err("open file for append", e))?;
+    file.write_all(bytes)
+        .map_err(|e| io_err("append record", e))?;
+    file.sync_all().map_err(|e| io_err("fsync record", e))
+}
+
+/// Reconstructs the pending-writes ledger for one `(checkpoint_id, namespace)`
+/// from a thread's append-only sidecar records, applying
+/// [`merge_writes`]'s replace-vs-ignore identity rule to the matching entries
+/// in file order.
+///
+/// This is the read-side counterpart of the append-only format: `put_writes`
+/// appends a line only when a write is new or (for a control-plane upsert)
+/// changes the stored value, so the same `(task_id, idx)` identity can appear
+/// on more than one line over a checkpoint's lifetime — the ledger for that
+/// checkpoint is not "every matching line" but "every matching line, folded
+/// through the same identity rule that decided whether to append it". Folding
+/// here rather than trusting `records` to already be deduplicated is what
+/// keeps `get_writes` correct regardless of how many times a control-plane
+/// value was overwritten.
+fn fold_write_records(
+    records: impl IntoIterator<Item = WriteRecord>,
+    checkpoint_id: &str,
+    namespace: &[String],
+) -> Vec<PendingWrite> {
+    let mut acc = Vec::new();
+    for record in records {
+        if record.checkpoint_id != checkpoint_id || record.namespace != namespace {
+            continue;
+        }
+        merge_writes(&mut acc, std::slice::from_ref(&record.write));
+    }
+    acc
+}
+
 #[async_trait]
 impl<State> Checkpointer<State> for FileCheckpointer<State>
 where
