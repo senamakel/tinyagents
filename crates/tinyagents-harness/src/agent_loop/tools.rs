@@ -70,12 +70,14 @@
 //! - **Cancellation**: observed between admissions (before each call starts),
 //!   matching the serial path, which also never interrupts a mid-flight tool.
 //! - **Errors**: an `Err` fails the turn at the first call in original order.
-//!   Difference: in
-//!   serial mode later calls never start after a failure; in concurrent mode
-//!   they were already in flight and run to completion (their results are
-//!   discarded). Tools that must not observe a sibling's failure should be run
-//!   under a tool-wrap middleware (serial) or a harness without
-//!   parallel-capable turns.
+//!   Difference: in serial mode later calls never start after a failure; in
+//!   concurrent mode they were already in flight and run to completion, but
+//!   their results are discarded — each already-started sibling still gets
+//!   exactly one terminal event, [`AgentEvent::ToolFailed`] with
+//!   `"aborted: sibling tool call failed"`, so the started/terminal invariant
+//!   above holds even on this path. Tools that must not observe a sibling's
+//!   failure should be run under a tool-wrap middleware (serial) or a harness
+//!   without parallel-capable turns.
 //!
 use super::model_call::ToolCallBase;
 use super::*;
