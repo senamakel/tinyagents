@@ -499,7 +499,9 @@ impl<State, Update> CompiledGraph<State, Update> {
             // after the run returns sees a complete log.
             let terminal = matches!(
                 event,
-                GraphEvent::RunCompleted { .. } | GraphEvent::RunFailed { .. }
+                GraphEvent::RunCompleted { .. }
+                    | GraphEvent::RunFailed { .. }
+                    | GraphEvent::RunCancelled { .. }
             );
             sink.emit(event);
             if terminal {
