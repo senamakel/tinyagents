@@ -489,10 +489,13 @@ where
         err: &TinyAgentsError,
         checkpoint_id: Option<CheckpointId>,
     ) {
-        self.emit(GraphEvent::RunFailed {
-            run_id: run_id.clone(),
-            error: err.to_string(),
-        });
+        self.emit(
+            run_id,
+            GraphEvent::RunFailed {
+                run_id: run_id.clone(),
+                error: err.to_string(),
+            },
+        );
         let mut status = self.base_status(run_id, thread_id, started_at);
         status.status = ExecutionStatus::Failed;
         status.current_step = steps;
