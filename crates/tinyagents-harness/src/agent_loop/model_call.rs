@@ -1024,7 +1024,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .as_ref()
                 .is_some_and(super::dialect::DeltaScrubber::has_calls);
             if let ModelStreamItem::Completed(response) = &mut item
-                && saw_streamed_content
+                && (saw_streamed_content || scrubber_recovered_calls)
             {
                 // Deltas represent only text/thinking, so preserve terminal
                 // blocks that cannot be streamed as a `ModelDelta` (JSON,
