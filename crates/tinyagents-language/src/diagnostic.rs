@@ -77,7 +77,7 @@ impl Label {
 /// drawn beneath its caret. Additional `labels` annotate related secondary
 /// spans, and `help` carries an optional suggestion line. `code` is an optional
 /// stable identifier rendered as `severity[code]:`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     /// The diagnostic severity.
     pub severity: Severity,
