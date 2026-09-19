@@ -1147,26 +1147,15 @@ async fn terminal_checkpoint_with_a_pending_interrupt_surfaces_it() {
         crate::checkpoint::FileCheckpointer::new(dir.path());
     let mut state = DelegationState::new_run();
     state.final_output = Some("done".to_string());
-    let checkpoint = Checkpoint {
-        thread_id: "terminal-interrupt".to_string(),
-        checkpoint_id: "cp-ti".to_string(),
-        run_id: None,
-        parent_checkpoint_id: None,
-        namespace: vec![],
-        state,
-        next_nodes: vec![],
-        completed_tasks: vec![],
-        completed_routes: vec![],
-        pending_writes: vec![],
-        interrupts: vec![Interrupt::with_id(
+    let checkpoint = Checkpoint::new(state, Vec::new())
+        .with_thread_id("terminal-interrupt")
+        .with_checkpoint_id("cp-ti")
+        .with_interrupts(vec![Interrupt::with_id(
             "intr-1",
             "approval",
             json!({ "kind": "delegation_review" }),
-        )],
-        pending_activations: None,
-        barrier_arrivals: vec![],
-        metadata: json!({}),
-    };
+        )])
+        .with_metadata(json!({}));
     seed.put(checkpoint).await.expect("seed terminal+interrupt");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
