@@ -123,7 +123,15 @@ fn namespaced<S, U>(child: &CompiledGraph<S, U>, ctx: &NodeContext) -> CompiledG
     if ctx.siblings > 1 {
         namespace.push(ctx.task_id().as_str().to_string());
     }
-    child.clone().with_namespace(namespace)
+    // A fresh sequence counter: the embedded instance's own namespace already
+    // disambiguates its event stream from the parent's (and from any sibling
+    // fan-out activation of this same node), so there is no benefit — only
+    // entanglement — in sharing the parent's `seq` counter. See
+    // `crate::stream::GraphEventEnvelope`.
+    child
+        .clone()
+        .with_namespace(namespace)
+        .with_fresh_sequence()
 }
 
 /// Prepares an embedded `child` graph for a subgraph run: extends its checkpoint
