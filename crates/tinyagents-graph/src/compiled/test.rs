@@ -2779,10 +2779,15 @@ async fn attributed_update_to_sink_node_keeps_other_pending_branches() {
 
 #[tokio::test]
 async fn attributed_update_preserves_pending_send_args_of_other_branches() {
-    // Three `Send` activations of `worker` are pending behind an interrupt. A
-    // write attributed to an unrelated node must carry them over *with* their
-    // args — dropping them loses the fanout, and re-scheduling them by node id
-    // alone loses each packet's payload.
+    // Three `Send` activations of `worker` are scheduled; the arg-1 worker
+    // interrupts while arg-2 and arg-3 complete in the same (parallel) step.
+    // Per the C1 fix, the completed higher-index workers are folded into
+    // state (not discarded/re-run) and are *not* part of the pending set —
+    // only the genuinely-interrupted arg-1 worker is. A write attributed to
+    // an unrelated node (`side`) must carry that one pending Send packet over
+    // *with* its arg (dropping it loses the fanout, and re-scheduling it by
+    // node id alone loses its payload) without resurrecting the two
+    // already-completed workers.
     let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
     let graph = GraphBuilder::<Counter, i32>::new()
         .with_parallel(true)
