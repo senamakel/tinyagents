@@ -167,6 +167,73 @@ pub struct RunConfig {
     pub lineage: RunLineage,
 }
 
+/// Where [`MiddlewareControl::JumpTo`] sends the agent loop next.
+///
+/// Modelled on LangChain's `jump_to: "model" | "tools" | "end"`. See
+/// `docs/modules/harness/middleware.md` for exactly how each target is
+/// realized against the loop's checkpoint structure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopTarget {
+    /// Skip any remaining tool execution for this turn and go straight to the
+    /// next model call.
+    Model,
+    /// Proceed to (or continue) tool execution for this turn. A no-op when the
+    /// turn has no tool calls to run — there is nothing to jump to.
+    Tools,
+    /// Stop the loop now, finishing the run with the transcript as it stands.
+    End,
+}
+
+/// A typed hook that mutates application state, carried by
+/// [`MiddlewareControl::UpdateState`].
+///
+/// `State` is type-erased on construction (`RunContext` is not generic over
+/// it) and recovered by [`Self::apply`] via a runtime check. Built with
+/// [`StateUpdate::new`], which captures an `Fn(&mut State)` closure in an
+/// `Arc` so [`MiddlewareControl`] (and therefore `StateUpdate`) stays
+/// [`Clone`] — required because [`RunContext::request_control`] may compare
+/// and replace a pending request.
+///
+/// The agent loop only ever sees `state: &State` (a shared reference), so it
+/// cannot apply this itself. [`RunContext::take_state_updates`] queues every
+/// requested update instead; a host that owns `&mut State` between runs (or
+/// between turns, via its own checkpoint) drains and applies them. See
+/// `docs/modules/harness/middleware.md` for the full contract.
+#[derive(Clone)]
+pub struct StateUpdate {
+    apply: std::sync::Arc<dyn Fn(&mut dyn std::any::Any) + Send + Sync>,
+}
+
+impl StateUpdate {
+    /// Captures `f` as a state update for the concrete application state type
+    /// `S`. Applying the update against any other type is a documented no-op
+    /// (see [`Self::apply`]).
+    pub fn new<S: 'static>(f: impl Fn(&mut S) + Send + Sync + 'static) -> Self {
+        Self {
+            apply: std::sync::Arc::new(move |state: &mut dyn std::any::Any| {
+                if let Some(state) = state.downcast_mut::<S>() {
+                    f(state);
+                }
+            }),
+        }
+    }
+
+    /// Applies this update to `state` when `state`'s concrete type matches the
+    /// type this update was constructed for. A mismatched type is a silent
+    /// no-op: the update was requested by middleware generic over a different
+    /// `State`, which a host wiring several harnesses together can otherwise
+    /// hit legitimately.
+    pub fn apply<S: 'static>(&self, state: &mut S) {
+        (self.apply)(state as &mut dyn std::any::Any);
+    }
+}
+
+impl std::fmt::Debug for StateUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StateUpdate(..)")
+    }
+}
+
 /// A structured control outcome a middleware (or any step) can request on the
 /// [`RunContext`] to steer the agent loop from outside its `Result<()>` return
 /// channel.
@@ -177,8 +244,28 @@ pub struct RunConfig {
 /// "stop after an early-exit tool" or "pause on budget" no longer need a
 /// bespoke side channel. Requests are visible via
 /// [`RunContext::take_control`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// A [`Middleware`][crate::middleware::Middleware] hook may also *return* one
+/// of these directly from its `_control`-suffixed variant (for example
+/// [`before_model_control`][crate::middleware::Middleware::before_model_control]);
+/// the [`MiddlewareStack`][crate::middleware::MiddlewareStack] resolves a
+/// non-[`Continue`](Self::Continue) return into exactly the same
+/// [`RunContext::request_control`] call a hook could have made explicitly —
+/// returning control is sugar over the side channel, not a second mechanism.
+#[derive(Clone, Debug)]
 pub enum MiddlewareControl {
+    /// No control requested. The default a `_control` hook returns when it has
+    /// nothing to say; never itself installed as a pending request (see
+    /// [`RunContext::request_control`]).
+    Continue,
+    /// Route the loop to `target` at the next safe checkpoint. See
+    /// [`LoopTarget`] for what each target does.
+    JumpTo(LoopTarget),
+    /// Queue a typed state mutation for the host to apply. The loop itself
+    /// only ever holds `&State`, so this is queued on
+    /// [`RunContext::take_state_updates`] rather than applied in place; see
+    /// [`StateUpdate`].
+    UpdateState(StateUpdate),
     /// Stop the loop now and use this text as the final assistant response.
     StopWithFinal(String),
     /// Pause the run at the next safe checkpoint, surfacing
