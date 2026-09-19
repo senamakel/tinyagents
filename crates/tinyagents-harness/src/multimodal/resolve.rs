@@ -368,6 +368,9 @@ fn resolve_file_data_uri(source: &str, max_bytes: usize) -> Result<(Vec<u8>, Str
     Ok((bytes, name, mime))
 }
 
+/// Enforces the MIME allowlist, then extracts text (via `extractor`) for a
+/// non-plaintext format that offers to handle it, degrading to a metadata
+/// reference on refusal, and builds the resulting [`FilePayload`].
 async fn build_file_payload(
     source: &str,
     bytes: Vec<u8>,
