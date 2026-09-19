@@ -75,6 +75,124 @@ pub(super) struct RunCtx<'a, State, Update> {
     /// boundary and raced against the step's in-flight node handlers by
     /// [`super::executor::CompiledGraph::run_step_with_cancel`].
     pub(super) cancellation: Option<tinyagents_harness::CancellationToken>,
+    /// Guards against the run future being dropped before it reaches a
+    /// normal terminal state (I4 part 3) — see [`RunDropGuard`].
+    pub(super) drop_guard: RunDropGuard,
+}
+
+/// Drop guard (I4 part 3) that guarantees a run's terminal status is
+/// durably set to `Cancelled` if the run's future is dropped before it
+/// reaches a normal terminal state (completed, failed, interrupted, or an
+/// explicit cooperative cancellation the executor already handled) —
+/// for example when a caller wraps the run in `tokio::time::timeout` and the
+/// deadline fires, or aborts the `JoinHandle` of the task the run was
+/// spawned on. Without this guard such a drop leaves the run's last written
+/// status stuck at `Running` forever, with nothing to signal that it will
+/// never make further progress.
+///
+/// Constructed armed by [`RunCtx::start`]; [`Self::disarm`] is called at the
+/// top of every one of `execute_run`'s terminal exit paths — success
+/// ([`super::executor::CompiledGraph::finish_run`]), an aborting error
+/// ([`super::boundary::CompiledGraph::fail_and_return`]), a resumable
+/// failure boundary
+/// ([`super::boundary::CompiledGraph::handle_failure_boundary`]), an
+/// interrupt boundary
+/// ([`super::boundary::CompiledGraph::handle_interrupt_boundary`]), and an
+/// explicit cooperative-cancellation boundary
+/// ([`super::boundary::CompiledGraph::handle_cancel_boundary`]) — so a run
+/// that reaches a real terminal state on its own never gets a spurious
+/// `Cancelled` overwrite from `Drop` racing (or following) that path.
+///
+/// # Best-effort guarantee
+///
+/// `Drop::drop` cannot `.await`, so this guard cannot synchronously flush
+/// in-flight [`AsyncCheckpointWrites`]. It instead spawns a detached
+/// background task (via [`tokio::runtime::Handle::try_current`], a no-op
+/// outside a tokio runtime) that persists a `Cancelled` [`GraphRunStatus`];
+/// this can still race a runtime shutdown that happens immediately after the
+/// drop, in which case even this best-effort write may not land. Any
+/// checkpoint write still in flight under `DurabilityMode::Async` is *not*
+/// separately re-awaited by this guard — but it is not abandoned either: a
+/// tokio `JoinHandle` being dropped only detaches it, it does not abort the
+/// task, so the underlying `checkpointer.put`/`put_writes` call keeps
+/// running to completion on its own regardless of whether `RunCtx` is still
+/// alive to track it. What this guard cannot restore is the tracker's
+/// ability to *observe* that write's outcome (the concern
+/// [`AsyncCheckpointWrites`]'s own contract documents) — a write that fails
+/// after the run future was dropped is only visible in the checkpointer
+/// backend's own logs, not through `GraphRunStatus.error`. The one concrete,
+/// testable contract this guard gives is: the run's stored status is never
+/// left at `Running` forever.
+pub(super) struct RunDropGuard {
+    armed: bool,
+    status_store: Option<Arc<dyn GraphStatusStore>>,
+    run_id: RunId,
+    thread_id: Option<ThreadId>,
+    graph_id: GraphId,
+    namespace: Vec<String>,
+    started_at: SystemTime,
+}
+
+impl RunDropGuard {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        status_store: Option<Arc<dyn GraphStatusStore>>,
+        run_id: RunId,
+        thread_id: Option<ThreadId>,
+        graph_id: GraphId,
+        namespace: Vec<String>,
+        started_at: SystemTime,
+    ) -> Self {
+        Self {
+            armed: true,
+            status_store,
+            run_id,
+            thread_id,
+            graph_id,
+            namespace,
+            started_at,
+        }
+    }
+
+    /// Disarms the guard so a normal terminal exit does not also trigger the
+    /// `Drop`-time `Cancelled` write.
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RunDropGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Some(store) = self.status_store.take() else {
+            return;
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let run_id = self.run_id.clone();
+        let thread_id = self.thread_id.clone();
+        let graph_id = self.graph_id.clone();
+        let namespace = std::mem::take(&mut self.namespace);
+        let started_at = self.started_at;
+        handle.spawn(async move {
+            let mut status =
+                GraphRunStatus::new(run_id.clone(), graph_id, ExecutionStatus::Cancelled);
+            status.thread_id = thread_id;
+            status.checkpoint_namespace = namespace;
+            status.started_at = started_at;
+            status.updated_at = SystemTime::now();
+            status.ended_at = Some(SystemTime::now());
+            if let Err(err) = store.put_status(status).await {
+                tracing::warn!(
+                    "[graph:drop-guard] failed to persist cancelled status for run `{run_id}` \
+                     after its future was dropped before completion: {err}"
+                );
+            }
+        });
+    }
 }
 
 /// Everything a resumed run seeds `RunCtx` with beyond a fresh run's
@@ -183,6 +301,14 @@ where
         let recursion_meta =
             serde_json::to_value(recursion.frames()).unwrap_or(serde_json::Value::Null);
         let live_frames = recursion.frames().to_vec();
+        let drop_guard = RunDropGuard::new(
+            graph.status_store.clone(),
+            run_id.clone(),
+            thread_id.clone(),
+            graph.graph_id.clone(),
+            graph.namespace.clone(),
+            started_at,
+        );
 
         let ctx = Self {
             graph,
