@@ -470,3 +470,100 @@ impl Default for SummarizationPolicy {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Compaction record
+// ---------------------------------------------------------------------------
+
+/// Why a compaction ran.
+///
+/// Mirrors pi's `before_compaction{reason: manual|threshold|overflow}` (see
+/// `docs/runtime-comparison/pi.md` §4.5): the reason is carried through to the
+/// durable [`CompactionRecord`] and to
+/// [`crate::events::AgentEvent::Compacted`] so a host or auditor can tell a
+/// proactive threshold-triggered compaction apart from a reactive
+/// overflow-recovery one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    /// Triggered explicitly by a caller (a `/compact`-style host command).
+    Manual,
+    /// Triggered by [`SummarizationPolicy::should_summarize`] crossing its
+    /// configured token threshold.
+    Threshold,
+    /// Triggered reactively by
+    /// [`crate::summarization::compaction::OverflowClassifier`] classifying a
+    /// model provider error as a context-window overflow, as part of the
+    /// overflow → compact → retry recovery path.
+    Overflow,
+}
+
+impl CompactionReason {
+    /// A stable, lowercase label for this reason (matches the `serde` wire
+    /// form), for logging and event payloads that want a plain string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CompactionReason::Manual => "manual",
+            CompactionReason::Threshold => "threshold",
+            CompactionReason::Overflow => "overflow",
+        }
+    }
+}
+
+/// A durable record of one compaction operation, returned by the compaction
+/// step (see `crate::summarization::compaction`) and, when a
+/// [`CompactionSink`] is attached to the run, handed to it for persistence.
+///
+/// Mirrors pi's `CompactionEntry{summary, firstKeptEntryId, tokensBefore,
+/// usage, details}` (`docs/runtime-comparison/pi.md` §4.5); the session
+/// crate's `tinyagents_session::entry_tree::CompactionEntry` is the durable,
+/// tree-anchored counterpart that a session-backed [`CompactionSink`] writes
+/// this record into, translating [`Self::first_kept_index`] (a position in
+/// the message slice compaction operated over) into that entry tree's
+/// `EntryId`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompactionRecord {
+    /// The replacement summary text installed as the new leading context.
+    pub summary: String,
+    /// Index, into the non-system message slice compaction operated over, of
+    /// the first message that survives verbatim (everything before it was
+    /// folded into [`Self::summary`]). Matches [`CutPoint::index`] when the
+    /// record was produced from a [`CutPoint`].
+    pub first_kept_index: usize,
+    /// Estimated total tokens of the transcript immediately before
+    /// compaction.
+    pub tokens_before: u64,
+    /// Estimated total tokens of the transcript immediately after
+    /// compaction (summary + kept messages).
+    pub tokens_after: u64,
+    /// Usage/cost of the summarization call(s) that produced
+    /// [`Self::summary`], when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<tinyinference_llm::usage::Usage>,
+    /// Additional host- or policy-defined provenance: which cut-point rule
+    /// fired, split-turn bookkeeping, the hook (if any) that authored or
+    /// replaced the summary, and so on. Defaults to JSON `null`.
+    #[serde(default)]
+    pub details: serde_json::Value,
+    /// Why this compaction ran.
+    pub reason: CompactionReason,
+}
+
+/// A durable sink a host attaches to a [`crate::context::RunContext`] so
+/// every [`CompactionRecord`] a run produces is persisted somewhere durable
+/// (typically a session's `tinyagents_session::entry_tree::EntryTree`),
+/// instead of only living as long as the in-process
+/// [`crate::middleware::ContextCompressionMiddleware::records`] buffer.
+///
+/// `tinyagents-harness` cannot depend on `tinyagents-session` (the dependency
+/// runs the other way), so this trait — not a concrete `Arc<EntryTree>` slot
+/// — is what [`crate::context::RunContext::compaction_sink`] holds; a
+/// session-backed implementation lives in `tinyagents-session`.
+pub trait CompactionSink: Send + Sync {
+    /// Persists `record`. Implementations should be idempotent-safe to call
+    /// once per compaction (the compaction step calls this exactly once per
+    /// successful compaction) and should not block the run indefinitely — a
+    /// slow or failing sink should return promptly with an error rather than
+    /// stall the agent loop.
+    fn persist(&self, record: &CompactionRecord) -> Result<()>;
+}
