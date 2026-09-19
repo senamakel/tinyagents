@@ -606,3 +606,27 @@ fn goto(loop_state: LoopState, target: &str) -> NodeResult<LoopState> {
         resume_by_task: Default::default(),
     })
 }
+
+/// Reconciles `ctx.config`'s per-run call caps against `policy.limits`,
+/// exactly like the direct loop's `run_loop_body` does at the top of every
+/// run (`resolve_call_cap` + `LimitTracker::sync_call_limits`) — without it,
+/// `ctx.limits` stays at whatever `RunContext::new` derived from `config`
+/// alone, silently ignoring a `RunPolicy::limits` override, in either
+/// direction. Exposed so [`super::driver::GraphLoopDriver`] (which does not
+/// build a [`LoopRuntime`], see that module's docs) can apply the exact same
+/// reconciliation before it starts stepping nodes.
+pub(crate) fn reconcile_call_limits<Ctx: Send + Sync>(
+    ctx: &mut RunContext<Ctx>,
+    policy: &tinyagents_harness::runtime::RunPolicy,
+) {
+    let effective_model_calls = match ctx.config.max_model_calls {
+        Some(explicit) => explicit.min(policy.limits.max_model_calls),
+        None => policy.limits.max_model_calls,
+    };
+    let effective_tool_calls = match ctx.config.max_tool_calls {
+        Some(explicit) => explicit.min(policy.limits.max_tool_calls),
+        None => policy.limits.max_tool_calls,
+    };
+    ctx.limits
+        .sync_call_limits(effective_model_calls, effective_tool_calls);
+}
