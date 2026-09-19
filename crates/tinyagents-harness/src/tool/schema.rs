@@ -408,6 +408,10 @@ impl SchemaCleanr {
         })
     }
 
+    /// Drops `"null"` out of a JSON Schema `type` array (used for nullable
+    /// types) and collapses the result: no non-null type left becomes
+    /// `"null"` itself, exactly one collapses to a scalar `type`, and more
+    /// than one is left as an array.
     fn clean_type_array(value: Value) -> Value {
         if let Value::Array(types) = value {
             let non_null: Vec<Value> = types
@@ -428,6 +432,8 @@ impl SchemaCleanr {
         }
     }
 
+    /// Cleans each value in an object's `properties` map, leaving the key set
+    /// unchanged.
     fn clean_properties(
         value: Value,
         defs: &HashMap<String, Value>,
