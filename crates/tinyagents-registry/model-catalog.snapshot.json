@@ -1,33 +1,215 @@
 {
   "schema_version": 1,
-  "snapshot_id": "2026-06-29-litellm-seed",
-  "created_at": "2026-06-29T00:00:00Z",
+  "snapshot_id": "models-dev-20260919",
+  "created_at": "2026-09-19T20:18:28.470631448+00:00",
   "currency": "USD",
   "unit": "token",
-  "description": "Small seed snapshot for registry model-catalog schema design. Refresh before using for production pricing.",
+  "description": "Generated from models.dev by crates/tinyagents-registry/src/bin/catalog_gen.rs",
   "sources": [
     {
-      "name": "litellm",
-      "url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-      "retrieved_at": "2026-06-29T00:00:00Z"
-    },
-    {
-      "name": "openai_pricing",
-      "url": "https://openai.com/api/pricing/",
-      "retrieved_at": "2026-06-29T00:00:00Z"
-    },
-    {
-      "name": "anthropic_pricing",
-      "url": "https://www.anthropic.com/pricing",
-      "retrieved_at": "2026-06-29T00:00:00Z"
-    },
-    {
-      "name": "gemini_pricing",
-      "url": "https://ai.google.dev/gemini-api/docs/pricing",
-      "retrieved_at": "2026-06-29T00:00:00Z"
+      "name": "models.dev",
+      "url": "https://models.dev/api.json",
+      "retrieved_at": "2026-09-19T20:18:28.470631448+00:00"
     }
   ],
   "models": [
+    {
+      "provider": "openai",
+      "model_id": "gpt-3.5-turbo",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 16385,
+      "max_output_tokens": 4096,
+      "deprecation_date": null,
+      "release_date": "2023-03-01",
+      "pricing": {
+        "input_per_token": 5e-7,
+        "output_per_token": 1.5e-6,
+        "cache_read_input_per_token": 0.0,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": false,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "cache_read": 0,
+          "input": 0.5,
+          "output": 1.5
+        },
+        "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+        "family": "gpt",
+        "id": "gpt-3.5-turbo",
+        "knowledge": "2021-09-01",
+        "last_updated": "2023-11-06",
+        "limit": {
+          "context": 16385,
+          "output": 4096
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-3.5-turbo",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2023-03-01",
+        "status": "deprecated",
+        "structured_output": false,
+        "temperature": true,
+        "tool_call": false
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192,
+      "deprecation_date": null,
+      "release_date": "2023-11-06",
+      "pricing": {
+        "input_per_token": 0.00003,
+        "output_per_token": 0.00006,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "input": 30,
+          "output": 60
+        },
+        "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+        "family": "gpt",
+        "id": "gpt-4",
+        "knowledge": "2023-11",
+        "last_updated": "2024-04-09",
+        "limit": {
+          "context": 8192,
+          "output": 8192
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2023-11-06",
+        "status": "deprecated",
+        "structured_output": false,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4-turbo",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 4096,
+      "deprecation_date": null,
+      "release_date": "2023-11-06",
+      "pricing": {
+        "input_per_token": 0.00001,
+        "output_per_token": 0.00003,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "input": 10,
+          "output": 30
+        },
+        "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+        "family": "gpt",
+        "id": "gpt-4-turbo",
+        "knowledge": "2023-12",
+        "last_updated": "2024-04-09",
+        "limit": {
+          "context": 128000,
+          "output": 4096
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4 Turbo",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2023-11-06",
+        "status": "deprecated",
+        "structured_output": false,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
     {
       "provider": "openai",
       "model_id": "gpt-4.1",
@@ -35,15 +217,20 @@
       "mode": "chat",
       "max_input_tokens": 1047576,
       "max_output_tokens": 32768,
+      "deprecation_date": null,
+      "release_date": "2025-04-14",
       "pricing": {
-        "input_per_token": 0.000002,
-        "output_per_token": 0.000008,
-        "cache_read_input_per_token": 0.0000005
+        "input_per_token": 2e-6,
+        "output_per_token": 8e-6,
+        "cache_read_input_per_token": 5e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
       },
       "capabilities": {
         "streaming": true,
         "tool_calling": true,
-        "parallel_tool_calling": true,
+        "parallel_tool_calling": false,
         "json_schema": true,
         "system_messages": true,
         "vision": true,
@@ -53,15 +240,41 @@
         "prompt_caching": true,
         "reasoning": false
       },
-      "source": "litellm",
-      "source_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      "source": "models.dev",
+      "source_url": null,
       "raw": {
-        "litellm_provider": "openai",
-        "supported_endpoints": [
-          "/v1/chat/completions",
-          "/v1/batch",
-          "/v1/responses"
-        ]
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.5,
+          "input": 2,
+          "output": 8
+        },
+        "description": "Long-lived GPT workhorse for coding, instruction following, and production apps",
+        "family": "gpt",
+        "id": "gpt-4.1",
+        "knowledge": "2024-04",
+        "last_updated": "2025-04-14",
+        "limit": {
+          "context": 1047576,
+          "output": 32768
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4.1",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2025-04-14",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
       }
     },
     {
@@ -71,15 +284,20 @@
       "mode": "chat",
       "max_input_tokens": 1047576,
       "max_output_tokens": 32768,
+      "deprecation_date": null,
+      "release_date": "2025-04-14",
       "pricing": {
-        "input_per_token": 0.0000004,
-        "output_per_token": 0.0000016,
-        "cache_read_input_per_token": 0.0000001
+        "input_per_token": 4.0000000000000003e-7,
+        "output_per_token": 1.6000000000000001e-6,
+        "cache_read_input_per_token": 1.0000000000000001e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
       },
       "capabilities": {
         "streaming": true,
         "tool_calling": true,
-        "parallel_tool_calling": true,
+        "parallel_tool_calling": false,
         "json_schema": true,
         "system_messages": true,
         "vision": true,
@@ -89,39 +307,398 @@
         "prompt_caching": true,
         "reasoning": false
       },
-      "source": "litellm",
-      "source_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      "source": "models.dev",
+      "source_url": null,
       "raw": {
-        "litellm_provider": "openai",
-        "supported_endpoints": [
-          "/v1/chat/completions",
-          "/v1/batch",
-          "/v1/responses"
-        ]
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.1,
+          "input": 0.4,
+          "output": 1.6
+        },
+        "description": "Affordable GPT-4.1 lane for fast coding help and structured extraction",
+        "family": "gpt-mini",
+        "id": "gpt-4.1-mini",
+        "knowledge": "2024-04",
+        "last_updated": "2025-04-14",
+        "limit": {
+          "context": 1047576,
+          "output": 32768
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4.1 mini",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2025-04-14",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4.1-nano",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1047576,
+      "max_output_tokens": 32768,
+      "deprecation_date": null,
+      "release_date": "2025-04-14",
+      "pricing": {
+        "input_per_token": 1.0000000000000001e-7,
+        "output_per_token": 4.0000000000000003e-7,
+        "cache_read_input_per_token": 2.5000000000000002e-8,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.025,
+          "input": 0.1,
+          "output": 0.4
+        },
+        "description": "Tiny GPT-4.1 option for classification, routing, and very high-volume tasks",
+        "family": "gpt-nano",
+        "id": "gpt-4.1-nano",
+        "knowledge": "2024-04",
+        "last_updated": "2025-04-14",
+        "limit": {
+          "context": 1047576,
+          "output": 32768
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4.1 nano",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2025-04-14",
+        "status": "deprecated",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 16384,
+      "deprecation_date": null,
+      "release_date": "2024-05-13",
+      "pricing": {
+        "input_per_token": 2.5e-6,
+        "output_per_token": 0.00001,
+        "cache_read_input_per_token": 1.25e-6,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 1.25,
+          "input": 2.5,
+          "output": 10
+        },
+        "description": "Omni-era GPT for multimodal chat, practical coding, and general assistants",
+        "family": "gpt",
+        "id": "gpt-4o",
+        "knowledge": "2023-09",
+        "last_updated": "2024-08-06",
+        "limit": {
+          "context": 128000,
+          "output": 16384
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4o",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2024-05-13",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-2024-05-13",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 4096,
+      "deprecation_date": null,
+      "release_date": "2024-05-13",
+      "pricing": {
+        "input_per_token": 5e-6,
+        "output_per_token": 0.000015,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "input": 5,
+          "output": 15
+        },
+        "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+        "family": "gpt",
+        "id": "gpt-4o-2024-05-13",
+        "knowledge": "2023-09",
+        "last_updated": "2024-05-13",
+        "limit": {
+          "context": 128000,
+          "output": 4096
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4o (2024-05-13)",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2024-05-13",
+        "status": "deprecated",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-2024-08-06",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 16384,
+      "deprecation_date": null,
+      "release_date": "2024-08-06",
+      "pricing": {
+        "input_per_token": 2.5e-6,
+        "output_per_token": 0.00001,
+        "cache_read_input_per_token": 1.25e-6,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 1.25,
+          "input": 2.5,
+          "output": 10
+        },
+        "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+        "family": "gpt",
+        "id": "gpt-4o-2024-08-06",
+        "knowledge": "2023-09",
+        "last_updated": "2024-08-06",
+        "limit": {
+          "context": 128000,
+          "output": 16384
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4o (2024-08-06)",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2024-08-06",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-4o-2024-11-20",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 16384,
+      "deprecation_date": null,
+      "release_date": "2024-11-20",
+      "pricing": {
+        "input_per_token": 2.5e-6,
+        "output_per_token": 0.00001,
+        "cache_read_input_per_token": 1.25e-6,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 1.25,
+          "input": 2.5,
+          "output": 10
+        },
+        "description": "GPT model for general reasoning, writing, coding, and tool-assisted tasks",
+        "family": "gpt",
+        "id": "gpt-4o-2024-11-20",
+        "knowledge": "2023-09",
+        "last_updated": "2024-11-20",
+        "limit": {
+          "context": 128000,
+          "output": 16384
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "GPT-4o (2024-11-20)",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2024-11-20",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
       }
     },
     {
       "provider": "anthropic",
-      "model_id": "claude-sonnet-4-20250514",
-      "aliases": [
-        "claude-sonnet-4"
-      ],
+      "model_id": "claude-fable-5",
+      "aliases": [],
       "mode": "chat",
       "max_input_tokens": 1000000,
-      "max_output_tokens": 64000,
-      "deprecation_date": "2026-05-14",
+      "max_output_tokens": 128000,
+      "deprecation_date": null,
+      "release_date": "2026-06-07",
       "pricing": {
-        "input_per_token": 0.000003,
-        "output_per_token": 0.000015,
-        "cache_creation_input_per_token": 0.00000375,
-        "cache_read_input_per_token": 0.0000003
+        "input_per_token": 0.00001,
+        "output_per_token": 0.00005,
+        "cache_read_input_per_token": 1e-6,
+        "cache_creation_input_per_token": 0.0000125,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
       },
       "capabilities": {
-        "streaming": false,
+        "streaming": true,
         "tool_calling": true,
         "parallel_tool_calling": false,
         "json_schema": true,
-        "system_messages": false,
+        "system_messages": true,
         "vision": true,
         "audio_input": false,
         "audio_output": false,
@@ -129,30 +706,928 @@
         "prompt_caching": true,
         "reasoning": true
       },
-      "source": "litellm",
-      "source_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      "source": "models.dev",
+      "source_url": null,
       "raw": {
-        "litellm_provider": "anthropic",
-        "input_cost_per_token_above_200k_tokens": 0.000006,
-        "output_cost_per_token_above_200k_tokens": 0.0000225
+        "attachment": true,
+        "cost": {
+          "cache_read": 1,
+          "cache_write": 12.5,
+          "input": 10,
+          "output": 50
+        },
+        "description": "Claude model for creative writing, analysis, and controlled agent workflows",
+        "family": "claude-fable",
+        "id": "claude-fable-5",
+        "last_updated": "2026-06-09",
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Fable 5",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-06-07",
+        "structured_output": true,
+        "temperature": false,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-fable-5-1",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "deprecation_date": null,
+      "release_date": "2026-09-01",
+      "pricing": {
+        "input_per_token": 0.00001,
+        "output_per_token": 0.00005,
+        "cache_read_input_per_token": 2.5e-7,
+        "cache_creation_input_per_token": 0.0000125,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.25,
+          "cache_write": 12.5,
+          "input": 10,
+          "output": 50
+        },
+        "description": "Claude model for demanding reasoning and long-horizon agentic work",
+        "family": "claude-fable",
+        "id": "claude-fable-5-1",
+        "knowledge": "2026-06",
+        "last_updated": "2026-09-01",
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Fable 5.1",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-09-01",
+        "structured_output": true,
+        "temperature": false,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-haiku-4-5",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "deprecation_date": null,
+      "release_date": "2025-10-15",
+      "pricing": {
+        "input_per_token": 1e-6,
+        "output_per_token": 5e-6,
+        "cache_read_input_per_token": 1.0000000000000001e-7,
+        "cache_creation_input_per_token": 1.25e-6,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "input": 1,
+          "output": 5
+        },
+        "description": "Fast Claude lane for lightweight agents, office tasks, and responsive chat",
+        "family": "claude-haiku",
+        "id": "claude-haiku-4-5",
+        "knowledge": "2025-02-28",
+        "last_updated": "2025-10-15",
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Haiku 4.5 (latest)",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "min": 1024,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-10-15",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-haiku-4-5-20251001",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "deprecation_date": null,
+      "release_date": "2025-10-15",
+      "pricing": {
+        "input_per_token": 1e-6,
+        "output_per_token": 5e-6,
+        "cache_read_input_per_token": 1.0000000000000001e-7,
+        "cache_creation_input_per_token": 1.25e-6,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.1,
+          "cache_write": 1.25,
+          "input": 1,
+          "output": 5
+        },
+        "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
+        "family": "claude-haiku",
+        "id": "claude-haiku-4-5-20251001",
+        "knowledge": "2025-02-28",
+        "last_updated": "2025-10-15",
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Haiku 4.5",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "min": 1024,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-10-15",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-5",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "deprecation_date": null,
+      "release_date": "2025-11-24",
+      "pricing": {
+        "input_per_token": 5e-6,
+        "output_per_token": 0.000025,
+        "cache_read_input_per_token": 5e-7,
+        "cache_creation_input_per_token": 6.25e-6,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5,
+          "output": 25
+        },
+        "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+        "family": "claude-opus",
+        "id": "claude-opus-4-5",
+        "knowledge": "2025-05",
+        "last_updated": "2025-11-24",
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Opus 4.5 (latest)",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          {
+            "min": 1024,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-11-24",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-5-20251101",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "deprecation_date": null,
+      "release_date": "2025-11-24",
+      "pricing": {
+        "input_per_token": 5e-6,
+        "output_per_token": 0.000025,
+        "cache_read_input_per_token": 5e-7,
+        "cache_creation_input_per_token": 6.25e-6,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5,
+          "output": 25
+        },
+        "description": "Flagship Claude model for deep reasoning, coding, and long-horizon agents",
+        "family": "claude-opus",
+        "id": "claude-opus-4-5-20251101",
+        "knowledge": "2025-05",
+        "last_updated": "2025-11-01",
+        "limit": {
+          "context": 200000,
+          "output": 64000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Opus 4.5",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          {
+            "min": 1024,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-11-24",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-6",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "deprecation_date": null,
+      "release_date": "2026-02-04",
+      "pricing": {
+        "input_per_token": 5e-6,
+        "output_per_token": 0.000025,
+        "cache_read_input_per_token": 5e-7,
+        "cache_creation_input_per_token": 6.25e-6,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5,
+          "output": 25
+        },
+        "description": "High-end Claude for difficult coding, planning, and slower expert reasoning",
+        "family": "claude-opus",
+        "id": "claude-opus-4-6",
+        "knowledge": "2025-05-31",
+        "last_updated": "2026-03-13",
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Opus 4.6",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
+          {
+            "min": 1024,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2026-02-04",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "anthropic",
+      "model_id": "claude-opus-4-7",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "deprecation_date": null,
+      "release_date": "2026-04-14",
+      "pricing": {
+        "input_per_token": 5e-6,
+        "output_per_token": 0.000025,
+        "cache_read_input_per_token": 5e-7,
+        "cache_creation_input_per_token": 6.25e-6,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.5,
+          "cache_write": 6.25,
+          "input": 5,
+          "output": 25
+        },
+        "description": "Stronger Opus tier for advanced software work and high-stakes reasoning",
+        "family": "claude-opus",
+        "id": "claude-opus-4-7",
+        "knowledge": "2026-01-31",
+        "last_updated": "2026-04-16",
+        "limit": {
+          "context": 1000000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Claude Opus 4.7",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-04-14",
+        "structured_output": true,
+        "temperature": false,
+        "tool_call": true
       }
     },
     {
       "provider": "gemini",
-      "model_id": "gemini/gemini-2.5-pro",
-      "aliases": [
-        "gemini-2.5-pro"
-      ],
+      "model_id": "deep-research-max-preview-04-2026",
+      "aliases": [],
       "mode": "chat",
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2026-04-21",
       "pricing": {
-        "input_per_token": 0.00000125,
-        "output_per_token": 0.00001,
-        "cache_read_input_per_token": 0.000000125
+        "input_per_token": 2e-6,
+        "output_per_token": 0.000012,
+        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 2e-6,
+            "output": 0.000012,
+            "cache_read": 2.0000000000000002e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 4e-6,
+            "output": 0.000018,
+            "cache_read": 4.0000000000000003e-7,
+            "cache_write": null
+          }
+        ]
       },
       "capabilities": {
-        "streaming": false,
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": true,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "cache_read": 0.4,
+            "input": 4,
+            "output": 18
+          },
+          "input": 2,
+          "output": 12,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 4,
+              "output": 18,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Maximum-comprehensiveness agentic researcher for multi-step investigation, synthesis, and cited reports",
+        "family": "gemini-pro",
+        "id": "deep-research-max-preview-04-2026",
+        "knowledge": "2025-01",
+        "last_updated": "2026-04-21",
+        "limit": {
+          "context": 131072,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Deep Research Max Preview (Apr-21-2026)",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [],
+        "release_date": "2026-04-21",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "gemini",
+      "model_id": "deep-research-preview-04-2026",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2026-04-21",
+      "pricing": {
+        "input_per_token": 2e-6,
+        "output_per_token": 0.000012,
+        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 2e-6,
+            "output": 0.000012,
+            "cache_read": 2.0000000000000002e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 4e-6,
+            "output": 0.000018,
+            "cache_read": 4.0000000000000003e-7,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": true,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "cache_read": 0.4,
+            "input": 4,
+            "output": 18
+          },
+          "input": 2,
+          "output": 12,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 4,
+              "output": 18,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Agentic model for autonomous multi-step research, synthesis, and cited reports",
+        "family": "gemini-pro",
+        "id": "deep-research-preview-04-2026",
+        "knowledge": "2025-01",
+        "last_updated": "2026-04-21",
+        "limit": {
+          "context": 131072,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Deep Research Preview (Apr-21-2026)",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [],
+        "release_date": "2026-04-21",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-computer-use-preview-10-2025",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2025-10-07",
+      "pricing": {
+        "input_per_token": 1.25e-6,
+        "output_per_token": 0.00001,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 1.25e-6,
+            "output": 0.00001,
+            "cache_read": null,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 2.5e-6,
+            "output": 0.000015,
+            "cache_read": null,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "context_over_200k": {
+            "input": 2.5,
+            "output": 15
+          },
+          "input": 1.25,
+          "output": 10,
+          "tiers": [
+            {
+              "input": 2.5,
+              "output": 15,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Specialized Gemini 2.5 model for browser-control agents that automate UI tasks",
+        "family": "gemini-pro",
+        "id": "gemini-2.5-computer-use-preview-10-2025",
+        "knowledge": "2025-01",
+        "last_updated": "2025-10-07",
+        "limit": {
+          "context": 131072,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 2.5 Computer Use Preview 10-2025",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [],
+        "release_date": "2025-10-07",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-flash",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2025-06-17",
+      "pricing": {
+        "input_per_token": 3e-7,
+        "output_per_token": 2.5e-6,
+        "cache_read_input_per_token": 3e-8,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
         "tool_calling": true,
         "parallel_tool_calling": false,
         "json_schema": true,
@@ -164,35 +1639,144 @@
         "prompt_caching": true,
         "reasoning": true
       },
-      "source": "litellm",
-      "source_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      "source": "models.dev",
+      "source_url": null,
       "raw": {
-        "litellm_provider": "gemini",
-        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
-        "input_cost_per_token_above_200k_tokens": 0.0000025,
-        "output_cost_per_token_above_200k_tokens": 0.000015
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.03,
+          "input": 0.3,
+          "input_audio": 1,
+          "output": 2.5
+        },
+        "description": "Fast Gemini workhorse for multimodal apps where latency and price matter",
+        "family": "gemini-flash",
+        "id": "gemini-2.5-flash",
+        "knowledge": "2025-01",
+        "last_updated": "2025-06-17",
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 2.5 Flash",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "max": 24576,
+            "min": 0,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-06-17",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
       }
     },
     {
       "provider": "gemini",
-      "model_id": "gemini/gemini-2.5-flash",
-      "aliases": [
-        "gemini-2.5-flash"
-      ],
+      "model_id": "gemini-2.5-flash-image",
+      "aliases": [],
       "mode": "chat",
-      "max_input_tokens": 1048576,
-      "max_output_tokens": 65535,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768,
+      "deprecation_date": null,
+      "release_date": "2025-08-26",
       "pricing": {
-        "input_per_token": 0.0000003,
-        "output_per_token": 0.0000025,
-        "cache_read_input_per_token": 0.00000003,
-        "input_audio_per_token": 0.000001,
-        "output_reasoning_per_token": 0.0000025
+        "input_per_token": 3e-7,
+        "output_per_token": 0.00003,
+        "cache_read_input_per_token": 7.5e-8,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
       },
       "capabilities": {
-        "streaming": false,
+        "streaming": true,
+        "tool_calling": false,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.075,
+          "input": 0.3,
+          "output": 30
+        },
+        "description": "Nano Banana image model for fast generation, edits, and character-consistent assets",
+        "family": "gemini-flash",
+        "id": "gemini-2.5-flash-image",
+        "knowledge": "2024-06",
+        "last_updated": "2025-08-26",
+        "limit": {
+          "context": 32768,
+          "output": 32768
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text",
+            "image"
+          ]
+        },
+        "name": "Nano Banana",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [],
+        "release_date": "2025-08-26",
+        "temperature": true,
+        "tool_call": false
+      }
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-flash-lite",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2025-06-17",
+      "pricing": {
+        "input_per_token": 1.0000000000000001e-7,
+        "output_per_token": 4.0000000000000003e-7,
+        "cache_read_input_per_token": 1e-8,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
         "tool_calling": true,
-        "parallel_tool_calling": true,
+        "parallel_tool_calling": false,
         "json_schema": true,
         "system_messages": true,
         "vision": true,
@@ -202,11 +1786,1620 @@
         "prompt_caching": true,
         "reasoning": true
       },
-      "source": "litellm",
-      "source_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
+      "source": "models.dev",
+      "source_url": null,
       "raw": {
-        "litellm_provider": "gemini",
-        "source": "https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-preview"
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.01,
+          "input": 0.1,
+          "input_audio": 0.3,
+          "output": 0.4
+        },
+        "description": "Lean Gemini 2.5 lane for cheap multimodal traffic and quick agents",
+        "family": "gemini-flash-lite",
+        "id": "gemini-2.5-flash-lite",
+        "knowledge": "2025-01",
+        "last_updated": "2025-06-17",
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 2.5 Flash-Lite",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "max": 24576,
+            "min": 512,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-06-17",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-2.5-pro",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2025-06-17",
+      "pricing": {
+        "input_per_token": 1.25e-6,
+        "output_per_token": 0.00001,
+        "cache_read_input_per_token": 1.25e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 1.25e-6,
+            "output": 0.00001,
+            "cache_read": 1.25e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 2.5e-6,
+            "output": 0.000015,
+            "cache_read": 2.5e-7,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": true,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.125,
+          "context_over_200k": {
+            "cache_read": 0.25,
+            "input": 2.5,
+            "output": 15
+          },
+          "input": 1.25,
+          "output": 10,
+          "tiers": [
+            {
+              "cache_read": 0.25,
+              "input": 2.5,
+              "output": 15,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Google's proven reasoning model for coding, math, and multimodal analysis",
+        "family": "gemini-pro",
+        "id": "gemini-2.5-pro",
+        "knowledge": "2025-01",
+        "last_updated": "2025-06-17",
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "audio",
+            "video",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 2.5 Pro",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "max": 32768,
+            "min": 128,
+            "type": "budget_tokens"
+          }
+        ],
+        "release_date": "2025-06-17",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "gemini",
+      "model_id": "gemini-3-flash-preview",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 65536,
+      "deprecation_date": null,
+      "release_date": "2025-12-17",
+      "pricing": {
+        "input_per_token": 5e-7,
+        "output_per_token": 3e-6,
+        "cache_read_input_per_token": 5.0000000000000004e-8,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": true,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.05,
+          "input": 0.5,
+          "input_audio": 1,
+          "output": 3
+        },
+        "description": "New Gemini flash lane bringing frontier-style multimodal reasoning to cheaper runs",
+        "family": "gemini-flash",
+        "id": "gemini-3-flash-preview",
+        "knowledge": "2025-01",
+        "last_updated": "2025-12-17",
+        "limit": {
+          "context": 1048576,
+          "output": 65536
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "video",
+            "audio",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Gemini 3 Flash Preview",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "release_date": "2025-12-17",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "codestral-latest",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 256000,
+      "max_output_tokens": 4096,
+      "deprecation_date": null,
+      "release_date": "2024-05-29",
+      "pricing": {
+        "input_per_token": 3e-7,
+        "output_per_token": 9.000000000000001e-7,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.3,
+          "output": 0.9
+        },
+        "description": "Mistral code model for completions, refactors, and developer IDE workflows",
+        "family": "codestral",
+        "id": "codestral-latest",
+        "knowledge": "2024-10",
+        "last_updated": "2025-01-04",
+        "limit": {
+          "context": 256000,
+          "output": 4096
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Codestral (latest)",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2024-05-29",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "devstral-2512",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "deprecation_date": null,
+      "release_date": "2025-12-09",
+      "pricing": {
+        "input_per_token": 4.0000000000000003e-7,
+        "output_per_token": 2e-6,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.4,
+          "output": 2
+        },
+        "description": "Mistral's coding-agent model for repository work, terminal tasks, and software fixes",
+        "family": "devstral",
+        "id": "devstral-2512",
+        "knowledge": "2025-12",
+        "last_updated": "2025-12-09",
+        "limit": {
+          "context": 262144,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Devstral 2",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-12-09",
+        "status": "deprecated",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "devstral-latest",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "deprecation_date": null,
+      "release_date": "2025-12-09",
+      "pricing": {
+        "input_per_token": 4.0000000000000003e-7,
+        "output_per_token": 2e-6,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.4,
+          "output": 2
+        },
+        "description": "Legacy model retained for compatibility with older integrations",
+        "family": "devstral",
+        "id": "devstral-latest",
+        "knowledge": "2025-12",
+        "last_updated": "2025-12-09",
+        "limit": {
+          "context": 262144,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Devstral 2",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-12-09",
+        "status": "deprecated",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "devstral-medium-2507",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000,
+      "deprecation_date": null,
+      "release_date": "2025-07-10",
+      "pricing": {
+        "input_per_token": 4.0000000000000003e-7,
+        "output_per_token": 2e-6,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.4,
+          "output": 2
+        },
+        "description": "Legacy model retained for compatibility with older integrations",
+        "family": "devstral",
+        "id": "devstral-medium-2507",
+        "knowledge": "2025-05",
+        "last_updated": "2025-07-10",
+        "limit": {
+          "context": 128000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Devstral Medium",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-07-10",
+        "status": "deprecated",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "devstral-medium-latest",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 262144,
+      "max_output_tokens": 262144,
+      "deprecation_date": null,
+      "release_date": "2025-12-02",
+      "pricing": {
+        "input_per_token": 4.0000000000000003e-7,
+        "output_per_token": 2e-6,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.4,
+          "output": 2
+        },
+        "description": "Legacy model retained for compatibility with older integrations",
+        "family": "devstral",
+        "id": "devstral-medium-latest",
+        "knowledge": "2025-12",
+        "last_updated": "2025-12-02",
+        "limit": {
+          "context": 262144,
+          "output": 262144
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Devstral 2 (latest)",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-12-02",
+        "status": "deprecated",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "mistral",
+      "model_id": "devstral-small-2505",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000,
+      "deprecation_date": null,
+      "release_date": "2025-05-07",
+      "pricing": {
+        "input_per_token": 1.0000000000000001e-7,
+        "output_per_token": 3e-7,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.1,
+          "output": 0.3
+        },
+        "description": "Legacy model retained for compatibility with older integrations",
+        "family": "devstral",
+        "id": "devstral-small-2505",
+        "knowledge": "2025-05",
+        "last_updated": "2025-05-07",
+        "limit": {
+          "context": 128000,
+          "output": 128000
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Devstral Small 2505",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-05-07",
+        "status": "deprecated",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "groq",
+      "model_id": "allam-2-7b",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096,
+      "deprecation_date": null,
+      "release_date": "2025-01-23",
+      "pricing": {
+        "input_per_token": 0.0,
+        "output_per_token": 0.0,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": false,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0,
+          "output": 0
+        },
+        "description": "ALLaM-2-7b instruction tuned model by SDAIA",
+        "id": "allam-2-7b",
+        "last_updated": "2025-01-23",
+        "limit": {
+          "context": 4096,
+          "output": 4096
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "ALLaM-2-7b",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-01-23",
+        "temperature": true,
+        "tool_call": false
+      }
+    },
+    {
+      "provider": "groq",
+      "model_id": "llama-3.1-8b-instant",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072,
+      "deprecation_date": null,
+      "release_date": "2024-07-23",
+      "pricing": {
+        "input_per_token": 5.0000000000000004e-8,
+        "output_per_token": 8e-8,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.05,
+          "output": 0.08
+        },
+        "description": "Compact Llama instruction model for fast chat and local deployment",
+        "family": "llama",
+        "id": "llama-3.1-8b-instant",
+        "knowledge": "2023-12",
+        "last_updated": "2024-07-23",
+        "limit": {
+          "context": 131072,
+          "output": 131072
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Llama 3.1 8B",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2024-07-23",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "groq",
+      "model_id": "llama-3.3-70b-versatile",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "deprecation_date": null,
+      "release_date": "2024-12-06",
+      "pricing": {
+        "input_per_token": 5.9e-7,
+        "output_per_token": 7.900000000000001e-7,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.59,
+          "output": 0.79
+        },
+        "description": "Open Llama instruction model for multilingual chat, reasoning, and coding",
+        "family": "llama",
+        "id": "llama-3.3-70b-versatile",
+        "knowledge": "2023-12",
+        "last_updated": "2024-12-06",
+        "limit": {
+          "context": 131072,
+          "output": 32768
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Llama 3.3 70B",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2024-12-06",
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "groq",
+      "model_id": "meta-llama/llama-prompt-guard-2-22m",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 512,
+      "max_output_tokens": 512,
+      "deprecation_date": null,
+      "release_date": "2025-05-29",
+      "pricing": {
+        "input_per_token": 3e-8,
+        "output_per_token": 3e-8,
+        "cache_read_input_per_token": null,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": false,
+        "parallel_tool_calling": false,
+        "json_schema": false,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": false,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "input": 0.03,
+          "output": 0.03
+        },
+        "description": "Safety model for policy screening, moderation, and risk-aware routing workflows",
+        "family": "llama",
+        "id": "meta-llama/llama-prompt-guard-2-22m",
+        "last_updated": "2025-05-29",
+        "limit": {
+          "context": 512,
+          "output": 512
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Llama Prompt Guard 2 22M",
+        "open_weights": true,
+        "reasoning": false,
+        "release_date": "2025-05-29",
+        "status": "beta",
+        "temperature": false,
+        "tool_call": false
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-flash",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "deprecation_date": null,
+      "release_date": "2026-09-10",
+      "pricing": {
+        "input_per_token": 1.5e-7,
+        "output_per_token": 6e-7,
+        "cache_read_input_per_token": 3e-9,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.003,
+          "input": 0.15,
+          "output": 0.6,
+          "reasoning": 0.6
+        },
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "id": "deepseek-flash",
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "knowledge": "2025-05",
+        "last_updated": "2026-09-10",
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "DeepSeek V4.1 Flash",
+        "open_weights": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-09-10",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "deprecation_date": null,
+      "release_date": "2026-09-10",
+      "pricing": {
+        "input_per_token": 1.5e-7,
+        "output_per_token": 6e-7,
+        "cache_read_input_per_token": 3e-9,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.003,
+          "input": 0.15,
+          "output": 0.6,
+          "reasoning": 0.6
+        },
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "id": "deepseek-v4-flash",
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "knowledge": "2025-05",
+        "last_updated": "2026-09-10",
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "DeepSeek V4 Flash",
+        "open_weights": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-09-10",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "deprecation_date": null,
+      "release_date": "2026-09-10",
+      "pricing": {
+        "input_per_token": 1.5e-7,
+        "output_per_token": 6e-7,
+        "cache_read_input_per_token": 3e-9,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.003,
+          "input": 0.15,
+          "output": 0.6,
+          "reasoning": 0.6
+        },
+        "description": "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+        "family": "deepseek-flash",
+        "id": "deepseek-v4-flash-vision-exp",
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "knowledge": "2025-05",
+        "last_updated": "2026-09-10",
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "DeepSeek V4 Flash Vision Exp",
+        "open_weights": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-09-10",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 384000,
+      "deprecation_date": null,
+      "release_date": "2026-08-12",
+      "pricing": {
+        "input_per_token": 4.35e-7,
+        "output_per_token": 8.7e-7,
+        "cache_read_input_per_token": 3.625e-9,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": false,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": false,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": false,
+        "cost": {
+          "cache_read": 0.003625,
+          "input": 0.435,
+          "output": 0.87,
+          "reasoning": 0.87
+        },
+        "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+        "family": "deepseek-thinking",
+        "id": "deepseek-v4-pro",
+        "interleaved": {
+          "field": "reasoning_content"
+        },
+        "last_updated": "2026-08-22",
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "DeepSeek V4 Pro",
+        "open_weights": true,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "toggle"
+          },
+          {
+            "type": "effort",
+            "values": [
+              "high",
+              "max"
+            ]
+          }
+        ],
+        "release_date": "2026-08-12",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "xai",
+      "model_id": "grok-4.20-0309-non-reasoning",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 30000,
+      "deprecation_date": null,
+      "release_date": "2026-03-09",
+      "pricing": {
+        "input_per_token": 1.25e-6,
+        "output_per_token": 2.5e-6,
+        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 1.25e-6,
+            "output": 2.5e-6,
+            "cache_read": 2.0000000000000002e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 2.5e-6,
+            "output": 5e-6,
+            "cache_read": 4.0000000000000003e-7,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": false
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "cache_read": 0.4,
+            "input": 2.5,
+            "output": 5
+          },
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Grok model for agentic tool use, reasoning, coding, and live assistance",
+        "family": "grok",
+        "id": "grok-4.20-0309-non-reasoning",
+        "last_updated": "2026-03-09",
+        "limit": {
+          "context": 1000000,
+          "output": 30000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Grok 4.20 (Non-Reasoning)",
+        "open_weights": false,
+        "reasoning": false,
+        "release_date": "2026-03-09",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "xai",
+      "model_id": "grok-4.20-0309-reasoning",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 30000,
+      "deprecation_date": null,
+      "release_date": "2026-03-09",
+      "pricing": {
+        "input_per_token": 1.25e-6,
+        "output_per_token": 2.5e-6,
+        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 1.25e-6,
+            "output": 2.5e-6,
+            "cache_read": 2.0000000000000002e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 2.5e-6,
+            "output": 5e-6,
+            "cache_read": 4.0000000000000003e-7,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "cache_read": 0.4,
+            "input": 2.5,
+            "output": 5
+          },
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Reasoning Grok for document-heavy analysis and long-horizon tool use",
+        "family": "grok",
+        "id": "grok-4.20-0309-reasoning",
+        "last_updated": "2026-03-09",
+        "limit": {
+          "context": 1000000,
+          "output": 30000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Grok 4.20 (Reasoning)",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [],
+        "release_date": "2026-03-09",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
+      }
+    },
+    {
+      "provider": "xai",
+      "model_id": "grok-4.20-multi-agent-0309",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 30000,
+      "deprecation_date": null,
+      "release_date": "2026-03-09",
+      "pricing": {
+        "input_per_token": 1.25e-6,
+        "output_per_token": 2.5e-6,
+        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 1.25e-6,
+            "output": 2.5e-6,
+            "cache_read": 2.0000000000000002e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 2.5e-6,
+            "output": 5e-6,
+            "cache_read": 4.0000000000000003e-7,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": false,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "cache_read": 0.4,
+            "input": 2.5,
+            "output": 5
+          },
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "Grok model for agentic tool use, reasoning, coding, and live assistance",
+        "family": "grok",
+        "id": "grok-4.20-multi-agent-0309",
+        "last_updated": "2026-03-09",
+        "limit": {
+          "context": 1000000,
+          "output": 30000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Grok 4.20 Multi-Agent",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "release_date": "2026-03-09",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": false
+      }
+    },
+    {
+      "provider": "xai",
+      "model_id": "grok-4.3",
+      "aliases": [],
+      "mode": "chat",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 30000,
+      "deprecation_date": null,
+      "release_date": "2026-04-17",
+      "pricing": {
+        "input_per_token": 1.25e-6,
+        "output_per_token": 2.5e-6,
+        "cache_read_input_per_token": 2.0000000000000002e-7,
+        "cache_creation_input_per_token": null,
+        "input_audio_per_token": null,
+        "output_reasoning_per_token": null,
+        "tiers": [
+          {
+            "up_to_tokens": 200000,
+            "input": 1.25e-6,
+            "output": 2.5e-6,
+            "cache_read": 2.0000000000000002e-7,
+            "cache_write": null
+          },
+          {
+            "up_to_tokens": null,
+            "input": 2.5e-6,
+            "output": 5e-6,
+            "cache_read": 4.0000000000000003e-7,
+            "cache_write": null
+          }
+        ]
+      },
+      "capabilities": {
+        "streaming": true,
+        "tool_calling": true,
+        "parallel_tool_calling": false,
+        "json_schema": true,
+        "system_messages": true,
+        "vision": true,
+        "audio_input": false,
+        "audio_output": false,
+        "pdf_input": true,
+        "prompt_caching": true,
+        "reasoning": true
+      },
+      "source": "models.dev",
+      "source_url": null,
+      "raw": {
+        "attachment": true,
+        "cost": {
+          "cache_read": 0.2,
+          "context_over_200k": {
+            "cache_read": 0.4,
+            "input": 2.5,
+            "output": 5
+          },
+          "input": 1.25,
+          "output": 2.5,
+          "tiers": [
+            {
+              "cache_read": 0.4,
+              "input": 2.5,
+              "output": 5,
+              "tier": {
+                "size": 200000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "description": "xAI's Grok for chat, coding, agentic tools, and lower hallucination risk",
+        "family": "grok",
+        "id": "grok-4.3",
+        "last_updated": "2026-04-17",
+        "limit": {
+          "context": 1000000,
+          "output": 30000
+        },
+        "modalities": {
+          "input": [
+            "text",
+            "image",
+            "pdf"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "name": "Grok 4.3",
+        "open_weights": false,
+        "reasoning": true,
+        "reasoning_options": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "release_date": "2026-04-17",
+        "structured_output": true,
+        "temperature": true,
+        "tool_call": true
       }
     }
   ]
