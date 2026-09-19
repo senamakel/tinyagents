@@ -186,8 +186,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // a narrower rule here than admission uses would let this loop
             // advertise an intrinsic schema that admission then treats as
             // owned by the registered tool (or, for `Hidden`, refuses).
-            let mut bridge =
-                crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery);
+            let mut bridge: Vec<_> =
+                crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery)
+                    .into_iter()
+                    .collect();
             if let Some(preparation) = &self.policy.tool_schemas {
                 // The bridge schemas are generated here, after the direct set
                 // was prepared above, so they need the same provider
