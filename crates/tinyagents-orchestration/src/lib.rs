@@ -11,9 +11,6 @@
 
 pub mod teams;
 
-/// Error returned by host-neutral orchestration operations.
-pub type OrchestrationError = anyhow::Error;
-
 #[cfg(test)]
 mod boundary_tests {
     #[test]
@@ -36,24 +33,6 @@ mod boundary_tests {
     #[test]
     fn public_team_surface_compiles() {
         fn assert_ledger<L: crate::teams::TeamLedger>() {}
-        fn assert_worker<W: crate::teams::TeamWorker>() {}
-        let _ = (
-            assert_ledger::<crate::teams::SessionTeamLedger>,
-            assert_worker::<NoopWorker>,
-        );
-    }
-
-    struct NoopWorker;
-
-    #[async_trait::async_trait]
-    impl crate::teams::TeamWorker for NoopWorker {
-        async fn run(
-            &self,
-            _request: crate::teams::TeamWorkRequest,
-        ) -> Result<crate::teams::TeamWorkResult, crate::OrchestrationError> {
-            Ok(crate::teams::TeamWorkResult {
-                output: String::new(),
-            })
-        }
+        let _ = assert_ledger::<crate::teams::SessionTeamLedger>;
     }
 }

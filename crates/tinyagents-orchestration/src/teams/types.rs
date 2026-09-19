@@ -1,8 +1,5 @@
-use async_trait::async_trait;
 use serde::Serialize;
 use tinyagents_session::run_ledger::{AgentTeam, AgentTeamMember, AgentTeamTask};
-
-use crate::OrchestrationError;
 
 /// Sentinel sender for a lead or user message rather than a member row.
 pub const LEAD_SENDER: &str = "lead";
@@ -57,24 +54,3 @@ impl std::fmt::Display for TeamError {
 }
 
 impl std::error::Error for TeamError {}
-
-/// A host-authorized unit of live team work. The orchestration crate never
-/// chooses the model, tools, workspace, or policy used by this request.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TeamWorkRequest {
-    pub team_id: String,
-    pub member_id: String,
-    pub task: AgentTeamTask,
-}
-
-/// Host-produced terminal worker result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TeamWorkResult {
-    pub output: String,
-}
-
-/// Host seam for executing already-authorized team work.
-#[async_trait]
-pub trait TeamWorker: Send + Sync {
-    async fn run(&self, request: TeamWorkRequest) -> Result<TeamWorkResult, OrchestrationError>;
-}

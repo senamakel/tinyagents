@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
+use std::thread;
 
 use chrono::Utc;
 use tempfile::TempDir;
@@ -93,11 +94,148 @@ fn task_claim_completion_and_quality_gate_are_durable() {
             .unwrap(),
         CompletionOutcome::GateFailed { .. }
     ));
+    let after_failed_gate = service.get_team(&team_id).unwrap().unwrap();
+    let durable_task = after_failed_gate
+        .tasks
+        .iter()
+        .find(|candidate| candidate.id == task.id)
+        .unwrap();
+    assert_eq!(
+        durable_task.status,
+        tinyagents_session::run_ledger::AgentTeamTaskStatus::InProgress
+    );
+    assert_eq!(durable_task.gate_status, "failed");
     assert!(matches!(
         service
             .complete_task(&team_id, &task.id, &member_id, &["proof".into()], true)
             .unwrap(),
         CompletionOutcome::Completed(_)
+    ));
+}
+
+#[test]
+fn racing_claims_have_one_winner_and_one_already_claimed_loser() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let view = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[
+                NewMember {
+                    name: "alice".into(),
+                    agent_id: None,
+                },
+                NewMember {
+                    name: "bob".into(),
+                    agent_id: None,
+                },
+            ],
+        )
+        .unwrap();
+    let task = service
+        .assign_task(&view.team.id, "race", None, None, &[])
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for (member, token) in [
+        (view.members[0].id.clone(), "alice-token"),
+        (view.members[1].id.clone(), "bob-token"),
+    ] {
+        let service = service.clone();
+        let team_id = view.team.id.clone();
+        let task_id = task.id.clone();
+        let barrier = barrier.clone();
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            service
+                .claim_task(&team_id, &task_id, &member, token)
+                .unwrap()
+        }));
+    }
+    let outcomes: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ClaimOutcome::Claimed(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, ClaimOutcome::AlreadyClaimed))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn completion_rejects_non_claimants_and_owner_mismatches() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let view = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[
+                NewMember {
+                    name: "alice".into(),
+                    agent_id: None,
+                },
+                NewMember {
+                    name: "bob".into(),
+                    agent_id: None,
+                },
+            ],
+        )
+        .unwrap();
+    let alice = &view.members[0].id;
+    let bob = &view.members[1].id;
+
+    let claimed_by_alice = service
+        .assign_task(&view.team.id, "alice work", None, None, &[])
+        .unwrap();
+    service
+        .claim_task(&view.team.id, &claimed_by_alice.id, alice, "alice-token")
+        .unwrap();
+    assert!(matches!(
+        service
+            .complete_task(
+                &view.team.id,
+                &claimed_by_alice.id,
+                bob,
+                &["proof".into()],
+                false
+            )
+            .unwrap(),
+        CompletionOutcome::NotClaimed
+    ));
+
+    let owned_by_alice = service
+        .assign_task(&view.team.id, "owned work", None, Some(alice), &[])
+        .unwrap();
+    service
+        .claim_task(&view.team.id, &owned_by_alice.id, bob, "bob-token")
+        .unwrap();
+    let outcome = service
+        .complete_task(
+            &view.team.id,
+            &owned_by_alice.id,
+            bob,
+            &["proof".into()],
+            false,
+        )
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        CompletionOutcome::GateFailed { ref reasons }
+            if reasons.iter().any(|reason| reason.contains("owned by"))
     ));
 }
 

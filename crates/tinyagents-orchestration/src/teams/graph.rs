@@ -1,7 +1,9 @@
 use std::future::Future;
+use std::sync::Arc;
 
 use anyhow::Result;
 use tinyagents_graph::export::GraphTopology;
+use tinyagents_graph::stream::GraphEventSink;
 use tinyagents_graph::{
     ClosureStateReducer, Command, CompiledGraph, GraphBuilder, NodeContext, NodeResult,
 };
@@ -27,7 +29,11 @@ fn graph_err(error: anyhow::Error) -> tinyagents_harness::TinyAgentsError {
 }
 
 /// Run the generic complete-or-fail member graph with host supplied effects.
+///
+/// `event_sink` is optional because observability belongs to the embedding host;
+/// when supplied it receives the graph executor's lifecycle events unchanged.
 pub async fn run_member_graph<W, WF, C, CF, F, FF>(
+    event_sink: Option<Arc<dyn GraphEventSink>>,
     run_worker: W,
     on_complete: C,
     on_failed: F,
@@ -40,7 +46,11 @@ where
     F: Fn(String) -> FF + Clone + Send + Sync + 'static,
     FF: Future<Output = Result<()>> + Send + 'static,
 {
-    build_member_graph(run_worker, on_complete, on_failed)?
+    let mut graph = build_member_graph(run_worker, on_complete, on_failed)?;
+    if let Some(event_sink) = event_sink {
+        graph = graph.with_event_sink(event_sink);
+    }
+    graph
         .run(MemberState::default())
         .await
         .map_err(|error| anyhow::anyhow!("member graph run failed: {error}"))?;

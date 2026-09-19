@@ -1531,7 +1531,6 @@ name = "tinyagents-orchestration"
 version = "2.1.2"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "serde",
  "serde_json",

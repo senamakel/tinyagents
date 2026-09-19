@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use tinyagents_graph::stream::CollectingSink;
+
 use super::*;
 
 #[tokio::test]
@@ -10,6 +12,7 @@ async fn member_graph_routes_completed_and_failed_workers() {
     let complete_flag = complete.clone();
     let failed_flag = failed.clone();
     run_member_graph(
+        None,
         || async {
             Ok(MemberOutcome::Completed {
                 output: "done".into(),
@@ -39,6 +42,7 @@ async fn member_graph_routes_completed_and_failed_workers() {
     let failed = Arc::new(AtomicBool::new(false));
     let failed_flag = failed.clone();
     run_member_graph(
+        None,
         || async {
             Ok(MemberOutcome::Failed {
                 reason: "boom".into(),
@@ -62,10 +66,33 @@ async fn member_graph_routes_completed_and_failed_workers() {
 #[tokio::test]
 async fn worker_engine_errors_propagate() {
     let result = run_member_graph(
+        None,
         || async { Err(anyhow::anyhow!("worker unavailable")) },
         |_| async { Ok(()) },
         |_| async { Ok(()) },
     )
     .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn injected_event_sink_observes_member_graph_lifecycle() {
+    let sink = Arc::new(CollectingSink::new());
+    run_member_graph(
+        Some(sink.clone()),
+        || async {
+            Ok(MemberOutcome::Completed {
+                output: "done".into(),
+            })
+        },
+        |_| async { Ok(()) },
+        |_| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !sink.is_empty(),
+        "an injected sink must receive the member graph lifecycle"
+    );
 }
