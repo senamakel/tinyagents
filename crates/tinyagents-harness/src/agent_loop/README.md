@@ -43,11 +43,17 @@ A turn's tool calls are driven in three phases — serial **admission**
 schema validation, `ToolStarted`), **execution**, and a serial **fold** in
 original call order (`after_tool`, `ToolCompleted`, transcript append).
 
-When a turn requests two or more tools and **no tool-wrap middleware**
-(`ToolMiddleware`) is registered, execution runs concurrently (`join_all`),
-so turn latency is the slowest tool instead of the sum. Tool-wrap middleware
-holds `&mut RunContext` across each wrapped call — part of its public
-contract — so its presence keeps the historical serial path. In both modes
+Execution runs concurrently (`join_all`) only when *all* of the following
+hold: the turn requests two or more tools, zero lifecycle middleware is
+registered, zero tool-wrap middleware (`ToolMiddleware`) is registered, and
+every call's tool reports `Tool::is_concurrency_safe() == true` (the trait
+default is `false`, so a tool must opt in). See
+`should_execute_tools_concurrently` and `batch_is_canonical_parallel_safe` in
+`tools.rs` (~1015-1022). Tool-wrap middleware holds `&mut RunContext` across
+each wrapped call — part of its public contract — so its presence keeps the
+historical serial path, as does any lifecycle middleware (which can rewrite a
+call's name or arguments during admission). When concurrency does trigger,
+turn latency is the slowest tool instead of the sum. In both modes
 results are attached to their original `tool_call_id` in the calls' original
 order, every call's `ToolStarted` precedes its `ToolCompleted`, and
 `ToolCompleted` events are emitted in call order. The first failing call (in
