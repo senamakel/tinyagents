@@ -1,4 +1,11 @@
 //! Shared, dynamically updateable tool-timeout resolution.
+//!
+//! [`ToolTimeoutSettings`] turns a `tinytools::ToolTimeout` policy (inherit /
+//! unbounded / explicit millis) into an enforced [`ResolvedToolTimeout`] the
+//! agent loop wraps a tool call with. It is cloned onto every harness that
+//! shares a host process, but the inherited deadline lives behind an atomic
+//! so a config reload or operator override takes effect on all of them
+//! without rebuilding a harness or invalidating in-flight calls.
 
 use std::fmt;
 use std::sync::Arc;
