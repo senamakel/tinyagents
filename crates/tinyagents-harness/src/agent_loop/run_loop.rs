@@ -1341,7 +1341,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .remove(&call_id)
                 .expect("every pending call was validated as resolved above");
             match decision {
-                crate::tool::ApprovalDecision::Deny { message } => {
+                crate::tool::ToolApprovalDecision::Deny { message } => {
                     let record = ctx.emit(AgentEvent::ToolDenied {
                         call_id,
                         message: message.clone(),
@@ -1359,7 +1359,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .await?;
                 }
                 decision => {
-                    if let crate::tool::ApprovalDecision::ApproveWithArgs(arguments) = decision {
+                    if let crate::tool::ToolApprovalDecision::ApproveWithArgs(arguments) = decision
+                    {
                         call.arguments = arguments;
                     }
                     let record = ctx.emit(AgentEvent::ToolApproved { call_id });

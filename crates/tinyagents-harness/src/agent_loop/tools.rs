@@ -113,7 +113,7 @@ enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
 /// Which [`DeferredToolRequests`] list a deferred call belongs to.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum DeferredKind {
-    /// Needs an [`crate::tool::ApprovalDecision`]; the harness runs the tool
+    /// Needs an [`crate::tool::ToolApprovalDecision`]; the harness runs the tool
     /// on approval.
     Approval,
     /// Needs a [`crate::tool::DeferredCallResult`]; the host runs the tool.

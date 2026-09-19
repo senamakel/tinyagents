@@ -47,7 +47,7 @@ impl DeferredToolRequests {
         for call in &self.approvals {
             results
                 .approvals
-                .insert(CallId::new(call.id.clone()), ApprovalDecision::Approve);
+                .insert(CallId::new(call.id.clone()), ToolApprovalDecision::Approve);
         }
         results
     }
@@ -63,7 +63,7 @@ impl DeferredToolResults {
     #[must_use]
     pub fn approve(mut self, call_id: impl Into<String>) -> Self {
         self.approvals
-            .insert(CallId::new(call_id), ApprovalDecision::Approve);
+            .insert(CallId::new(call_id), ToolApprovalDecision::Approve);
         self
     }
 
@@ -72,7 +72,7 @@ impl DeferredToolResults {
     pub fn approve_with_args(mut self, call_id: impl Into<String>, arguments: Value) -> Self {
         self.approvals.insert(
             CallId::new(call_id),
-            ApprovalDecision::ApproveWithArgs(arguments),
+            ToolApprovalDecision::ApproveWithArgs(arguments),
         );
         self
     }
@@ -82,7 +82,7 @@ impl DeferredToolResults {
     pub fn deny(mut self, call_id: impl Into<String>, message: impl Into<String>) -> Self {
         self.approvals.insert(
             CallId::new(call_id),
-            ApprovalDecision::Deny {
+            ToolApprovalDecision::Deny {
                 message: message.into(),
             },
         );

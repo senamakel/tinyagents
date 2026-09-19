@@ -33,7 +33,7 @@ fn remaining_reports_every_unresolved_id_in_deferral_order() {
     let mut partial = DeferredToolResults::default();
     partial
         .approvals
-        .insert(CallId::new("appr-2"), ApprovalDecision::Approve);
+        .insert(CallId::new("appr-2"), ToolApprovalDecision::Approve);
     partial.calls.insert(
         CallId::new("ext-1"),
         DeferredCallResult::Result(ToolResult::success("done")),
@@ -42,7 +42,7 @@ fn remaining_reports_every_unresolved_id_in_deferral_order() {
 
     partial.approvals.insert(
         CallId::new("appr-1"),
-        ApprovalDecision::Deny {
+        ToolApprovalDecision::Deny {
             message: "no".into(),
         },
     );
@@ -62,6 +62,6 @@ fn remaining_accepts_a_decision_in_either_map() {
     );
     results
         .approvals
-        .insert(CallId::new("ext-1"), ApprovalDecision::Approve);
+        .insert(CallId::new("ext-1"), ToolApprovalDecision::Approve);
     assert_eq!(requests.remaining(&results), vec![CallId::new("appr-2")]);
 }

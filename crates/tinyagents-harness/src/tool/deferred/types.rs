@@ -39,7 +39,7 @@ pub struct DeferredToolRequests {
     #[serde(default)]
     pub calls: Vec<ToolCall>,
     /// Calls that need a human decision before the harness runs them.
-    /// Resolve each with an [`ApprovalDecision`].
+    /// Resolve each with an [`ToolApprovalDecision`].
     #[serde(default)]
     pub approvals: Vec<ToolCall>,
     /// Host-only metadata attached at deferral time (the `metadata` payload
@@ -52,7 +52,7 @@ pub struct DeferredToolRequests {
 /// A human decision on one call listed in [`DeferredToolRequests::approvals`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
-pub enum ApprovalDecision {
+pub enum ToolApprovalDecision {
     /// Run the tool now with the arguments the model supplied.
     Approve,
     /// Run the tool now with these edited arguments instead of the model's.
@@ -86,7 +86,7 @@ pub enum DeferredCallResult {
 pub struct DeferredToolResults {
     /// Decisions for the calls in [`DeferredToolRequests::approvals`].
     #[serde(default)]
-    pub approvals: BTreeMap<CallId, ApprovalDecision>,
+    pub approvals: BTreeMap<CallId, ToolApprovalDecision>,
     /// Outcomes for the calls in [`DeferredToolRequests::calls`].
     #[serde(default)]
     pub calls: BTreeMap<CallId, DeferredCallResult>,

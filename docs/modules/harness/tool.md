@@ -388,7 +388,7 @@ assert!(pending.remaining(&results).is_empty());
 let run = harness.resume_deferred(&state, ctx, run.messages, results).await?;
 ```
 
-`ApprovalDecision::{Approve, ApproveWithArgs(Value), Deny { message }}` and
+`ToolApprovalDecision::{Approve, ApproveWithArgs(Value), Deny { message }}` and
 `DeferredCallResult::{Result(ToolResult), Retry(String), Failed(String)}`
 are the per-call vocabularies; `DeferredToolRequests::remaining(&results)`
 lists what is still unresolved and `approve_all()` builds a blanket

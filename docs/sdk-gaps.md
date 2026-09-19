@@ -429,7 +429,7 @@ middleware), or a `ToolRegistry::register_external(schema)` tool all produce
 `AgentRun::deferred = Some(DeferredToolRequests { calls, approvals,
 metadata })` after the batch's other calls run. Resume with
 `AgentHarness::resume_deferred` / `AgentTurnRequest::with_deferred_results`
-and `DeferredToolResults { approvals: ApprovalDecision::{Approve,
+and `DeferredToolResults { approvals: ToolApprovalDecision::{Approve,
 ApproveWithArgs, Deny}, calls: DeferredCallResult::{Result, Retry, Failed} }`;
 `remaining()` reports unresolved ids. A `DeferredToolHandler` on the harness
 resolves inline; `HumanApprovalMiddleware::with_approval_outcome` returns

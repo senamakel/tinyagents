@@ -154,7 +154,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// `messages` is the deferred run's transcript (`run.messages`, which
     /// still ends with the assistant tool-call row whose deferred calls are
     /// unanswered) and `results` resolves every pending call: an
-    /// [`crate::tool::ApprovalDecision`] runs or denies an approval-gated
+    /// [`crate::tool::ToolApprovalDecision`] runs or denies an approval-gated
     /// call, a [`crate::tool::DeferredCallResult`] injects the host's outcome
     /// for an external one. The loop answers each call — executing approved
     /// ones for real, with the model's or the approver's edited arguments —
