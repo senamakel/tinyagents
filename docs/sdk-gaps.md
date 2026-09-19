@@ -65,15 +65,10 @@ registries and adapters. That means the SDK cannot make fail-closed decisions
 about whether a tool should be exposed, approved, retried, timed out, or allowed
 to touch the filesystem/network.
 
-Implement:
+Implement (shipped as vendored `tinytools::ToolPolicy` — side effects,
+runtime requirements, access requirements — plus `ToolPolicyMiddleware`;
+`access.approval_required` now also drives the A2 deferral in §14):
 
-- Add SDK-owned tool metadata, probably `ToolPolicy` or `ToolSafety`.
-- Represent side effects: `read_only`, `writes_files`, `network`,
-  `installs_dependencies`, `destructive`, `external_service`, `payment`.
-- Represent runtime requirements: timeout, retry policy, idempotency,
-  cancellation behavior, sandbox mode, max result bytes, streaming support.
-- Represent access requirements: workspace root policy, trusted roots,
-  credentials needed, user approval required, background-safe vs interactive.
 - Add helper middleware for policy enforcement before model-visible exposure and
   before execution.
 
@@ -432,6 +427,29 @@ Acceptance criteria (harness scope):
       side only; graph `Command`/`Interrupt` remain a separate vocabulary).
 - [x] Control decisions are visible in journals for audit/replay
       (`AgentEvent::ControlApplied`).
+
+### 14. Deferred Tool Calls (A2)
+
+Status: shipped (harness); durability stays host-owned.
+
+Landed as `docs/runtime-comparison/plan.md` Phase 2 item A2. A tool call now
+leaves the loop as a typed, resumable output instead of `Err(Interrupted)`:
+`ToolPolicy.access.approval_required`, `Err(TinyAgentsError::ApprovalRequired
+{ metadata })` / `CallDeferred { metadata }` (from a tool or a `before_tool`
+middleware), or a `ToolRegistry::register_external(schema)` tool all produce
+`AgentRun::deferred = Some(DeferredToolRequests { calls, approvals,
+metadata })` after the batch's other calls run. Resume with
+`AgentHarness::resume_deferred` / `AgentTurnRequest::with_deferred_results`
+and `DeferredToolResults { approvals: ApprovalDecision::{Approve,
+ApproveWithArgs, Deny}, calls: DeferredCallResult::{Result, Retry, Failed} }`;
+`remaining()` reports unresolved ids. A `DeferredToolHandler` on the harness
+resolves inline; `HumanApprovalMiddleware::with_approval_outcome` returns
+`ApprovalOutcome::{Allow, Deny, Defer}`. Events: `ToolDeferred`,
+`ToolApproved`, `ToolDenied`. OpenHuman's `security/approval::ApprovalGate`
+becomes a `DeferredToolHandler`. Persistence of `run.messages` +
+`run.deferred` is the host's (the session ledger depends on the harness, so
+the loop cannot write it); see
+[`docs/modules/harness/tool.md`](modules/harness/tool.md#deferred-tool-calls-approval-and-external-execution-a2).
 
 ### 15. Registry Diagnostics And Introspection
 
