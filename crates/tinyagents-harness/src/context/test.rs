@@ -186,7 +186,9 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
             .with_max_turn_output_tokens(123),
         (),
     );
-    let child = parent.child(RunConfig::new("child"), "child-data").unwrap();
+    let child = parent
+        .child_with_data(RunConfig::new("child"), "child-data")
+        .unwrap();
     let grandchild = child.child(RunConfig::new("grandchild"), ()).unwrap();
 
     assert_eq!(parent.lineage().root_run_id.as_str(), "root");
