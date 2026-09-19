@@ -1105,6 +1105,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             duration_ms: Some(duration_ms),
             output_bytes: Some(output_bytes),
             error,
+            metadata: result.metadata.clone(),
         });
         crate::runtime::emit_host_progress::<State, Ctx>(
             ctx,

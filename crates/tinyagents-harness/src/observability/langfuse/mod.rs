@@ -543,6 +543,11 @@ fn observation_event(
             duration_ms,
             output_bytes,
             error,
+            // The tool's host-only result metadata (B2) is not exported: the
+            // observation's `metadata` is the exporter's own correlation
+            // record, and a tool payload of arbitrary size/shape belongs in a
+            // deliberate mapping, not merged in by default.
+            metadata: _,
         } => {
             // Prefer the loop-captured start + real duration for the end time;
             // fall back to the journal timestamp. A failed call is marked ERROR
