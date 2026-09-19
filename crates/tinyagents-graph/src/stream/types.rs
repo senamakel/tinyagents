@@ -255,9 +255,13 @@ impl GraphEvent {
 
 /// High-level projection modes for a graph run stream.
 ///
-/// These mirror the LangGraph stream modes. The milestone executor exposes them
-/// as a selection enum; richer typed `StreamPart` projection is future work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// These mirror the LangGraph stream modes. [`GraphEvent::mode`] maps every
+/// event kind onto one of these (or `None` for the lifecycle events every
+/// mode should still see); [`super::project::project_graph_event`] applies
+/// that mapping to filter a raw [`GraphEventEnvelope`] stream the way
+/// [`tinyagents_harness::stream::project_event_for_modes`] does for
+/// [`tinyagents_harness::events::AgentEvent`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StreamMode {
     /// Full state values after each step.
     Values,
@@ -271,4 +275,79 @@ pub enum StreamMode {
     Interrupts,
     /// Arbitrary user stream writes from inside nodes.
     Custom,
+    /// Task-level lifecycle: [`GraphEvent::TaskScheduled`],
+    /// [`GraphEvent::TaskStarted`], and [`GraphEvent::TaskCompleted`] — the
+    /// LangGraph `"tasks"` mode, narrower than [`StreamMode::Debug`] (no
+    /// step/checkpoint/routing internals, just task start/end).
+    Tasks,
+    /// Checkpoint lifecycle only: [`GraphEvent::CheckpointSaved`] and
+    /// [`GraphEvent::CheckpointRestored`] — the LangGraph `"checkpoints"`
+    /// mode.
+    Checkpoints,
+}
+
+impl GraphEvent {
+    /// Returns the [`StreamMode`] this event projects onto, when it belongs
+    /// to a narrower mode than [`StreamMode::Debug`] (which every event kind
+    /// still counts toward — see
+    /// [`super::project::project_graph_event`]).
+    ///
+    /// Run/step lifecycle events (`RunStarted`, `StepStarted`, …) have no
+    /// narrower home and return `None`: they surface only under
+    /// [`StreamMode::Debug`].
+    pub fn mode(&self) -> Option<StreamMode> {
+        match self {
+            GraphEvent::TaskScheduled { .. }
+            | GraphEvent::TaskStarted { .. }
+            | GraphEvent::TaskCompleted { .. }
+            | GraphEvent::NodeStarted { .. }
+            | GraphEvent::NodeCompleted { .. }
+            | GraphEvent::NodeFailed { .. }
+            | GraphEvent::NodeRetryScheduled { .. } => Some(StreamMode::Tasks),
+            GraphEvent::StateUpdated { .. } => Some(StreamMode::Updates),
+            GraphEvent::CheckpointSaved { .. } | GraphEvent::CheckpointRestored { .. } => {
+                Some(StreamMode::Checkpoints)
+            }
+            GraphEvent::InterruptEmitted { .. } => Some(StreamMode::Interrupts),
+            GraphEvent::Custom { .. } => Some(StreamMode::Custom),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GraphEventEnvelope
+// ---------------------------------------------------------------------------
+
+/// A [`GraphEvent`] wrapped with the run/task correlation and ordering
+/// metadata every emission site needs to be attributable in a merged,
+/// multi-run stream.
+///
+/// `run_id` and `ns` (the checkpoint namespace) identify which run — and
+/// which level of subgraph nesting within it — emitted the event, so a
+/// parent run's observer can tell its own events apart from a nested
+/// subgraph's. `seq` is a monotonic counter scoped to the emitting
+/// [`crate::compiled::CompiledGraph`] instance (shared across a clone that
+/// only changes `event_sink`, such as journal wrapping, but **not** shared
+/// between a parent graph and a subgraph embedded as a node — the subgraph's
+/// [`Self::ns`] already distinguishes its stream). `task_id` is `None` until
+/// per-task correlation ids land end-to-end
+/// (`docs/runtime-comparison/feature-gaps.md` D4); the field exists now so
+/// adding that id later is additive.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GraphEventEnvelope {
+    /// The run that emitted this event.
+    pub run_id: RunId,
+    /// Correlation id for the task this event belongs to, when task ids are
+    /// wired end to end. `None` today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<TaskId>,
+    /// Checkpoint namespace of the emitting graph instance (empty for a
+    /// top-level run; one segment deeper per level of subgraph nesting).
+    pub ns: Vec<String>,
+    /// Monotonically increasing sequence number, scoped as described on
+    /// [`Self`].
+    pub seq: u64,
+    /// The wrapped event.
+    pub event: GraphEvent,
 }
