@@ -447,6 +447,41 @@ where
         Ok(out)
     }
 
+    /// Replays a [`crate::channel::ChannelSet::with_delta`]-tracked
+    /// channel's per-step write history for `config.thread_id`/
+    /// `config.namespace` (I5/R3).
+    ///
+    /// The default implementation walks [`Checkpointer::state_history`]
+    /// (newest-first, so it is reversed to oldest-first here) and
+    /// concatenates each checkpoint's own
+    /// [`Checkpoint::channel_deltas`] entry for `channel`, in lineage
+    /// order — every checkpoint carries only *its own step's* writes to a
+    /// delta-tracked channel (not a cumulative history), which is what
+    /// keeps a single checkpoint's size bounded regardless of how long the
+    /// channel's append history grows. A checkpoint with no recorded delta
+    /// for `channel` (predates delta tracking, or `channel` was not
+    /// delta-tracked when it was written) contributes nothing.
+    ///
+    /// A backend may override this with a cheaper single-pass read; the
+    /// observable result must remain identical.
+    async fn delta_history(
+        &self,
+        config: &CheckpointConfig,
+        channel: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut tuples = self
+            .state_history(&config.thread_id, &config.namespace, None)
+            .await?;
+        tuples.reverse();
+        let mut out = Vec::new();
+        for tuple in &tuples {
+            if let Some(deltas) = tuple.checkpoint.channel_deltas.get(channel) {
+                out.extend(deltas.iter().cloned());
+            }
+        }
+        Ok(out)
+    }
+
     // ---- Thread operations -------------------------------------------------
     //
     // Three storage-specific primitives (`list_threads`, `delete_thread`,
