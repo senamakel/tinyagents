@@ -14,11 +14,19 @@ use std::time::Duration;
 
 use tinytools::ToolTimeout;
 
+/// Shared state behind every [`ToolTimeoutSettings`] clone.
 #[derive(Debug)]
 struct ToolTimeoutSettingsInner {
+    /// Timeout applied to `ToolTimeout::Inherit`; `0` means disabled. Mutable
+    /// at runtime, hence the atomic rather than a plain `u64`.
     inherited_ms: AtomicU64,
+    /// Lower bound an explicit or inherited budget is clamped to.
     min_ms: u64,
+    /// Upper bound an explicit or inherited budget is clamped to.
     max_ms: u64,
+    /// Extra slack added to the enforced deadline beyond the reported budget,
+    /// to absorb scheduling jitter without prematurely cancelling a tool that
+    /// finished within its budget.
     grace_ms: u64,
 }
 

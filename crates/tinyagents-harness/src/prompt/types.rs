@@ -150,7 +150,9 @@ pub struct PromptAssembly {
 /// Caller-supplied byte and token ceilings for pure prompt assembly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PromptBudget {
+    /// Maximum total bytes of assembled text.
     pub max_bytes: usize,
+    /// Maximum total tokens of assembled text, per the caller's tokenizer.
     pub max_tokens: usize,
 }
 
