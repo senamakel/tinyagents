@@ -66,7 +66,7 @@ pub struct CacheStats {
 pub enum CacheSkipReason {
     /// No [`ResponseCache`] is attached to the harness.
     NoCacheAttached,
-    /// The effective [`CachePolicy`] disables response caching for this call.
+    /// The effective [`CachePolicy`](tinyinference_llm::cache::CachePolicy) disables response caching for this call.
     PolicyDisabled,
     /// The transcript already contains an assistant or tool turn, so the
     /// request is unique to this run and can never be re-served.
