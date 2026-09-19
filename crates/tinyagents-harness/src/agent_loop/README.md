@@ -42,6 +42,12 @@ A turn's tool calls are driven in three phases — serial **admission**
 (cancellation/deadline/limit checks, `before_tool`, unknown-tool policy,
 schema validation, `ToolStarted`), **execution**, and a serial **fold** in
 original call order (`after_tool`, `ToolCompleted`, transcript append).
+The fold also records a result's host-only `metadata` on the event and on
+`AgentRun::tool_metadata`, and hands back its `follow_up` content as a user
+message that the batch driver appends only after the batch's last tool row
+(B2) — a provider requires every tool row to follow its assistant row
+directly, so follow-ups never interleave with tool rows. The same holds for
+the deferred-resume batch in `apply_deferred_results`.
 
 Execution runs concurrently only when *all* of the following hold: the turn
 requests two or more tools, zero tool-wrap middleware (`ToolMiddleware`) is
