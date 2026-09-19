@@ -548,9 +548,11 @@ async fn bounded_fires_the_timeout_message_only_when_the_deadline_elapses() {
 async fn bounded_does_not_build_the_timeout_message_on_the_success_path() {
     let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-no-timeout"), ());
     let result: Result<u32> = ctx
-        .bounded(Some(std::time::Duration::from_secs(60)), async { Ok(7) }, || {
-            panic!("timeout_message must not be called when the future finishes first")
-        })
+        .bounded(
+            Some(std::time::Duration::from_secs(60)),
+            async { Ok(7) },
+            || panic!("timeout_message must not be called when the future finishes first"),
+        )
         .await;
     assert_eq!(result.unwrap(), 7);
 }
@@ -570,5 +572,8 @@ async fn bounded_returns_cancelled_when_the_run_is_cancelled_before_the_future_r
             || "unused".to_string(),
         )
         .await;
-    assert!(matches!(result, Err(crate::error::TinyAgentsError::Cancelled)));
+    assert!(matches!(
+        result,
+        Err(crate::error::TinyAgentsError::Cancelled)
+    ));
 }
