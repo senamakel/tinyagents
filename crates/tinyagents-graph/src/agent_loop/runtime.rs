@@ -584,7 +584,3 @@ fn goto(loop_state: LoopState, target: &str) -> NodeResult<LoopState> {
         resume_by_task: Default::default(),
     })
 }
-
-// Re-exported so `compile.rs`/`iter.rs` (same crate) can name the node ids
-// without importing `super::types::node` redundantly.
-pub(crate) use super::types::node as node_ids;
