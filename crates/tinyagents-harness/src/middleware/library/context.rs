@@ -179,7 +179,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
             return Ok(());
         }
 
-        let (to_summarize, mut to_keep) = self.policy.plan(&request.messages);
+        let (to_summarize, to_keep) = self.policy.plan(&request.messages);
         // Nothing old enough to compress (e.g. keep_last covers everything):
         // leave the transcript untouched rather than summarizing an empty set.
         if to_summarize.is_empty() {
