@@ -209,10 +209,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ///   toolset owns (through [`crate::tool::toolset::CombinedToolSet`],
     ///   say) executes through [`crate::tool::toolset::ToolSet::call`].
     ///
-    /// A common construction wraps the harness's own registry:
-    /// `Arc::new(harness.tools().clone_handle())`, though nothing requires
-    /// the toolset chain to include the registry at all — see
-    /// [`crate::tool::toolset::CombinedToolSet`] to compose the two.
+    /// A caller building a fresh [`crate::tool::ToolRegistry`] separately
+    /// (rather than through [`Self::register_tool`]) can pass it here
+    /// directly — [`crate::tool::ToolRegistry`] implements
+    /// [`crate::tool::toolset::ToolSet`] — or compose it with other
+    /// toolsets via [`crate::tool::toolset::CombinedToolSet`].
     ///
     /// `None` (never calling this) leaves every existing harness's turn
     /// behavior exactly as before this field existed. Returns `&mut Self`
