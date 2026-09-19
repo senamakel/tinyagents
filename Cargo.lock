@@ -1588,6 +1588,7 @@ name = "tinyagents-session"
 version = "2.1.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "rusqlite",
  "serde",
