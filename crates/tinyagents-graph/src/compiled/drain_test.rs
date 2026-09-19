@@ -212,3 +212,25 @@ async fn undrained_runs_report_drained_false_on_every_outcome() {
     assert!(!unsignalled.drained);
     assert_eq!(unsignalled.status.status, ExecutionStatus::Completed);
 }
+
+#[tokio::test]
+async fn probe_sequential_stall_keeps_unstarted_siblings_pending() {
+    use crate::command::Interrupt;
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s)) })
+        .add_node("b", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Interrupt(Interrupt::new("b", serde_json::json!({}))))
+        })
+        .add_node("c", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+        .set_entry("a")
+        .add_edge("a", "b")
+        .add_edge("a", "c")
+        .set_finish("b")
+        .set_finish("c")
+        .compile()
+        .unwrap()
+        .with_checkpointer(Arc::new(InMemoryCheckpointer::<i32>::new()));
+    let paused = graph.run_with_thread("probe", 0).await.unwrap();
+    let snapshot = graph.get_state("probe", None).await.unwrap().unwrap();
+    panic!("pending after sequential stall: {:?} (visited {:?})", snapshot.next_nodes, paused.visited);
+}
