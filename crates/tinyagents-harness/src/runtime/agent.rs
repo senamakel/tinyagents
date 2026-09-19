@@ -561,6 +561,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         }
     }
 
+    /// Resolves the host agent definition, screens the caller's messages,
+    /// composes the system prompt/preamble, and folds in memory and experience
+    /// recall to produce a [`PreparedAgentTurn`].
+    ///
+    /// Order matters: the definition must resolve and validate before any host
+    /// I/O runs, user messages are screened before their text is used as a
+    /// memory/experience recall query, and recalled/stored text is screened a
+    /// second time (as [`ContentOrigin::Stored`]) before it is appended to the
+    /// transcript — a host's own stored content is not exempt from screening.
     async fn prepare_agent_turn(
         &self,
         host: std::sync::Arc<crate::host::HostCapabilities<State>>,
