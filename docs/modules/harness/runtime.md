@@ -149,6 +149,34 @@ inside a fenced code block. A model that quotes the syntax while explaining
 it (or answers under a model that *does* support native tool calling) is
 never executed as a real call.
 
+Every safe checkpoint above — before a model call is dispatched, after the
+model response, and after tool execution — also drains any pending
+`MiddlewareControl` (see
+[middleware control outcomes](middleware.md#middleware-control-a1)) and, at
+the tool-execution checkpoint, first asks
+`MiddlewareStack::any_should_stop_after_turn` whether any registered
+middleware wants to end the run based on the whole turn's results. Step 19's
+structured-output validation is the output-validation retry loop (A3, see
+[structured-output.md](structured-output.md#error-policy-the-output-validation-retry-loop-a3)):
+a schema failure or an `OutputValidator` rejection re-asks the model (bounded
+by `RunPolicy::output_retry.max_attempts`) instead of failing the run on the
+first attempt. Step 12's tool-call handling additionally honors
+`RunPolicy::end_strategy` (A6, see
+[structured-output.md](structured-output.md#endstrategy-output-tool--function-tools-in-one-turn-a6))
+when a turn returns both a structured-output tool call and real tool calls.
+
+### `RunPolicy` fields added by Phase 2 (A1/A3/A6)
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `output_retry` | `OutputRetryPolicy { max_attempts: u8, message_template: String }` | `max_attempts = 1` | Bounds the output-validation retry loop. |
+| `end_strategy` | `EndStrategy` | `Graceful` | Resolves output-tool + function-tool turns. |
+| `structured_strategy_override` | `Option<StructuredStrategyOverride>` | `None` | Forces `Prompted`/`ToolCallUnion` for `ResponseFormat::Auto`. |
+
+`AgentHarness::with_output_validator(Arc<dyn OutputValidator<State, Ctx>>)`
+registers the validator the output-retry loop consults; only one may be
+installed (calling it again replaces the previous one).
+
 ## Middleware
 
 Middleware is the main extension point for behavior that cuts across providers,
