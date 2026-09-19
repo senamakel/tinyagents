@@ -105,6 +105,16 @@ struct FoldAccum<Update> {
     goto_map: HashMap<usize, Vec<RouteTarget>>,
 }
 
+/// The per-branch identity [`StepRunner::fold_result`] needs to emit its
+/// events and update its accumulators. Bundled (rather than four separate
+/// parameters) to keep `fold_result`'s signature small.
+struct FoldBranch<'a> {
+    run_id: &'a RunId,
+    index: usize,
+    node_id: &'a NodeId,
+    step: usize,
+}
+
 /// Runs one superstep's active node set against a [`CompiledGraph`].
 ///
 /// A thin wrapper around a `&CompiledGraph` borrow — it exists to give the
