@@ -209,10 +209,11 @@ pub(crate) struct PhaseRegistration<S: WorkflowStore> {
 }
 
 impl<S: WorkflowStore> PhaseRegistration<S> {
-    /// Exposed `pub(crate)` so `workflow::tests` can exercise
+    /// Exposed `pub(crate)` (test-only) so `workflow::tests` can exercise
     /// [`WorkflowChildRegistration::register`]'s CAS semantics directly,
     /// from a real tokio async context, without going through the whole
     /// [`WorkflowEngine::drive`] loop.
+    #[cfg(test)]
     pub(crate) fn new(
         store: Arc<S>,
         owner: String,
