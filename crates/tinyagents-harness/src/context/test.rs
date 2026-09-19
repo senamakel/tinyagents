@@ -398,6 +398,7 @@ fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
             messages: 3,
             text_chars: 13,
             images: 1,
+            media: 0,
             tool_calls: 1,
             tool_results: 1,
             paired_tool_results: 1,
