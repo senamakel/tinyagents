@@ -39,7 +39,7 @@ use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
 /// nodes ever run concurrently (it is a strictly sequential chain), so the
 /// locks are never contended — they exist to satisfy `Send + Sync + 'static`
 /// and the `Fn` bound, not to arbitrate real concurrency.
-pub(crate) struct LoopRuntime<State: Send + Sync, Ctx: Send + Sync> {
+pub struct LoopRuntime<State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) harness: Arc<AgentHarness<State, Ctx>>,
     pub(crate) app_state: Arc<State>,
     pub(crate) ctx: Mutex<RunContext<Ctx>>,
