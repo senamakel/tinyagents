@@ -1,25 +1,2 @@
     Blocking waiting for file lock on build directory
-   Compiling tinyagents-graph v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-graph)
-warning: ignoring -C extra-filename flag due to -o flag
-
-error[E0425]: cannot find function `fold_write_records` in this scope
-   --> crates/tinyagents-graph/src/checkpoint/file.rs:815:17
-    |
-815 |                 fold_write_records(existing_records, &checkpoint_id, &config.namespace);
-    |                 ^^^^^^^^^^^^^^^^^^ not found in this scope
-
-error[E0425]: cannot find function `append_atomic` in this scope
-   --> crates/tinyagents-graph/src/checkpoint/file.rs:870:13
-    |
-870 |             append_atomic(&path, buf.as_bytes())?;
-    |             ^^^^^^^^^^^^^ not found in this scope
-
-error[E0425]: cannot find function `fold_write_records` in this scope
-   --> crates/tinyagents-graph/src/checkpoint/file.rs:891:16
-    |
-891 |             Ok(fold_write_records(records, &checkpoint_id, &config.namespace))
-    |                ^^^^^^^^^^^^^^^^^^ not found in this scope
-
-For more information about this error, try `rustc --explain E0425`.
-warning: `tinyagents-graph` (lib) generated 1 warning
-error: could not compile `tinyagents-graph` (lib) due to 3 previous errors; 1 warning emitted
+   Compiling tinyagents-harness v2.1.2 (/home/enamakel/work/tinyagents/worktrees/runtime-comparison/crates/tinyagents-harness)

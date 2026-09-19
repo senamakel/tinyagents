@@ -1572,12 +1572,24 @@ mod canonical_result_tests {
     }
 
     #[test]
-    fn lifecycle_rewrite_of_a_safe_call_forces_the_serial_route() {
-        // `before_tool` receives `&mut ToolCall`, so a middleware may rewrite
-        // a raw-safe call into an unsafe tool/action. The loop consequently
-        // never selects its concurrent path while any lifecycle middleware is
-        // present, regardless of the pre-admission declaration result.
-        assert!(!should_execute_tools_concurrently(2, true, 1, 0));
-        assert!(should_execute_tools_concurrently(2, true, 0, 0));
+    fn lifecycle_middleware_no_longer_forces_the_serial_route() {
+        // Regression test (I-8): lifecycle middleware used to force the
+        // serial path unconditionally, on the theory that `before_tool` can
+        // rewrite a call (`&mut ToolCall`) while execution is concurrently in
+        // flight. That never actually applied: admission (including every
+        // `before_tool` hook) is serial and completes in full, for every call
+        // in the batch, before any concurrent future is built — so a
+        // lifecycle middleware has nothing left to mutate once execution
+        // starts. Only tool-*wrap* middleware (bypassed entirely by the
+        // concurrent path) still forces serial execution.
+        assert!(should_execute_tools_concurrently(2, true, 0));
+    }
+
+    #[test]
+    fn tool_wrap_middleware_still_forces_the_serial_route() {
+        // The concurrent path drives each tool directly, skipping the
+        // tool-wrap onion; a registered `ToolMiddleware` must still force
+        // serial execution or it would silently never run.
+        assert!(!should_execute_tools_concurrently(2, true, 1));
     }
 }
