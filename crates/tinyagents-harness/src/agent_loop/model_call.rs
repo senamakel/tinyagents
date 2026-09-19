@@ -968,17 +968,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
         };
-        let Some(requested) = request.model.as_deref() else {
+        let needs_host_resolution =
+            request.model.is_some() || request.required_capabilities.is_some();
+        if !needs_host_resolution {
             return Ok(captured());
-        };
-        if self.resolved.source == ModelResolutionSource::RequestOverride
-            && self.resolved.requested.as_deref() == Some(requested)
-        {
+        }
+        let requested = request.model.as_deref();
+        if requested.is_some_and(|requested| {
+            self.resolved.source == ModelResolutionSource::RequestOverride
+                && self.resolved.requested.as_deref() == Some(requested)
+        }) {
             return Ok(captured());
         }
         if let Some(binding) = self.harness.resolve_host_model(ctx, request).await? {
             return Ok(binding);
         }
+        let Some(requested) = requested else {
+            return Ok(captured());
+        };
         if requested == self.resolved.name {
             return Ok(captured());
         }

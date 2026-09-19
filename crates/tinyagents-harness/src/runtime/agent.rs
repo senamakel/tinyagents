@@ -203,7 +203,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     where
         State: 'static,
     {
-        let prepared = self.prepare_agent_turn(host, request, &context).await?;
+        let prepared = self
+            .prepare_agent_turn_bounded(host, request, &context)
+            .await?;
         let context_id = context.instance_id();
         let agent_id = prepared.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
@@ -296,7 +298,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ctx: 'static,
         State: 'static,
     {
-        let prepared = self.prepare_agent_turn(host, request, &context).await?;
+        let prepared = self
+            .prepare_agent_turn_bounded(host, request, &context)
+            .await?;
         let context_id = context.instance_id();
         let agent_id = prepared.agent_id.clone();
         context.host_agent_id = Some(agent_id.clone());
@@ -326,6 +330,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         })
     }
 
+    /// Runs host-owned preparation under the same cancellation and wall-clock
+    /// controls as model resolution.  Definitions, security screening, and
+    /// context composition are all host I/O boundaries, not setup work that
+    /// may outlive a cancelled turn.
+    async fn prepare_agent_turn_bounded(
+        &self,
+        host: crate::host::HostCapabilities<State>,
+        request: AgentTurnRequest,
+        context: &RunContext<Ctx>,
+    ) -> Result<PreparedAgentTurn<State>> {
+        let cancellation = context.cancellation.clone();
+        let preparation = self.prepare_agent_turn(host, request, context);
+        match context.remaining_wall_clock() {
+            Some(remaining) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
+                result = tokio::time::timeout(remaining, preparation) => result.map_err(|_| TinyAgentsError::Timeout(format!(
+                    "host turn preparation for run `{}` exceeded its remaining wall-clock budget",
+                    context.run_id()
+                )))?,
+            },
+            None => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
+                result = preparation => result,
+            },
+        }
+    }
+
     async fn prepare_agent_turn(
         &self,
         host: crate::host::HostCapabilities<State>,
@@ -342,7 +375,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .resolve(&request.agent_id)
             .await
             .map_err(|error| {
-                tinyagents_tracing::warn!(%error, agent_id = %request.agent_id, "[host] definition lookup failed");
+                let _ = error;
+                tinyagents_tracing::warn!(agent_id = %request.agent_id, "[host] definition lookup failed");
                 TinyAgentsError::Validation("agent definition lookup failed".to_string())
             })?
             .ok_or_else(|| {
