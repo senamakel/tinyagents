@@ -45,6 +45,8 @@
 //! LOCAL_MODEL_TESTS=1 cargo test --test live_local_models -- --nocapture
 //! ```
 
+mod common;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 
