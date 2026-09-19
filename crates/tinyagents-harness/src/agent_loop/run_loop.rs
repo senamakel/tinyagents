@@ -445,10 +445,29 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // some must still be gated — checking the earlier snapshot would
             // silently let those middleware-added tools reach an
             // incapable-of-native-tool-calling model.
+            //
+            // Also gated on an `Auto` structured-output format even when
+            // `request.tools` is still empty here: `StructuredStrategy`
+            // resolution (below, after `binding`) only ever appends a
+            // synthetic tool-call schema for a model whose profile already
+            // has `tool_calling` (`StructuredStrategy::for_profile`'s
+            // `ToolCall` arm), so requiring it up front is what makes that
+            // later fact true rather than merely hoped for — by the time
+            // structured planning knows whether a schema tool is needed the
+            // model is already resolved, too late to gate resolution on.
+            // Requiring the capability here is conservatively broader than
+            // strictly necessary for a model that would have used
+            // `ProviderSchema` instead, but never wrong: a fail-closed
+            // requirement narrowing the candidate pool is the point of this
+            // gate.
+            let structured_output_may_need_tool_calling = matches!(
+                self.policy.default_response_format,
+                Some(ResponseFormat::Auto { .. })
+            );
             if matches!(
                 self.policy.tool_dialect,
                 crate::config::ToolDispatcher::Native
-            ) && !request.tools.is_empty()
+            ) && (!request.tools.is_empty() || structured_output_may_need_tool_calling)
             {
                 let mut required = request.required_capabilities.clone().unwrap_or_default();
                 required.tool_calling = true;
