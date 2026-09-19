@@ -810,6 +810,115 @@ async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
     );
 }
 
+/// I3 regression: the checkpoint `step` metadata (and so
+/// `get_state_history`) must stay monotonically increasing across a resume,
+/// instead of restarting at `1`. Before the fix, `ctx.steps` was always
+/// seeded at `0` in `RunCtx::start`, so a resumed run's boundaries
+/// re-numbered from `1` again, making a checkpoint's `step` field disagree
+/// with its position in the thread's actual lineage.
+#[tokio::test]
+async fn resume_continues_step_counter_monotonically() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let interrupted_once = Arc::new(AtomicBool::new(false));
+    let flag = interrupted_once.clone();
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+        .add_node("b", move |s, c: NodeContext| {
+            let flag = flag.clone();
+            async move {
+                if c.resume.is_none() && !flag.swap(true, AtomicOrdering::SeqCst) {
+                    return Ok(NodeResult::Interrupt(Interrupt::new("b", json!({}))));
+                }
+                Ok(NodeResult::Update(s + 1))
+            }
+        })
+        .add_node("c", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+        .set_entry("a")
+        .add_edge("a", "b")
+        .add_edge("b", "c")
+        .set_finish("c")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    // Step 1: a. Step 2: b (interrupts).
+    let paused = graph.run_with_thread("t-i3-steps", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+    assert_eq!(paused.status.current_step, 2);
+
+    // Resumed: step 3 finishes b, step 4 runs c.
+    let done = graph
+        .resume("t-i3-steps", Command::resume(json!(null)))
+        .await
+        .unwrap();
+    assert_eq!(done.state, 3, "a(+1) + b(+1) + c(+1)");
+
+    let history = graph.get_state_history("t-i3-steps", None).await.unwrap();
+    let mut steps: Vec<usize> = history.iter().map(|snap| snap.metadata.step).collect();
+    // History is newest-first; reverse to check monotonicity forward.
+    steps.reverse();
+    for pair in steps.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "step must be strictly increasing across the whole lineage, got {steps:?}"
+        );
+    }
+    assert_eq!(
+        steps.last().copied(),
+        Some(4),
+        "the final boundary's step must continue from where the interrupt \
+         left off (2), not restart at 1 after the resume, got {steps:?}"
+    );
+}
+
+/// I3 regression: `RecursionPolicy::max_visits_per_node` must bound a node's
+/// visits across the whole thread's lifetime, not reset every resume. Before
+/// the fix, `node_visits` was always seeded empty in `RunCtx::start`, so an
+/// interrupt-then-resume loop could revisit a node past the configured limit
+/// without ever tripping it.
+#[tokio::test]
+async fn resume_accumulates_node_visit_limit_across_resume() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let interrupted_once = Arc::new(AtomicBool::new(false));
+    let flag = interrupted_once.clone();
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("loop", move |s, c: NodeContext| {
+            let flag = flag.clone();
+            async move {
+                if c.resume.is_none() && !flag.swap(true, AtomicOrdering::SeqCst) {
+                    return Ok(NodeResult::Interrupt(Interrupt::new("loop", json!({}))));
+                }
+                Ok(NodeResult::Update(s + 1))
+            }
+        })
+        .set_entry("loop")
+        .add_edge("loop", "loop")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone())
+        .with_recursion_policy(RecursionPolicy {
+            max_depth: 25,
+            max_visits_per_node: Some(2),
+            max_total_steps: 1000,
+        });
+
+    // Visit 1: interrupts (still within the limit of 2).
+    let paused = graph.run_with_thread("t-i3-visits", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+
+    // Visit 2 (post-resume): completes and self-loops, within the limit.
+    // Visit 3: must trip the *cumulative* limit of 2 — if node_visits reset
+    // on resume, this would incorrectly be seen as only the second visit.
+    let err = graph
+        .resume("t-i3-visits", Command::resume(json!(null)))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, TinyAgentsError::NodeVisitLimit { limit: 2, .. }),
+        "got {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn bulk_update_state_applies_successive_updates() {
     use crate::CheckpointSource;
