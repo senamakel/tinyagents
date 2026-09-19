@@ -594,6 +594,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             run.steps += 1;
             status.model_calls = run.model_calls;
             status.active_model_call = None;
+            ctx.active_model_call = None;
             // A cache replay consumed no provider tokens, so folding its usage
             // into the run's totals reports spend that never happened. The
             // saving is surfaced through the cache-hit event instead of being
