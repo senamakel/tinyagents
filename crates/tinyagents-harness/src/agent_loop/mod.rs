@@ -119,6 +119,7 @@ mod entry;
 mod model_call;
 mod run_loop;
 pub(crate) mod stream;
+mod tool_changes;
 mod tools;
 
 pub use stream::AgentStreamItem;
