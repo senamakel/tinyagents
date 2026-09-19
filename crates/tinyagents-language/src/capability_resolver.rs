@@ -31,6 +31,7 @@ pub(crate) const CODE_UNKNOWN_AGENT: &str = "E-rag-unknown-agent";
 pub(crate) const CODE_UNKNOWN_SCRIPT: &str = "E-rag-unknown-script";
 pub(crate) const CODE_UNKNOWN_REDUCER: &str = "E-rag-unknown-reducer";
 pub(crate) const CODE_INVALID_NODE_KIND: &str = "E-rag-invalid-node-kind";
+pub(crate) const CODE_UNKNOWN_CAPABILITY: &str = "E-rag-unknown-capability";
 
 /// Maps a [`ReferenceClass`] to its stable diagnostic code.
 pub(crate) fn code_for(class: ReferenceClass) -> &'static str {
