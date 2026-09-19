@@ -121,6 +121,61 @@ fn an_error_result_passes_through_however_large() {
     assert_eq!(out, err);
 }
 
+/// M-9 regression: the extractor tool name and the "already an error"
+/// prefix used to be hardcoded (`extract_from_result`, a bare
+/// `starts_with("Error")`). A host with different conventions must be able
+/// to configure both instead of forking the module.
+#[test]
+fn a_host_can_configure_its_own_extractor_name_and_error_prefix() {
+    let config = HandoffConfig {
+        extractor_tool_name: "fetch_full_result".to_string(),
+        error_prefixes: vec!["FAILED:".to_string()],
+    };
+
+    // The custom extractor's own output is never re-stashed.
+    let c = cache();
+    let raw = big(8_000);
+    let out = apply_handoff(
+        &c,
+        &config,
+        "fetch_full_result",
+        "task",
+        "agent",
+        raw.clone(),
+        1,
+    );
+    assert_eq!(out, raw);
+
+    // A result whose custom error prefix matches passes through unstashed,
+    // even though it does not start with the historical "Error".
+    let c = cache();
+    let err = format!("FAILED: {}", big(8_000));
+    let out = apply_handoff(&c, &config, "gmail_list", "task", "agent", err.clone(), 1);
+    assert_eq!(out, err);
+
+    // A result starting with the *historical* "Error" prefix is NOT treated
+    // as an error under this custom config, and is stashed like any other
+    // oversized payload — the heuristic is fully replaced, not merged.
+    let c = cache();
+    let historical_error = format!("Error: {}", big(8_000));
+    let out = apply_handoff(
+        &c,
+        &config,
+        "gmail_list",
+        "task",
+        "agent",
+        historical_error.clone(),
+        1,
+    );
+    assert_ne!(out, historical_error);
+    assert!(out.contains("oversized tool output"));
+
+    // The placeholder advertises the configured extractor tool name.
+    let placeholder = build_handoff_placeholder(&config, "gmail_list", "res_1", "payload");
+    assert!(placeholder.contains("fetch_full_result"));
+    assert!(!placeholder.contains("extract_from_result"));
+}
+
 #[test]
 fn an_extraction_result_is_never_re_stashed() {
     // The extractor answers a query against a stashed payload. Handing its
