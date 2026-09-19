@@ -37,6 +37,12 @@ pub(super) struct BoundaryCheckpoint<'a, State> {
     /// [`crate::checkpoint::CompletedTask`]).
     pub(super) completed: Vec<crate::checkpoint::CompletedTask>,
     pub(super) child_runs: &'a serde_json::Value,
+    /// Per-task replay memos of this step's *stalled* branches — their
+    /// [`NodeContext::durable_task`] writes and any deferred
+    /// `interrupt_after` result — persisted alongside the completion
+    /// markers so a resumed re-run of those tasks can consult them. Empty at
+    /// a normal boundary (nothing stalled, so nothing to replay).
+    pub(super) task_writes: Vec<crate::checkpoint::PendingWrite>,
 }
 
 /// The transient data one superstep's boundary handling needs: the step's
@@ -56,6 +62,9 @@ pub(super) struct StepBoundary<'a> {
     pub(super) stalled: &'a [(usize, Activation)],
     pub(super) goto_map: &'a HashMap<usize, Vec<RouteTarget>>,
     pub(super) child_runs_meta: &'a serde_json::Value,
+    /// Replay memos of the stalled branches (see
+    /// [`crate::compiled::step::StepRun::task_writes`]).
+    pub(super) task_writes: &'a [crate::checkpoint::PendingWrite],
     pub(super) step: usize,
 }
 
@@ -220,6 +229,7 @@ where
                 pending: &next,
                 completed,
                 child_runs: sb.child_runs_meta,
+                task_writes: Vec::new(),
             };
             if matches!(self.durability, DurabilityMode::Async) && !terminal {
                 self.persist_checkpoint_nonblocking(ctx, boundary, sb.step)
@@ -303,6 +313,7 @@ where
                     pending: &pending,
                     completed,
                     child_runs: sb.child_runs_meta,
+                    task_writes: sb.task_writes.to_vec(),
                 },
                 sb.step,
                 &failed_node,
@@ -383,6 +394,7 @@ where
                     pending: &pending,
                     completed,
                     child_runs: sb.child_runs_meta,
+                    task_writes: sb.task_writes.to_vec(),
                 },
                 sb.step,
                 stamped.clone(),
@@ -414,6 +426,7 @@ where
             interrupts: stamped,
             status,
             checkpoint_id,
+            drained: false,
         })
     }
 
@@ -445,7 +458,7 @@ where
         // successfully-requested cancellation into a hard error.
         let _ = ctx.async_writes.drain().await;
         let checkpoint_id = self
-            .persist_cancel_checkpoint(ctx, state, active)
+            .persist_stop_checkpoint(ctx, state, active, "cancelled")
             .await
             .unwrap_or(None);
 
@@ -472,20 +485,75 @@ where
             interrupts: Vec::new(),
             status,
             checkpoint_id,
+            drained: false,
         })
     }
 
-    /// Persists a resumable cancellation-boundary checkpoint, mirroring
-    /// [`Self::persist_failure_checkpoint`]: `next_nodes` schedules exactly
-    /// the activations that were still pending when the cancellation was
-    /// observed, so `resume`/`retry` re-runs exactly what did not complete.
-    /// A no-op returning `None` without a checkpointer/thread, exactly like
-    /// the failure boundary.
-    async fn persist_cancel_checkpoint(
+    /// The graceful-drain boundary: the run's [`super::DrainSignal`] was
+    /// observed raised between supersteps (`execute_run` polls it only
+    /// there), so the previous step finished and committed normally and
+    /// `active` — the next step's whole set, none of which has started — is
+    /// persisted as the resumable checkpoint's pending set, exactly as the
+    /// cancellation boundary does. Records a `Drained` status, emits
+    /// [`GraphEvent::RunDrained`], and returns `Ok` with
+    /// [`GraphExecution::drained`] set. A later `resume`/`retry` continues
+    /// from that checkpoint like any other pending-tasks checkpoint.
+    pub(super) async fn handle_drain_boundary(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        active: &[Activation],
+        state: &State,
+    ) -> Result<GraphExecution<State>> {
+        ctx.disarm_drop_guard();
+        // A drain is a requested stop, so like cancellation a lost Async
+        // background write must not turn it into a hard error.
+        let _ = ctx.async_writes.drain().await;
+        let checkpoint_id = self
+            .persist_stop_checkpoint(ctx, state, active, "drained")
+            .await
+            .unwrap_or(None);
+
+        let mut status = ctx.base_status();
+        status.status = ExecutionStatus::Drained;
+        status.current_step = ctx.steps;
+        status.active_nodes = activation_nodes(active);
+        status.checkpoint_id = checkpoint_id.clone();
+        status.ended_at = Some(SystemTime::now());
+        ctx.save_status(status.clone()).await;
+        ctx.emit(GraphEvent::RunDrained {
+            run_id: ctx.run_id.clone(),
+            steps: ctx.steps,
+        });
+
+        Ok(GraphExecution {
+            state: state.clone(),
+            run_id: ctx.run_id.clone(),
+            graph_id: self.graph_id.clone(),
+            root_run_id: ctx.root_run_id.clone(),
+            parent_run_id: ctx.parent_run_id.clone(),
+            child_runs: std::mem::take(&mut ctx.all_child_runs),
+            visited: std::mem::take(&mut ctx.visited),
+            steps: ctx.steps,
+            interrupts: Vec::new(),
+            status,
+            checkpoint_id,
+            drained: true,
+        })
+    }
+
+    /// Persists a resumable stop-boundary checkpoint for a cancellation or
+    /// drain, mirroring [`Self::persist_failure_checkpoint`]: `next_nodes`
+    /// schedules exactly the activations that were still pending when the
+    /// stop was observed, so `resume`/`retry` re-runs exactly what did not
+    /// complete. `marker` (`"cancelled"`/`"drained"`) is stamped `true` into
+    /// the checkpoint metadata. A no-op returning `None` without a
+    /// checkpointer/thread, exactly like the failure boundary.
+    async fn persist_stop_checkpoint(
         &self,
         ctx: &RunCtx<'_, State, Update>,
         state: &State,
         pending: &[Activation],
+        marker: &str,
     ) -> Result<Option<CheckpointId>> {
         let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &ctx.thread_id) else {
             return Ok(None);
@@ -509,7 +577,7 @@ where
             "source": "loop",
             "step": ctx.steps,
             "recursion": ctx.recursion_meta,
-            "cancelled": true,
+            marker: true,
             "node_visits": node_visits_to_json(&ctx.node_visits),
         }));
         let id = checkpointer.put(checkpoint).await?;
@@ -605,7 +673,7 @@ where
         let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &ctx.thread_id) else {
             return Ok(None);
         };
-        let pending_writes = Self::completion_writes(&boundary.completed);
+        let pending_writes = Self::completion_writes(&boundary.completed, &boundary.task_writes);
         let (channel_versions, channel_deltas, versions_seen) =
             self.channel_checkpoint_fields(ctx, boundary.state);
         let checkpoint = Checkpoint::new(
@@ -806,8 +874,15 @@ where
     /// The task id is persisted on the activation itself, so a resume can
     /// match a marker to one fan-out task rather than every task with its
     /// node.
+    ///
+    /// `task_writes` — the stalled branches' replay memos (durable-task
+    /// writes, deferred `interrupt_after` results) — are appended verbatim.
+    /// They belong to tasks that are still *pending*, and resume tells them
+    /// apart from completion markers by
+    /// [`PendingWrite::is_task_replay`](crate::checkpoint::PendingWrite::is_task_replay).
     fn completion_writes(
         completed: &[crate::checkpoint::CompletedTask],
+        task_writes: &[crate::checkpoint::PendingWrite],
     ) -> Vec<crate::checkpoint::PendingWrite> {
         completed
             .iter()
@@ -817,6 +892,7 @@ where
                     task.task_id.clone(),
                 )
             })
+            .chain(task_writes.iter().cloned())
             .collect()
     }
 
@@ -849,7 +925,7 @@ where
                     .collect::<Vec<_>>()
             );
         }
-        let pending_writes = Self::completion_writes(&boundary.completed);
+        let pending_writes = Self::completion_writes(&boundary.completed, &boundary.task_writes);
         let (channel_versions, channel_deltas, versions_seen) =
             self.channel_checkpoint_fields(ctx, boundary.state);
         Checkpoint::new(
