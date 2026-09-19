@@ -3871,3 +3871,74 @@ async fn async_durability_skips_a_write_whose_predecessor_failed() {
         "no orphaned checkpoint may be appended after a broken lineage"
     );
 }
+
+/// C3/R4 regression: two concurrent `run_with_thread` calls for the SAME
+/// thread id must not interleave their node execution. Before the executor
+/// held its own per-thread lock, nothing serialized two concurrent
+/// entry-point calls at this layer (only `delegation::run` worked around it
+/// with a private lock of its own) — see the C3 finding in
+/// `docs/runtime-comparison/code-review-graph.md`.
+#[tokio::test]
+async fn concurrent_run_with_thread_calls_on_one_thread_serialize() {
+    let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
+    let concurrent = Arc::new(AtomicUsize::new(0));
+    let max_concurrent = Arc::new(AtomicUsize::new(0));
+    let concurrent_for_node = concurrent.clone();
+    let max_concurrent_for_node = max_concurrent.clone();
+    let graph = GraphBuilder::<Counter, i32>::new()
+        .set_reducer(ClosureStateReducer::new(|mut s: Counter, u: i32| {
+            s.value += u;
+            s.log.push(format!("+{u}"));
+            Ok(s)
+        }))
+        .add_node("inc", move |_s: Counter, _c: NodeContext| {
+            let concurrent = concurrent_for_node.clone();
+            let max_concurrent = max_concurrent_for_node.clone();
+            async move {
+                let now = concurrent.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                max_concurrent.fetch_max(now, AtomicOrdering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                concurrent.fetch_sub(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(1))
+            }
+        })
+        .set_entry("inc")
+        .set_finish("inc")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let (r1, r2) = tokio::join!(
+        graph.run_with_thread(
+            "t-concurrent-serialize",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        ),
+        graph.run_with_thread(
+            "t-concurrent-serialize",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        ),
+    );
+    r1.expect("first run completes");
+    r2.expect("second run completes");
+
+    assert_eq!(
+        max_concurrent.load(AtomicOrdering::SeqCst),
+        1,
+        "the executor's per-thread lock must serialize concurrent run_with_thread calls"
+    );
+
+    // Both runs wrote a complete, un-torn checkpoint for the thread — no
+    // interleaved/partial record from one run's boundary landing inside the
+    // other's.
+    let listed = cp.list("t-concurrent-serialize").await.unwrap();
+    assert_eq!(listed.len(), 2, "each serialized run wrote its own checkpoint");
+    let run_ids: std::collections::HashSet<_> =
+        listed.iter().map(|m| m.run_id.clone()).collect();
+    assert_eq!(run_ids.len(), 2, "the two runs must not share a run id");
+}
