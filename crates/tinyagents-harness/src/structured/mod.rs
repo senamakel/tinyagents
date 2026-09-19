@@ -251,15 +251,41 @@ impl StructuredExtractor {
             strategy,
             schema_name: schema_name.into(),
             schema,
+            variants: Vec::new(),
+        }
+    }
+
+    /// Creates a [`StructuredStrategy::ToolCallUnion`] extractor over
+    /// `variants` (`(name, schema)` pairs, one per synthetic tool).
+    ///
+    /// `schema_name` is used only to label errors when *no* variant matched;
+    /// it need not be one of the variant names.
+    pub fn new_union(
+        schema_name: impl Into<String>,
+        variants: Vec<(String, Value)>,
+    ) -> Self {
+        Self {
+            strategy: StructuredStrategy::ToolCallUnion,
+            schema_name: schema_name.into(),
+            schema: Value::Null,
+            variants,
         }
     }
 
     /// Returns the JSON Schema document this extractor was configured with.
     ///
     /// Used for local validation and for echoing the schema back into a
-    /// [`ResponseFormat`] when re-requesting structured output.
+    /// [`ResponseFormat`] when re-requesting structured output. Meaningless
+    /// for [`StructuredStrategy::ToolCallUnion`] (use [`Self::variants`]).
     pub fn schema(&self) -> &Value {
         &self.schema
+    }
+
+    /// Returns the `(name, schema)` variants this
+    /// [`StructuredStrategy::ToolCallUnion`] extractor was configured with.
+    /// Empty for every other strategy.
+    pub fn variants(&self) -> &[(String, Value)] {
+        &self.variants
     }
 
     /// Extracts a [`StructuredOutput`] from `response` using the configured
