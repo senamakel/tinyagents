@@ -82,6 +82,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
         let target = self.transcript.map(|config| crate::TranscriptTarget {
             locator: config.locator,
             stem: config.stem,
+            resume_agent: None,
             meta: config.meta,
         });
         if target.is_some() && self.codec.is_none() {

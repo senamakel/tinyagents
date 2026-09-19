@@ -23,7 +23,7 @@ pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
 pub use tools::ToolSnapshot;
 pub use types::{
-    CommitReceipt, ResumeMode, SessionResume, SessionStateView, SessionTerminal,
+    CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
     TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };

@@ -20,10 +20,12 @@ The host supplies three narrow seams:
   `Clone` so reconciliation receives the current host context plus request,
   thread, stream, and resume options after the live `RunContext` moves into the
   driver.
-- `SessionHooks<C>` prepares a request and mutable `TurnOptions<C>` before
-  handoff. Its `TurnPreparation` can install a first-turn prefix, select the
-  one immutable `ToolSnapshot` for that request, and lazily choose a
-  `TranscriptTarget`. `before_commit` validates the candidate; `after_commit`
+- `SessionHooks<C>` prepares a request and mutable `TurnOptions<C>` in two
+  stages. `before_resume` lazily chooses a `TranscriptTarget`, then the runtime
+  binds it and loads any requested transcript. `before_turn` sees that decoded
+  history and raw rows plus `SessionStateView::resumed`; its `TurnPreparation`
+  can install or replace the prefix before the first commit and selects the
+  one immutable `ToolSnapshot` for that request. `before_commit` validates the candidate; `after_commit`
   receives an exactly-once `CommitReceipt<C>` containing the explicit context
   snapshot and neutral transcript path/delta receipt. `on_terminal` receives
   one truthful terminal state. It does not make policy decisions.
@@ -42,7 +44,9 @@ let session = SessionBuilder::new(driver)
 
 To supply a default lazy destination, add `SessionBuilder::transcript(locator, stem, meta)`.
 It does not open a transcript while building: a selected target binds only on
-resume/first append and cannot be redirected after that. The runtime
+resume/first append and cannot be redirected after that. `TranscriptTarget` can
+use a distinct `resume_agent` for `LatestForAgent` lookup; writes always use its
+`stem`. The runtime
 uses `tinyagents-session`'s `TranscriptHistory::append_turn_with_partial`, so a normal
 extension appends only the new tail and a reduced context writes one compaction
 record. A supplied partial driver outcome is represented through that single
@@ -54,7 +58,8 @@ in-memory history and persisted snapshot unchanged.
 Every turn receives explicit `TurnOptions`, including its cancellation token
 and `RunContext<C>`; no task-local data crosses the runtime boundary. The
 stable prefix is reconciled after resume and driver compaction without
-duplication. `Session::seed_history(history, raw)` is the explicit, lossless
+duplication, including a prefix supplied by `before_turn` after a resumed
+history. `Session::seed_history(history, raw)` is the explicit, lossless
 resume/seed boundary; a host must not keep a second shadow history. Cancellation before the commit point leaves no durable mutation;
 once it succeeds, the turn remains successful. `after_commit` and terminal
 hooks get the committed outcome, but their error or a cooperative cancellation

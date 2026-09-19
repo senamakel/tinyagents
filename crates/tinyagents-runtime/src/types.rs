@@ -64,7 +64,11 @@ pub struct TranscriptTurnOptions<C = ()> {
 #[derive(Clone)]
 pub struct TranscriptTarget {
     pub locator: Arc<dyn TranscriptLocator>,
+    /// The durable stem used for every append and write.
     pub stem: String,
+    /// Optional agent key used only by `ResumeMode::LatestForAgent` lookup.
+    /// When absent, the write stem is also the resume lookup key.
+    pub resume_agent: Option<String>,
     pub meta: TranscriptMeta,
 }
 
@@ -77,28 +81,42 @@ impl TranscriptTarget {
         Self {
             locator,
             stem: stem.into(),
+            resume_agent: None,
             meta,
         }
     }
 
-    pub(crate) fn same_binding(&self, other: &Self) -> bool {
-        self.stem == other.stem && Arc::ptr_eq(&self.locator, &other.locator)
+    /// Uses a distinct agent key when looking up the latest transcript.
+    pub fn with_resume_agent(mut self, resume_agent: impl Into<String>) -> Self {
+        self.resume_agent = Some(resume_agent.into());
+        self
     }
+
+    pub(crate) fn same_binding(&self, other: &Self) -> bool {
+        self.stem == other.stem
+            && self.resume_agent == other.resume_agent
+            && Arc::ptr_eq(&self.locator, &other.locator)
+    }
+}
+
+/// Values prepared by `SessionHooks::before_resume` before transcript loading.
+#[derive(Clone, Default)]
+pub struct ResumePreparation {
+    /// A lazy transcript destination. It can be selected or replaced before
+    /// the first history handle is bound, but cannot be redirected afterwards.
+    pub transcript: Option<TranscriptTarget>,
 }
 
 /// Values prepared by `SessionHooks::before_turn` for exactly one driver call.
 #[derive(Clone, Default)]
 pub struct TurnPreparation {
-    /// A replacement prefix allowed only while the session is empty and has
-    /// never committed a transcript transition.
+    /// A replacement prefix allowed before the first committed turn. It is
+    /// reconciled against any decoded resumed history without duplication.
     pub prefix: Option<PrefixSnapshot>,
     /// The immutable tool declarations for this driver request. `None` uses
     /// the builder's compatibility default and is never retained from a prior
     /// preparation.
     pub tools: Option<ToolSnapshot>,
-    /// A lazy transcript destination. It can be selected or replaced before
-    /// the first bind, but cannot be redirected after binding.
-    pub transcript: Option<TranscriptTarget>,
 }
 
 impl TurnPreparation {
@@ -118,6 +136,9 @@ pub struct SessionStateView<'a> {
     pub prefix: &'a PrefixSnapshot,
     pub transcript_target: Option<&'a TranscriptTarget>,
     pub committed_turns: usize,
+    /// `true` only when this call loaded and decoded a durable transcript
+    /// before `before_turn` ran.
+    pub resumed: bool,
 }
 
 /// The shape of a successful logical transcript transition.

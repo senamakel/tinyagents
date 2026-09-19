@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use crate::{
-    CommitReceipt, RuntimeError, SessionStateView, SessionTerminal, SessionTurnOutcome,
-    SessionTurnRequest, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    CommitReceipt, ResumePreparation, RuntimeError, SessionStateView, SessionTerminal,
+    SessionTurnOutcome, SessionTurnRequest, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 /// Host observation/preparation around a session turn.
@@ -12,8 +12,20 @@ use crate::{
 /// keep preparation state without task-local runtime state.
 #[async_trait]
 pub trait SessionHooks<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
+    /// Runs after the turn's initial cancellation check and before transcript
+    /// target binding or resume. It may mutate the request and live options.
+    /// Its target remains lazy until resume or the first append needs it.
+    async fn before_resume(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions<C>,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        Ok(ResumePreparation::default())
+    }
     /// Runs before the driver sees the request and consumes the explicit
-    /// options. Returned values apply only to this driver invocation.
+    /// options, after any requested transcript has been loaded. Returned
+    /// values apply only to this driver invocation.
     async fn before_turn(
         &self,
         request: &mut SessionTurnRequest,
@@ -44,6 +56,14 @@ pub struct NoopSessionHooks;
 
 #[async_trait]
 impl<C: Clone + Send + Sync + 'static> SessionHooks<C> for NoopSessionHooks {
+    async fn before_resume(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions<C>,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        Ok(ResumePreparation::default())
+    }
     async fn before_turn(
         &self,
         _: &mut SessionTurnRequest,

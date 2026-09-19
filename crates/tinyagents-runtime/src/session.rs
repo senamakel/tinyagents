@@ -7,10 +7,10 @@ use tinyagents_session::transcript::{
 use tinyinference_llm::message::Message;
 
 use crate::{
-    CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, RuntimeError, SessionDriver,
-    SessionHooks, SessionResume, SessionStateView, SessionTerminal, SessionTurnOutcome,
-    SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt, TranscriptDelta,
-    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, ResumePreparation, RuntimeError,
+    SessionDriver, SessionHooks, SessionResume, SessionStateView, SessionTerminal,
+    SessionTurnOutcome, SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt,
+    TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 /// Host-neutral mutable state for one conversation session.
@@ -104,7 +104,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         let read = match options.resume {
             ResumeMode::Never => None,
-            ResumeMode::LatestForAgent => target.locator.latest_for_agent(&target.stem),
+            ResumeMode::LatestForAgent => target
+                .locator
+                .latest_for_agent(target.resume_agent.as_deref().unwrap_or(&target.stem)),
             ResumeMode::Thread => options
                 .thread_id
                 .as_deref()
@@ -183,26 +185,35 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         options: &mut TurnOptions<C>,
         terminal_guard: &mut TerminalGuard<C>,
     ) -> Result<SessionTurnOutcome, RuntimeError> {
-        let state = SessionStateView {
-            history: &self.history,
-            raw_history: &self.persisted,
-            prefix: &self.prefix,
-            transcript_target: self.target.as_ref(),
-            committed_turns: self.committed_turns,
-        };
+        if options.cancellation.is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
         let cancellation = options.cancellation.clone();
+        let resume_preparation = cancelable(
+            &cancellation,
+            self.hooks
+                .before_resume(request, options, self.state_view(false)),
+        )
+        .await?;
+        self.apply_resume_preparation(resume_preparation)?;
+        let resumed = if options.resume == ResumeMode::Never {
+            false
+        } else {
+            self.resume(options).await?.loaded
+        };
+        // `resume` is synchronous after its read, so this explicit boundary
+        // makes cancellation between loading and before-turn preparation
+        // observable without handing work to the driver.
+        if options.cancellation.is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
         let preparation = cancelable(
             &cancellation,
-            self.hooks.before_turn(request, options, state),
+            self.hooks
+                .before_turn(request, options, self.state_view(resumed)),
         )
         .await?;
         let (tools, prepared_prefix) = self.apply_preparation(preparation)?;
-        // Preparation owns the current turn's target and explicit resume mode,
-        // so resolve only after it has made its changes visible. This is also
-        // why a selected target is checked for a codec before driver handoff.
-        if options.resume != ResumeMode::Never {
-            self.resume(options).await?;
-        }
         if let Some(prefix) = prepared_prefix {
             self.apply_prefix(prefix)?;
         }
@@ -291,24 +302,6 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         &mut self,
         preparation: TurnPreparation,
     ) -> Result<(ToolSnapshot, Option<PrefixSnapshot>), RuntimeError> {
-        if let Some(target) = preparation.transcript {
-            if self.transcript.is_some() {
-                if !self
-                    .target
-                    .as_ref()
-                    .is_some_and(|bound| bound.same_binding(&target))
-                {
-                    return Err(RuntimeError::InvalidSessionState(
-                        "cannot change a transcript target after it is bound".into(),
-                    ));
-                }
-            } else {
-                self.target = Some(target);
-            }
-        }
-        if self.target.is_some() && self.codec.is_none() {
-            return Err(RuntimeError::MissingDependency("TranscriptCodec"));
-        }
         // A returned snapshot never updates `default_tools`: it applies only
         // to the `DriverRequest` being built by this call.
         Ok((
@@ -319,18 +312,59 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         ))
     }
 
+    fn apply_resume_preparation(
+        &mut self,
+        preparation: ResumePreparation,
+    ) -> Result<(), RuntimeError> {
+        if let Some(target) = preparation.transcript {
+            if self.transcript.is_some() || self.committed_turns != 0 {
+                if !self
+                    .target
+                    .as_ref()
+                    .is_some_and(|bound| bound.same_binding(&target))
+                {
+                    return Err(RuntimeError::InvalidSessionState(
+                        "cannot change a transcript target after it is bound or committed".into(),
+                    ));
+                }
+            } else {
+                self.target = Some(target);
+            }
+        }
+        if self.target.is_some() && self.codec.is_none() {
+            return Err(RuntimeError::MissingDependency("TranscriptCodec"));
+        }
+        Ok(())
+    }
+
     fn apply_prefix(&mut self, prefix: PrefixSnapshot) -> Result<(), RuntimeError> {
-        if self.committed_turns != 0
-            || !self.persisted.is_empty()
-            || self.history != self.prefix.messages()
-        {
+        if prefix == self.prefix {
+            return Ok(());
+        }
+        if self.committed_turns != 0 {
             return Err(RuntimeError::InvalidSessionState(
-                "cannot change a session prefix after history is present or committed".into(),
+                "cannot change a session prefix after a committed turn".into(),
             ));
         }
-        self.history = prefix.messages().to_vec();
+        let history = std::mem::take(&mut self.history);
+        let history = history
+            .strip_prefix(self.prefix.messages())
+            .unwrap_or(&history)
+            .to_vec();
         self.prefix = prefix;
+        self.history = self.with_prefix(history);
         Ok(())
+    }
+
+    fn state_view(&self, resumed: bool) -> SessionStateView<'_> {
+        SessionStateView {
+            history: &self.history,
+            raw_history: &self.persisted,
+            prefix: &self.prefix,
+            transcript_target: self.target.as_ref(),
+            committed_turns: self.committed_turns,
+            resumed,
+        }
     }
 
     fn encode(
