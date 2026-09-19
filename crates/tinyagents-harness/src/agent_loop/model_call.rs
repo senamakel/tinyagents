@@ -60,18 +60,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         let resolution = host_run.host.models.resolve(&resolve);
         let (budget, bound) = self.model_call_budget(ctx);
-        let model = match budget {
-            Some(remaining) => tokio::select! {
-                biased;
-                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its {bound}", ctx.run_id())))?,
-            },
-            None => tokio::select! {
-                biased;
-                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = resolution => result,
-            },
-        }.map_err(|error| match error {
+        let model = ctx
+            .bounded(budget, resolution, || {
+                format!(
+                    "host model resolution for run `{}` exceeded its {bound}",
+                    ctx.run_id()
+                )
+            })
+            .await
+            .map_err(|error| match error {
             TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
             _ => { tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
         })?;
