@@ -68,6 +68,7 @@ pub mod ops;
 pub mod retention;
 pub mod run_ledger;
 mod store;
+pub mod testkit;
 pub mod transcript;
 pub mod types;
 
