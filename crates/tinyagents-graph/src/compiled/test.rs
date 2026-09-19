@@ -817,12 +817,12 @@ async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
     // completion), scheduling `y` into the pending set alongside `lo`.
     graph.update_state("t-i2", 0, None).await.unwrap();
     let mid = cp.get("t-i2", None).await.unwrap().unwrap();
+    let mid_next_nodes: Vec<NodeId> = mid.tasks.iter().map(|t| t.node.clone()).collect();
     assert!(
-        mid.next_nodes.iter().any(|n| n.as_str() == "lo")
-            && mid.next_nodes.iter().any(|n| n.as_str() == "y"),
+        mid_next_nodes.iter().any(|n| n.as_str() == "lo")
+            && mid_next_nodes.iter().any(|n| n.as_str() == "y"),
         "both lo (still interrupted) and y (hi's deferred successor) must \
-         be pending, got {:?}",
-        mid.next_nodes
+         be pending, got {mid_next_nodes:?}"
     );
 
     let resume_value = json!("only-for-lo");
