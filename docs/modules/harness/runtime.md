@@ -123,7 +123,6 @@ Hard limits:
 
 - `max_model_calls`
 - `max_tool_calls`
-- `max_concurrency`
 - wall-clock timeout
 - per-call timeout
 - retry budget
