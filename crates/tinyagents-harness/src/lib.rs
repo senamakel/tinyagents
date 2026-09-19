@@ -47,7 +47,7 @@ pub mod summarization;
 pub mod testkit;
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "tools")]
+#[cfg(feature = "builtin-tools")]
 pub mod tools;
 pub mod workspace;
 
