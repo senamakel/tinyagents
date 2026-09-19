@@ -123,7 +123,8 @@ a `.rag` `capability "name"` node item resolves against
 `AstNode::capability: Option<String>`); `CapabilityResolver`/`Resolver` gate
 it the same way they gate `tool`/`model`/`subgraph` references — unconditional
 membership in the host-registered capability allowlist
-(`resolver.rs`'s `capability_allowed`).
+(`capability_resolver.rs`'s `capability_allowed`, consulted from both
+`CapabilityResolver::bind_blueprint` and `Resolver::resolve_blueprint`).
 
 On the harness side, `AgentHarness::with_capability(capability)` installs a
 bundle: its middleware is appended in installation order, its model defaults
