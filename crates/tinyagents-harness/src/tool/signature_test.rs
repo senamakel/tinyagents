@@ -20,6 +20,30 @@ fn renders_flat_objects_with_optional_markers() {
     assert_eq!(argument_notes(&schema), vec!["path: Where to read"]);
 }
 
+/// Regression: JSON Schema property names are arbitrary strings, not
+/// restricted to valid TypeScript/JavaScript identifiers. A name like
+/// `file-path` rendered bare (`file-path: string`) reads as a subtraction
+/// expression, not a member declaration, and a model can misparse it. Any
+/// non-identifier name must be JSON-quoted; an identifier-shaped name still
+/// renders bare so the common case stays terse.
+#[test]
+fn quotes_non_identifier_property_names() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "file-path": {"type": "string"},
+            "2fa_code": {"type": "string"},
+            "plain_name": {"type": "string"},
+        },
+        "required": ["file-path", "2fa_code", "plain_name"]
+    });
+    let rendered = type_signature(&schema);
+    assert!(rendered.contains("\"file-path\": string"), "{rendered}");
+    assert!(rendered.contains("\"2fa_code\": string"), "{rendered}");
+    assert!(rendered.contains("plain_name: string"), "{rendered}");
+    assert!(!rendered.contains("\"plain_name\""), "{rendered}");
+}
+
 #[test]
 fn renders_arrays_unions_and_nesting() {
     let schema = json!({
