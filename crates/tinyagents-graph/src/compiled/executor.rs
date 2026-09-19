@@ -296,7 +296,7 @@ where
 
     /// Returns the configured checkpointer or a [`TinyAgentsError::Checkpoint`]
     /// when inspection is attempted on a graph without durability.
-    async fn execute(&self, seed: RunSeed<State, Update>) -> Result<GraphExecution<State>> {
+    pub(super) async fn execute(&self, seed: RunSeed<State, Update>) -> Result<GraphExecution<State>> {
         let run_id = tinyagents_harness::ids::new_run_id();
         // When a durable journal is configured, run against a clone whose event
         // sink wraps every emitted event into a `GraphObservation` and appends
