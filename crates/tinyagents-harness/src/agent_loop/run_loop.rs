@@ -873,6 +873,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         run: &mut AgentRun,
         status: &mut HarnessRunStatus,
+        messages: &mut Vec<Message>,
     ) -> Result<Option<LoopExit>> {
         let Some(control) = ctx.take_control() else {
             return Ok(None);
@@ -887,6 +888,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status.set_last_event(record.id);
         match control {
             MiddlewareControl::StopWithFinal(text) => {
+                // The most recently appended assistant row may carry
+                // `tool_calls` that were never answered — e.g. a middleware
+                // requesting `StopWithFinal` right after the model turn that
+                // requested them, before `execute_tools` ever ran. Left as
+                // is, `run.messages`/`messages` end with an assistant row
+                // whose tool calls have no matching tool message, which a
+                // provider rejects (400) if the transcript is ever replayed
+                // (M-1). Append a synthetic tool result for each unanswered
+                // call so the transcript stays replayable.
+                Self::close_unanswered_tool_calls(messages, "run stopped before this tool call was executed");
                 run.final_response = Some(ModelResponse::assistant(text));
                 Ok(Some(LoopExit::Finished))
             }
@@ -894,6 +905,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 Err(TinyAgentsError::Interrupted { node, message })
             }
         }
+    }
+
+    /// Appends a synthetic [`Message::tool`] result for every tool call on
+    /// the last message that is still unanswered, so the transcript stays
+    /// replayable through a provider that requires every `tool_calls` entry
+    /// on an assistant message to have a matching tool result before the next
+    /// turn (M-1). A no-op when the last message is not an unanswered
+    /// assistant tool-call row.
+    fn close_unanswered_tool_calls(messages: &mut Vec<Message>, reason: &str) {
+        let Some(Message::Assistant(last)) = messages.last() else {
+            return;
+        };
+        if last.tool_calls.is_empty() {
+            return;
+        }
+        let synthetic: Vec<Message> = last
+            .tool_calls
+            .iter()
+            .map(|call| Message::tool(call.id.clone(), reason))
+            .collect();
+        messages.extend(synthetic);
     }
 
     /// Resolves the effective response-cache decision for `request`.
