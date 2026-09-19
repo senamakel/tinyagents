@@ -303,6 +303,11 @@ impl ChildRunRecorder {
                 run_id: execution.run_id.clone(),
                 root_run_id: execution.root_run_id.clone(),
                 usage: tinyinference_llm::usage::UsageTotals::default(),
+                // C4: the child's latest checkpoint, so the parent's own
+                // checkpoint metadata (`child_runs`) carries an explicit
+                // pointer to the exact record a later `retry`/`resume`
+                // continuation would act on.
+                checkpoint_id: execution.checkpoint_id.clone(),
             });
         }
     }
