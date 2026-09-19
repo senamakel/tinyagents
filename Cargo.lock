@@ -1527,6 +1527,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyagents-orchestration"
+version = "2.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tinyagents-graph",
+ "tinyagents-harness",
+ "tinyagents-session",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "tinyagents-registry"
 version = "2.1.2"
 dependencies = [
