@@ -647,6 +647,99 @@ where
         }
         Ok(out)
     }
+
+    async fn try_claim(&self, thread: &str, owner: &str, ttl: std::time::Duration) -> Result<bool> {
+        let conn = self.conn.clone();
+        let thread = thread.to_string();
+        let owner = owner.to_string();
+        let ttl_ms = ttl.as_millis() as i64;
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let now = tinyagents_harness::ids::now_ms() as i64;
+            let expires_at = now.saturating_add(ttl_ms);
+            let conn = conn.lock().map_err(|_| {
+                TinyAgentsError::Checkpoint(
+                    "sqlite checkpointer: connection lock poisoned".to_string(),
+                )
+            })?;
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| sqlite_err("begin try_claim tx", e))?;
+            let existing: Option<(String, i64)> = tx
+                .query_row(
+                    "SELECT owner, expires_at FROM thread_leases WHERE thread_id = ?1",
+                    params![thread],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| sqlite_err("read thread_leases", e))?;
+            let claimable = match &existing {
+                None => true,
+                Some((existing_owner, _)) if existing_owner == &owner => true,
+                Some((_, existing_expires)) => *existing_expires <= now,
+            };
+            if !claimable {
+                tx.commit().map_err(|e| sqlite_err("commit try_claim", e))?;
+                return Ok(false);
+            }
+            tx.execute(
+                "INSERT INTO thread_leases (thread_id, owner, expires_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(thread_id) DO UPDATE SET owner = excluded.owner, expires_at = excluded.expires_at",
+                params![thread, owner, expires_at],
+            )
+            .map_err(|e| sqlite_err("upsert thread_leases", e))?;
+            tx.commit().map_err(|e| sqlite_err("commit try_claim", e))?;
+            Ok(true)
+        })
+        .await
+        .map_err(|e| sqlite_err("join blocking try_claim task", e))?
+    }
+
+    async fn renew(&self, thread: &str, owner: &str, ttl: std::time::Duration) -> Result<bool> {
+        let conn = self.conn.clone();
+        let thread = thread.to_string();
+        let owner = owner.to_string();
+        let ttl_ms = ttl.as_millis() as i64;
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let now = tinyagents_harness::ids::now_ms() as i64;
+            let expires_at = now.saturating_add(ttl_ms);
+            let conn = conn.lock().map_err(|_| {
+                TinyAgentsError::Checkpoint(
+                    "sqlite checkpointer: connection lock poisoned".to_string(),
+                )
+            })?;
+            let updated = conn
+                .execute(
+                    "UPDATE thread_leases SET expires_at = ?1
+                     WHERE thread_id = ?2 AND owner = ?3",
+                    params![expires_at, thread, owner],
+                )
+                .map_err(|e| sqlite_err("renew thread_leases", e))?;
+            Ok(updated > 0)
+        })
+        .await
+        .map_err(|e| sqlite_err("join blocking renew task", e))?
+    }
+
+    async fn release(&self, thread: &str, owner: &str) -> Result<()> {
+        let conn = self.conn.clone();
+        let thread = thread.to_string();
+        let owner = owner.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let conn = conn.lock().map_err(|_| {
+                TinyAgentsError::Checkpoint(
+                    "sqlite checkpointer: connection lock poisoned".to_string(),
+                )
+            })?;
+            conn.execute(
+                "DELETE FROM thread_leases WHERE thread_id = ?1 AND owner = ?2",
+                params![thread, owner],
+            )
+            .map_err(|e| sqlite_err("release thread_leases", e))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| sqlite_err("join blocking release task", e))?
+    }
 }
 
 /// Decodes one `checkpoint_writes` row into a [`PendingWrite`].
