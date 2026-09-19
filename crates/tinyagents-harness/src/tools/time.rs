@@ -298,6 +298,13 @@ pub(crate) fn parse_relative_duration(raw: &str) -> Option<Duration> {
     Some(if future { magnitude } else { -magnitude })
 }
 
+/// Resolves a free-form time expression to a UTC instant, trying each
+/// recognised form in order: `"now"`, a relative duration
+/// ([`parse_relative_duration`]), `"today"`/`"yesterday"`/`"tomorrow"`
+/// (civil midnight in `zone`), RFC-3339, a handful of naive datetime formats,
+/// then a bare `YYYY-MM-DD` date. Returns an error string (not
+/// `TinyAgentsError`) so [`ResolveTimeTool::execute`] can surface it directly
+/// as a tool-error result without wrapping.
 pub(crate) fn resolve_expr(
     expr: &str,
     zone: ResolveZone,
