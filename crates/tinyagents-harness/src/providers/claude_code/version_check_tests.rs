@@ -1,3 +1,5 @@
+//! Unit tests for CLI binary resolution and version-gate probing.
+
 use super::*;
 
 #[test]

@@ -1,3 +1,5 @@
+//! Unit tests for `SessionStore` persistence and UUID v4 validation.
+
 use super::*;
 use tempfile::tempdir;
 
