@@ -2,6 +2,17 @@
 //!
 //! Provider-neutral inference types and calls live in `tinyinference`; this
 //! module owns only name registration, fallback ordering, and runtime defaults.
+//!
+//! [`ModelRegistry`] maps runtime model names to executable
+//! `Arc<dyn ChatModel<State>>` handles and holds one designated default.
+//! [`ModelRegistry::resolve`] is the single selection algorithm: given a
+//! [`ModelSelection`] it tries, in strict precedence order, an explicit
+//! per-request override, a reusable previous selection, priority-sorted
+//! runtime hints, the agent's own default, and finally the registry-wide
+//! default — returning the first candidate that is both registered and
+//! [`model_eligible`]. [`ModelRegistry::resolve_request`] is the common-case
+//! entry point that builds a [`ModelSelection`] from one
+//! [`ModelRequest`][tinyinference_llm::model::ModelRequest].
 
 mod types;
 
