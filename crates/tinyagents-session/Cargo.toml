@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Durable TinyAgents session history and run ledger."
 
 [dependencies]
+async-trait = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { workspace = true }
