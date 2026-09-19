@@ -931,8 +931,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let outcome = extractor.extract_outcome(&response);
                     let error = match outcome.value {
                         Some(value) => match &self.output_validator {
-                            Some(validator) => match validator.validate(ctx, state, &value).await
-                            {
+                            Some(validator) => match validator.validate(ctx, state, &value).await {
                                 Ok(()) => {
                                     run.structured = Some(value);
                                     None

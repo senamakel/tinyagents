@@ -1464,9 +1464,7 @@ where
         Ok(result) => Ok(result),
         Err(error) => match error.downcast::<TinyAgentsError>() {
             Ok(TinyAgentsError::ModelRetry(message)) => Ok(tinytools::ToolResult::retry(message)),
-            Ok(TinyAgentsError::ToolFailed(message)) => {
-                Ok(tinytools::ToolResult::failed(message))
-            }
+            Ok(TinyAgentsError::ToolFailed(message)) => Ok(tinytools::ToolResult::failed(message)),
             Ok(other) => Err(map_tool_dispatch_error(anyhow::Error::from(other))),
             Err(error) => Err(map_tool_dispatch_error(error)),
         },

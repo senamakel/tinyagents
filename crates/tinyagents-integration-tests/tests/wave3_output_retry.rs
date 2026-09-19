@@ -93,7 +93,10 @@ async fn validator_rejects_once_then_accepts() {
         .await
         .expect("the second attempt satisfies the validator");
 
-    assert_eq!(run.model_calls, 2, "one rejected attempt plus one accepted retry");
+    assert_eq!(
+        run.model_calls, 2,
+        "one rejected attempt plus one accepted retry"
+    );
     let structured = run.structured.expect("structured output is surfaced");
     assert_eq!(structured["score"], 99);
 
@@ -102,7 +105,10 @@ async fn validator_rejects_once_then_accepts() {
         .into_iter()
         .filter(|event| matches!(event, AgentEvent::OutputRetry { .. }))
         .count();
-    assert_eq!(retries, 1, "exactly one OutputRetry event for the rejected attempt");
+    assert_eq!(
+        retries, 1,
+        "exactly one OutputRetry event for the rejected attempt"
+    );
 }
 
 /// A validator that never accepts, to prove exhaustion fails the run instead
@@ -168,10 +174,7 @@ async fn exhausting_output_retries_fails_the_run() {
 async fn structured_as_deserializes_the_typed_output() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::constant(r#"{"score":7}"#)),
-        )
+        .register_model("mock", Arc::new(MockModel::constant(r#"{"score":7}"#)))
         .set_default_model("mock")
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema("answer", object_schema())),
