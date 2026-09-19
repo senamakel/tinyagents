@@ -258,14 +258,27 @@ where
                 .get(node_id)
                 .ok_or_else(|| TinyAgentsError::MissingNode(node_id.to_string()))?;
 
-            self.graph.emit(GraphEvent::TaskScheduled {
-                node: node_id.clone(),
-                step,
-            });
-            self.graph.emit(GraphEvent::NodeStarted {
-                node: node_id.clone(),
-                step,
-            });
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::TaskScheduled {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::NodeStarted {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
+            self.graph.emit(
+                &ctx.run_id,
+                GraphEvent::TaskStarted {
+                    node: node_id.clone(),
+                    step,
+                },
+            );
 
             let node_ctx = ctx.node_context(
                 activation,
