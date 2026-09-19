@@ -18,20 +18,21 @@ carry their own `README.md` — see the module map below.
 
 | Module | Concern |
 | --- | --- |
-| `builder` | Authoring/compile contract: `GraphBuilder` accumulates nodes, edges, conditional routing, and a reducer; `.compile()` validates topology and freezes it into an immutable `CompiledGraph`. |
+| `builder` | Authoring/compile contract: `GraphBuilder` accumulates nodes, edges, conditional routing, and a reducer; `.compile()` validates topology and freezes it into an immutable `CompiledGraph`. See [`builder/README.md`](builder/README.md). |
 | `channel` | Channel-per-field state model (additive) — per-field merge rules and concurrent-write conflict detection, running on the unmodified executor. See [`channel/README.md`](channel/README.md). |
 | `checkpoint` | The `Checkpointer` trait and backends (file, sqlite, in-memory) — durability that makes runs resumable and time-travelable. See [`checkpoint/README.md`](checkpoint/README.md). |
-| `command` | `Command`, `Interrupt`, `NodeResult`, `RouteTarget`, `Send` — the vocabulary a node handler returns to update state, route, interrupt, or fan out. |
+| `command` | `Command`, `Interrupt`, `NodeResult`, `RouteTarget`, `Send` — the vocabulary a node handler returns to update state, route, interrupt, or fan out. See [`command/README.md`](command/README.md). |
 | `compiled` | The superstep executor, `CompiledGraph` — sequential/parallel steps, node retry, resumable failure, run/resume/state APIs. See [`compiled/README.md`](compiled/README.md). |
+| `dag` | Structural validation (duplicates, dangling edges, cycles) of a borrowed dependency-node view, independent of the graph runtime. See [`dag/README.md`](dag/README.md). |
 | `export` | Graph introspection/visualization: topology extraction, Mermaid/JSON export, validation reports. |
 | `goals` | A durable per-thread goal (single "completion contract"), continuation loop, and harness tools. See [`goals/README.md`](goals/README.md). |
 | `observability` | Durable graph observability: journals, status stores, the journaling sink, latency/health rollups, Langfuse export. See [`observability/README.md`](observability/README.md). |
 | `orchestration` | Managed child-work controls (`spawn`/`await`/`cancel`/... ) exposed as harness tools, backed by a `TaskStore`. See [`orchestration/README.md`](orchestration/README.md). |
 | `parallel` | `map_reduce` — ordered, bounded-concurrency parallel map/reduce with a configurable failure policy, independent of the graph executor. |
-| `recursion` | Recursion policy and depth tracking: `RecursionFrame`/`RecursionPolicy`/`RecursionStack`/`RunTree` bound and observe nested graph/subgraph/sub-agent recursion. |
-| `reducer` | `StateReducer`/`Reducer` implementations (overwrite, append, min/max, set-union, closures) that fold branch updates into committed state at a superstep boundary. |
-| `status` | `GraphRunStatus` — a compact run-status snapshot. |
-| `stream` | `GraphEvent`, `GraphEventSink`, and streaming modes — the live, in-process event surface `observability` makes durable. |
+| `recursion` | Recursion policy and depth tracking: `RecursionFrame`/`RecursionPolicy`/`RecursionStack`/`RunTree` bound and observe nested graph/subgraph/sub-agent recursion. See [`recursion/README.md`](recursion/README.md). |
+| `reducer` | `StateReducer`/`Reducer` implementations (overwrite, append, min/max, set-union, closures) that fold branch updates into committed state at a superstep boundary. See [`reducer/README.md`](reducer/README.md). |
+| `status` | `GraphRunStatus` — a compact run-status snapshot. See [`status/README.md`](status/README.md). |
+| `stream` | `GraphEvent`, `GraphEventSink`, and streaming modes — the live, in-process event surface `observability` makes durable. See [`stream/README.md`](stream/README.md). |
 | `subagent_node` | Embeds a harness agent as a graph node (the graph-level analogue of `subgraph`, but for agents instead of graphs). |
 | `subgraph` | Embeds a `CompiledGraph` as a node (shared-state or adapter mode) — graph-level recursion. See [`subgraph/README.md`](subgraph/README.md). |
 | `testkit` | Deterministic node doubles, event recorder, fluent run assertions, storage conformance suites. See [`testkit/README.md`](testkit/README.md). |

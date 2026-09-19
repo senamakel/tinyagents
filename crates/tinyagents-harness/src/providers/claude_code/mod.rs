@@ -526,6 +526,9 @@ impl ChatModel<()> for ClaudeCodeProvider {
     }
 }
 
+/// Converts one [`ProviderDelta`] into a `ModelStreamItem::MessageDelta`,
+/// running text through `tool_call_scrubber` (when the request has tools)
+/// so streamed `<tool_call>` markup does not reach the live consumer.
 fn forward_delta(
     sender: &tokio::sync::mpsc::UnboundedSender<ModelStreamItem>,
     delta: ProviderDelta,
@@ -546,6 +549,8 @@ fn forward_delta(
     }
 }
 
+/// Emits any text the scrubber is still holding once the stream ends, so a
+/// turn that finished mid-buffer does not silently drop trailing text.
 fn flush_tool_call_scrubber(
     sender: &tokio::sync::mpsc::UnboundedSender<ModelStreamItem>,
     tool_call_scrubber: Option<&mut ToolCallStreamScrubber>,
