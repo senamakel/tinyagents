@@ -265,12 +265,10 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
     assert_eq!(calls, vec![json!({"symbol": "ACME"}), json!({"symbol": "XYZ"})]);
     assert!(hidden.calls.lock().unwrap().is_empty());
 
-    // `before_tool` saw the real name for the bridged call, never `tool_call`.
+    // `before_tool` saw the real name for the bridged call, never `tool_call`;
+    // `tool_search` is answered intrinsically before any hook runs.
     let hooks = before_tool.lock().unwrap().clone();
-    assert_eq!(
-        hooks,
-        vec![TOOL_SEARCH_NAME, "stock_quote", "stock_quote", "internal_step"]
-    );
+    assert_eq!(hooks, vec!["stock_quote", "stock_quote", "internal_step"]);
 
     // Transcript: the search answer carries the full schema; the hidden call
     // was answered as unknown, listing only model-callable names.
