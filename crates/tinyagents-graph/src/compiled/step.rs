@@ -373,10 +373,12 @@ where
             });
 
             let send_arg = activation.send_arg.clone();
-            let result = if let Some(update) = self
-                .try_cache_get(node_id, state, send_arg.as_ref())
-                .await
-            {
+            let cache_key = self.cache_key_for(node_id, state, send_arg.as_ref());
+            let cache_hit = match &cache_key {
+                Some(key) => self.cache_get(node_id, key).await,
+                None => None,
+            };
+            let result = if let Some(update) = cache_hit {
                 self.graph.emit(GraphEvent::TaskCompleted {
                     node: node_id.clone(),
                     step,
@@ -400,8 +402,8 @@ where
                 let result = self
                     .run_node_with_retry(node_id, &node.handler, state, node_ctx, step, &policy)
                     .await;
-                if let Some((key, value, ttl)) =
-                    self.prepare_cache_put(node_id, state, send_arg.as_ref(), &result)
+                if let (Some(key), Some((value, ttl))) =
+                    (&cache_key, self.prepare_cache_put(node_id, &result))
                 {
                     self.store_cache_entry(key, value, ttl, node_id, step).await;
                 }
