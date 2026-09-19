@@ -88,7 +88,6 @@ pub mod retriever;
 pub mod retry;
 pub mod run_queue;
 pub mod runtime;
-pub mod sanitize;
 pub mod steering;
 pub mod store;
 pub mod stream;
