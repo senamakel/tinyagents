@@ -703,20 +703,27 @@ where
         ctx: &RunCtx<'_, State, Update>,
         completed: &[(usize, Activation)],
         goto_map: &HashMap<usize, Vec<RouteTarget>>,
-    ) -> (Vec<Activation>, Vec<Vec<RouteTarget>>) {
-        let mut tasks: Vec<Activation> = Vec::new();
-        let mut routes: Vec<Vec<RouteTarget>> = Vec::new();
+    ) -> Vec<crate::checkpoint::CompletedTask> {
+        let mut out: Vec<crate::checkpoint::CompletedTask> = Vec::new();
         if let Some(carried) = &ctx.carried_completed {
             for (node, goto) in carried {
-                tasks.push(Activation::node(node.clone()));
-                routes.push(goto.clone());
+                // No task id is carried across a resume: `RunCtx::carried_completed`
+                // stores only the node id and persisted routing.
+                out.push(crate::checkpoint::CompletedTask::with_routes(
+                    TaskId::from(String::new()),
+                    node.clone(),
+                    goto.clone(),
+                ));
             }
         }
         for (index, activation) in completed {
-            tasks.push(activation.clone());
-            routes.push(goto_map.get(index).cloned().unwrap_or_default());
+            out.push(crate::checkpoint::CompletedTask::with_routes(
+                activation.task_id.clone(),
+                activation.node.clone(),
+                goto_map.get(index).cloned().unwrap_or_default(),
+            ));
         }
-        (tasks, routes)
+        out
     }
 
     /// Records completion markers for the tasks that finished in the step a
