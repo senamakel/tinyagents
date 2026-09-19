@@ -196,7 +196,7 @@ pub(super) fn recover_text_calls(
     offered: &[ToolSchema],
     registry: Option<&PFormatRegistry>,
 ) {
-    if offered.is_empty() || !response.message.tool_calls.is_empty() {
+    if offered.is_empty() {
         return;
     }
     let known: Vec<String> = offered.iter().map(|tool| tool.name.clone()).collect();
