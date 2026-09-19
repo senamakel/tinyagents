@@ -954,7 +954,7 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
 
 fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
     prepared: PreparedAgentTurn<State, Ctx>,
-    run: AgentRun,
+    run: crate::context::TerminalRunSummary,
     succeeded: bool,
     error: Option<String>,
 ) {
