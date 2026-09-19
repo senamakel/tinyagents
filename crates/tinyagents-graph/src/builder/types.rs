@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::Result;
 use crate::command::NodeResult;
 use crate::reducer::StateReducer;
-use tinyagents_harness::ids::{GraphId, NodeId, RunId, ThreadId};
+use tinyagents_harness::ids::{GraphId, NodeId, RunId, TaskId, ThreadId};
 
 /// The reserved virtual entry node.
 pub const START: &str = "__start__";
