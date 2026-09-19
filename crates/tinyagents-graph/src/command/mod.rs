@@ -14,7 +14,7 @@ mod types;
 
 pub use types::{Command, Interrupt, NodeResult, RouteTarget, Send};
 
-use tinyagents_harness::ids::NodeId;
+use tinyagents_harness::ids::{NodeId, TaskId};
 
 impl<Update> Command<Update> {
     /// Creates an empty command (no update, no routing, no resume).
@@ -23,6 +23,7 @@ impl<Update> Command<Update> {
             update: None,
             goto: Vec::new(),
             resume: None,
+            resume_by_task: std::collections::HashMap::new(),
         }
     }
 
@@ -35,6 +36,7 @@ impl<Update> Command<Update> {
                 .map(|t| RouteTarget::Node(t.into()))
                 .collect(),
             resume: None,
+            resume_by_task: std::collections::HashMap::new(),
         }
     }
 
@@ -46,6 +48,7 @@ impl<Update> Command<Update> {
             update: None,
             goto: sends.into_iter().map(RouteTarget::Send).collect(),
             resume: None,
+            resume_by_task: std::collections::HashMap::new(),
         }
     }
 
@@ -55,6 +58,7 @@ impl<Update> Command<Update> {
             update: Some(update),
             goto: Vec::new(),
             resume: None,
+            resume_by_task: std::collections::HashMap::new(),
         }
     }
 
@@ -64,6 +68,21 @@ impl<Update> Command<Update> {
             update: None,
             goto: Vec::new(),
             resume: Some(value),
+            resume_by_task: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Creates a resume command carrying a distinct value per interrupted
+    /// task (I1): a `Send` fan-out of the same node produces several
+    /// concurrently-interrupted tasks, and this is how a caller delivers each
+    /// its own resume value in one call, keyed by
+    /// [`crate::builder::NodeContext::task_id`].
+    pub fn resume_tasks(values: impl IntoIterator<Item = (TaskId, serde_json::Value)>) -> Self {
+        Self {
+            update: None,
+            goto: Vec::new(),
+            resume: None,
+            resume_by_task: values.into_iter().collect(),
         }
     }
 
