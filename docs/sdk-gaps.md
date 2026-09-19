@@ -289,27 +289,24 @@ Acceptance criteria:
 ### 9. Dynamic Tool Exposure And Allowlist Policy
 
 Status: present (B3 composable toolsets, `docs/runtime-comparison/pydantic-ai.md`
-§3.4/§4).
+§3.4/§4; see `docs/modules/harness/toolsets.md` for the full design).
 
 `tinyagents_harness::tool::toolset::ToolSet<State, Ctx>` (`tools`/`call`/
-`instructions`/`for_run`) is the composition unit;
-`ToolRegistry` implements it directly, and `Combined`/`Filtered`/`Prefixed`/
-`Renamed`/`Prepared`/`ApprovalRequired`/`External` are value-level adaptors,
-each independently testable, wired in via `AgentHarness::with_toolset`. Every
-adaptor that changes or withholds a tool records a `ToolExposureExplanation`
+`instructions`/`for_run`) is the composition unit; `ToolRegistry` implements
+it directly, and `Combined`/`Filtered`/`Prefixed`/`Renamed`/`Prepared`/
+`ApprovalRequired`/`External` are independently testable value-level
+adaptors, wired in via `AgentHarness::with_toolset`. Every adaptor that
+changes or withholds a tool records a `ToolExposureExplanation`
 (`FilteredOut`, `Renamed`, `Prefixed`, `Prepared`, `ApprovalRequired`,
-`Deferred`, `Hidden`), additive on `AgentEvent::ToolsFiltered`, giving a
-concrete, inspectable answer to "why was this tool hidden" instead of
-depending on middleware ordering. `ToolAllowlistMiddleware` and
-`DynamicToolSelectionMiddleware` are kept as public types (existing hosts
-need no migration) but are now thin wrappers sharing predicate logic with
-`FilteredToolSet`/`PreparedToolSet` so the two mechanisms cannot drift. See
-`docs/modules/harness/toolsets.md`.
+`Deferred`, `Hidden`), additive on `AgentEvent::ToolsFiltered` — a concrete,
+inspectable answer to "why was this tool hidden" instead of depending on
+middleware ordering. `ToolAllowlistMiddleware`/`DynamicToolSelectionMiddleware`
+are kept as public types but are now thin wrappers sharing predicate logic
+with `FilteredToolSet`/`PreparedToolSet` so the two cannot drift.
 
 OpenHuman-specific per-tier/per-sub-agent/per-task allowlist *policy*
 composition, and MCP-backed tool sources, still live in OpenHuman: this gap
-closes the composition primitive (`ToolSet` + adaptors +
-`ToolExposureExplanation`) and the host seam (`ExternalToolSet` +
+closes the composition primitive and the host seam (`ExternalToolSet` +
 `TinyAgentsError::CallDeferred`) that policy is built on, not OpenHuman's own
 policy tables.
 
