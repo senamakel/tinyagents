@@ -179,13 +179,14 @@ async fn graph_reducers_streams_observability_and_status_helpers_work() {
     .with_thread(Some(ThreadId::new("thread")))
     .with_namespace(vec!["child".into()])
     .with_inner(Arc::new(sink.clone()));
-    journal_sink.emit(GraphEvent::StepStarted {
+    journal_sink.emit(envelope(GraphEvent::StepStarted {
         step: 3,
         active: vec![NodeId::new("a")],
-    });
-    journal_sink.emit(GraphEvent::CheckpointSaved {
+    }));
+    journal_sink.emit(envelope(GraphEvent::CheckpointSaved {
         checkpoint_id: CheckpointId::new("cp-3"),
-    });
+        step: Some(3),
+    }));
     // Persistence is asynchronous; block until the durable log catches up.
     journal_sink.flush();
     assert_eq!(journal.len("run-g"), 2);
