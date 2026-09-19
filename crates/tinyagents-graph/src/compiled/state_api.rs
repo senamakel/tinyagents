@@ -213,8 +213,51 @@ where
         let completed_tasks: Vec<NodeId> = as_node.iter().cloned().collect();
         let barrier_arrivals = barriers_to_persisted(&arrivals);
 
+        // I2: carry the base checkpoint's interrupt provenance through this
+        // manual write unless `as_node` names the node that actually
+        // interrupted — clearing it in exactly that case is how the
+        // documented "inspect -> update_state -> resume(value)" flow keeps
+        // working (`resume` fans the value across the pending set when it
+        // finds no interrupt provenance at all, so blindly erasing
+        // `interrupts`/`interrupted_nodes` on every manual write — as before
+        // this fix — handed the resume value to nodes that never paused).
+        let base_interrupted_stamped: Vec<NodeId> = base
+            .metadata
+            .get("interrupted_nodes")
+            .and_then(serde_json::Value::as_array)
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(NodeId::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let names_interrupted_node = |node: &NodeId| -> bool {
+            if base_interrupted_stamped.is_empty() {
+                base.interrupts.iter().any(|i| &i.node == node)
+            } else {
+                base_interrupted_stamped.contains(node)
+            }
+        };
+        let clears_interrupt = as_node.as_ref().is_some_and(names_interrupted_node);
+        let (interrupts, interrupted_nodes_meta) = if clears_interrupt {
+            (Vec::new(), Vec::new())
+        } else {
+            (base.interrupts.clone(), base_interrupted_stamped)
+        };
+
         let checkpoint_id = next_checkpoint_id();
         let config = self.config_for(thread_id, Some(&checkpoint_id));
+        let mut metadata = serde_json::json!({ "source": "update", "step": parent_step + 1 });
+        if !interrupted_nodes_meta.is_empty() {
+            metadata["interrupted_nodes"] = serde_json::json!(
+                interrupted_nodes_meta
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
         let checkpoint = Checkpoint {
             thread_id: thread_id.to_string(),
             checkpoint_id,
@@ -225,10 +268,10 @@ where
             next_nodes,
             completed_tasks,
             pending_writes: Vec::new(),
-            interrupts: Vec::new(),
+            interrupts,
             pending_activations,
             barrier_arrivals,
-            metadata: serde_json::json!({ "source": "update", "step": parent_step + 1 }),
+            metadata,
         };
         let id = checkpointer.put(checkpoint).await?;
         self.emit(GraphEvent::CheckpointSaved { checkpoint_id: id });
