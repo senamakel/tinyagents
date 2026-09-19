@@ -79,13 +79,15 @@ pub(super) struct StepRun<Update> {
     /// scratch on resume/retry). The first entry is always the branch named
     /// by `interrupt`/`failure` below, when either is set.
     pub(super) stalled: Vec<(usize, Activation)>,
-    /// The lowest-index branch interrupt, if any (its active-set index +
-    /// value). Other, higher-index branches that also interrupted this step
-    /// are still recorded in `stalled` (so they are not silently dropped or
-    /// mistaken for completed), but only this one's value is surfaced as
-    /// *the* step interrupt — surfacing more than one concurrently is not
-    /// modeled by [`GraphExecution::interrupts`](super::GraphExecution).
-    pub(super) interrupt: Option<(usize, Interrupt)>,
+    /// Every branch that interrupted this step, active-set-index-paired, in
+    /// ascending index order (I1). Empty when nothing interrupted. Unlike
+    /// the pre-I1 fold (which surfaced only the lowest-index interrupt),
+    /// every interrupted branch is carried through to the boundary — a
+    /// `Send` fan-out of one node interrupting on every concurrent
+    /// activation surfaces all of them on
+    /// [`GraphExecution::interrupts`](super::GraphExecution), each stamped
+    /// with its own branch's task id.
+    pub(super) interrupted: Vec<(usize, Interrupt)>,
     /// A node-handler failure that survived the node-retry policy, if any —
     /// always the lowest-index error this step. When set, `updates` still
     /// carries the updates of every branch that completed (not just those
