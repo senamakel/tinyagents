@@ -496,6 +496,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             }
 
+            // A caller asking for a *named* reasoning effort (for example
+            // `ReasoningEffort::High`) gets whatever generic token that name
+            // implies unless the resolved model's profile maps that name to
+            // something more specific for this exact model (a provider-tuned
+            // `budget_tokens`, typically). Only fill in a name the profile
+            // actually maps and only when the caller has not already pinned
+            // an explicit `budget_tokens` — an explicit budget is the
+            // caller's own override and must win over the profile default.
+            if let Some(profile) = binding.model.profile()
+                && let Some(reasoning) = request.reasoning.as_ref()
+                && reasoning.budget_tokens.is_none()
+                && let Some(effort) = reasoning.effort
+                && let Some(mapped) = profile.thinking_level_map.get(effort.as_str())
+            {
+                request.reasoning = Some(mapped.clone());
+            }
+
             // Resolve the structured-output plan against the resolved model.
             // `Auto` consults the model profile to choose provider-native schema
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
