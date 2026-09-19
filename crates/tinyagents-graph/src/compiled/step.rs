@@ -232,7 +232,7 @@ where
         } else {
             self.run_sequential(ctx, active, state, step).await?
         };
-        Ok(self.fold_step(outcome, step, &mut ctx.visited))
+        Ok(self.fold_step(&ctx.run_id, outcome, step, &mut ctx.visited))
     }
 
     /// Runs the active node set one node at a time (default behavior).
