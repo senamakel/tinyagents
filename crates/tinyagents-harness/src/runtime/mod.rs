@@ -57,6 +57,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             response_cache: None,
             output_validator: None,
             toolset: None,
+            capabilities: Vec::new(),
+            capability_base_toolset: None,
         }
     }
 
