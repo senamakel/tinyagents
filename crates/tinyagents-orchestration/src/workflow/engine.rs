@@ -392,7 +392,14 @@ where
         // resume can race in another process, and only the durable lease
         // prevents both drivers from spawning the same phase.
         let owner = uuid::Uuid::new_v4().to_string();
-        let mut run = match self.store.claim(run_id, &owner, self.lease_for)? {
+        let claim = {
+            let claim_run_id = run_id.to_owned();
+            let claim_owner = owner.clone();
+            let lease_for = self.lease_for;
+            self.store_op(move |store| store.claim(&claim_run_id, &claim_owner, lease_for))
+                .await?
+        };
+        let mut run = match claim {
             WorkflowLeaseClaim::Acquired(run) => run,
             WorkflowLeaseClaim::Busy(_) => return Ok(()),
             WorkflowLeaseClaim::Missing => {
