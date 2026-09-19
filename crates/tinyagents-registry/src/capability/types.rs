@@ -61,4 +61,7 @@ where
     pub(crate) meta: HashMap<(ComponentKind, String), ComponentMetadata>,
     /// Alias map, keyed by `(kind, alias)` -> canonical name.
     pub(crate) aliases: HashMap<(ComponentKind, String), String>,
+    /// Declarative workload-tier → model routing policy, when one is
+    /// installed. See [`CapabilityRegistry::route_workload`].
+    pub(crate) router: crate::router::WorkloadRouter,
 }
