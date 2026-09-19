@@ -68,8 +68,8 @@ pub(super) struct RunSeed<State, Update> {
     /// mid-step completions) — see [`ResumeSeed`]. Left at its `Default`
     /// (empty/zero) for a fresh run.
     pub(super) resume_seed: ResumeSeed,
-    /// Optional per-run options (I4 part 2) — currently the cooperative
-    /// cancellation token, if the caller opted in via
+    /// Optional per-run options (I4 part 2) — the cooperative cancellation
+    /// token and/or graceful-drain signal, if the caller opted in via
     /// [`CompiledGraph::run_with_options`]/[`CompiledGraph::resume_with_options`].
     pub(super) options: RunOptions,
     pub(super) _update: std::marker::PhantomData<Update>,
@@ -127,15 +127,17 @@ where
         .await
     }
 
-    /// Runs the graph to completion (or to an interrupt/cancellation) without
-    /// a thread, honoring `options` (I4 part 2) — currently a cooperative
+    /// Runs the graph to completion (or to an interrupt/cancellation/drain)
+    /// without a thread, honoring `options` (I4 part 2): a cooperative
     /// [`RunOptions::cancellation`] token checked at every superstep
-    /// boundary and raced against that step's in-flight node handlers.
+    /// boundary and raced against that step's in-flight node handlers, and
+    /// a graceful [`RunOptions::drain`] signal checked between supersteps
+    /// only (the step in flight always completes).
     ///
-    /// Without a thread id, cancellation still stops the run and records a
-    /// `Cancelled` status, but there is nothing to persist a resumable
-    /// checkpoint against (checkpoints are keyed by thread), exactly like
-    /// [`Self::run`].
+    /// Without a thread id, cancellation/drain still stop the run and record
+    /// a `Cancelled`/`Drained` status, but there is nothing to persist a
+    /// resumable checkpoint against (checkpoints are keyed by thread),
+    /// exactly like [`Self::run`].
     pub async fn run_with_options(
         &self,
         state: State,
@@ -151,9 +153,9 @@ where
     /// Runs the graph under a thread id, honoring `options` (I4 part 2).
     ///
     /// This is the checkpointed counterpart to [`Self::run_with_options`]: a
-    /// cancellation observed mid-run persists a resumable checkpoint naming
-    /// the still-pending activations, so the run can be continued later with
-    /// [`Self::resume`]/[`Self::retry`].
+    /// cancellation or drain observed mid-run persists a resumable checkpoint
+    /// naming the still-pending activations, so the run can be continued
+    /// later with [`Self::resume`]/[`Self::retry`].
     pub async fn run_with_thread_options(
         &self,
         thread_id: impl Into<ThreadId>,
@@ -538,7 +540,6 @@ where
             options,
             ..
         } = seed;
-        let cancellation = options.cancellation;
 
         let mut ctx = RunCtx::start(
             self,
@@ -549,7 +550,7 @@ where
             initial_parent,
             binding,
             resume_seed,
-            cancellation,
+            options,
         )
         .await?;
         let runner = StepRunner { graph: self };
@@ -568,6 +569,13 @@ where
             // executed yet).
             if ctx.is_cancelled() {
                 return self.handle_cancel_boundary(&mut ctx, &active, &state).await;
+            }
+            // Graceful drain: checked *only* here, between supersteps, so a
+            // drain raised while a step was in flight lets that step finish
+            // and commit its boundary (above/`advance`), then stops before
+            // `active` — the next step's whole set — runs anything.
+            if ctx.is_drain_requested() {
+                return self.handle_drain_boundary(&mut ctx, &active, &state).await;
             }
 
             let step = match self.begin_step(&mut ctx, &mut active).await {
@@ -750,6 +758,7 @@ where
             interrupts: Vec::new(),
             status,
             checkpoint_id: ctx.last_checkpoint.clone(),
+            drained: false,
         }
     }
 }
