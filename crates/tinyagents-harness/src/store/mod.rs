@@ -527,12 +527,7 @@ impl AppendStore for JsonlAppendStore {
             Ok(offset)
         };
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => handle.spawn_blocking(work).await.map_err(|e| {
-                TinyAgentsError::Validation(format!("append store task error: {e}"))
-            })?,
-            Err(_) => work(),
-        }
+        crate::blocking::run_blocking(work).await
     }
 
     async fn read_from(&self, stream: &str, offset: u64) -> Result<Vec<(u64, Value)>> {
