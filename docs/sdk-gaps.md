@@ -288,26 +288,39 @@ Acceptance criteria:
 
 ### 9. Dynamic Tool Exposure And Allowlist Policy
 
-Status: partially present.
+Status: present (B3 composable toolsets, `docs/runtime-comparison/pydantic-ai.md`
+§3.4/§4).
 
-TinyAgents can run with a provided tool registry, but OpenHuman needs per-agent,
-per-tier, per-sub-agent, and per-task allowlists. Tool visibility depends on
-security tier, workspace roots, parent/child delegation policy, model
-capabilities, and whether the run is background or interactive.
+`tinyagents_harness::tool::toolset::ToolSet<State, Ctx>` (`tools`/`call`/
+`instructions`/`for_run`) is the composition unit;
+`ToolRegistry` implements it directly, and `Combined`/`Filtered`/`Prefixed`/
+`Renamed`/`Prepared`/`ApprovalRequired`/`External` are value-level adaptors,
+each independently testable, wired in via `AgentHarness::with_toolset`. Every
+adaptor that changes or withholds a tool records a `ToolExposureExplanation`
+(`FilteredOut`, `Renamed`, `Prefixed`, `Prepared`, `ApprovalRequired`,
+`Deferred`, `Hidden`), additive on `AgentEvent::ToolsFiltered`, giving a
+concrete, inspectable answer to "why was this tool hidden" instead of
+depending on middleware ordering. `ToolAllowlistMiddleware` and
+`DynamicToolSelectionMiddleware` are kept as public types (existing hosts
+need no migration) but are now thin wrappers sharing predicate logic with
+`FilteredToolSet`/`PreparedToolSet` so the two mechanisms cannot drift. See
+`docs/modules/harness/toolsets.md`.
 
-Implement:
-
-- A tool selection middleware that receives run context, agent identity, task
-  kind, parent policy, and model profile.
-- Allowlist/denylist composition with explicit inheritance rules.
-- Explainable exposure decisions for audit/debugging.
-- Fail-closed behavior when policy metadata is missing.
+OpenHuman-specific per-tier/per-sub-agent/per-task allowlist *policy*
+composition, and MCP-backed tool sources, still live in OpenHuman: this gap
+closes the composition primitive (`ToolSet` + adaptors +
+`ToolExposureExplanation`) and the host seam (`ExternalToolSet` +
+`TinyAgentsError::CallDeferred`) that policy is built on, not OpenHuman's own
+policy tables.
 
 Acceptance criteria:
 
-- Sub-agents inherit only the tools they are allowed to call.
-- Tool exposure decisions are visible in run events or observations.
-- OpenHuman can remove adapter-local allowlist enforcement from most call paths.
+- [x] Sub-agents inherit only the tools they are allowed to call — composable
+      via `FilteredToolSet`/`PrefixedToolSet` chains per sub-agent.
+- [x] Tool exposure decisions are visible in run events or observations —
+      `ToolExposureExplanation` on `AgentEvent::ToolsFiltered`.
+- [ ] OpenHuman can remove adapter-local allowlist enforcement from most call
+      paths — OpenHuman-side migration, not tracked here.
 
 ### 10. Graph Fanout And Parallel Agent Ergonomics
 
