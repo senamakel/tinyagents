@@ -104,7 +104,9 @@ impl<'a> EntryTree<'a> {
     /// Returns the entry with the greatest ordinal (the current head), if
     /// any entries have been appended.
     pub fn head(&self) -> Result<Option<EntryId>> {
-        with_connection(self.workspace_dir, |conn| store::head(conn, &self.session_id))
+        with_connection(self.workspace_dir, |conn| {
+            store::head(conn, &self.session_id)
+        })
     }
 
     /// Fetches one entry by id.
@@ -265,14 +267,15 @@ impl<'a> EntryTree<'a> {
             }
         })?;
 
-        let compaction = chain
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(idx, entry)| match &entry.kind {
-                EntryKind::Compaction(c) => Some((idx, c.clone())),
-                _ => None,
-            });
+        let compaction =
+            chain
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(idx, entry)| match &entry.kind {
+                    EntryKind::Compaction(c) => Some((idx, c.clone())),
+                    _ => None,
+                });
 
         let mut messages = Vec::new();
         let start_idx = match compaction {
@@ -334,13 +337,15 @@ fn transcript_message_to_message(message: &crate::transcript::TranscriptMessage)
         "user" => Message::User(UserMessage {
             content: vec![ContentBlock::Text(text)],
         }),
-        "assistant" => Message::Assistant(tinyagents_harness::tinyinference_llm::AssistantMessage {
-            id: message.id.clone(),
-            content: vec![ContentBlock::Text(text)],
-            tool_calls: Vec::new(),
-            usage: None,
-            origin: None,
-        }),
+        "assistant" => {
+            Message::Assistant(tinyagents_harness::tinyinference_llm::AssistantMessage {
+                id: message.id.clone(),
+                content: vec![ContentBlock::Text(text)],
+                tool_calls: Vec::new(),
+                usage: None,
+                origin: None,
+            })
+        }
         other => Message::Custom(CustomMessage {
             kind: format!("legacy:{other}"),
             payload: serde_json::json!({ "content": text }),

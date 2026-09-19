@@ -333,7 +333,8 @@ fn legacy_jsonl_messages_import_with_derived_linear_parents() {
 
     // Re-importing the same source is a no-op: ids collide and are skipped,
     // so the tree stays exactly as before rather than erroring or duplicating.
-    tree.import_legacy(&entries).expect("re-import is idempotent");
+    tree.import_legacy(&entries)
+        .expect("re-import is idempotent");
     let context_again = tree.build_context(&tip).expect("context");
     assert_eq!(context_again.len(), 3);
 }

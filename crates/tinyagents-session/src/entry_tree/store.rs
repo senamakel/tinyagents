@@ -25,7 +25,9 @@ fn decode_kind(payload_json: &str) -> Result<EntryKind> {
     serde_json::from_str(payload_json).storage_context("failed to decode entry kind")
 }
 
-fn map_entry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, Option<String>, u64, String, String)> {
+fn map_entry_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(String, Option<String>, u64, String, String)> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -35,7 +37,13 @@ fn map_entry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(String, Option<St
     ))
 }
 
-fn row_to_entry(id: String, parent_id: Option<String>, ordinal: u64, payload_json: String, ts: String) -> Result<Entry> {
+fn row_to_entry(
+    id: String,
+    parent_id: Option<String>,
+    ordinal: u64,
+    payload_json: String,
+    ts: String,
+) -> Result<Entry> {
     Ok(Entry {
         id: EntryId(id),
         parent_id: parent_id.map(EntryId),
@@ -62,11 +70,7 @@ pub(super) fn next_ordinal(conn: &Connection, session_id: &str) -> Result<u64> {
 
 /// Inserts one entry row. Callers choose the id (either a freshly derived
 /// `EntryId::derive`, or a legacy-preserved one) and the ordinal.
-pub(super) fn insert_entry(
-    conn: &Connection,
-    session_id: &str,
-    entry: &Entry,
-) -> Result<()> {
+pub(super) fn insert_entry(conn: &Connection, session_id: &str, entry: &Entry) -> Result<()> {
     let (tag, payload) = encode_kind(&entry.kind)?;
     conn.execute(
         "INSERT INTO entry_tree_entries (session_id, id, parent_id, ordinal, kind, payload_json, ts)
@@ -85,7 +89,11 @@ pub(super) fn insert_entry(
     Ok(())
 }
 
-pub(super) fn get_entry(conn: &Connection, session_id: &str, id: &EntryId) -> Result<Option<Entry>> {
+pub(super) fn get_entry(
+    conn: &Connection,
+    session_id: &str,
+    id: &EntryId,
+) -> Result<Option<Entry>> {
     let row = conn
         .query_row(
             "SELECT id, parent_id, ordinal, payload_json, ts
@@ -103,7 +111,11 @@ pub(super) fn get_entry(conn: &Connection, session_id: &str, id: &EntryId) -> Re
 
 /// Walks `parent_id` from `tip` to the session root, returning entries in
 /// **chronological** (root-first) order.
-pub(super) fn ancestor_chain(conn: &Connection, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>> {
+pub(super) fn ancestor_chain(
+    conn: &Connection,
+    session_id: &str,
+    tip: &EntryId,
+) -> Result<Vec<Entry>> {
     let mut chain = Vec::new();
     let mut current = Some(tip.clone());
     while let Some(id) = current {
@@ -152,7 +164,12 @@ pub(super) fn head(conn: &Connection, session_id: &str) -> Result<Option<EntryId
     .map(|opt| opt.map(EntryId))
 }
 
-pub(super) fn insert_label(conn: &Connection, session_id: &str, name: &str, entry_id: &EntryId) -> Result<()> {
+pub(super) fn insert_label(
+    conn: &Connection,
+    session_id: &str,
+    name: &str,
+    entry_id: &EntryId,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO entry_tree_labels (session_id, name, entry_id) VALUES (?1, ?2, ?3)
          ON CONFLICT(session_id, name) DO UPDATE SET entry_id = excluded.entry_id",
@@ -195,7 +212,12 @@ pub(super) fn reindex_tip(conn: &Connection, session_id: &str, tip: &EntryId) ->
         conn.execute(
             "INSERT INTO branch_entries (session_id, tip_id, entry_id, ordinal)
              VALUES (?1, ?2, ?3, ?4)",
-            params![session_id, tip.as_str(), entry.id.as_str(), entry.ordinal as i64],
+            params![
+                session_id,
+                tip.as_str(),
+                entry.id.as_str(),
+                entry.ordinal as i64
+            ],
         )
         .storage_context("failed to insert branch_entries row")?;
     }
@@ -225,7 +247,11 @@ pub(super) fn rebuild_index(conn: &Connection, session_id: &str) -> Result<()> {
 /// Reads the materialized ancestor chain for `tip` from `branch_entries`, in
 /// chronological order. Returns `None` if the tip has no index rows (not yet
 /// built, or stale) so the caller can fall back to [`ancestor_chain`].
-pub(super) fn indexed_chain(conn: &Connection, session_id: &str, tip: &EntryId) -> Result<Option<Vec<Entry>>> {
+pub(super) fn indexed_chain(
+    conn: &Connection,
+    session_id: &str,
+    tip: &EntryId,
+) -> Result<Option<Vec<Entry>>> {
     let mut stmt = conn
         .prepare(
             "SELECT e.id, e.parent_id, e.ordinal, e.payload_json, e.ts

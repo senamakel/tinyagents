@@ -87,8 +87,8 @@ pub mod types;
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 pub use entry_tree::{
-    Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind,
-    EntryTree, Fork, ForkPosition, ForkScope, LabelEntry,
+    Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind, EntryTree,
+    Fork, ForkPosition, ForkScope, LabelEntry,
 };
 pub use ops::{
     DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, get_session, list_children, list_messages,
