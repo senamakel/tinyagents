@@ -61,6 +61,7 @@ use std::sync::{Arc, Mutex};
 use crate::context::RunContext;
 use crate::error::Result;
 use crate::events::AgentEvent;
+use crate::ids::RunId;
 use tinyinference_llm::message::Message;
 
 // ── SteeringPolicy ────────────────────────────────────────────────────────────
