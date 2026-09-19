@@ -13,9 +13,7 @@ use tinyagents_session::run_ledger::{
 };
 use uuid::Uuid;
 
-use super::{LEAD_SENDER, MemberShutdown, NewMember, TeamError, TeamView};
-
-const TEAM_MESSAGE_EVENT: &str = "team_message";
+use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamError, TeamView};
 
 /// Durable team state required by [`TeamService`].
 ///
