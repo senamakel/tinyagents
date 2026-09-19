@@ -123,7 +123,7 @@ fn answer_tool_search_returns_full_schemas_for_hits() {
         answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf", "limit": 1}));
     assert!(!result.is_error);
     assert_eq!(matched, 1);
-    let text = result.text().unwrap_or_default();
+    let text = result.text();
     assert!(text.starts_with("1 match(es)."));
     assert!(text.contains("\"name\": \"pdf_read\""));
     assert!(text.contains("\"path\""));
@@ -146,7 +146,7 @@ fn answer_tool_search_clamps_limit_and_handles_misses() {
         answer_tool_search(&catalog(), &policy, &json!({"query": "zzzz qqqq"}));
     assert!(!result.is_error);
     assert_eq!(matched, 0);
-    assert!(result.text().unwrap_or_default().starts_with("No deferred tool matches"));
+    assert!(result.text().starts_with("No deferred tool matches"));
 
     let (result, _) = answer_tool_search(&catalog(), &policy, &json!({"query": "  "}));
     assert!(result.is_error);
