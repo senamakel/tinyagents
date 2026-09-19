@@ -461,21 +461,6 @@ impl OverflowClassifier {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for OverflowClassifier {
-    // `OverflowClassifier` holds `Fn` closures and is never meant to be
-    // deserialized directly (it is process-local configuration, not durable
-    // data); this impl exists only so container types generic over
-    // `Deserialize` compose. It always errors.
-    fn deserialize<D>(_deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Err(serde::de::Error::custom(
-            "OverflowClassifier is process-local configuration and cannot be deserialized",
-        ))
-    }
-}
-
 /// Extracts every run of ASCII digits from `text` as a `u64`, in order of
 /// appearance, tolerating `,` thousands separators inside a run (`"9,000"` →
 /// `9000`). Best-effort: used only to fill optional
