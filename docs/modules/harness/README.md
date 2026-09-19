@@ -258,6 +258,19 @@ live context and cannot select a bundle from their own harness. The lower-level
 explicit-model `invoke*` APIs remain separate for SDK callers that intentionally
 assemble a run without host capabilities.
 
+`invoke_agent` (and its streaming counterpart) return
+`Result<AgentRun, runtime::HostedError>`, not `TinyAgentsError`: a hosted
+failure carries a closed `runtime::HostedErrorKind` (`Cancelled | Timeout |
+LimitExceeded | Policy | Provider | Internal`) a host can match on directly,
+plus the partial `AgentRun` accumulated before the failure. `HostedError`'s
+own `message` is a fixed, sanitized string per `kind` — never raw provider,
+middleware, or budget error text — so distinguishing failure modes never
+requires attaching a private event listener to the run. `HostedError`
+implements `From<HostedError> for TinyAgentsError` for callers (recursive
+hosted delegation) that need to keep propagating through the crate-wide
+`Result` alias with `?`, which is why the `?` in the example above still
+compiles.
+
 Hosted invocations require `State: 'static` because their live capability
 authority must be retained in the recursive context. The explicit-model
 `invoke*`, streaming, and direct `SubAgent` paths do not install or inspect
