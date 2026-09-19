@@ -614,7 +614,9 @@ async fn screen_user_messages<State: Send + Sync>(
     for message in messages {
         if let tinyinference_llm::message::Message::User(user) = message {
             for block in &mut user.content {
-                if let tinyinference_llm::message::ContentBlock::Text(text) = block {
+                if let tinyinference_llm::message::ContentBlock::Text(text)
+                | tinyinference_llm::message::ContentBlock::Thinking { text, .. } = block
+                {
                     let screened = host
                         .security
                         .screen_input(text, ContentOrigin::User)

@@ -56,7 +56,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
         }.map_err(|error| match error {
             TinyAgentsError::Timeout(_) => error,
-            _ => { tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
+            _ => { tinyagents_tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
         })?;
         let name = model
             .profile()
@@ -774,7 +774,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Race the next provider chunk against cooperative cancellation. If
             // cancellation wins we drop the partially consumed stream and unwind
             // with `Cancelled`; the `cancelled()` future is cancel-safe.
-            let item = tokio::select! {
+            let mut item = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => {
                     return Err(TinyAgentsError::Cancelled);
@@ -825,9 +825,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ctx.instance_id(),
                     crate::host::ProgressEvent::Token {
                         run: ctx.run_id().clone(),
-                        text: model_delta.content,
+                        text: model_delta.content.clone(),
                     },
                 );
+                item = match item {
+                    ModelStreamItem::MessageDelta(_) => {
+                        ModelStreamItem::MessageDelta(MessageDelta {
+                            text: model_delta.content,
+                            reasoning: model_delta.reasoning,
+                            tool_call: model_delta.tool_call,
+                        })
+                    }
+                    ModelStreamItem::ToolCallDelta(_) => model_delta
+                        .tool_call
+                        .map_or(item, ModelStreamItem::ToolCallDelta),
+                    _ => item,
+                };
                 *deltas_emitted += 1;
             }
 
@@ -892,6 +905,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         let Some(requested) = request.model.as_deref() else {
             return Ok(captured());
         };
+        if self.resolved.source == ModelResolutionSource::RequestOverride
+            && self.resolved.requested.as_deref() == Some(requested)
+        {
+            return Ok(captured());
+        }
         if let Some(binding) = self.harness.resolve_host_model(ctx, request).await? {
             return Ok(binding);
         }
