@@ -170,6 +170,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.response_cache.as_ref()
     }
 
+    /// Registers an [`crate::structured::OutputValidator`] consulted after
+    /// the final turn's structured extraction succeeds (A3's
+    /// output-validation retry loop).
+    ///
+    /// The validator sees the *already schema-valid* extracted value; a
+    /// `TinyAgentsError::ModelRetry` it returns is treated exactly like a
+    /// schema-validation failure — re-asked, bounded by
+    /// [`RunPolicy::output_retry`]. Only one validator may be installed;
+    /// calling this again replaces it. Returns `&mut Self` for chaining.
+    pub fn with_output_validator(
+        &mut self,
+        validator: Arc<dyn crate::structured::OutputValidator<State, Ctx>>,
+    ) -> &mut Self {
+        self.output_validator = Some(validator);
+        self
+    }
+
     /// Returns a reference to the model registry.
     pub fn models(&self) -> &ModelRegistry<State> {
         &self.models
