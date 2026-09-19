@@ -60,26 +60,33 @@ pub struct CheckpointTuple {
 }
 ```
 
-Checkpoint fields:
+Checkpoint fields (verified against `crates/tinyagents-graph/src/checkpoint/types.rs`,
+`Checkpoint<State>` and `CheckpointMetadata`):
 
-- version
+Implemented today:
+
 - checkpoint id
 - thread id
 - checkpoint namespace
-- graph id
 - run id
-- timestamp
-- channel values
-- channel versions
-- versions seen by each node
-- updated channels
-- next active nodes
-- pending sends
+- committed state (`state: State`, not a per-channel value map)
+- next active nodes (`next_nodes`) and pending activations (`pending_activations`,
+  the richer `Send`-argument-carrying superset)
+- barrier (waiting-edge) arrivals (`barrier_arrivals`)
 - pending writes
-- task outcomes
 - interrupts
-- parent checkpoint config
-- metadata source: `input`, `loop`, `update`, or `fork`
+- parent checkpoint id
+- free-form `metadata: serde_json::Value`
+- metadata source: `input`, `loop`, `update`, or `fork` (`CheckpointMetadata::source`)
+
+**Target (not implemented):** the following LangGraph-derived fields do not
+exist on `Checkpoint`/`CheckpointMetadata` today — there is no `version` or
+`timestamp` field, no per-channel `channel_values`/`channel_versions`, no
+`versions_seen` map, no `updated_channels` list, no `graph_id` field, and no
+`task_outcomes` list (task completion is tracked as a flat `completed_tasks:
+Vec<NodeId>`, not a structured per-task outcome record). Introducing these
+would require a channel-based state model this crate does not have (state
+here is a single typed `State`, not a set of named channels).
 
 Durability modes:
 
