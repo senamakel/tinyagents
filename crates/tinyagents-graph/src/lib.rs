@@ -23,6 +23,7 @@
 //! `mod.rs` (implementations), and `test.rs` (unit tests).
 
 pub mod builder;
+pub mod cache;
 pub mod channel;
 pub mod checkpoint;
 pub mod command;
