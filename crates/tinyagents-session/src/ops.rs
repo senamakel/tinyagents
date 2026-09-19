@@ -610,6 +610,8 @@ pub fn list_tool_calls(
     })
 }
 
+/// Lists direct child sessions of `session_id`, oldest first (`started_at
+/// ASC`).
 pub fn list_children(workspace_dir: &Path, session_id: &str) -> Result<Vec<SessionRecord>> {
     with_connection(workspace_dir, |conn| {
         let mut stmt = conn.prepare(
