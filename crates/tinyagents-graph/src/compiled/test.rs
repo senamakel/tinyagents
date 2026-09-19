@@ -1300,10 +1300,28 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
         "the resume must carry `lo` past its interrupt check, not pause it again"
     );
 
+    // The reducer fan-in *order* of `lo` vs `hi` is allowed to differ (`hi`
+    // is folded into the original step's state; `lo`'s update lands one
+    // superstep later, once it actually completes on resume) — durable
+    // execution never suspends mid-superstep, so an interrupted branch's
+    // update necessarily commits later than an uninterrupted run's would.
+    // What must be identical is the *value* every node's update commits
+    // (the multiset of applied updates) and the final merged state's sum:
+    // `y`, the successor of both, must see both updates either way (the C2
+    // property) — not just whichever completed first.
     assert_eq!(
-        resumed.state, baseline.state,
-        "an interrupted-then-resumed run must reach the same final state \
-         as the same graph run straight through"
+        resumed.state.value, baseline.state.value,
+        "an interrupted-then-resumed run must reach the same final summed \
+         state as the same graph run straight through"
+    );
+    let mut resumed_log = resumed.state.log.clone();
+    let mut baseline_log = baseline.state.log.clone();
+    resumed_log.sort();
+    baseline_log.sort();
+    assert_eq!(
+        resumed_log, baseline_log,
+        "every node's update must be applied exactly once in both runs, \
+         regardless of fan-in order"
     );
     // Every node completed exactly once in both runs — no double-execution
     // and no missing execution introduced by the interrupt/resume path.
