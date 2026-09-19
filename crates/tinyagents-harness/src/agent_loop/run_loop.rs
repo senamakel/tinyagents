@@ -995,7 +995,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // row stays on the transcript so the model sees what it did.
                 if tool_calls.is_empty()
                     && response.finish_reason.as_deref() == Some("tool_calls")
-                    
+                    && tools_available_this_turn
                     && dropped_tool_call_nudges_used < self.policy.dropped_tool_call_nudges
                 {
                     dropped_tool_call_nudges_used += 1;
