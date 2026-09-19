@@ -363,6 +363,7 @@ where
             state: source.state.clone(),
             next_nodes: source.next_nodes.clone(),
             completed_tasks: source.completed_tasks.clone(),
+            completed_routes: source.completed_routes.clone(),
             pending_writes: source.pending_writes.clone(),
             interrupts: source.interrupts.clone(),
             pending_activations: source.pending_activations.clone(),
