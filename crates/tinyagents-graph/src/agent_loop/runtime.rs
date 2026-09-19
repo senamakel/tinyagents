@@ -350,42 +350,38 @@ struct ModelOutcomeShadow<'a>(&'a ModelResponse);
 /// uses — see that function's docs), then routes back to `plan` for the next
 /// turn.
 pub(crate) async fn tools_node<State, Ctx>(
-    rt: &Arc<LoopRuntime<State, Ctx>>,
+    harness: &AgentHarness<State, Ctx>,
+    app_state: &State,
+    ctx: &mut RunContext<Ctx>,
+    run: &mut AgentRun,
+    status: &mut HarnessRunStatus,
     mut loop_state: LoopState,
 ) -> Result<NodeResult<LoopState>>
 where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
-    let mut ctx_guard = rt.ctx.lock().await;
-    let mut run_guard = rt.run.lock().await;
-    let mut status_guard = rt.status.lock().await;
-
     let calls = std::mem::take(&mut loop_state.pending_tool_calls);
     let outcome = phases::execute_tool_batch(
-        &rt.harness,
-        &rt.app_state,
-        &mut ctx_guard,
-        &mut run_guard,
-        &mut status_guard,
+        harness,
+        app_state,
+        ctx,
+        run,
+        status,
         &mut loop_state.messages,
         calls,
     )
     .await?;
-    loop_state.tool_calls = run_guard.tool_calls;
-    loop_state.executed_tools = run_guard.executed_tools.clone();
+    loop_state.tool_calls = run.tool_calls;
+    loop_state.executed_tools = run.executed_tools.clone();
     let _ = outcome;
 
-    if rt
-        .harness
-        .middleware()
-        .any_should_stop_after_turn(&ctx_guard, &run_guard)
-    {
-        ctx_guard.request_control(MiddlewareControl::JumpTo(LoopTarget::End));
+    if harness.middleware().any_should_stop_after_turn(ctx, run) {
+        ctx.request_control(MiddlewareControl::JumpTo(LoopTarget::End));
     }
 
-    if let Some(control) = ctx_guard.take_control() {
-        return apply_control(&mut ctx_guard, &mut loop_state, control, node::TOOLS);
+    if let Some(control) = ctx.take_control() {
+        return apply_control(ctx, &mut loop_state, control, node::TOOLS);
     }
 
     Ok(goto(loop_state, node::PLAN))
