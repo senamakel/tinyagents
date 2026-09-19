@@ -1467,6 +1467,158 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     }
 }
 
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Reconciles unresolved tool-effect-ledger rows (B5) before resuming a
+    /// run from durable transcript `messages`.
+    ///
+    /// A crash between [`Self::record_tool_effect_started`] and the matching
+    /// settle write (or between the settle write and the tool result being
+    /// folded into `messages`) leaves a `started` row a resumed run must
+    /// resolve one way or another before it can safely feed `messages` back
+    /// into the loop: the last assistant turn may still carry a tool call
+    /// with no matching [`Message::Tool`] answer.
+    ///
+    /// For every tool call on the *last* assistant message that has no
+    /// [`Message::Tool`] answer yet **and** an unresolved (`started`) ledger
+    /// row, this consults the tool's declared
+    /// [`tinytools::ToolReplay`][tinytools::ToolPolicy::runtime]:
+    ///
+    /// - [`tinytools::ToolReplay::Safe`]: the call is left unanswered.
+    ///   `messages` is not appended to for that call, so the normal loop
+    ///   re-executes it exactly as it would a fresh call — the tool declared
+    ///   this safe.
+    /// - [`tinytools::ToolReplay::Never`] (the default): a synthesized
+    ///   tool-error result ("interrupted before settlement") is appended in
+    ///   place of a real answer, the ledger row is settled as
+    ///   [`crate::tool::ToolEffectStatus::Interrupted`], and the loop never
+    ///   re-attempts the call.
+    ///
+    /// A call whose tool is no longer registered on this harness (renamed,
+    /// removed since the interrupted run) is treated as [`ToolReplay::Never`]
+    /// — fail closed rather than blindly re-run an unknown effect.
+    ///
+    /// Returns the messages synthesized for `Never`-classified calls (already
+    /// appended to `messages` as well), so a caller that journals messages
+    /// separately from the in-memory transcript knows what changed. Returns
+    /// an empty `Vec` immediately, without any ledger I/O, when `ctx` has no
+    /// [`crate::tool::ToolEffectLedger`] attached or the transcript has no
+    /// pending tool calls.
+    ///
+    /// This is not wired into any automatic resume path on this branch — no
+    /// `resume_deferred`/deferred-results entry point exists yet in this
+    /// harness. A host resuming a run from durable state after a crash calls
+    /// this explicitly, before re-entering the agent loop with the recovered
+    /// `messages`.
+    pub async fn reconcile_tool_effects(
+        &self,
+        ctx: &RunContext<Ctx>,
+        run_id: &str,
+        messages: &mut Vec<Message>,
+    ) -> Result<Vec<Message>> {
+        let mut synthesized = Vec::new();
+        let Some(ledger) = ctx.tool_effect_ledger.clone() else {
+            return Ok(synthesized);
+        };
+
+        // The calls a resumed run must judge are exactly the tool calls on
+        // the *last* assistant turn — any earlier assistant tool-call turn
+        // already has its answers folded in by definition, since the loop
+        // never advances past an unanswered turn.
+        let Some(pending_calls) = messages.iter().rev().find_map(|message| match message {
+            Message::Assistant(assistant) if !assistant.tool_calls.is_empty() => {
+                Some(assistant.tool_calls.clone())
+            }
+            _ => None,
+        }) else {
+            return Ok(synthesized);
+        };
+        let already_answered: std::collections::HashSet<&str> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Tool(tool_message) => Some(tool_message.tool_call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let unanswered: Vec<&ToolCall> = pending_calls
+            .iter()
+            .filter(|call| !already_answered.contains(call.id.as_str()))
+            .collect();
+        if unanswered.is_empty() {
+            return Ok(synthesized);
+        }
+
+        let unresolved = ledger.unresolved(run_id).await?;
+        for call in unanswered {
+            let Some(effect) = unresolved.iter().find(|effect| effect.call_id == call.id) else {
+                // No ledger row for this call: nothing was ever journaled as
+                // started for it (e.g. a ledger was attached only after the
+                // interrupted attempt began), so there is nothing to
+                // reconcile — leave it for the loop to handle as it always
+                // has.
+                continue;
+            };
+            let replay = self
+                .tools
+                .dispatch(&call.name)
+                .map(|dispatch| dispatch.tool().policy().runtime.replay)
+                .unwrap_or(tinytools::ToolReplay::Never);
+            match replay {
+                tinytools::ToolReplay::Safe => {
+                    ctx.emit(AgentEvent::ToolEffectReconciled {
+                        call_id: CallId::new(call.id.clone()),
+                        action: "re_execute".to_string(),
+                    });
+                    tracing::info!(
+                        "[agent_loop::tools] reconciling unresolved tool effect for call `{}` \
+                         (tool `{}`) as ToolReplay::Safe — leaving unanswered for re-execution",
+                        call.id,
+                        call.name
+                    );
+                }
+                tinytools::ToolReplay::Never => {
+                    let result = tinytools::ToolResult::error(
+                        "interrupted before settlement".to_string(),
+                    );
+                    let tool_message = tool_message_from_result(
+                        call.id.clone(),
+                        &result,
+                        ToolCallOptions::default(),
+                    );
+                    messages.push(Message::Tool(tool_message.clone()));
+                    synthesized.push(Message::Tool(tool_message));
+                    if let Err(err) = ledger
+                        .settled(ToolEffectSettle {
+                            run_id: RunId::new(run_id),
+                            call_id: CallId::new(call.id.clone()),
+                            status: ToolEffectStatus::Interrupted,
+                            effect_summary: Some(effect.tool.clone()),
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            "[agent_loop::tools] failed to settle interrupted tool effect for \
+                             call `{}` (tool `{}`): {err}",
+                            call.id,
+                            call.name
+                        );
+                    }
+                    ctx.emit(AgentEvent::ToolEffectReconciled {
+                        call_id: CallId::new(call.id.clone()),
+                        action: "interrupted".to_string(),
+                    });
+                    tracing::info!(
+                        "[agent_loop::tools] reconciled unresolved tool effect for call `{}` \
+                         (tool `{}`) as ToolReplay::Never — synthesized an interrupted result",
+                        call.id,
+                        call.name
+                    );
+                }
+            }
+        }
+        Ok(synthesized)
+    }
+}
+
 /// Decides whether a batch may leave the serial path.
 ///
 /// Lifecycle middleware used to force serial execution unconditionally
