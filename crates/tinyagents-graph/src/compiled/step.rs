@@ -424,6 +424,11 @@ where
         // failure in one branch is retried without disturbing its siblings.
         let siblings = sibling_counts(active);
         let mut futures = Vec::with_capacity(active.len());
+        // Parallel with a cache hit: `true` at `index` means that branch's
+        // slot in `futures` is an already-resolved replay, not a handler
+        // invocation — the post-loop pass below must not re-cache it (that
+        // would spuriously refresh its TTL on every hit).
+        let mut cache_hits = vec![false; active.len()];
         for (index, activation) in active.iter().enumerate() {
             let node_id = &activation.node;
             let node = self
@@ -436,6 +441,25 @@ where
                 node: node_id.clone(),
                 step,
             });
+
+            let send_arg = activation.send_arg.clone();
+            if let Some(update) = self
+                .try_cache_get(node_id, state, send_arg.as_ref())
+                .await
+            {
+                self.graph.emit(GraphEvent::TaskCompleted {
+                    node: node_id.clone(),
+                    step,
+                    cached: true,
+                });
+                cache_hits[index] = true;
+                let fut: std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<NodeResult<Update>>> + Send + '_>,
+                > = Box::pin(async move { Ok(NodeResult::Update(update)) });
+                futures.push(fut);
+                continue;
+            }
+
             self.graph.emit(GraphEvent::NodeStarted {
                 node: node_id.clone(),
                 step,
