@@ -191,6 +191,7 @@ impl Default for RunLimits {
             max_retries_per_call: 3,
             max_depth: Self::DEFAULT_MAX_DEPTH,
             behavior: LimitBehavior::Error,
+            max_tool_concurrency: None,
         }
     }
 }
