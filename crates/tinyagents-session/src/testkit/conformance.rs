@@ -360,8 +360,8 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
         })
         .expect("re-importing the same turn succeeds");
     assert_eq!(
-        history.messages().expect("messages succeeds"),
-        turn1_next,
+        content_view(&history.messages().expect("messages succeeds")),
+        content_view(&turn1_next),
         "re-importing an already-persisted turn must not duplicate it"
     );
 
@@ -369,8 +369,8 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
     let reduced = vec![contract_message("user", "compacted summary")];
     history.replace(&reduced).expect("replace succeeds");
     assert_eq!(
-        history.messages().expect("messages succeeds"),
-        reduced,
+        content_view(&history.messages().expect("messages succeeds")),
+        content_view(&reduced),
         "replace overwrites the logical set outright"
     );
 
