@@ -428,8 +428,10 @@ async fn a_flushed_stream_tail_that_was_only_a_marker_false_alarm_still_hits_del
     let listener = Arc::new(RecordingListener::new());
     let mut harness = harness_with(model, &listener);
     harness
-        .push_middleware(Arc::new(DeltaRecorder { seen: seen.clone() }))
+        // Order matters: middleware runs in push order, and `DeltaRecorder`
+        // must observe the *result* of redaction, not race it.
         .push_middleware(Arc::new(RedactMiddleware))
+        .push_middleware(Arc::new(DeltaRecorder { seen: seen.clone() }))
         .with_policy(RunPolicy {
             limits: tinyagents_harness::limits::RunLimits {
                 max_model_calls: 1,
