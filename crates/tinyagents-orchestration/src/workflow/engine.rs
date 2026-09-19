@@ -286,7 +286,9 @@ impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration
                     // retry against the now-current state, a different (or
                     // absent) owner means the lease is really gone.
                     match self.store.load(&snapshot.id)? {
-                        Some(current) if current.lease_owner.as_deref() == Some(self.owner.as_str()) => {
+                        Some(current)
+                            if current.lease_owner.as_deref() == Some(self.owner.as_str()) =>
+                        {
                             let mut run = self.run.lock();
                             if run.revision < current.revision {
                                 *run = current;
