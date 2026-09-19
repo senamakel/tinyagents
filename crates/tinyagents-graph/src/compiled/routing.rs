@@ -59,10 +59,13 @@ where
                 if tnode.as_str() == END {
                     continue;
                 }
-                self.emit(GraphEvent::RouteSelected {
-                    node: node_id.clone(),
-                    target: tnode.clone(),
-                });
+                self.emit(
+                    run_id,
+                    GraphEvent::RouteSelected {
+                        node: node_id.clone(),
+                        target: tnode.clone(),
+                    },
+                );
                 // Barrier gating: hold a waiting node until every required
                 // predecessor has arrived (possibly across supersteps).
                 if let Some(required) = self.waiting.get(&tnode) {
