@@ -52,6 +52,10 @@ Routes based on a named route function provided from Rust.
 
 Supported fields:
 
+- `router` — the registered route-function name (e.g. `router "classify"`),
+  parallel to `subgraph`'s `graph "name"` and `subagent`'s `agent "name"`.
+  `model` is still accepted as a deprecated fallback for the same value (the
+  convention before `router` existed as its own item).
 - `routes`
 - `metadata`
 
