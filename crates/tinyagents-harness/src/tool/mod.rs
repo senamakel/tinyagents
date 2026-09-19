@@ -12,6 +12,7 @@ mod schema_prepare;
 pub mod select;
 mod signature;
 mod timeout;
+pub mod toolset;
 mod types;
 
 use std::collections::HashMap;
