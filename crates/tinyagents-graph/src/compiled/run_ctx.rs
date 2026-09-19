@@ -68,7 +68,8 @@ where
     /// Builds a fresh [`GraphRunStatus`] for this run at `Running` status,
     /// stamped with this context's identity and start time.
     pub(super) fn base_status(&self) -> GraphRunStatus {
-        self.graph.base_status(&self.run_id, &self.thread_id, self.started_at)
+        self.graph
+            .base_status(&self.run_id, &self.thread_id, self.started_at)
     }
 
     /// Builds the per-task [`NodeContext`] for `node_id`, consuming its entry

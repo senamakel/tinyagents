@@ -226,11 +226,7 @@ impl Diagnostic {
                 let (line, column) = file.location(self.primary.start);
                 (line, column, self.render(file))
             }
-            _ => (
-                self.primary.line,
-                self.primary.column,
-                self.render_plain(),
-            ),
+            _ => (self.primary.line, self.primary.column, self.render_plain()),
         };
         RenderedDiagnostic {
             code: self.code.clone(),
@@ -283,10 +279,7 @@ pub fn into_diagnostics_error(
         !diagnostics.is_empty(),
         "into_diagnostics_error requires at least one diagnostic"
     );
-    let rendered = diagnostics
-        .iter()
-        .map(|d| d.to_rendered(source))
-        .collect();
+    let rendered = diagnostics.iter().map(|d| d.to_rendered(source)).collect();
     TinyAgentsError::Diagnostics(rendered)
 }
 

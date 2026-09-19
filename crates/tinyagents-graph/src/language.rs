@@ -68,11 +68,7 @@ fn ignored_populated_fields(blueprint: &Blueprint) -> Vec<String> {
         if !spec.join_sources.is_empty() {
             ignored.push(format!("node `{}` `join_sources`", spec.name));
         }
-        if spec
-            .command
-            .as_ref()
-            .is_some_and(|c| !c.update.is_empty())
-        {
+        if spec.command.as_ref().is_some_and(|c| !c.update.is_empty()) {
             ignored.push(format!("node `{}` `command.update`", spec.name));
         }
         if !spec.options.is_empty() {
@@ -196,10 +192,13 @@ mod test {
 
     #[tokio::test]
     async fn build_graph_accepts_a_blueprint_with_no_ignored_fields() {
-        let bp = blueprint("graph g { start a node a { kind model next b } node b { kind model next END } }");
+        let bp = blueprint(
+            "graph g { start a node a { kind model next b } node b { kind model next END } }",
+        );
         assert_eq!(bp.start, "a");
 
-        let graph = build_graph::<S, _>(&bp, &EchoFactory).expect("no ignored fields, graph builds");
+        let graph =
+            build_graph::<S, _>(&bp, &EchoFactory).expect("no ignored fields, graph builds");
         let run = graph.run(S::default()).await.expect("graph runs to end");
         assert_eq!(run.state.trail, vec!["a".to_string(), "b".to_string()]);
     }

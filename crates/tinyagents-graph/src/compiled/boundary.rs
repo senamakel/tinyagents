@@ -67,7 +67,8 @@ where
         // Select the next active set from commands or static/conditional
         // edges, evaluated against the freshly-committed state. Barrier
         // arrivals accumulate into `ctx.barrier_arrivals` (persisted below).
-        let next = self.route_completed(sb.active, sb.goto_map, state, &mut ctx.barrier_arrivals)?;
+        let next =
+            self.route_completed(sb.active, sb.goto_map, state, &mut ctx.barrier_arrivals)?;
 
         // Persist a boundary checkpoint. Under `Exit` durability only the
         // terminal boundary (the step that empties the active set) is
@@ -322,8 +323,15 @@ where
         err: TinyAgentsError,
     ) -> Result<T> {
         let _ = ctx.async_writes.drain().await;
-        self.fail_run(&ctx.run_id, &ctx.thread_id, ctx.started_at, ctx.steps, &err, None)
-            .await;
+        self.fail_run(
+            &ctx.run_id,
+            &ctx.thread_id,
+            ctx.started_at,
+            ctx.steps,
+            &err,
+            None,
+        )
+        .await;
         Err(err)
     }
 
@@ -361,7 +369,13 @@ where
             completed_tasks: activation_nodes(boundary.completed_tasks),
             pending_writes: Self::completion_writes(boundary.completed_tasks),
             interrupts: Vec::new(),
-            pending_activations: Some(boundary.pending.iter().map(PendingActivation::from).collect()),
+            pending_activations: Some(
+                boundary
+                    .pending
+                    .iter()
+                    .map(PendingActivation::from)
+                    .collect(),
+            ),
             barrier_arrivals: barriers_to_persisted(&ctx.barrier_arrivals),
             metadata: serde_json::json!({
                 "source": "loop",
@@ -448,8 +462,7 @@ where
             return Ok(None);
         };
         let thread = thread.clone();
-        let checkpoint =
-            self.build_loop_checkpoint(ctx, &thread, boundary, step, Vec::new(), &[]);
+        let checkpoint = self.build_loop_checkpoint(ctx, &thread, boundary, step, Vec::new(), &[]);
         let id = CheckpointId::new(checkpoint.checkpoint_id.clone());
 
         match tokio::runtime::Handle::try_current() {
@@ -541,7 +554,13 @@ where
             next_nodes: activation_nodes(boundary.pending),
             completed_tasks: activation_nodes(boundary.completed_tasks),
             pending_writes: Self::completion_writes(boundary.completed_tasks),
-            pending_activations: Some(boundary.pending.iter().map(PendingActivation::from).collect()),
+            pending_activations: Some(
+                boundary
+                    .pending
+                    .iter()
+                    .map(PendingActivation::from)
+                    .collect(),
+            ),
             barrier_arrivals: barriers_to_persisted(&ctx.barrier_arrivals),
             interrupts,
             metadata,

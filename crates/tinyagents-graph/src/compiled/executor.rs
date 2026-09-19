@@ -32,7 +32,11 @@ pub(super) struct RunSeed<State, Update> {
 }
 
 impl<State, Update> RunSeed<State, Update> {
-    pub(super) fn fresh(state: State, active: Vec<Activation>, thread_id: Option<ThreadId>) -> Self {
+    pub(super) fn fresh(
+        state: State,
+        active: Vec<Activation>,
+        thread_id: Option<ThreadId>,
+    ) -> Self {
         Self {
             state,
             active,
@@ -296,7 +300,10 @@ where
 
     /// Returns the configured checkpointer or a [`TinyAgentsError::Checkpoint`]
     /// when inspection is attempted on a graph without durability.
-    pub(super) async fn execute(&self, seed: RunSeed<State, Update>) -> Result<GraphExecution<State>> {
+    pub(super) async fn execute(
+        &self,
+        seed: RunSeed<State, Update>,
+    ) -> Result<GraphExecution<State>> {
         let run_id = tinyagents_harness::ids::new_run_id();
         // When a durable journal is configured, run against a clone whose event
         // sink wraps every emitted event into a `GraphObservation` and appends
@@ -525,7 +532,9 @@ where
             // interrupt: both are terminal for this run, persisting a
             // resumable boundary checkpoint before returning.
             if let Some(fail) = step_run.failure {
-                return self.handle_failure_boundary(&mut ctx, sb, &state, fail).await;
+                return self
+                    .handle_failure_boundary(&mut ctx, sb, &state, fail)
+                    .await;
             }
             if let Some((index, emitted)) = step_run.interrupt {
                 return self

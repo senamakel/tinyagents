@@ -288,11 +288,7 @@ where
             _ => futures::future::join_all(futures).await,
         };
 
-        let results = active
-            .iter()
-            .cloned()
-            .zip(results)
-            .collect::<Vec<_>>();
+        let results = active.iter().cloned().zip(results).collect::<Vec<_>>();
         Ok(StepOutcome { results })
     }
 

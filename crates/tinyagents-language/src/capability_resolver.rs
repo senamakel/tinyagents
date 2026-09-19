@@ -508,7 +508,10 @@ impl CapabilityResolver {
                         span_for(&node.name),
                     )
                     .with_code(code_for(reference.class))
-                    .with_primary_label(format!("{} not registered or not allowed", reference.class.word())),
+                    .with_primary_label(format!(
+                        "{} not registered or not allowed",
+                        reference.class.word()
+                    )),
                 );
             }
 
