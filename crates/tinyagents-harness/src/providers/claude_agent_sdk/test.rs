@@ -77,16 +77,18 @@ async fn provider_pipes_large_request_to_cli_stdin() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("claude");
+    let staging = dir.path().join("claude.staging");
     std::fs::write(
-        &script,
+        &staging,
         r#"#!/bin/sh
 cat > "$0.stdin"
 printf '%s\n' '{"type":"result","result":"captured","is_error":false}'
 "#,
     )
     .expect("write fake claude");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
         .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
 
     let config = ClaudeAgentSdkConfig {
         binary: script.display().to_string(),
@@ -146,8 +148,9 @@ async fn chat_model_uses_prompt_guided_protocol_and_model_override() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("claude");
+    let staging = dir.path().join("claude.staging");
     std::fs::write(
-            &script,
+            &staging,
             r#"#!/bin/sh
 cat > "$0.stdin"
 printf '%s\n' "$@" > "$0.args"
@@ -155,8 +158,9 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
 "#,
         )
         .expect("write fake claude");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
         .expect("make fake claude executable");
+    std::fs::rename(&staging, &script).expect("publish fake claude");
 
     let config = ClaudeAgentSdkConfig {
         binary: script.display().to_string(),

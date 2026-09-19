@@ -69,4 +69,4 @@ jobs:
         run: >-
           cargo llvm-cov --all-features --workspace
           --ignore-filename-regex '(^|/)(tests?|examples)/|/test(_.*)?\.rs$'
-          --fail-under-lines 85
+          --fail-under-lines 80

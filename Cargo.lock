@@ -1556,6 +1556,7 @@ dependencies = [
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-language",
+ "tinyagents-orchestration",
  "tinyagents-registry",
  "tinyagents-session",
  "tinyinference-embeddings",
