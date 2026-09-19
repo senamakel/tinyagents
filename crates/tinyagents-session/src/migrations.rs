@@ -417,7 +417,7 @@ mod test {
     fn migration_list_is_append_only() {
         assert_eq!(
             MIGRATIONS.len(),
-            7,
+            8,
             "MIGRATIONS is append-only — adding one is fine, reordering or \
              deleting one silently re-numbers every later migration"
         );
