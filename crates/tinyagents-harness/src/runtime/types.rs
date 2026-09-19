@@ -546,6 +546,11 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// See [`crate::structured::OutputValidator`] and
     /// [`AgentHarness::with_output_validator`].
     pub(crate) output_validator: Option<Arc<dyn crate::structured::OutputValidator<State, Ctx>>>,
+    /// Alternate loop engine selected when [`RunPolicy::execution`] is
+    /// [`LoopExecution::Graph`] (A5). See
+    /// [`crate::agent_loop::phases::LoopDriver`] and
+    /// [`AgentHarness::with_loop_driver`].
+    pub(crate) loop_driver: Option<Arc<dyn crate::agent_loop::phases::LoopDriver<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.
