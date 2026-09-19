@@ -184,7 +184,21 @@ impl ScriptedModel {
         Self {
             queue: Mutex::new(VecDeque::from(responses)),
             received: Mutex::new(Vec::new()),
+            profile: None,
         }
+    }
+
+    /// Attaches a capability profile, returned by
+    /// [`tinyinference_llm::model::ChatModel::profile`] for the rest of this
+    /// model's lifetime.
+    ///
+    /// Use this to exercise profile-driven harness behavior (schema
+    /// transforms, structured-output mode selection, thinking-tag
+    /// extraction, reasoning-level mapping) against a scripted response.
+    #[must_use]
+    pub fn with_profile(mut self, profile: tinyinference_llm::model::ModelProfile) -> Self {
+        self.profile = Some(profile);
+        self
     }
 
     /// Creates a scripted model from a list of plain text replies.
