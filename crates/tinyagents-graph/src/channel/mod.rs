@@ -476,6 +476,27 @@ impl ChannelSet {
         self.channels.insert(name.into(), Box::new(channel));
     }
 
+    /// Marks an already-registered append-style channel (typically [`Topic`]
+    /// or a `"append"`/`"set_union"` [`BinaryAggregate`]) for delta-history
+    /// tracking: every write to `name` also records the raw incoming value
+    /// into [`ChannelState::step_deltas`] for that step, which the
+    /// checkpoint-construction call sites persist into
+    /// [`crate::checkpoint::Checkpoint::channel_deltas`]. Every
+    /// `snapshot_every` writes (minimum `1`) an additional full-value
+    /// snapshot marker (`{"$snapshot": <value>}`) is recorded alongside the
+    /// delta, so a consumer walking the history can fast-forward without
+    /// replaying every write from genesis.
+    ///
+    /// Returns the set for chaining. A no-op marker on a channel name that
+    /// is never registered with [`ChannelSet::with_channel`]/
+    /// [`ChannelSet::add_channel`] has no effect (there is nothing to track
+    /// writes for).
+    pub fn with_delta(mut self, name: impl Into<String>, snapshot_every: u32) -> Self {
+        self.delta_channels
+            .insert(name.into(), snapshot_every.max(1));
+        self
+    }
+
     /// Returns the current value of `name`, if any has been written.
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.values.get(name)
