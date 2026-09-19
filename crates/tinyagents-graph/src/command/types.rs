@@ -111,7 +111,6 @@ pub struct Command<Update> {
     /// [`TaskId`] (see [`crate::builder::NodeContext::task_id`]). Consulted
     /// before `resume`: a task named here gets its own value; every other
     /// pending task falls back to `resume` (if set).
-    #[serde(default)]
     pub resume_by_task: std::collections::HashMap<TaskId, serde_json::Value>,
 }
 
