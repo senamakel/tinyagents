@@ -803,6 +803,86 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
     }
 
+    /// Records a tool-effect-ledger `started` row for `prepared` (B5), if a
+    /// ledger is attached to `ctx`. A no-op when [`RunContext::tool_effect_ledger`]
+    /// is `None`.
+    ///
+    /// Must be called *before* the tool actually executes, so a crash between
+    /// this write and the call settling is observable on resume. When the
+    /// write itself fails, [`RunContext::tool_effect_ledger_failure`] decides
+    /// whether that is fatal ([`LedgerFailure::Abort`], the default — the
+    /// caller must fail the call and propagate the error) or merely logged
+    /// ([`LedgerFailure::Continue`] — the call proceeds unrecorded).
+    async fn record_tool_effect_started(
+        &self,
+        ctx: &RunContext<Ctx>,
+        arguments: &Value,
+        prepared: &PreparedToolCall,
+    ) -> Result<()> {
+        let Some(ledger) = ctx.tool_effect_ledger.clone() else {
+            return Ok(());
+        };
+        let idempotency_key = tool_call_idempotency_key(&prepared.tool_name, arguments);
+        let start = ToolEffectStart {
+            run_id: ctx.run_id().clone(),
+            call_id: prepared.call_id.clone(),
+            tool: prepared.tool_name.clone(),
+            idempotency_key,
+            effect_summary: None,
+        };
+        if let Err(err) = ledger.started(start).await {
+            return match ctx.tool_effect_ledger_failure {
+                LedgerFailure::Abort => Err(err),
+                LedgerFailure::Continue => {
+                    tracing::warn!(
+                        "[agent_loop::tools] tool-effect ledger `started` write failed for \
+                         call `{}` (tool `{}`): {err} — continuing per \
+                         LedgerFailure::Continue",
+                        prepared.call_id.as_str(),
+                        prepared.tool_name
+                    );
+                    Ok(())
+                }
+            };
+        }
+        Ok(())
+    }
+
+    /// Records a tool-effect-ledger terminal row for `prepared` (B5), if a
+    /// ledger is attached to `ctx`. A no-op when [`RunContext::tool_effect_ledger`]
+    /// is `None`.
+    ///
+    /// Deliberately best-effort and never fatal: by the time this is called
+    /// the tool has already executed (or its execution future has already
+    /// failed), so aborting the run over a *settle* write failure would
+    /// discard a real result rather than merely skip recording one. A failed
+    /// settle write is logged; the row stays `started` and will surface again
+    /// from [`crate::tool::ToolEffectLedger::unresolved`] on the next resume.
+    async fn record_tool_effect_settled(
+        &self,
+        ctx: &RunContext<Ctx>,
+        prepared: &PreparedToolCall,
+        status: ToolEffectStatus,
+    ) {
+        let Some(ledger) = ctx.tool_effect_ledger.clone() else {
+            return;
+        };
+        let settle = ToolEffectSettle {
+            run_id: ctx.run_id().clone(),
+            call_id: prepared.call_id.clone(),
+            status,
+            effect_summary: None,
+        };
+        if let Err(err) = ledger.settled(settle).await {
+            tracing::warn!(
+                "[agent_loop::tools] tool-effect ledger `settled` write failed for call `{}` \
+                 (tool `{}`): {err}",
+                prepared.call_id.as_str(),
+                prepared.tool_name
+            );
+        }
+    }
+
     /// Terminal partner of [`AgentEvent::ToolStarted`] on the abort path:
     /// emits [`AgentEvent::ToolFailed`] and closes the call's `active_tool_calls`
     /// entry.
