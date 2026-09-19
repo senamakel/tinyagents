@@ -53,7 +53,7 @@ impl Severity {
 }
 
 /// A labelled secondary span attached to a [`Diagnostic`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Label {
     /// The span this label points at.
     pub span: Span,
