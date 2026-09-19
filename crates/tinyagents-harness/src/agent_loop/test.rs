@@ -3786,6 +3786,104 @@ impl Tool for ConcurrencyProbeTool {
     }
 }
 
+/// A concurrency-safe tool that fails fast (a real dispatch error, not a
+/// recoverable `ToolResult::error`), used to exercise the concurrent path's
+/// first-fatal-error handling.
+struct FailingConcurrentTool {
+    name: &'static str,
+}
+
+#[async_trait]
+impl Tool for FailingConcurrentTool {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn description(&self) -> &str {
+        "fails fast"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
+    }
+    fn is_concurrency_safe(&self, _arguments: &serde_json::Value) -> bool {
+        true
+    }
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Err(anyhow::anyhow!("boom"))
+    }
+}
+
+/// C-3 regression: on the first fatal error in the concurrent tool path,
+/// every already-started sibling call must still get exactly one terminal
+/// event (`ToolFailed`), and `active_tool_calls` must end up empty — not just
+/// the call that actually failed. Before the fix, siblings whose futures had
+/// already resolved (via `join_all`) but were never reached by the fold after
+/// the first `Err` kept their `ToolStarted` unanswered and stayed listed in
+/// `active_tool_calls` even though the run had already failed.
+#[tokio::test]
+async fn concurrent_tool_failure_fails_every_started_sibling_before_returning() {
+    use crate::testkit::EventRecorder;
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![multi_tool_call_response(
+            vec![("call-a", "alpha"), ("call-b", "boom")],
+        )])),
+    );
+    let max_seen = probe_pair(&mut harness, (80, 80));
+    let _ = max_seen; // only used to register the "alpha"/"beta" tools' peers
+    // Re-register "alpha" as the slow success half of this turn (probe_pair's
+    // "beta" is unused here; "boom" is the fast fatal failure).
+    harness.register_tool(Arc::new(FailingConcurrentTool { name: "boom" }));
+
+    let recorder = EventRecorder::new();
+    let ctx = RunContext::new(RunConfig::new("concurrent-fatal"), ()).with_events(recorder.sink());
+    let outcome = harness
+        .invoke_in_context_collecting_partial(&(), ctx, vec![Message::user("go")])
+        .await;
+
+    assert!(
+        outcome.error.is_some(),
+        "a fatal sibling error must fail the turn"
+    );
+    assert!(
+        outcome.status.active_tool_calls.is_empty(),
+        "every started call must have a terminal event before the run reports failure, \
+         got active_tool_calls = {:?}",
+        outcome.status.active_tool_calls
+    );
+
+    let started: Vec<_> = recorder
+        .events()
+        .iter()
+        .filter_map(|record| match &record.event {
+            AgentEvent::ToolStarted { call_id, .. } => Some(call_id.as_str().to_string()),
+            _ => None,
+        })
+        .collect();
+    let terminal: Vec<_> = recorder
+        .events()
+        .iter()
+        .filter_map(|record| match &record.event {
+            AgentEvent::ToolFailed { call_id, .. } => Some(call_id.as_str().to_string()),
+            AgentEvent::ToolCompleted { call_id, .. } => Some(call_id.as_str().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started.len(), 2, "both siblings must have started");
+    assert_eq!(
+        terminal.len(),
+        2,
+        "every started call must be answered by exactly one terminal event, got {terminal:?}"
+    );
+    for call_id in &started {
+        assert!(
+            terminal.contains(call_id),
+            "call `{call_id}` started but has no terminal event"
+        );
+    }
+}
+
 /// Builds an assistant response carrying several tool calls in one turn.
 fn multi_tool_call_response(calls: Vec<(&str, &str)>) -> ModelResponse {
     let tool_calls = calls
