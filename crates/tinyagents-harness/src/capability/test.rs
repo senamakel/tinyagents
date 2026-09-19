@@ -1,7 +1,6 @@
 //! Unit tests for the capability bundle (gap G3).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use serde_json::json;
