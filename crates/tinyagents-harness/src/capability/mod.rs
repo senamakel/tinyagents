@@ -38,7 +38,7 @@ mod test;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinytools::{Tool, ToolExposure};
+use tinytools::ToolExposure;
 
 use crate::error::{Result, TinyAgentsError};
 use crate::middleware::Middleware;
