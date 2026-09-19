@@ -132,6 +132,12 @@ impl<State> FileCheckpointer<State> {
             .join(format!("{}{WRITES_SUFFIX}", escape_thread_id(thread_id)))
     }
 
+    /// Resolves the execution-lease sidecar path for `thread_id` (C3/R4).
+    fn lease_path(&self, thread_id: &str) -> PathBuf {
+        self.base_dir
+            .join(format!("{}{LEASE_SUFFIX}", escape_thread_id(thread_id)))
+    }
+
     fn legacy_thread_path(&self, thread_id: &str) -> PathBuf {
         self.base_dir.join(format!(
             "{}.{THREAD_EXT}",
