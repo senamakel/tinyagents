@@ -558,6 +558,6 @@ fn emit_delivers_normally_once_a_listener_subscribes_after_a_quiet_run() {
     // same offset sequence rather than resetting or skipping an id.
     let delivered = sink.emit(AgentEvent::StateUpdate);
     assert_eq!(delivered.offset, 1);
-    assert_eq!(recorder.records().len(), 1);
-    assert_eq!(recorder.records()[0].offset, 1);
+    assert_eq!(recorder.events().len(), 1);
+    assert_eq!(recorder.events()[0].offset, 1);
 }
