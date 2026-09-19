@@ -47,17 +47,10 @@ OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows:
 Status: partially present.
 
 TinyAgents has `ToolSchema { name, description, parameters, format }` and
-`ToolExecutionContext { run_id, call_id, thread_id, depth,
-max_turn_output_tokens, events, cancellation, streaming, workspace, store,
-state_view }` (the last three and `call_id` landed with B1, §16). That is
-enough for model-visible tool calls, but not enough for OpenHuman's approval
-gate, command classifier, workspace policy, sandbox handoff, or tool-result
-budgeting.
-
-OpenHuman currently keeps that metadata outside TinyAgents in domain tool
-registries and adapters. That means the SDK cannot make fail-closed decisions
-about whether a tool should be exposed, approved, retried, timed out, or allowed
-to touch the filesystem/network.
+`ToolExecutionContext` (run/call/thread identity, limits, events, workspace,
+store, state view — see §16). Without policy metadata the SDK could not make
+fail-closed decisions about whether a tool should be exposed, approved,
+retried, timed out, or allowed to touch the filesystem/network.
 
 Implement (shipped as vendored `tinytools::ToolPolicy` — side effects,
 runtime requirements, access requirements — plus `ToolPolicyMiddleware`;
@@ -470,27 +463,16 @@ Acceptance criteria:
 
 Status: shipped (harness); OpenHuman adapters still to migrate.
 
-Landed as `docs/runtime-comparison/plan.md` Phase 2 items B1/B2.
-`ToolExecutionContext` now carries `call_id` (the admitted call's id, per
-call even in a concurrent batch), `store: Option<Arc<dyn NamespacedStore>>`
-(`RunContext::with_namespaced_store`), `state_view` with
-`state::<S>() -> Option<&S>` (`RunContext::with_state_view(Arc<S>)`), and
-`custom(payload)` emitting `AgentEvent::Custom { call_id, payload }`. A
-`tinytools::Tool` reaches it by downcasting
-`ToolRunContext::host_extension()` (new vendored hook, mirroring
-`Tool::host_extension`); a `ToolDispatch::execute` gets `call_id` as an
-explicit parameter. On the result side the loop honours the vendored
-`ToolResult::follow_up` — one user message per result, appended after the
-batch's last tool row (`Image` → `ContentBlock::Image`, `File` → `[file
-<name> (<media_type>)]` placeholder) — and `ToolResult::metadata`, which
-rides `AgentEvent::ToolCompleted { metadata }` and
-`AgentRun::tool_metadata` and never the transcript. OpenHuman's
-`tool_result_artifacts` / `artifact_offload` JSON-stuffing can move to
-`metadata`. See [`tool-context.md`](modules/harness/tool-context.md).
-
-Still open: an approval flag on the context (a tool raising
-`ApprovalRequired` from `execute` cannot see it was approved on resume), and
-a native file block in the message model.
+`ToolExecutionContext` gained `call_id`, `store` (`NamespacedStore`),
+`state::<S>()`, and `custom()` → `AgentEvent::Custom`; a `tinytools::Tool`
+reaches it via the new vendored `ToolRunContext::host_extension()` downcast,
+and `ToolDispatch::execute` takes `call_id`. The loop appends
+`ToolResult::follow_up` as a user message after the batch's tool rows and
+routes `ToolResult::metadata` to `ToolCompleted { metadata }` /
+`AgentRun::tool_metadata`, never the transcript — OpenHuman's
+`tool_result_artifacts` / `artifact_offload` JSON-stuffing can move there.
+Details: [`tool-context.md`](modules/harness/tool-context.md). Still open:
+an approval flag on the context; a native file block in the message model.
 
 ### 17. Storage And Graph Conformance
 
