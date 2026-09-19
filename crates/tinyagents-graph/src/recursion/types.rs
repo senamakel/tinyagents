@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, TinyAgentsError};
-use tinyagents_harness::ids::{GraphId, NodeId, RunId, TaskId};
+use tinyagents_harness::ids::{CheckpointId, GraphId, NodeId, RunId, TaskId};
 
 /// One level of the graph/subgraph/sub-agent recursion tree.
 ///
