@@ -14,6 +14,7 @@ use tinyagents_session::run_ledger::{
     WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
 };
 
+use super::engine::PhaseRegistration;
 use super::state::set_phase_status;
 use super::*;
 
