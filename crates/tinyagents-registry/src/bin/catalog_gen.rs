@@ -27,7 +27,6 @@
 //!
 //! [models.dev]: https://models.dev/api.json
 
-use std::collections::BTreeMap;
 use std::process::Command;
 
 use serde_json::Value;
