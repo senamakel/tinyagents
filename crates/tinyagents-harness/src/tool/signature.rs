@@ -170,7 +170,12 @@ fn render_object(object: &serde_json::Map<String, Value>, depth: usize) -> Strin
             "?"
         };
         // Infallible: writing to a String never errors.
-        let _ = write!(out, "{name}{optional}: {}", render(property, depth + 1));
+        let _ = write!(
+            out,
+            "{}{optional}: {}",
+            render_property_name(name),
+            render(property, depth + 1)
+        );
     }
     out.push('}');
     out
