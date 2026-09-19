@@ -1201,6 +1201,153 @@ async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allow
     assert_eq!(names, vec!["browse", "search"]);
 }
 
+/// Gap G3: a `defer_loading` capability's tool is not advertised until the
+/// model calls `load_capability`, and once it does, the very next turn's
+/// existing tool-change diff (B6, `agent_loop::tool_changes`) picks up the
+/// change automatically and appends a patch system message — no bespoke
+/// capability-specific patch wiring is needed.
+#[tokio::test]
+async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patches_the_transcript()
+ {
+    let profile = ModelProfile {
+        tool_calling: true,
+        mid_conversation_system_messages: true,
+        ..ModelProfile::default()
+    };
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(ProfiledModel {
+            inner: MockModel::with_responses(vec![
+                tool_call_response(
+                    "call-1",
+                    crate::capability::LOAD_CAPABILITY_TOOL_NAME,
+                    json!({"capability": "advanced"}),
+                ),
+                tool_call_response("call-2", "advanced-tool", json!({})),
+                text_response("done", 4, 2),
+            ]),
+            profile,
+        }),
+    );
+
+    let advanced_tool: Arc<dyn Tool> = Arc::new(FakeTool::new("advanced-tool", "advanced-output"));
+    let capability_toolset: Arc<dyn crate::tool::toolset::ToolSet<(), ()>> =
+        Arc::new(crate::tool::toolset::CombinedToolSet::new(vec![]));
+    // A minimal single-tool toolset behind the capability, independent of
+    // `defer_loading` gating (that gating is `CapabilityToolSet`'s job, one
+    // layer up).
+    struct SingleToolSet {
+        tool: Arc<dyn Tool>,
+    }
+    #[async_trait]
+    impl crate::tool::toolset::ToolSet<(), ()> for SingleToolSet {
+        async fn tools(&self, _ctx: &RunContext<()>) -> Result<Vec<Arc<dyn Tool>>> {
+            Ok(vec![self.tool.clone()])
+        }
+        async fn call(
+            &self,
+            name: &str,
+            args: serde_json::Value,
+            _ctx: &RunContext<()>,
+        ) -> Result<ToolResult> {
+            if name == self.tool.name() {
+                self.tool
+                    .execute(args)
+                    .await
+                    .map_err(|err| TinyAgentsError::Tool(err.to_string()))
+            } else {
+                Err(TinyAgentsError::ToolNotFound(name.to_string()))
+            }
+        }
+    }
+    let _ = capability_toolset; // placeholder removed below
+
+    let capability = crate::capability::Capability::new("advanced")
+        .with_instructions("Advanced instructions.")
+        .with_toolset(Arc::new(SingleToolSet {
+            tool: advanced_tool.clone(),
+        }))
+        .with_defer_loading(true);
+    harness.with_capability(capability);
+
+    // `advanced-tool`'s dispatch is bridged explicitly (the same documented
+    // limitation as plain `with_toolset`): advertisement is automatic once
+    // loaded, dispatch is not. `load_capability` needed no such bridge — it
+    // was registered directly into `self.tools` by `with_capability`.
+    let toolset = harness.toolset().expect("toolset installed").clone();
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset,
+        advanced_tool,
+    )));
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system("baseline persona"), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.text(), Some("done".to_string()));
+
+    let system_messages: Vec<&Message> = run
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::System(_)))
+        .collect();
+    // The original leading system message, plus one patch for turn 1 (just
+    // `load_capability` itself — `advanced-tool` is still gated), plus one
+    // patch for turn 2 (once `load_capability` ran, `advanced-tool` joins the
+    // live set).
+    assert_eq!(
+        system_messages.len(),
+        3,
+        "expected the leading message plus two tool-change patches"
+    );
+
+    let Message::System(turn1_patch) = system_messages[1] else {
+        unreachable!("filtered above");
+    };
+    let turn1_added: Vec<&str> = turn1_patch
+        .tools_added
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect();
+    assert_eq!(turn1_added, vec![crate::capability::LOAD_CAPABILITY_TOOL_NAME]);
+    assert!(
+        !turn1_added.contains(&"advanced-tool"),
+        "the deferred capability's tool must not be advertised before load_capability runs"
+    );
+
+    let Message::System(turn2_patch) = system_messages[2] else {
+        unreachable!("filtered above");
+    };
+    assert_eq!(
+        turn2_patch
+            .tools_added
+            .iter()
+            .map(|schema| schema.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["advanced-tool"],
+        "advanced-tool becomes advertised only on the turn after load_capability ran"
+    );
+
+    // The final effective tool set (replayed from the transcript alone)
+    // includes both the always-registered `load_capability` and the now
+    // loaded `advanced-tool`.
+    let (_, effective_tools) = tinyinference_llm::message::replay_system_state(&run.messages);
+    let mut names: Vec<&str> = effective_tools
+        .iter()
+        .map(|schema| schema.name.as_str())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["advanced-tool", crate::capability::LOAD_CAPABILITY_TOOL_NAME]
+    );
+}
+
 #[tokio::test]
 async fn after_tool_receives_distinct_identity_for_same_named_calls() {
     let mut parallel_calls = ModelResponse::assistant("");
