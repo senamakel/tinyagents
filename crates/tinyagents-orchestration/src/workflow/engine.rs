@@ -546,8 +546,10 @@ where
                     // A host stop/resume fences this owner with a revision CAS.
                     // Do not turn that intentional hand-off into a stale
                     // failure event or overwrite the newer durable state.
-                    if self.owner_lost(run_id, &owner)
-                        || self.emit_recorded_terminal(run_id, total_spawned as usize)
+                    if self.owner_lost(run_id, &owner).await
+                        || self
+                            .emit_recorded_terminal(run_id, total_spawned as usize)
+                            .await
                     {
                         return Ok(());
                     }
