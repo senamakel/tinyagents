@@ -480,6 +480,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 });
             }
 
+            // Apply the resolved model's schema transform (for example
+            // stripping `$defs` a provider rejects) to every tool schema
+            // already attached to the request. This is the same wire-shape
+            // adjustment `SchemaPreparation::schema_transform` performs, run
+            // here because it depends on the resolved binding's profile,
+            // which is only known once resolution above has run.
+            if let Some(transform) = binding
+                .model
+                .profile()
+                .and_then(|profile| profile.schema_transform.as_ref())
+            {
+                for tool in request.tools.iter_mut() {
+                    tool.parameters = transform.apply(&tool.parameters);
+                }
+            }
+
             // Resolve the structured-output plan against the resolved model.
             // `Auto` consults the model profile to choose provider-native schema
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
