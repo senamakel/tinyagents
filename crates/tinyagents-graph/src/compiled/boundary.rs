@@ -452,6 +452,8 @@ where
         let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &ctx.thread_id) else {
             return Ok(None);
         };
+        let (channel_versions, channel_deltas, versions_seen) =
+            self.channel_checkpoint_fields(ctx, state);
         let checkpoint = Checkpoint::new(
             state.clone(),
             pending.iter().map(PendingActivation::from).collect(),
@@ -462,6 +464,9 @@ where
         .with_parent_checkpoint_id(ctx.parent_checkpoint.clone())
         .with_namespace(self.namespace.clone())
         .with_barrier_arrivals(barriers_to_persisted(&ctx.barrier_arrivals))
+        .with_channel_versions(channel_versions)
+        .with_channel_deltas(channel_deltas)
+        .with_versions_seen(versions_seen)
         .with_metadata(serde_json::json!({
             "source": "loop",
             "step": ctx.steps,
