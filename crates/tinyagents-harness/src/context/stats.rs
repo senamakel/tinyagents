@@ -63,6 +63,9 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                     stats.text_chars += value.to_string().chars().count();
                 }
                 ContentBlock::Image(_) => stats.images += 1,
+                ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => {
+                    stats.media += 1;
+                }
                 ContentBlock::RedactedThinking { .. } => {}
             }
         }
