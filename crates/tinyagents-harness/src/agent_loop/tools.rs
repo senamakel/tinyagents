@@ -1410,6 +1410,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let result = match result {
                         Ok(result) => result,
                         Err(err) => {
+                            self.record_tool_effect_settled(
+                                ctx,
+                                &prepared,
+                                ToolEffectStatus::Failed,
+                            )
+                            .await;
                             self.fail_tool_call(
                                 ctx,
                                 status,
@@ -1432,6 +1438,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 "aborted: sibling tool call failed".to_string(),
                             );
                             for (sibling_prepared, _) in executed {
+                                self.record_tool_effect_settled(
+                                    ctx,
+                                    &sibling_prepared,
+                                    ToolEffectStatus::Failed,
+                                )
+                                .await;
                                 self.fail_tool_call(
                                     ctx,
                                     status,
@@ -1444,6 +1456,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             return Err(err);
                         }
                     };
+                    self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Completed)
+                        .await;
                     self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
                         .await?;
                 }
