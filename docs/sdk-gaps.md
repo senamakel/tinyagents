@@ -47,10 +47,12 @@ OpenHuman can migrate more of `src/openhuman/agent/` if TinyAgents grows:
 Status: partially present.
 
 TinyAgents has `ToolSchema { name, description, parameters, format }` and
-`ToolExecutionContext { run_id, thread_id, depth, max_turn_output_tokens,
-events }`. That is enough for model-visible tool calls, but not enough for
-OpenHuman's approval gate, command classifier, workspace policy, sandbox
-handoff, or tool-result budgeting.
+`ToolExecutionContext { run_id, call_id, thread_id, depth,
+max_turn_output_tokens, events, cancellation, streaming, workspace, store,
+state_view }` (the last three and `call_id` landed with B1, §16). That is
+enough for model-visible tool calls, but not enough for OpenHuman's approval
+gate, command classifier, workspace policy, sandbox handoff, or tool-result
+budgeting.
 
 OpenHuman currently keeps that metadata outside TinyAgents in domain tool
 registries and adapters. That means the SDK cannot make fail-closed decisions
@@ -440,6 +442,32 @@ becomes a `DeferredToolHandler`. Persistence of `run.messages` +
 `run.deferred` is the host's (the session ledger depends on the harness, so
 the loop cannot write it); see
 [`docs/modules/harness/tool.md`](modules/harness/tool.md#deferred-tool-calls-approval-and-external-execution-a2).
+
+### 16. Tool Execution Context Parity And Rich Returns (B1/B2)
+
+Status: shipped (harness); OpenHuman adapters still to migrate.
+
+Landed as `docs/runtime-comparison/plan.md` Phase 2 items B1/B2.
+`ToolExecutionContext` now carries `call_id` (the admitted call's id, per
+call even in a concurrent batch), `store: Option<Arc<dyn NamespacedStore>>`
+(`RunContext::with_namespaced_store`), `state_view` with
+`state::<S>() -> Option<&S>` (`RunContext::with_state_view(Arc<S>)`), and
+`custom(payload)` emitting `AgentEvent::Custom { call_id, payload }`. A
+`tinytools::Tool` reaches it by downcasting
+`ToolRunContext::host_extension()` (new vendored hook, mirroring
+`Tool::host_extension`); a `ToolDispatch::execute` gets `call_id` as an
+explicit parameter. On the result side the loop honours the vendored
+`ToolResult::follow_up` — one user message per result, appended after the
+batch's last tool row (`Image` → `ContentBlock::Image`, `File` → `[file
+<name> (<media_type>)]` placeholder) — and `ToolResult::metadata`, which
+rides `AgentEvent::ToolCompleted { metadata }` and
+`AgentRun::tool_metadata` and never the transcript. OpenHuman's
+`tool_result_artifacts` / `artifact_offload` JSON-stuffing can move to
+`metadata`. See [`tool-context.md`](modules/harness/tool-context.md).
+
+Still open: an approval flag on the context (a tool raising
+`ApprovalRequired` from `execute` cannot see it was approved on resume), and
+a native file block in the message model.
 
 ### 15. Registry Diagnostics And Introspection
 
