@@ -1596,7 +1596,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tinyagents-definition",
- "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-language",
  "tinyinference-llm",
