@@ -194,10 +194,10 @@ where
     if checkpoint.metadata.get("failed_node").is_some() {
         return Ok(Some(ChildContinuation::Retry));
     }
-    if checkpoint.metadata.get("interrupted_nodes").is_some() {
-        if let Some(value) = resume {
-            return Ok(Some(ChildContinuation::Resume(value.clone())));
-        }
+    if checkpoint.metadata.get("interrupted_nodes").is_some()
+        && let Some(value) = resume
+    {
+        return Ok(Some(ChildContinuation::Resume(value.clone())));
     }
     Ok(None)
 }
