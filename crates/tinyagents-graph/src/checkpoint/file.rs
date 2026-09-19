@@ -111,7 +111,7 @@ impl CheckpointHeader {
 
 use super::{
     Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSource, CheckpointTuple,
-    Checkpointer, PendingWrite, decode_json_err, merge_writes,
+    Checkpointer, PendingActivation, PendingWrite, decode_json_err, merge_writes,
 };
 use crate::{Result, TinyAgentsError};
 use tinyagents_harness::ids::{CheckpointId, NodeId};
