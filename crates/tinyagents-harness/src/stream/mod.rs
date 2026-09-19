@@ -34,9 +34,14 @@
 //! one mode the projection cannot supply — a full state snapshot is graph
 //! state, so the graph runtime pushes [`StreamChunk::Values`] itself.
 
+pub mod frame;
 mod project;
 mod types;
 
+pub use frame::{
+    AssistantFrame, FrameEncoder, PartialAssistantMessage, PartialTerminal, encode_frames,
+    reduce_frames,
+};
 pub use project::{project_event, project_event_for_modes, projected_mode};
 pub use types::*;
 
