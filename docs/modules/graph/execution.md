@@ -80,16 +80,18 @@ Parallel execution rules:
 - completed writes can be preserved as pending writes when other nodes fail
 - concurrency is bounded by graph defaults and run config
 
-Parallelism must be visible in events:
+Parallelism must be visible in events. The `GraphEvent` enum actually shipped
+(`crates/tinyagents-graph/src/stream/types.rs`) uses `Node*` naming, not
+`Task*`, and has no cached-task variant:
 
 - `StepStarted { active: [...] }`
-- `TaskStarted`
-- `TaskCompleted`
-- `TaskFailed`
-- `TaskCached`
+- `TaskScheduled` (not `TaskStarted`)
+- `NodeStarted` / `NodeCompleted` / `NodeFailed` (not `TaskCompleted`/`TaskFailed`)
+- `NodeRetryScheduled`
+- **Target (not implemented):** `TaskCached` — no cached-write replay exists
 - `StateUpdated`
 - `RouteSelected`
-- `CheckpointSaved`
+- `CheckpointSaved` / `CheckpointRestored`
 - `StepCompleted`
 
 For agent-specific fanout, forked runtime context, and shared-cache semantics,
