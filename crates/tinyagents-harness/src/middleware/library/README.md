@@ -103,6 +103,24 @@ Grouped by extension shape:
   `tokio::time` paused-time tests; `RateLimitMiddleware` takes an injectable
   clock and configurable poll interval. Preserve this when adding new
   middleware: prefer computing a delay over unconditionally awaiting one.
+- **Retry engines are coordinated, not yet unified (R-3, partial).**
+  `invoke_model_resolving` (the loop's own base-call attempt engine),
+  `RetryMiddleware`, and `ModelFallbackMiddleware` each still implement their
+  own attempt loop. Double-retrying is prevented by
+  `ModelMiddleware::overrides_retry` — a registered `RetryMiddleware` (or any
+  middleware overriding it) makes the base call skip its own retry loop
+  entirely, so attempts are bounded by whichever engine actually runs, never
+  by their product (`middleware::library::test::
+  retry_middleware_correlates_retry_scheduled_with_the_loops_call_id` and
+  `agent_loop::test::
+  retry_middleware_and_run_policy_retry_do_not_multiply_attempts` cover this).
+  `RetryMiddleware` also mirrors the loop's own call id onto
+  `RunContext::active_model_call` so its `RetryScheduled` events correlate
+  with the `ModelStarted`/`ModelCompleted` pair for the same attempt. Making
+  the loop's engine the *only* one and turning these middlewares into pure
+  policy overrides (`code-review-harness.md` R-3) is still open — it changes
+  their semantics from "execute" to "configure" and touches every test that
+  exercises them directly via `MiddlewareStack::run_wrapped_model`.
 - **Budget reservations are keyed by `RunContext::instance_id`, not `run_id`.**
   Concurrent runs sharing a `BudgetTracker` may share a caller-supplied
   `run_id`; only the process-unique instance id keeps each run releasing
