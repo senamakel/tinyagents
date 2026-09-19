@@ -65,7 +65,10 @@ does not itself declare an argument of that name, and the unwrapped value
 validates. Failing any of those, the original arguments survive so the model
 sees a precise error rather than a rewritten one.
 
-This only runs under a recovering `InvalidArgsPolicy` — see below.
+This normalization step only runs under
+`InvalidArgsPolicy::NormalizeThenReturnToolError` — see below. The default
+policy, `ReturnToolError`, still recovers (it returns the validation error as
+a tool-error message instead of aborting) but skips this normalization pass.
 
 ### Tool calls emitted as text
 
