@@ -195,6 +195,7 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
                 duration_ms: None,
                 output_bytes: None,
                 error: None,
+                metadata: None,
             });
             Ok::<(String, String), TinyAgentsError>((name, result.output()))
         }

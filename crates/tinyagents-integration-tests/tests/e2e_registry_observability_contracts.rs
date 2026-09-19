@@ -185,6 +185,7 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
             duration_ms: None,
             output_bytes: None,
             error: None,
+            metadata: None,
         },
         AgentEvent::StateUpdate,
         AgentEvent::MiddlewareStarted { name: "mw".into() },
@@ -312,6 +313,7 @@ async fn event_sinks_journals_and_status_stores_preserve_run_lineage() {
         duration_ms: None,
         output_bytes: None,
         error: None,
+        metadata: None,
     });
     assert_eq!(journal.len(), 2);
     assert_eq!(journal.replay_from(1)[0].event.kind(), "tool.completed");
