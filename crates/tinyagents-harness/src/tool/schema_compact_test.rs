@@ -141,6 +141,38 @@ fn compact_parameters_walks_the_whole_ladder_for_a_huge_schema() {
     assert!(compacted["properties"]["u"].is_object());
 }
 
+/// Regression: `compact_parameters` alone only *tries* to fit `max_bytes` —
+/// when even the top-level argument surface (property names/types/required)
+/// is irreducibly larger than the budget, it used to return that oversized
+/// value verbatim, so a configured `max_schema_bytes` was not actually a
+/// ceiling. `compact_tool_schema` must enforce it as a hard cap by falling
+/// back to an open object schema.
+#[test]
+fn compact_tool_schema_enforces_the_byte_cap_with_an_open_object_fallback() {
+    // Many long, required top-level properties: the ladder cannot touch this
+    // (every rung keeps the top-level surface intact), so it stays over any
+    // small budget no matter which rung runs.
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+    for i in 0..20 {
+        let name = format!("argument_number_{i}_with_a_long_descriptive_name");
+        properties.insert(name.clone(), json!({"type": "string"}));
+        required.push(Value::String(name));
+    }
+    let schema = ToolSchema::new(
+        "wide_tool",
+        "wide",
+        json!({"type": "object", "properties": properties, "required": required}),
+    );
+    let compaction = SchemaCompaction {
+        max_schema_bytes: Some(60),
+        max_description_bytes: None,
+    };
+    let compacted = compact_tool_schema(&schema, &compaction);
+    assert_eq!(compacted.parameters, json!({"type": "object", "properties": {}}));
+    assert!(serde_json::to_vec(&compacted.parameters).unwrap().len() <= 60);
+}
+
 #[test]
 fn compact_tool_schema_caps_description_on_a_char_boundary() {
     let schema = ToolSchema::new("t", "héllo wörld, this is long", json!({"type": "object"}));
