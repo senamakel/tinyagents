@@ -1,7 +1,8 @@
-# `session` — durable session history and run ledger
+# `session` — durable session history, run ledger, and transcripts
 
-SQLite-backed history for agent sessions, and a restart-survivable ledger for
-background agent/workflow execution. Requires the `sqlite` feature.
+SQLite-backed history for agent sessions (requires the `sqlite` feature), a
+restart-survivable ledger for background agent/workflow execution, and a
+JSONL-backed transcript store for KV-cache-stable resume.
 
 ## Why this is a top-level module
 
@@ -17,10 +18,15 @@ would imply a dependency that exists in neither direction.
 | --- | --- | --- |
 | `harness::store` | "what is this run working with right now?" | during a run |
 | `graph::checkpoint` | "how do I resume this interrupted run?" | until resumed |
-| **`session`** | "what happened, what did it cost, how did runs nest?" | indefinitely |
+| **`session` (SQLite)** | "what happened, what did it cost, how did runs nest?" | indefinitely |
+| **`session::transcript` (JSONL)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
 
-Nothing resumes from this module. It is queryable history: cross-session search,
-cost attribution, and orchestration recovery.
+The SQLite-backed history (`ops`, `run_ledger`) is queryable history that
+nothing resumes *from*: cross-session search, cost attribution, and
+orchestration recovery. `session::transcript` is the exception — it exists
+specifically so a restarted run can resume with the byte-identical message
+stream a provider (and its prompt cache) already saw; see its own
+[README](./transcript/README.md) for the format.
 
 ## Layout
 
@@ -28,13 +34,16 @@ Every entry point takes the workspace root and derives the path itself, so a
 host chooses only where its workspace lives:
 
 ```text
-{workspace_dir}/session_db/sessions.db
+{workspace_dir}/session_db/sessions.db          ← SQLite: sessions, run ledger
+{workspace_dir}/session_raw/{stem}.jsonl        ← JSONL: transcripts (source of truth)
+{workspace_dir}/sessions/YYYY_MM_DD/{stem}.md   ← human-readable transcript view
 ```
 
 ## Public surface
 
 Re-exported from the crate root (see `src/lib.rs`); the full surface stays
-reachable under `session::` and `session::run_ledger::`.
+reachable under `session::`, `session::run_ledger::`, and
+`session::transcript::`.
 
 - **Recording** — `record_session_start`, `record_message`,
   `record_message_with_reasoning`, `record_tool_call`, `record_session_end`.
@@ -44,8 +53,15 @@ reachable under `session::` and `session::run_ledger::`.
 - **Querying** — `get_session`, `list_sessions`, `search_sessions`,
   `list_messages`, `list_tool_calls`, `list_children`
 - **Recovery** — `mark_interrupted`
+- **Retention** — `apply_retention`, `prune_sessions_before`,
+  `prune_tool_calls_before`, `prune_run_events_before`,
+  `prune_run_telemetry_before`, `trim_session_messages`, `reindex_fts`
 - **Run ledger** — agent runs, workflow runs, teams, members, tasks, run events,
-  and telemetry, with the claim/completion coordination primitives
+  and telemetry, with the claim/completion coordination primitives — see its
+  own [README](./run_ledger/README.md)
+- **Transcripts** — full-rewrite and append-only writers, model-context and
+  display readers, thread lookups and usage summaries — see its own
+  [README](./transcript/README.md)
 - **Connections** — `with_connection` (autocommit) and `with_transaction`
   (`BEGIN IMMEDIATE`)
 
