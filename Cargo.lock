@@ -1609,6 +1609,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyagents-runtime"
+version = "2.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tinyagents-harness",
+ "tinyagents-session",
+ "tinyinference-llm",
+ "tinytools",
+ "tokio",
+]
+
+[[package]]
 name = "tinyagents-session"
 version = "2.1.2"
 dependencies = [
