@@ -615,3 +615,121 @@ async fn dropped_tool_call_nudges_are_bounded() {
     );
     assert_eq!(run.tool_calls, 0);
 }
+
+/// A queued model with a fixed, caller-chosen profile, so a test can force
+/// `StructuredStrategy::ToolCall` (a profile with `tool_calling` but not
+/// `native_structured_output && json_schema`) while still scripting a
+/// specific sequence of responses. [`ScriptedModel`] cannot do this: it
+/// advertises no profile at all, which `StructuredStrategy::for_profile`
+/// resolves to `ProviderSchema`, not `ToolCall`.
+struct ProfiledScriptedModel {
+    profile: ModelProfile,
+    queue: Mutex<std::collections::VecDeque<ModelResponse>>,
+}
+
+impl ProfiledScriptedModel {
+    fn new(profile: ModelProfile, responses: Vec<ModelResponse>) -> Self {
+        Self {
+            profile,
+            queue: Mutex::new(responses.into()),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for ProfiledScriptedModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.queue
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| tinyinference_llm::Error::Model("queue exhausted".to_string()))
+    }
+}
+
+/// Builds an assistant response carrying several tool calls in one turn, with
+/// no text.
+fn multi_tool_call_response(calls: Vec<(&str, &str)>) -> ModelResponse {
+    let mut response = ModelResponse::assistant("");
+    response.finish_reason = Some("tool_calls".to_string());
+    response.message.tool_calls = calls
+        .into_iter()
+        .map(|(id, name)| ToolCall::new(id, name, json!({})))
+        .collect();
+    response
+}
+
+#[tokio::test]
+async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn() {
+    // Regression: the mixed-turn branch (a structured payload alongside real
+    // tool calls in the same response) runs its real tools and continues the
+    // loop, but — unlike the ordinary tool-calling path and the
+    // dropped-call-recovered path, both of which do — it used to leave
+    // `dropped_tool_call_nudges_used` unreset. A nudge spent before a mixed
+    // turn would then leak into a later, unrelated dropped-call turn and
+    // receive fewer than the policy's configured number of re-prompts.
+    let mut promised = ModelResponse::assistant("");
+    promised.finish_reason = Some("tool_calls".into());
+
+    let profile = ModelProfile {
+        tool_calling: true,
+        native_structured_output: false,
+        json_schema: false,
+        ..ModelProfile::default()
+    };
+    let model = Arc::new(ProfiledScriptedModel::new(
+        profile,
+        vec![
+            promised.clone(), // dropped call #1: spends the only nudge.
+            multi_tool_call_response(vec![("s1", "answer"), ("t1", "lookup")]), // mixed turn: must reset the nudge budget.
+            promised, // dropped call #2: must be nudged again, not treated
+            // as already out of budget.
+            ModelResponse::assistant("done"),
+        ],
+    ));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .with_policy(RunPolicy {
+            dropped_tool_call_nudges: 1,
+            default_response_format: Some(ResponseFormat::auto(
+                "answer",
+                json!({"type": "object"}),
+            )),
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("both dropped-call turns are recoverable under their own nudge budget");
+
+    assert_eq!(
+        run.model_calls, 4,
+        "dropped -> nudged -> mixed turn -> dropped -> nudged again -> final"
+    );
+    let nudges = listener
+        .events()
+        .into_iter()
+        .filter(|record| matches!(record.event, AgentEvent::RetryScheduled { .. }))
+        .count();
+    assert_eq!(
+        nudges, 2,
+        "each dropped-call turn gets its own full nudge budget, proving the \
+         mixed turn reset the counter rather than leaving it spent"
+    );
+}
