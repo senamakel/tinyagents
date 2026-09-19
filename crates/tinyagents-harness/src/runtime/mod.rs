@@ -30,7 +30,7 @@ mod agent;
 mod types;
 
 #[cfg(test)]
-pub(crate) use agent::HostInvocationAuthority;
+pub(crate) use agent::{ErasedHostAuthority, HostInvocationAuthority};
 pub use agent::{AgentInvocation, AgentStream, AgentTurnRequest};
 pub(crate) use agent::{emit_host_progress, host_invocation_binding};
 pub use types::*;
