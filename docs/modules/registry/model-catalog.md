@@ -241,15 +241,22 @@ cargo run --example refresh_model_catalog -- \
   --output data/model-catalog/model-catalog.snapshot.json
 ```
 
-Validation should fail on:
+Validation is implemented (`ModelCatalogSnapshot::validate` /
+`validate_with_providers` in `catalog.rs`, called by
+`ModelCatalog::from_json`/`try_from_snapshot`) and fails on:
 
 - duplicate `(provider, model_id)` pairs
-- negative prices
+- negative prices (flat or any `ModelPricing::tiers` entry)
 - missing source
-- output limit greater than total context when both are known and incompatible
-- model alias collision
-- invalid date format
-- unknown provider id unless explicitly allowed
+- `max_output_tokens` greater than `max_input_tokens` when both are known
+- model alias collision (an alias colliding with another entry's id or alias)
+- invalid date format (`created_at`, `retrieved_at`, `deprecation_date`,
+  `release_date`; accepts `YYYY-MM-DD` or a full RFC-3339 timestamp)
+- unknown provider id — **only** when an allowlist is passed via
+  `validate_with_providers(Some(providers))`; the plain `validate()` used by
+  `from_json` does not restrict provider ids, so a hand-written or synthetic
+  test snapshot can name a fictional provider. `catalog_gen` passes
+  `Some(catalog::KNOWN_PROVIDERS)` against a live `models.dev` fetch.
 
 ## Staleness Policy
 
