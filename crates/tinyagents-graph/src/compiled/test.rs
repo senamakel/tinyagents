@@ -1292,9 +1292,13 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
         .unwrap();
     assert!(paused.is_interrupted());
     let resumed = resumed_graph
-        .resume("t-equivalence", Command::new())
+        .resume("t-equivalence", Command::resume(json!(null)))
         .await
         .unwrap();
+    assert!(
+        !resumed.is_interrupted(),
+        "the resume must carry `lo` past its interrupt check, not pause it again"
+    );
 
     assert_eq!(
         resumed.state, baseline.state,
