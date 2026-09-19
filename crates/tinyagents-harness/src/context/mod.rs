@@ -523,6 +523,32 @@ impl<Ctx> RunContext<Ctx> {
             .unwrap_or_default()
     }
 
+    /// Queues a raw JSON state update a tool requested via
+    /// [`tinytools::ToolControl::state_update`][tc].
+    ///
+    /// A canonical tool has no access to the harness's typed `State`, so its
+    /// state update travels as `serde_json::Value` rather than a
+    /// [`StateUpdate`] closure. Kept as a separate queue (not merged into
+    /// [`Self::push_state_update`]) so a host can tell a middleware-originated
+    /// typed update from a tool-originated JSON one without downcasting.
+    ///
+    /// [tc]: tinytools::ToolControl::state_update
+    pub fn push_tool_state_update(&self, update: serde_json::Value) {
+        if let Ok(mut guard) = self.tool_state_updates.lock() {
+            guard.push(update);
+        }
+    }
+
+    /// Drains every raw JSON tool state update queued so far, in request
+    /// order. See [`Self::push_tool_state_update`].
+    pub fn take_tool_state_updates(&self) -> Vec<serde_json::Value> {
+        self.tool_state_updates
+            .lock()
+            .ok()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or_default()
+    }
+
     /// Attaches a [`CancellationToken`] so an orchestrator can request that this
     /// run stop cooperatively at its next safe checkpoint.
     ///
