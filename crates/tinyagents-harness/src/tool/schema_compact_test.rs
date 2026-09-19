@@ -79,7 +79,10 @@ fn drop_definitions_opens_surviving_refs() {
     });
     let dropped = drop_definitions(schema);
     assert!(dropped.get("$defs").is_none());
-    assert_eq!(dropped["properties"]["x"], json!({"type": "object"}));
+    // A `$ref` can resolve to any JSON type, not only an object, so the
+    // opened schema is unconstrained (`{}`) rather than forced to
+    // `{"type": "object"}` — see `drop_definitions`'s doc comment.
+    assert_eq!(dropped["properties"]["x"], json!({}));
 }
 
 #[test]
