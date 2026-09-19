@@ -23,7 +23,7 @@ pub struct CompiledGraph<State, Update> {
     /// Optional human-readable graph name surfaced by the topology export.
     pub(crate) name: Option<String>,
     pub(crate) nodes: Arc<HashMap<NodeId, BuilderNode<State, Update>>>,
-    pub(crate) edges: Arc<HashMap<NodeId, NodeId>>,
+    pub(crate) edges: Arc<HashMap<NodeId, Vec<NodeId>>>,
     pub(crate) branches: Arc<HashMap<NodeId, Branch<State>>>,
     pub(crate) command_nodes: Arc<HashSet<NodeId>>,
     /// Barrier/waiting edges: target -> the predecessor set that must all
