@@ -47,9 +47,6 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "vertex",
     "perplexity",
     "tinyhumans",
-    // Not a real provider: used by tests and examples for fixture entries
-    // that must not be mistaken for a live-provider catalog record.
-    "mock",
 ];
 
 const SEED_SNAPSHOT: &str = include_str!("../model-catalog.snapshot.json");
