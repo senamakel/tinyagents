@@ -521,6 +521,7 @@ where
     /// active set.
     fn fold_step(
         &self,
+        run_id: &RunId,
         outcome: StepOutcome<Update>,
         step: usize,
         visited: &mut Vec<NodeId>,
