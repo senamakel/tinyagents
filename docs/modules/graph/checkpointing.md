@@ -317,9 +317,15 @@ Two backends are bundled:
   restarts. Each thread maps to one append-only `<thread>.jsonl` file under a
   base directory (one serialized `Checkpoint` per line, in insertion order).
   `put` appends a line; `get`/`get_scoped`/`list` decode only the header
-  fields (thread/checkpoint/run ids, parent id, namespace, next nodes,
-  metadata) while scanning, and fully deserialize `State` only for the one
-  winning record — `list` never pays for a full-state decode of every row.
+  fields (thread/checkpoint/run ids, parent id, namespace, `version`, the v2
+  `tasks` set or the v1 `next_nodes`/`pending_activations` pair, metadata)
+  while scanning, and fully deserialize `State` only for the one winning
+  record — `list` never pays for a full-state decode of every row, and its
+  header decode resolves the same v2-or-v1 pending set `Checkpoint::to_metadata`
+  would, without needing `Checkpoint::normalize`'s full-record path.
+  `get`/`get_scoped`/`get_thread`/`state_history` all call
+  `Checkpoint::normalize` on the decoded record before returning it, so a v1
+  line on disk is indistinguishable from a v2 one to every caller.
   `delete_*`/`prune` rewrite the file (and remove it once empty); `copy_thread`
   copies the file with the `thread_id` rewritten on every record. Thread ids
   are percent-escaped into a single safe filename component, and
