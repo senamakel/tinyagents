@@ -279,7 +279,7 @@ impl FakeTool {
         }
     }
 
-    /// Returns a snapshot of every [`ToolCall`] received by this tool, in
+    /// Returns a snapshot of every [`ToolCall`](tinytools::ToolCall) received by this tool, in
     /// invocation order.
     pub fn calls(&self) -> Vec<serde_json::Value> {
         self.received
