@@ -42,7 +42,10 @@ default = []
 sqlite = ["dep:rusqlite"]
 tools = ["dep:chrono-tz"]
 multimodal = ["dep:flate2"]
-tracing = ["tinyagents-tracing/tracing", "tinytools-agent/tracing"]
+# Tracing instrumentation is now always compiled in (via the `tracing` crate
+# dependency above). This feature is retained as a no-op so downstream
+# feature forwards keep compiling.
+tracing = ["tinytools-agent/tracing"]
 
 [dev-dependencies]
 tempfile = "3"
