@@ -231,7 +231,11 @@ impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration
     /// failure; only a lease actually held by a different owner ends the
     /// retry loop.
     fn register(&self, child_id: String) -> Result<(), OrchestrationError> {
-        loop {
+        // Bounds the retry loop below. Each iteration only re-fires after a
+        // real CAS conflict (a concurrent registration or a genuine lease
+        // loss), so this is generous headroom rather than an expected depth.
+        const MAX_ATTEMPTS: u32 = 32;
+        for _attempt in 0..MAX_ATTEMPTS {
             let (snapshot, children) = {
                 let run = self.run.lock();
                 if run.child_run_ids.iter().any(|known| known == &child_id) {
@@ -273,18 +277,35 @@ impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration
                 }
                 None => {
                     // The CAS lost either to a concurrent registration (the
-                    // revision moved under us; retry against the fresh
-                    // state) or to a genuine lease takeover by another
-                    // owner. Only the latter is a real failure.
-                    let still_owned = self.run.lock().lease_owner.as_deref() == Some(self.owner.as_str());
-                    if !still_owned {
-                        return Err(OrchestrationError(
-                            "workflow lease lost while registering child".into(),
-                        ));
+                    // revision moved under us) or to a genuine lease
+                    // takeover by another owner. The in-memory snapshot
+                    // cannot tell these apart — it is only ever written by a
+                    // *successful* CAS from this same struct, so it never
+                    // learns about an external takeover on its own — so a
+                    // fresh authoritative read decides: same owner means
+                    // retry against the now-current state, a different (or
+                    // absent) owner means the lease is really gone.
+                    match self.store.load(&snapshot.id)? {
+                        Some(current) if current.lease_owner.as_deref() == Some(self.owner.as_str()) => {
+                            let mut run = self.run.lock();
+                            if run.revision < current.revision {
+                                *run = current;
+                            }
+                        }
+                        _ => {
+                            return Err(OrchestrationError(
+                                "workflow lease lost while registering child".into(),
+                            ));
+                        }
                     }
                 }
             }
         }
+        Err(OrchestrationError(
+            "workflow child registration exceeded its retry budget under sustained \
+             concurrent CAS contention"
+                .into(),
+        ))
     }
 }
 
