@@ -254,13 +254,3 @@ fn preparation_applies_compaction_after_cleaning() {
     assert!(wire[0].description.len() <= 10);
 }
 
-#[test]
-fn debug_check_huge_schema_size() {
-    let schema = json!({
-        "type": "object",
-        "properties": {"deep": nested(8), "u": {"oneOf": [nested(2), {"type": "string"}]}},
-    });
-    let compacted = compact_parameters(schema, 60);
-    let after = serde_json::to_vec(&compacted).unwrap().len();
-    eprintln!("AFTER LEN = {after}");
-}
