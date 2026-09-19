@@ -633,6 +633,12 @@ pub fn list_children(workspace_dir: &Path, session_id: &str) -> Result<Vec<Sessi
     })
 }
 
+/// Marks every session still `status = "running"` as `interrupted`,
+/// returning how many rows changed.
+///
+/// Called at host startup: any session still `running` in a freshly-opened
+/// database belongs to a process that is gone, so its status is stale by
+/// definition.
 pub fn mark_interrupted(workspace_dir: &Path) -> Result<usize> {
     tinyagents_tracing::debug!(
         "[session_db] mark_interrupted — marking all running sessions as interrupted"
