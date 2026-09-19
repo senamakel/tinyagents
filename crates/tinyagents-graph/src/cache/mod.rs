@@ -19,6 +19,7 @@ mod types;
 pub use memory::InMemoryTaskCache;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteTaskCache;
+pub(crate) use types::CachedNode;
 pub use types::{TaskCache, TaskCacheKey};
 
 #[cfg(test)]
