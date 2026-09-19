@@ -1416,6 +1416,102 @@ async fn higher_index_completed_sibling_not_rerun_after_interrupt_then_resume() 
     assert_eq!(done.state.value, 22, "20 (hi) + 2 (lo's resume value)");
 }
 
+/// R1 regression: a carried-forward completed sibling's explicit
+/// `Command::goto` must survive the interrupt + resume round trip. Before
+/// the fix, `RouteTarget`/`Command::goto` were not serializable and
+/// `Checkpoint` had nowhere to persist them, so a carried branch's routing
+/// was re-resolved via static/conditional edges only on resume — silently
+/// diverging from what an uninterrupted run would have routed to.
+#[tokio::test]
+async fn carried_completed_sibling_goto_survives_resume() {
+    let cp = Arc::new(InMemoryCheckpointer::<Counter>::new());
+    let x_calls = Arc::new(AtomicUsize::new(0));
+    let y_calls = Arc::new(AtomicUsize::new(0));
+    let x_calls_for_node = x_calls.clone();
+    let y_calls_for_node = y_calls.clone();
+    let graph = GraphBuilder::<Counter, i32>::new()
+        .with_parallel(true)
+        .set_reducer(ClosureStateReducer::new(|mut s: Counter, u: i32| {
+            s.value += u;
+            s.log.push(format!("+{u}"));
+            Ok(s)
+        }))
+        .add_node("super", |_s: Counter, _c: NodeContext| async move {
+            Ok(NodeResult::Command(
+                Command::default().with_goto(["lo", "hi"]),
+            ))
+        })
+        .add_node("lo", |_s: Counter, c: NodeContext| async move {
+            match c.resume {
+                Some(_) => Ok(NodeResult::Update(2)),
+                None => Ok(NodeResult::Interrupt(Interrupt::new("lo", json!({})))),
+            }
+        })
+        // `hi` (the higher-index, already-completed sibling) explicitly
+        // routes to `x` via `Command::goto`, overriding its static edge to
+        // `y` — the routing this test asserts is not lost.
+        .add_node("hi", |_s: Counter, _c: NodeContext| async move {
+            Ok(NodeResult::Command(
+                Command::update(20).with_goto(["x"]),
+            ))
+        })
+        .add_node("x", move |_s: Counter, _c: NodeContext| {
+            let calls = x_calls_for_node.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(100))
+            }
+        })
+        .add_node("y", move |_s: Counter, _c: NodeContext| {
+            let calls = y_calls_for_node.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(1000))
+            }
+        })
+        .set_entry("super")
+        .mark_command_routing("super")
+        .mark_command_routing("hi")
+        .add_edge("hi", "y")
+        .set_finish("lo")
+        .set_finish("x")
+        .set_finish("y")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let paused = graph
+        .run_with_thread(
+            "t-carried-goto",
+            Counter {
+                value: 0,
+                log: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(paused.is_interrupted());
+    assert_eq!(paused.state.value, 20, "hi's update committed before the pause");
+
+    let done = graph
+        .resume("t-carried-goto", Command::resume(json!(null)))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        x_calls.load(AtomicOrdering::SeqCst),
+        1,
+        "hi's persisted goto(\"x\") must run exactly once after resume"
+    );
+    assert_eq!(
+        y_calls.load(AtomicOrdering::SeqCst),
+        0,
+        "the static hi -> y edge must not fire once an explicit goto was persisted"
+    );
+    // 20 (hi) + 2 (lo's resume value) + 100 (x)
+    assert_eq!(done.state.value, 122);
+}
+
 /// R2/C2 regression: an interrupted-then-resumed run must reach the same
 /// final state as the same graph run straight through, with each node
 /// completing exactly once in both cases. Before the fix, a completed
