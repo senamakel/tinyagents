@@ -146,7 +146,7 @@ where
             && (base.metadata.get("interrupted_nodes").is_some()
                 || base.metadata.get("failed_node").is_some())
         {
-            base.completed_tasks.clone()
+            base.completed.iter().map(|c| c.node.clone()).collect()
         } else {
             Vec::new()
         };
