@@ -153,6 +153,10 @@ where
 }
 
 /// Structure-only view of the generic member execution graph.
+///
+/// Returns a topology that reflects the nodes and edges (entry, execute,
+/// complete, fail, done, routing rules) without running any real worker or
+/// calling effects. Used for introspection and documentation.
 pub fn member_graph_topology() -> Result<GraphTopology> {
     Ok(build_member_graph(
         || async {

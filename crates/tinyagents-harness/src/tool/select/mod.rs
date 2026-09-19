@@ -361,6 +361,10 @@ pub(crate) fn verbs_are_compatible(query: ToolVerb, tool: ToolVerb) -> bool {
     query == tool || matches!((query, tool), (ToolVerb::List, ToolVerb::Read))
 }
 
+/// Additive score adjustment from verb alignment between `name`'s verb and
+/// the query's detected verbs: `+3` exact match, `+1` compatible-but-not-exact
+/// (see [`verbs_are_compatible`]), `-2` a recognised but conflicting verb,
+/// `0` when the query has no detected verb or the tool's verb is neutral.
 fn verb_bonus(name: &str, query_verbs: &HashSet<ToolVerb>) -> i32 {
     if query_verbs.is_empty() {
         return 0;
