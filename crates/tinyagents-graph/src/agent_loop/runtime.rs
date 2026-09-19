@@ -64,11 +64,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> LoopRuntime<State, Ctx> {
     pub fn new(
         harness: Arc<AgentHarness<State, Ctx>>,
         app_state: Arc<State>,
-        ctx: RunContext<Ctx>,
+        mut ctx: RunContext<Ctx>,
         run: AgentRun,
         status: HarnessRunStatus,
         streaming: bool,
     ) -> Self {
+        ctx.limits.restart();
+        reconcile_call_limits(&mut ctx, harness.policy());
         Self {
             harness,
             app_state,
