@@ -687,11 +687,14 @@ async fn budget_enforces_cached_input_token_limit() {
         .unwrap();
 
     let mut req = ModelRequest::new(vec![Message::user("next")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("cached input budget exhausted should block");
-    assert!(matches!(err, TinyAgentsError::LimitExceeded(_)));
+        .expect("a cached-input budget exhausted stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(crate::context::LoopTarget::End))
+    ));
 }
 
 #[tokio::test]
