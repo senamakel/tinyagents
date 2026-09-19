@@ -3,8 +3,12 @@
 //! `on_error` recovery, and real `defer` scheduling.
 
 use super::*;
-use crate::builder::{GraphBuilder, NodeContext, NodePolicy};
-use crate::command::NodeResult;
+use crate::builder::{GraphBuilder, NodeCachePolicy, NodeContext, NodePolicy};
+use crate::cache::InMemoryTaskCache;
+use crate::command::{Command, NodeResult, RouteTarget, Send};
+use crate::reducer::ClosureStateReducer;
+use crate::stream::{CollectingSink, GraphEvent};
+use serde_json::json;
 use tinyagents_harness::retry::RetryPolicy;
 
 use std::sync::Arc;
@@ -227,4 +231,180 @@ async fn flat_timeout_still_bounds_a_heartbeating_handler() {
     let err = graph.run(0).await.unwrap_err();
     assert!(matches!(err, TinyAgentsError::Timeout(_)), "got {err:?}");
     assert!(started.elapsed() < Duration::from_millis(300));
+}
+
+// ── A.2: task cache ──────────────────────────────────────────────────────────
+
+/// A single-node graph counting handler invocations, cached on the input
+/// state's value.
+fn counting_cached_graph(
+    calls: Arc<AtomicUsize>,
+    ttl: Option<Duration>,
+) -> (CompiledGraph<i32, i32>, Arc<InMemoryTaskCache>) {
+    let cache = Arc::new(InMemoryTaskCache::new());
+    let mut policy = NodeCachePolicy::new(|s: &i32, _arg| format!("state={s}"));
+    if let Some(ttl) = ttl {
+        policy = policy.with_ttl(ttl);
+    }
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("compute", move |s: i32, _c: NodeContext| {
+            let calls = calls.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(s * 10))
+            }
+        })
+        .set_entry("compute")
+        .set_finish("compute")
+        .compile()
+        .unwrap()
+        .with_task_cache(cache.clone())
+        .with_cached_node("compute", policy);
+    (graph, cache)
+}
+
+/// A second run with the same cache key skips the handler entirely, replays
+/// the cached update, and reports the hit as `TaskCompleted { cached: true }`.
+#[tokio::test]
+async fn cache_hit_skips_handler_and_emits_cached_task_completed() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (graph, _cache) = counting_cached_graph(calls.clone(), None);
+    let sink = Arc::new(CollectingSink::new());
+    let graph = graph.with_event_sink(sink.clone());
+
+    let first = graph.run(4).await.unwrap();
+    assert_eq!(first.state, 40);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
+    assert!(
+        !sink.events().iter().any(|e| matches!(
+            e,
+            GraphEvent::TaskCompleted { cached: true, .. }
+        )),
+        "the first run was a miss"
+    );
+
+    let second = graph.run(4).await.unwrap();
+    assert_eq!(second.state, 40, "the cached update was replayed");
+    assert_eq!(
+        calls.load(AtomicOrdering::SeqCst),
+        1,
+        "the handler was not invoked on the cache hit"
+    );
+    assert_eq!(
+        second.visited,
+        vec![NodeId::from("compute")],
+        "a cached node still counts as visited"
+    );
+    let hit = sink.events().into_iter().find(|e| {
+        matches!(
+            e,
+            GraphEvent::TaskCompleted {
+                cached: true,
+                step: 1,
+                ..
+            }
+        )
+    });
+    assert!(hit.is_some(), "expected a cached TaskCompleted event");
+
+    // A different key is a miss again.
+    let third = graph.run(5).await.unwrap();
+    assert_eq!(third.state, 50);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+}
+
+/// Once an entry's TTL elapses the handler runs again (and repopulates).
+#[tokio::test]
+async fn cache_ttl_expiry_reruns_the_handler() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (graph, _cache) = counting_cached_graph(calls.clone(), Some(Duration::from_millis(40)));
+
+    graph.run(1).await.unwrap();
+    graph.run(1).await.unwrap();
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 1, "second run was a hit");
+
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let run = graph.run(1).await.unwrap();
+    assert_eq!(run.state, 10);
+    assert_eq!(
+        calls.load(AtomicOrdering::SeqCst),
+        2,
+        "the expired entry forced a re-run"
+    );
+}
+
+/// The cache key function receives each activation's `send_arg`, so a
+/// `Send` fan-out of one node keys (and hits) per argument.
+#[tokio::test]
+async fn cache_key_receives_send_arg_per_fanout_activation() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen_args = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let cache = Arc::new(InMemoryTaskCache::new());
+    let key_args = seen_args.clone();
+    let graph = GraphBuilder::<Vec<String>, Vec<String>>::new()
+        .set_reducer(ClosureStateReducer::new(
+            |mut s: Vec<String>, u: Vec<String>| {
+                s.extend(u);
+                Ok(s)
+            },
+        ))
+        .add_node("fan", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Command(Command {
+                update: None,
+                goto: vec![
+                    RouteTarget::Send(Send::new("work", json!("a"))),
+                    RouteTarget::Send(Send::new("work", json!("b"))),
+                ],
+                resume: None,
+                resume_by_task: Default::default(),
+            }))
+        })
+        .add_node("work", move |_s, ctx: NodeContext| {
+            let calls = calls.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                let arg = ctx.send_arg.and_then(|v| v.as_str().map(String::from));
+                Ok(NodeResult::Update(vec![format!(
+                    "work:{}",
+                    arg.unwrap_or_default()
+                )]))
+            }
+        })
+        .mark_command_routing("fan")
+        .set_entry("fan")
+        .set_finish("work")
+        .compile()
+        .unwrap()
+        .with_task_cache(cache.clone())
+        .with_cached_node(
+            "work",
+            NodeCachePolicy::new(move |_s: &Vec<String>, arg: Option<&serde_json::Value>| {
+                let arg = arg.map(|v| v.to_string()).unwrap_or_default();
+                key_args.lock().unwrap().push(arg.clone());
+                format!("arg={arg}")
+            }),
+        );
+
+    let first = graph.run(vec![]).await.unwrap();
+    let mut got = first.state.clone();
+    got.sort();
+    assert_eq!(got, vec!["work:a", "work:b"]);
+    assert_eq!(calls.load(AtomicOrdering::SeqCst), 2);
+    {
+        let mut args = seen_args.lock().unwrap();
+        args.sort();
+        assert_eq!(*args, vec!["\"a\"", "\"b\""], "key fn saw each send_arg");
+    }
+
+    // Second run: both fan-out activations are cache hits, the fan node
+    // itself (uncached) still runs.
+    let second = graph.run(vec![]).await.unwrap();
+    let mut got = second.state.clone();
+    got.sort();
+    assert_eq!(got, vec!["work:a", "work:b"], "cached updates were replayed");
+    assert_eq!(
+        calls.load(AtomicOrdering::SeqCst),
+        2,
+        "neither fan-out activation invoked the handler"
+    );
 }
