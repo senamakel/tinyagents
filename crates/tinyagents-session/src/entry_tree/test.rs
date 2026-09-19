@@ -471,3 +471,137 @@ fn every_entry_kind_round_trips_through_serde() {
     let round_tripped: Entry = serde_json::from_str(&json).expect("deserialize entry");
     assert_eq!(entry, round_tripped);
 }
+
+// ── SessionCompactionSink ───────────────────────────────────────────────
+
+#[test]
+fn compaction_sink_persists_a_record_anchored_at_the_tip() {
+    use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
+
+    let ws = workspace();
+    let tree = EntryTree::new(ws.path(), "sess-1");
+    tree.append(None, message_kind("user", "one")).unwrap();
+    tree.append_to_head(message_kind("assistant", "two"))
+        .unwrap();
+    let tip = tree
+        .append_to_head(message_kind("user", "three"))
+        .unwrap();
+
+    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+    assert_eq!(sink.tip(), Some(tip.clone()));
+
+    let record = CompactionRecord {
+        summary: "one and two, summarized".to_string(),
+        // Skip "one" only; keep "two" and "three" verbatim.
+        first_kept_index: 1,
+        tokens_before: 300,
+        tokens_after: 120,
+        usage: None,
+        details: serde_json::json!({ "rule": "threshold" }),
+        reason: CompactionReason::Threshold,
+    };
+    sink.persist(&record).expect("persist");
+
+    let new_tip = sink.tip().expect("sink has a new tip after persisting");
+    assert_ne!(new_tip, tip);
+
+    let context = tree.build_context(&new_tip).expect("context");
+    assert_eq!(context.len(), 2);
+    assert_eq!(context[0].text(), "one and two, summarized");
+    assert_eq!(context[1].text(), "three");
+}
+
+#[test]
+fn compaction_sink_advances_its_tip_across_repeated_compactions() {
+    use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
+
+    let ws = workspace();
+    let tree = EntryTree::new(ws.path(), "sess-1");
+    tree.append(None, message_kind("user", "a")).unwrap();
+    tree.append_to_head(message_kind("assistant", "b"))
+        .unwrap();
+    tree.append_to_head(message_kind("user", "c")).unwrap();
+
+    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+
+    sink.persist(&CompactionRecord {
+        summary: "first summary".to_string(),
+        first_kept_index: 1,
+        tokens_before: 100,
+        tokens_after: 40,
+        usage: None,
+        details: serde_json::json!({}),
+        reason: CompactionReason::Threshold,
+    })
+    .expect("first persist");
+    let after_first = sink.tip().expect("tip after first compaction");
+
+    // Grow the (already-compacted) transcript, then compact again.
+    tree.append(Some(&after_first), message_kind("assistant", "d"))
+        .unwrap();
+
+    sink.persist(&CompactionRecord {
+        summary: "second summary".to_string(),
+        first_kept_index: 0,
+        tokens_before: 200,
+        tokens_after: 20,
+        usage: None,
+        details: serde_json::json!({}),
+        reason: CompactionReason::Overflow,
+    })
+    .expect("second persist");
+
+    let after_second = sink.tip().expect("tip after second compaction");
+    assert_ne!(after_second, after_first);
+
+    let context = tree.build_context(&after_second).expect("context");
+    // Only the second (newest) compaction's summary is visible.
+    assert_eq!(context[0].text(), "second summary");
+}
+
+#[test]
+fn compaction_sink_is_a_no_op_on_an_empty_session() {
+    use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
+
+    let ws = workspace();
+    let sink = SessionCompactionSink::new(ws.path(), "sess-empty").expect("sink");
+    assert_eq!(sink.tip(), None);
+
+    sink.persist(&CompactionRecord {
+        summary: "nothing to compact".to_string(),
+        first_kept_index: 0,
+        tokens_before: 10,
+        tokens_after: 5,
+        usage: None,
+        details: serde_json::json!({}),
+        reason: CompactionReason::Manual,
+    })
+    .expect("persist on empty session should be a no-op, not an error");
+
+    assert_eq!(sink.tip(), None);
+}
+
+#[test]
+fn compaction_sink_skips_an_out_of_range_index_rather_than_corrupting_the_tree() {
+    use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
+
+    let ws = workspace();
+    let tree = EntryTree::new(ws.path(), "sess-1");
+    let tip = tree.append(None, message_kind("user", "only one")).unwrap();
+
+    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+
+    sink.persist(&CompactionRecord {
+        summary: "bogus".to_string(),
+        first_kept_index: 5, // out of range: only one message entry exists
+        tokens_before: 10,
+        tokens_after: 5,
+        usage: None,
+        details: serde_json::json!({}),
+        reason: CompactionReason::Threshold,
+    })
+    .expect("out-of-range index is skipped, not an error");
+
+    // No compaction entry was written; the tip is unchanged.
+    assert_eq!(sink.tip(), Some(tip));
+}
