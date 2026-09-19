@@ -110,7 +110,7 @@
 
 pub mod driver;
 pub mod iter;
-mod runtime;
+pub mod runtime;
 pub mod types;
 
 mod compile;
@@ -118,4 +118,5 @@ mod compile;
 pub use compile::compile_loop;
 pub use driver::GraphLoopDriver;
 pub use iter::{AgentLoopGraphExt, LoopIter, LoopStep};
+pub use runtime::LoopRuntime;
 pub use types::{node, LoopState, LoopUpdate};
