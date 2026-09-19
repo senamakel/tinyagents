@@ -1213,14 +1213,37 @@ fn tool_message_from_result(
 
 /// Maps a canonical-dispatch failure back to the harness error surface.
 ///
-/// Only cancellation and timeout retain their safe typed classifications.
-/// Every other typed or foreign error is collapsed because message-bearing
-/// errors can include credentials or user data exposed to model/event consumers.
+/// Cancellation, timeout, and the structural errors that can escape a nested
+/// sub-agent call ([`TinyAgentsError::SubAgentDepth`],
+/// [`TinyAgentsError::LimitExceeded`]) keep their own typed classification.
+/// Every other typed or foreign error is collapsed to a generic
+/// [`TinyAgentsError::Tool`] because message-bearing errors from arbitrary
+/// tool code can include credentials or user data exposed to model/event
+/// consumers.
+///
+/// Preserving the structural variants matters for retry correctness, not just
+/// diagnostics: [`crate::retry::is_retryable`] treats every
+/// [`TinyAgentsError::Tool`] as unconditionally retryable (arbitrary
+/// tool-authored text has no shared vocabulary to classify against), but a
+/// depth cap or run-limit violation is deterministic and will never succeed
+/// on retry. Flattening `SubAgentDepth`/`LimitExceeded` into `Tool` made a
+/// `RetryMiddleware` around tools re-run a permanently failing sub-agent call
+/// until its attempt budget was exhausted (M-3).
 pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
     match error.downcast::<TinyAgentsError>() {
         Ok(TinyAgentsError::Cancelled) => TinyAgentsError::Cancelled,
         Ok(TinyAgentsError::Timeout(message)) => TinyAgentsError::Timeout(message),
         Ok(TinyAgentsError::CallTimeout(message)) => TinyAgentsError::CallTimeout(message),
+        // `usize` carries no free-form content, so it is always safe to keep.
+        Ok(TinyAgentsError::SubAgentDepth(depth)) => TinyAgentsError::SubAgentDepth(depth),
+        // The message is harness-generated (a limit description), not
+        // attacker/tool-controlled, but is redacted anyway for the same
+        // "never assume a message is safe" posture as every other variant
+        // here; only the *classification* needs to survive for retry
+        // purposes.
+        Ok(TinyAgentsError::LimitExceeded(_)) => {
+            TinyAgentsError::LimitExceeded("tool dispatch hit a run limit".to_string())
+        }
         Ok(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
         Err(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
     }
