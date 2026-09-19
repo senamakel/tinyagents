@@ -352,6 +352,28 @@ async fn child_run_ids_are_deterministic_from_the_parent_run_id_and_call_order()
     assert_ne!(ids_a[0], ids_a[1]);
 }
 
+/// M-4 regression: `SubAgentTool::tool()` used to build a fresh
+/// `Arc<SubAgentToolDeclaration>` (with a cloned `parameters` JSON `Value`)
+/// on every call, even though it is invoked several times per admitted call
+/// plus once per tool per run for `schemas()`. It must now cache and return
+/// the *same* declaration `Arc` across calls.
+#[test]
+fn tool_declaration_is_cached_across_calls() {
+    let child = SubAgent::new(
+        "worker",
+        "works",
+        Arc::new(child_harness::<()>("unused")),
+    );
+    let dispatch: SubAgentTool<(), ()> = SubAgentTool::new(Arc::new(child), ChildDataPolicy::default());
+
+    let first = dispatch.tool();
+    let second = dispatch.tool();
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "tool() should return the same cached Arc on repeated calls"
+    );
+}
+
 #[tokio::test]
 async fn child_harness_depth_cap_is_enforced_before_model_work() {
     let mut harness = child_harness::<()>("unused");
