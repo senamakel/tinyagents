@@ -1267,11 +1267,14 @@ async fn human_approval_consults_callback() {
         .expect("callback approves wire_transfer");
 
     let mut rejected = tool_call("delete");
-    let err = stack
+    stack
         .run_before_tool(&mut ctx, &(), &mut rejected)
         .await
-        .expect_err("callback rejects delete");
-    assert!(matches!(err, TinyAgentsError::Interrupted { .. }));
+        .expect("the hook itself succeeds; the rejection is queued as control");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::Interrupt { .. })
+    ));
 }
 
 // ── StructuredOutputValidatorMiddleware ─────────────────────────────────────
