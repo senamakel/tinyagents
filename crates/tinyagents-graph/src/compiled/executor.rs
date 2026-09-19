@@ -535,8 +535,10 @@ where
             parent: initial_parent,
             binding,
             resume_seed,
+            options,
             ..
         } = seed;
+        let cancellation = options.cancellation;
 
         let mut ctx = RunCtx::start(
             self,
@@ -547,6 +549,7 @@ where
             initial_parent,
             binding,
             resume_seed,
+            cancellation,
         )
         .await?;
         let runner = StepRunner { graph: self };
