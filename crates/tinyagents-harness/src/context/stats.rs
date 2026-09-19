@@ -36,7 +36,7 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
     };
     let mut requested = std::collections::HashSet::new();
     for message in messages {
-        let content = match message {
+        let content: &[ContentBlock] = match message {
             Message::System(message) => &message.content,
             Message::User(message) => &message.content,
             Message::Assistant(message) => {
@@ -51,6 +51,8 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                 }
                 &message.content
             }
+            // Host-side out-of-band record; carries no content blocks.
+            Message::Custom(_) => &[],
         };
         for block in content {
             match block {
