@@ -18,6 +18,7 @@ Supported fields:
 - `system`
 - `prompt`
 - `tools`
+- `capability` — see [Capability references](#capability-references)
 - `routes`
 - `retry`
 - `timeout`
