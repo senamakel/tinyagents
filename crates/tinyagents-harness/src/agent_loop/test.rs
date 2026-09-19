@@ -483,6 +483,51 @@ impl ChatModel<()> for ToolStructuredModel {
     }
 }
 
+/// A model whose profile lacks native structured output, paired with a
+/// forced P-Format dialect: unlike [`ToolStructuredModel`], the loop strips
+/// *every* schema off the wire for a text dialect (including the synthetic
+/// structured-output fallback tool), so this narrates the call back in
+/// P-Format syntax — `name[0|value|1|value]` — instead of returning a
+/// structured `tool_calls` entry.
+struct PFormatStructuredModel {
+    profile: ModelProfile,
+    received: Mutex<Vec<ModelRequest>>,
+}
+
+impl PFormatStructuredModel {
+    fn new() -> Self {
+        Self {
+            profile: ModelProfile {
+                tool_calling: true,
+                native_structured_output: false,
+                json_schema: false,
+                ..ModelProfile::default()
+            },
+            received: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for PFormatStructuredModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+    async fn invoke(
+        &self,
+        _state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.received
+            .lock()
+            .expect("PFormatStructuredModel received lock poisoned")
+            .push(request);
+        Ok(ModelResponse::assistant(
+            "<tool_call>answer[0|viatool|1|7]</tool_call>",
+        ))
+    }
+}
+
 /// A model that always fails with a retryable error and counts attempts.
 struct FailingModel {
     attempts: Mutex<usize>,
@@ -1556,6 +1601,52 @@ async fn normalized_non_object_executes_tool_without_required_fields() {
 }
 
 #[tokio::test]
+async fn normalization_preserves_a_decoded_but_schema_invalid_scalar() {
+    // Regression: a stringified JSON scalar (the string `"true"`) decodes
+    // successfully to `Value::Bool(true)`, which is schema-invalid for an
+    // object schema. That decoded value used to fall through past decode
+    // preservation into the has-no-required-fields fallback below — which
+    // exists for values that never decoded at all — and get silently
+    // replaced with `{}`, letting the tool execute with fabricated empty
+    // arguments instead of surfacing the model's real type mismatch.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("call-1", "permissive", json!("true")),
+            text_response("recovered", 1, 1),
+        ])),
+    );
+    let tool = Arc::new(FakeTool::new("permissive", "ok"));
+    harness.register_tool(tool.clone());
+    harness.with_policy(RunPolicy {
+        invalid_args: InvalidArgsPolicy::NormalizeThenReturnToolError,
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("run")])
+        .await
+        .expect("a decoded-but-invalid scalar is recoverable under ReturnToolError");
+
+    assert_eq!(run.final_response.unwrap().text(), "recovered");
+    assert_eq!(
+        *tool.calls.lock().unwrap(),
+        0,
+        "the tool must not run on a schema-invalid decoded scalar"
+    );
+    let injected = run
+        .messages
+        .iter()
+        .any(|m| format!("{m:?}").contains("invalid arguments for tool `permissive`"));
+    assert!(
+        injected,
+        "the injected message should report the real validation failure, not a fabricated success: {:?}",
+        run.messages
+    );
+}
+
+#[tokio::test]
 async fn normalization_preserves_valid_primitive_arguments() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
@@ -1919,6 +2010,215 @@ async fn auto_format_uses_tool_call_for_non_native_model() {
     assert_eq!(structured["score"], 7);
     // Exactly one model call: the structured tool call ends the loop.
     assert_eq!(run.model_calls, 1);
+}
+
+#[tokio::test]
+async fn pformat_dialect_recovers_the_structured_output_fallback_tool() {
+    // The run-level P-Format registry is built once from the schemas offered
+    // at the start of the run, before the structured-output fallback tool
+    // (`answer`) is pushed onto the request for a non-native model. The
+    // catalogue advertising it is rendered fresh from the final tool list on
+    // every call, so a model dutifully narrating the call back in P-Format —
+    // `answer[0|<value>|1|<score>]` — has to be decodable too, which needs
+    // the fallback tool's positional layout in the registry used to parse
+    // the answer, not just the one used to render the prompt.
+    let model = Arc::new(PFormatStructuredModel::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Pformat,
+            default_response_format: Some(ResponseFormat::auto(
+                "answer",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"},
+                        "score": {"type": "integer"},
+                    },
+                    "required": ["value", "score"],
+                }),
+            )),
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("answer")])
+        .await
+        .expect("run succeeds");
+
+    let structured = run.structured.expect("structured output present");
+    assert_eq!(structured["value"], "viatool");
+    assert_eq!(structured["score"], 7);
+
+    // The catalogue sent to the model already advertised the fallback
+    // tool's p-format signature; confirm that, so a failure here could only
+    // be the parsing registry, never a missing catalogue entry.
+    let request = model
+        .received
+        .lock()
+        .expect("PFormatStructuredModel received lock poisoned")[0]
+        .clone();
+    let system = request
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(system.contains("answer[0|<value>|1|<score>]"), "{system}");
+}
+
+#[tokio::test]
+async fn native_tool_dispatcher_requires_tool_calling_capability() {
+    // `ToolDispatcher::Native` is documented as *forcing* provider-native
+    // tool calls, unlike `Auto`'s "native when available, else Xml". Without
+    // a capability requirement that promise was unenforceable at
+    // resolution: a model whose profile cannot do native tool calling could
+    // still be selected as the (only, default) model and silently receive
+    // whatever fallback its own adapter chooses, rather than the run
+    // failing closed the way the `Native` name implies.
+    let incapable = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        text: "should never be reached",
+        attempts: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", incapable.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::new("lookup", "tool-output")))
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Native,
+            ..RunPolicy::default()
+        });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("no model satisfies the forced-native capability requirement");
+    assert!(
+        matches!(err, TinyAgentsError::ModelNotFound(_)),
+        "got {err:?}"
+    );
+    assert_eq!(
+        *incapable.attempts.lock().unwrap(),
+        0,
+        "the capability-ineligible model must never be invoked"
+    );
+}
+
+#[tokio::test]
+async fn native_tool_dispatcher_gates_on_the_post_middleware_tool_set() {
+    // The capability requirement must be derived from the *effective*
+    // request tools, checked after `before_model` middleware has run — not
+    // from the earlier `tool_schemas` snapshot taken before it. A run that
+    // registers no tools directly but whose `before_model` middleware adds
+    // one must still be gated, or that middleware-added tool would silently
+    // reach a model that cannot make native tool calls, defeating the
+    // `Native` dispatcher's fail-closed promise exactly as if the gate did
+    // not exist at all.
+    struct InjectToolMiddleware;
+
+    #[async_trait]
+    impl Middleware<(), ()> for InjectToolMiddleware {
+        fn name(&self) -> &str {
+            "inject-tool"
+        }
+        async fn before_model(
+            &self,
+            _ctx: &mut RunContext<()>,
+            _state: &(),
+            request: &mut ModelRequest,
+        ) -> Result<()> {
+            request.tools.push(ToolSchema::new(
+                "lookup",
+                "looks something up",
+                json!({"type": "object"}),
+            ));
+            Ok(())
+        }
+    }
+
+    let incapable = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        text: "should never be reached",
+        attempts: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", incapable.clone())
+        .set_default_model("mock")
+        .push_middleware(Arc::new(InjectToolMiddleware))
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Native,
+            ..RunPolicy::default()
+        });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("no model satisfies the forced-native capability requirement");
+    assert!(
+        matches!(err, TinyAgentsError::ModelNotFound(_)),
+        "got {err:?}"
+    );
+    assert_eq!(
+        *incapable.attempts.lock().unwrap(),
+        0,
+        "the capability-ineligible model must never be invoked"
+    );
+}
+
+#[tokio::test]
+async fn native_tool_dispatcher_gates_on_auto_structured_output_with_no_ordinary_tools() {
+    // `StructuredStrategy` resolution only ever appends a synthetic
+    // tool-call schema for a model whose profile already has `tool_calling`
+    // (`StructuredStrategy::for_profile`'s `ToolCall` arm) — but that
+    // resolution happens *after* the model is already chosen, so gating on
+    // `request.tools` alone (empty here, since no ordinary tool is
+    // registered and the synthetic schema hasn't been appended yet at gate
+    // time) let an incapable model be selected for a run that would go on to
+    // need native tool calling for its `Auto` structured-output fallback.
+    let incapable = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        text: "should never be reached",
+        attempts: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", incapable.clone())
+        .set_default_model("mock")
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Native,
+            default_response_format: Some(ResponseFormat::auto(
+                "answer",
+                json!({"type": "object"}),
+            )),
+            ..RunPolicy::default()
+        });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("no model satisfies the forced-native capability requirement");
+    assert!(
+        matches!(err, TinyAgentsError::ModelNotFound(_)),
+        "got {err:?}"
+    );
+    assert_eq!(
+        *incapable.attempts.lock().unwrap(),
+        0,
+        "the capability-ineligible model must never be invoked"
+    );
 }
 
 #[tokio::test]

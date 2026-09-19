@@ -90,6 +90,6 @@ it, each owned by its own submodule:
 
 `response_format_for_strategy` supplies the `ResponseFormat` for a
 `tinyinference_llm::model::ModelRequest`; `repair::parse_lenient` reuses
-`crate::relaxed_json::recover_relaxed_object`, the same relaxed-JSON repair
+`tinytools_agent::repair::json::recover_object`, the same relaxed-JSON repair
 tool-call argument parsing already uses, rather than a second divergent
 implementation.

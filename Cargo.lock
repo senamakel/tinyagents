@@ -1644,9 +1644,9 @@ dependencies = [
  "sha2",
  "thiserror",
  "tinyinference-core",
+ "tinytools-agent",
  "tokio",
  "tracing",
- "url",
 ]
 
 [[package]]
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",
