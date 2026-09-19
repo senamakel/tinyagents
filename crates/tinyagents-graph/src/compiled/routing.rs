@@ -111,7 +111,7 @@ where
             let source_indices: Vec<usize> = completed
                 .iter()
                 .enumerate()
-                .filter(|(_, activation)| activation.node == relief.source)
+                .filter(|(_, (_, activation))| activation.node == relief.source)
                 .map(|(index, _)| index)
                 .collect();
             if source_indices.is_empty() {
