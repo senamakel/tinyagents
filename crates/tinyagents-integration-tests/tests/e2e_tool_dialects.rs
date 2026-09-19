@@ -19,7 +19,8 @@ use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{Message, MessageDelta};
-use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse, ModelStreamItem};
+use tinyinference_llm::model::{ChatModel, ModelDelta, ModelResponse, ModelStreamItem};
+use tinytools::{Tool, ToolResult};
 use tinyinference_llm::providers::MockModel;
 
 struct CaptureMiddleware {
@@ -39,6 +40,32 @@ impl Middleware<(), ()> for CaptureMiddleware {
     ) -> tinyagents_harness::Result<()> {
         ctx.events.subscribe(self.listener.clone());
         Ok(())
+    }
+}
+
+/// A tool with a real parameter, so P-Format has a slot to render.
+struct Lookup;
+
+#[async_trait]
+impl Tool for Lookup {
+    fn name(&self) -> &str {
+        "lookup"
+    }
+
+    fn description(&self) -> &str {
+        "Looks something up."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": { "q": { "type": "string" } },
+            "required": ["q"]
+        })
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("tool-output"))
     }
 }
 
@@ -172,13 +199,7 @@ async fn a_forced_pformat_dialect_parses_positional_calls() {
     harness
         .register_model("mock", model.clone())
         .set_default_model("mock")
-        .register_tool(Arc::new(
-            FakeTool::returning("lookup", "tool-output").with_schema(json!({
-                "type": "object",
-                "properties": { "q": { "type": "string" } },
-                "required": ["q"]
-            })),
-        ))
+        .register_tool(Arc::new(Lookup))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
         }))
@@ -217,7 +238,7 @@ impl Middleware<(), ()> for DeltaRecorder {
         &self,
         _ctx: &mut RunContext<()>,
         _state: &(),
-        delta: &mut tinyagents_harness::middleware::ModelDelta,
+        delta: &mut ModelDelta,
     ) -> tinyagents_harness::Result<()> {
         self.seen.lock().unwrap().push(delta.content.clone());
         Ok(())
