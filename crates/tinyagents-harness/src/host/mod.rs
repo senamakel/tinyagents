@@ -207,6 +207,7 @@ impl<State: Send + Sync> Clone for HostCapabilities<State> {
             learning: self.learning.clone(),
             tool_outcomes: self.tool_outcomes.clone(),
             experience: self.experience.clone(),
+            fail_closed_tool_allowlist: self.fail_closed_tool_allowlist,
         }
     }
 }
