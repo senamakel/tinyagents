@@ -67,7 +67,7 @@ pub(super) fn insert_entry(
     session_id: &str,
     entry: &Entry,
 ) -> Result<()> {
-    let (_, payload) = encode_kind(&entry.kind)?;
+    let (tag, payload) = encode_kind(&entry.kind)?;
     conn.execute(
         "INSERT INTO entry_tree_entries (session_id, id, parent_id, ordinal, kind, payload_json, ts)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -76,7 +76,7 @@ pub(super) fn insert_entry(
             entry.id.as_str(),
             entry.parent_id.as_ref().map(EntryId::as_str),
             entry.ordinal as i64,
-            encode_kind(&entry.kind)?.0,
+            tag,
             payload,
             entry.ts,
         ],
