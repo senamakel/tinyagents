@@ -20,7 +20,7 @@
 //!
 //! | Part | Source |
 //! | ---- | ------ |
-//! | content blocks (text, JSON, reasoning, provider extensions) | [`ContentBlock::estimated_char_weight`][super::ContentBlock::estimated_char_weight] |
+//! | content blocks (text, JSON, reasoning, provider extensions) | [`ContentBlock::estimated_char_weight`](tinyinference_llm::message::ContentBlock::estimated_char_weight) |
 //! | images | flat per-image weight, not the base64 length |
 //! | assistant `tool_calls` | JSON rendering of the call array |
 //! | tool `tool_call_id` | the id string |
