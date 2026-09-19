@@ -137,6 +137,10 @@ async fn human_gated_run_parks_on_interrupt_then_resume_approves() {
     let pending = outcome.pending.expect("parked on the approval interrupt");
     assert_eq!(pending.node, "approval");
     assert_eq!(pending.thread_id, "hg-approve");
+    // The pause is the node's own (carrying the review payload), not an
+    // executor-injected `interrupt_before` ahead of the handler.
+    assert_eq!(pending.interrupt_id, "delegation-review-approval");
+    assert_eq!(pending.payload["kind"], "delegation_review");
     assert!(
         outcome.state.final_output.is_none(),
         "must not finalize while paused for human approval"
