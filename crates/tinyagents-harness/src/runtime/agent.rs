@@ -718,14 +718,14 @@ pub(crate) fn host_invocation_binding<State: Send + Sync + 'static, Ctx: Send + 
 
 /// Best-effort progress projection. A host UI must never make the turn wait or
 /// fail, so delivery is detached and dropped when no Tokio runtime is available.
-pub(crate) fn emit_host_progress<State: Send + Sync, Ctx: Send + Sync>(
+pub(crate) fn emit_host_progress<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
     context: &RunContext<Ctx>,
     event: ProgressEvent,
 ) {
     let Ok(Some(binding)) = host_invocation_binding::<State, Ctx>(context) else {
         return;
     };
-    let Some(progress) = binding.progress else {
+    let Some(progress) = binding.progress.as_ref() else {
         return;
     };
     progress.send_nonterminal(event);
