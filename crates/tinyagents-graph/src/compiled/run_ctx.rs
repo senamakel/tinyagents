@@ -1,0 +1,101 @@
+//! Per-run execution context threaded through the superstep loop.
+//!
+//! [`RunCtx`] bundles run identity (ids, namespace), clocks/deadlines,
+//! recursion bookkeeping, the accumulators a superstep loop carries forward
+//! (`node_visits`, `barrier_arrivals`, `visited`, `all_child_runs`,
+//! `steps`/checkpoint lineage), and the handles for background checkpoint
+//! writes and status/event I/O.
+//!
+//! It exists so the step-running, boundary, and resume helpers split out of
+//! `executor.rs` stop threading a dozen positional parameters between them:
+//! every one of those helpers takes `&RunCtx`/`&mut RunCtx` plus the handful
+//! of values that are genuinely local to that call (the active set, the
+//! state snapshot, a step's folded outcome). `RunCtx` is created once per
+//! `execute_run` call and never outlives it — it borrows the owning
+//! [`CompiledGraph`] for that duration.
+
+use super::*;
+
+/// Run-scoped state for one `execute_run` call.
+///
+/// Fields fall into three groups: identity that never changes for the run
+/// (`run_id`, `thread_id`, `root_run_id`, `parent_run_id`, `started_at`,
+/// `live_frames`, `recursion_meta`, `binding`), accumulators the superstep
+/// loop updates every iteration (`recursion`, `node_visits`,
+/// `barrier_arrivals`, `resume_map`, `visited`, `all_child_runs`, `steps`,
+/// `last_checkpoint`, `parent_checkpoint`), and I/O handles
+/// (`child_sink`, `async_writes`). `graph` is the owning [`CompiledGraph`],
+/// kept here so the convenience methods below (`emit`, `save_status`,
+/// `base_status`, `node_context`) don't need a separate receiver.
+pub(super) struct RunCtx<'a, State, Update> {
+    pub(super) graph: &'a CompiledGraph<State, Update>,
+    pub(super) run_id: RunId,
+    pub(super) thread_id: Option<ThreadId>,
+    pub(super) root_run_id: RunId,
+    pub(super) parent_run_id: Option<RunId>,
+    pub(super) started_at: SystemTime,
+    pub(super) live_frames: Vec<RecursionFrame>,
+    pub(super) recursion_meta: serde_json::Value,
+    pub(super) recursion: RecursionStack,
+    pub(super) binding: Option<crate::subagent_node::AgentInvocationBinding>,
+    pub(super) child_sink: ChildRunSink,
+    pub(super) node_visits: HashMap<NodeId, usize>,
+    pub(super) barrier_arrivals: HashMap<NodeId, HashSet<NodeId>>,
+    pub(super) async_writes: AsyncCheckpointWrites,
+    pub(super) resume_map: HashMap<NodeId, serde_json::Value>,
+    pub(super) visited: Vec<NodeId>,
+    pub(super) all_child_runs: Vec<ChildRun>,
+    pub(super) steps: usize,
+    pub(super) last_checkpoint: Option<CheckpointId>,
+    pub(super) parent_checkpoint: Option<String>,
+}
+
+impl<'a, State, Update> RunCtx<'a, State, Update>
+where
+    State: Clone + Send + Sync + 'static,
+    Update: Send + 'static,
+{
+    /// Forwards to the owning graph's event sink (a no-op without one).
+    pub(super) fn emit(&self, event: GraphEvent) {
+        self.graph.emit(event);
+    }
+
+    /// Forwards to the owning graph's status store (a no-op without one).
+    pub(super) async fn save_status(&self, status: GraphRunStatus) {
+        self.graph.save_status(status).await;
+    }
+
+    /// Builds a fresh [`GraphRunStatus`] for this run at `Running` status,
+    /// stamped with this context's identity and start time.
+    pub(super) fn base_status(&self) -> GraphRunStatus {
+        self.graph.base_status(&self.run_id, &self.thread_id, self.started_at)
+    }
+
+    /// Builds the per-task [`NodeContext`] for `node_id`, consuming its entry
+    /// from `resume_map` (a node can only be handed its resume value once).
+    ///
+    /// `fork` carries the branch identity in a concurrent step (`None` in
+    /// sequential mode or single-node steps).
+    pub(super) fn node_context(
+        &mut self,
+        node_id: &NodeId,
+        step: usize,
+        fork: Option<ForkId>,
+        send_arg: Option<serde_json::Value>,
+    ) -> NodeContext {
+        NodeContext {
+            graph_id: self.graph.graph_id.clone(),
+            node_id: node_id.clone(),
+            run_id: self.run_id.clone(),
+            thread_id: self.thread_id.clone(),
+            step,
+            resume: self.resume_map.remove(node_id),
+            fork,
+            send_arg,
+            root_run_id: Some(self.root_run_id.clone()),
+            recursion_frames: self.live_frames.clone(),
+            child_runs: Some(self.child_sink.clone()),
+            agent_binding: self.binding.clone(),
+        }
+    }
+}
