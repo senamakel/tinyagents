@@ -194,7 +194,7 @@ pub fn apply_handoff(
     let tokens = cleaned.len().div_ceil(4);
     if !skip_cleaning && tokens > threshold_tokens {
         let id = cache.store(tool_name.to_string(), cleaned.clone());
-        let placeholder = build_handoff_placeholder(tool_name, &id, &cleaned);
+        let placeholder = build_handoff_placeholder(config, tool_name, &id, &cleaned);
         tracing::info!(
             task_id = %task_id,
             agent_id = %agent_id,
