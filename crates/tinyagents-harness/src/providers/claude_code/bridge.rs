@@ -1,5 +1,11 @@
 //! Internal normalized shapes used by the Claude Code stream adapter.
+//!
+//! These are the crate-private types `mod.rs` converts `ModelRequest` /
+//! `ModelResponse` to and from before handing off to `driver.rs` and
+//! `event_mapper.rs`, keeping the provider's request/response bridging
+//! independent of `tinyinference_llm`'s wire types.
 
+/// A single flattened chat turn (role + rendered text) sent to the CLI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChatMessage {
     pub(crate) role: String,
