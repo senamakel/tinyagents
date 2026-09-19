@@ -91,6 +91,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 );
                 run.paused = Some(pause);
             }
+            LoopExit::Deferred(requests) => {
+                // Like a pause, a deferral is not a completion: the run is
+                // waiting on a human decision or host-side execution for the
+                // calls listed in `requests`. The transcript already carries
+                // the assistant's tool-call row and every non-deferred
+                // sibling's result, so persisting `run.messages` +
+                // `run.deferred` is all a host needs to resume later.
+                let record = ctx.emit(AgentEvent::ControlApplied {
+                    control: "deferred".to_string(),
+                    detail: format!(
+                        "{} approval(s), {} external call(s) pending",
+                        requests.approvals.len(),
+                        requests.calls.len()
+                    ),
+                });
+                status.set_last_event(record.id);
+                tracing::debug!(
+                    target: "tinyagents::agent_loop",
+                    run_id = %ctx.run_id(),
+                    approvals = requests.approvals.len(),
+                    calls = requests.calls.len(),
+                    "[agent_loop] run deferred on pending tool calls"
+                );
+                run.deferred = Some(requests);
+            }
         }
 
         Ok(())

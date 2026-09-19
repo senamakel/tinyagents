@@ -318,7 +318,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical
                 // to "the model produced an empty final answer".
-                let paused = terminal.run.paused.is_some();
+                // A deferred run (A2) is resumable for the same reason.
+                let paused = terminal.run.paused.is_some() || terminal.run.deferred.is_some();
                 if paused {
                     status.mark_interrupted();
                 } else {
