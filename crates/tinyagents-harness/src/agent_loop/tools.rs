@@ -90,9 +90,11 @@ enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
         dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
         tool: Arc<dyn tinytools::Tool>,
     },
-    /// Unknown-tool recovery: no tool runs; this tool-error message is
-    /// appended to the transcript at the call's original position.
-    ErrorMessage(String),
+    /// No tool runs; this result is appended to the transcript at the call's
+    /// original position. A tool-error result for the recovery paths (unknown
+    /// tool, invalid arguments); a success result for an intrinsic answer
+    /// (`tool_search`).
+    Answered(tinytools::ToolResult),
 }
 
 /// One requested call after admission, in original order.
@@ -107,10 +109,13 @@ enum AdmittedCall<State: Send + Sync, Ctx: Send + Sync> {
         tool: Arc<dyn tinytools::Tool>,
         call: ToolCall,
     },
-    /// A recovery: no tool runs, but the call is still answered through the
-    /// normal result pipeline so it emits the same started/completed pair and
-    /// runs the same `after_tool` hooks (TOOL-11).
-    Recovered { call: ToolCall, message: String },
+    /// A recovery or an intrinsic answer: no tool runs, but the call is still
+    /// answered through the normal result pipeline so it emits the same
+    /// started/completed pair and runs the same `after_tool` hooks (TOOL-11).
+    Recovered {
+        call: ToolCall,
+        result: tinytools::ToolResult,
+    },
 }
 
 /// One transcript slot per requested call, in original order, used by the
@@ -119,7 +124,10 @@ enum ToolSlot {
     /// An executed call: consumes the next prepared/result pair in order.
     Execute,
     /// A recovery, folded in place through the normal result pipeline.
-    Recovered { call: ToolCall, message: String },
+    Recovered {
+        call: ToolCall,
+        result: tinytools::ToolResult,
+    },
 }
 
 /// Admission metadata for one executable call, paired 1:1 (in order) with its
@@ -244,6 +252,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Err(TinyAgentsError::LimitExceeded(err.to_string()));
         }
 
+        // Discovery bridge, resolved before any hook runs. `tool_call` is
+        // unwrapped here so every `before_tool` hook, allow-list, and the host
+        // authorization gate below see the *real* tool name and arguments —
+        // a deferred tool is admitted exactly as if the model had called it
+        // directly. `tool_search` is answered from the run's catalogue without
+        // running a tool. A host-registered tool under either name wins, and
+        // a call the provider could not parse is left for the recovery below.
+        if call.invalid.is_none() && self.tools.dispatch(&call.name).is_none() {
+            if let Some(answered) = self.answer_discovery_bridge(ctx, status, call)? {
+                return Ok(answered);
+            }
+        }
+
         // The slot is *reserved* above (cap-first, so a middleware hook never
         // runs for a call the budget has already refused) and *released* here
         // when `before_tool` refuses the call — an approval denial or an
@@ -283,7 +304,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::ErrorMessage(detail));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(detail)));
         }
 
         // Hosted turns carry an explicit definition allowlist. Do not merely
@@ -295,7 +316,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .as_ref()
             .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
         let (dispatch, tool) = match is_allowed
-            .then(|| self.tools.dispatch(&call.name))
+            .then(|| self.tools.model_dispatch(&call.name))
             .flatten()
         {
             Some(dispatch) => {
@@ -345,7 +366,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // tool-call budget slot above, bounding the loop.
                     let valid = self
                         .tools
-                        .names()
+                        .model_callable_names()
                         .into_iter()
                         .filter(|name| {
                             allowed_tools
@@ -367,7 +388,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         recovery: "tool_error".to_string(),
                     });
                     status.set_last_event(record.id);
-                    return Ok(ResolvedToolCall::ErrorMessage(message));
+                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(message)));
                 }
             }
         };
@@ -416,10 +437,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if matches!(self.policy.invalid_args, InvalidArgsPolicy::Fail) {
                     return Err(TinyAgentsError::Validation(error.to_string()));
                 }
-                return Ok(ResolvedToolCall::ErrorMessage(format!(
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(format!(
                     "invalid injected arguments for tool `{}`: {error}",
                     call.name
-                )));
+                ))));
             }
         };
         call.arguments = prepared_arguments;
@@ -458,7 +479,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::ErrorMessage(message));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(message)));
         }
         // Host authorization is deliberately last in admission: the gate sees
         // the raw provider arguments (including any forged hidden fields),
@@ -499,7 +520,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // approval denials cannot exhaust the tool budget and block a
                 // later authorized call in the same turn.
                 ctx.limits.rollback_tool_calls(1);
-                return Ok(ResolvedToolCall::ErrorMessage(reason));
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(reason)));
             }
         }
         Ok(ResolvedToolCall::Tool { dispatch, tool })
@@ -770,8 +791,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         for mut call in tool_calls {
             let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
                 ResolvedToolCall::Tool { dispatch, .. } => dispatch,
-                ResolvedToolCall::ErrorMessage(message) => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, message)
+                ResolvedToolCall::Answered(result) => {
+                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                     continue;
                 }
@@ -850,10 +871,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         call: &ToolCall,
-        message: String,
+        result: tinytools::ToolResult,
     ) -> Result<()> {
         tinyagents_tracing::debug!(
-            "[agent_loop::tools] recovering call `{}` for `{}` without executing a tool",
+            "[agent_loop::tools] answering call `{}` for `{}` without executing a tool",
             call.id,
             call.name
         );
@@ -865,7 +886,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             false,
             crate::host::ContentOrigin::Tool,
         );
-        let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
     }
