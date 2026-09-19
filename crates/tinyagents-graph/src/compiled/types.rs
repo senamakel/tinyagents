@@ -89,6 +89,14 @@ pub struct CompiledGraph<State, Update> {
     /// abort-on-first-error behavior. Configured via
     /// [`CompiledGraph::with_node_retry`](crate::CompiledGraph::with_node_retry).
     pub(crate) node_retry: Option<tinyagents_harness::retry::RetryPolicy>,
+    /// Monotonic sequence counter for [`crate::stream::GraphEventEnvelope::seq`],
+    /// shared (via this `Arc`) across clones that only change `event_sink`
+    /// (journal wrapping) so a run's sequence stays continuous end to end.
+    /// A subgraph embedded as a node gets its own fresh counter (see
+    /// [`crate::subgraph`]) — its distinct `namespace` already disambiguates
+    /// its stream, and note in [`crate::stream::GraphEventEnvelope`] why a
+    /// shared counter is not needed across that boundary.
+    pub(crate) sequence: Arc<AtomicU64>,
 }
 
 impl<State, Update> std::fmt::Debug for CompiledGraph<State, Update> {
