@@ -652,11 +652,14 @@ async fn budget_prices_usage_and_enforces_cost() {
     );
 
     let mut req = ModelRequest::new(vec![Message::user("go")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("cost budget exhausted should block");
-    assert!(matches!(err, TinyAgentsError::LimitExceeded(_)));
+        .expect("a cost budget exhausted stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(crate::context::LoopTarget::End))
+    ));
 }
 
 #[tokio::test]
