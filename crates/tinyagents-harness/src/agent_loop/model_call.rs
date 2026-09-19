@@ -746,9 +746,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// [`on_model_delta`][crate::middleware::Middleware::on_model_delta]
     /// hook for each [`ModelStreamItem::MessageDelta`] (and standalone
     /// [`ModelStreamItem::ToolCallDelta`]), then folds the items into the final
-    /// [`ModelResponse`] via [`StreamAccumulator`]. The merged response is
-    /// equivalent to what the unary [`tinyinference_llm::model::ChatModel::invoke`]
-    /// path would have produced, so the rest of the loop is unaffected.
+    /// [`ModelResponse`] via [`StreamAccumulator`]. Terminal provider metadata
+    /// is retained, while terminal text/thinking is reconciled from those
+    /// transformed deltas so the returned response agrees with streaming
+    /// consumers.
     ///
     /// `deltas_emitted` is incremented for every delta actually handed to
     /// consumers, so the retry path can tell whether a failed attempt already
@@ -764,6 +765,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<ModelResponse> {
         let mut stream = model.stream(state, request.clone()).await?;
         let mut accumulator = StreamAccumulator::new();
+        // A terminal `Completed` response usually has richer provider metadata
+        // than deltas (message id, usage, tool calls, and route information),
+        // but its text is still the raw provider payload.  Keep the text and
+        // reasoning that actually crossed the middleware boundary so that the
+        // terminal item cannot restore content a delta middleware redacted or
+        // transformed before it reached consumers.
+        let mut streamed_text = String::new();
+        let mut streamed_reasoning = String::new();
+        let mut saw_streamed_content = false;
 
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
@@ -811,6 +821,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)
                     .await?;
+                saw_streamed_content |= !message_delta.text.is_empty()
+                    || !message_delta.reasoning.is_empty()
+                    || !model_delta.content.is_empty()
+                    || !model_delta.reasoning.is_empty();
+                streamed_text.push_str(&model_delta.content);
+                streamed_reasoning.push_str(&model_delta.reasoning);
                 let forwarded_delta = MessageDelta {
                     text: model_delta.content.clone(),
                     reasoning: model_delta.reasoning.clone(),
@@ -842,6 +858,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => item,
                 };
                 *deltas_emitted += 1;
+            }
+
+            if let ModelStreamItem::Completed(response) = &mut item
+                && saw_streamed_content
+            {
+                // Deltas represent only text/thinking, so preserve terminal
+                // blocks that cannot be streamed as a `ModelDelta` (JSON,
+                // images, and provider extensions).  Provider signatures on
+                // thinking are intentionally discarded: a transformed block
+                // can no longer be replayed as the signed raw one.
+                let mut content = Vec::new();
+                if !streamed_reasoning.is_empty() {
+                    content.push(tinyinference_llm::message::ContentBlock::Thinking {
+                        text: std::mem::take(&mut streamed_reasoning),
+                        signature: None,
+                    });
+                }
+                if !streamed_text.is_empty() {
+                    content.push(tinyinference_llm::message::ContentBlock::Text(
+                        std::mem::take(&mut streamed_text),
+                    ));
+                }
+                content.extend(response.message.content.drain(..).filter(|block| {
+                    !matches!(
+                        block,
+                        tinyinference_llm::message::ContentBlock::Text(_)
+                            | tinyinference_llm::message::ContentBlock::Thinking { .. }
+                    )
+                }));
+                response.message.content = content;
             }
 
             accumulator.push(&item);

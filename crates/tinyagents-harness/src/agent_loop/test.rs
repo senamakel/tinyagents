@@ -2175,6 +2175,29 @@ impl Middleware<(), ()> for DeltaRecorder {
     }
 }
 
+/// Replaces a provider secret at the streaming boundary.  The terminal
+/// `Completed` response deliberately retains the unmodified value in the
+/// regression below, so the test proves the accumulated run and cache use the
+/// transformed delta rather than the raw terminal payload.
+struct SecretRedactingDelta;
+
+#[async_trait]
+impl Middleware<(), ()> for SecretRedactingDelta {
+    fn name(&self) -> &str {
+        "secret-redacting-delta"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut tinyinference_llm::model::ModelDelta,
+    ) -> Result<()> {
+        delta.content = delta.content.replace("raw-secret", "[REDACTED]");
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn invoke_streaming_fires_on_model_delta_per_delta_and_accumulates() {
     use crate::testkit::StreamingMock;
@@ -2217,6 +2240,60 @@ async fn invoke_streaming_fires_on_model_delta_per_delta_and_accumulates() {
     assert_eq!(
         *reasonings.lock().unwrap(),
         vec![String::new(), String::new(), String::new()]
+    );
+}
+
+#[tokio::test]
+async fn streaming_delta_transform_controls_final_run_and_cached_response() {
+    use crate::cache::InMemoryResponseCache;
+    use crate::testkit::StreamingMock;
+
+    // The provider exposes the raw secret both incrementally and in the
+    // terminal response.  A transform applied to the delta must be the value
+    // returned to the caller and retained for a subsequent cache hit.
+    let model = Arc::new(StreamingMock::new(vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::MessageDelta(MessageDelta::text("raw-secret")),
+        ModelStreamItem::Completed(ModelResponse::assistant("raw-secret")),
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("stream", model.clone());
+    harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
+    harness.push_middleware(Arc::new(SecretRedactingDelta));
+
+    let first = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("stream-secret-first"),
+            vec![Message::user("same request")],
+        )
+        .await
+        .expect("streaming run succeeds");
+    assert_eq!(first.text().as_deref(), Some("[REDACTED]"));
+    assert!(
+        !first.text().unwrap_or_default().contains("raw-secret"),
+        "the returned AgentRun must not restore terminal raw content"
+    );
+
+    let second = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("stream-secret-cached"),
+            vec![Message::user("same request")],
+        )
+        .await
+        .expect("cached streaming run succeeds");
+    assert_eq!(
+        model.call_count(),
+        1,
+        "second response was served from cache"
+    );
+    assert_eq!(second.text().as_deref(), Some("[REDACTED]"));
+    assert!(
+        !second.text().unwrap_or_default().contains("raw-secret"),
+        "the cached response must not retain the raw terminal secret"
     );
 }
 

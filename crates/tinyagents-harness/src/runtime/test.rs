@@ -23,7 +23,7 @@ use futures::StreamExt;
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::{
-    model::{ChatModel, ModelRequest, ModelResponse},
+    model::{ChatModel, ModelRequest, ModelResponse, ResponseFormat},
     usage::Usage,
 };
 use tinytools::{Tool, ToolResult};
@@ -34,6 +34,8 @@ use serde_json::json;
 struct NoopTool;
 
 struct BlockedTool;
+
+struct AnswerCollisionTool;
 
 struct DenyToolGate;
 
@@ -482,6 +484,25 @@ impl Tool for BlockedTool {
 }
 
 #[async_trait]
+impl Tool for AnswerCollisionTool {
+    fn name(&self) -> &str {
+        "answer"
+    }
+
+    fn description(&self) -> &str {
+        "a tool intentionally hidden from the hosted definition"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        panic!("a definition-hidden collision tool must never execute")
+    }
+}
+
+#[async_trait]
 impl Tool for InjectedArgumentTool {
     fn name(&self) -> &str {
         "injected"
@@ -877,6 +898,56 @@ async fn hosted_turn_screens_and_redacts_json_user_blocks_before_model_submissio
 }
 
 #[tokio::test]
+async fn hosted_turn_screens_and_redacts_thinking_user_blocks_before_model_submission() {
+    let model = Arc::new(ScriptedModel::replies(vec!["ok"]));
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(RedactJsonUserGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_host_capabilities(host);
+    let message =
+        tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
+            content: vec![tinyinference_llm::message::ContentBlock::Thinking {
+                text: "secret reasoning must not cross the host boundary".to_string(),
+                signature: None,
+            }],
+        });
+
+    harness
+        .invoke_agent(
+            AgentTurnRequest::new("helper", vec![message]),
+            RunContext::new(RunConfig::new("thinking-screen"), ()),
+            &(),
+        )
+        .await
+        .expect("hosted turn succeeds");
+
+    let request = model.requests().pop().expect("model request");
+    let user = request
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            tinyinference_llm::message::Message::User(user) => Some(user),
+            _ => None,
+        })
+        .expect("user message retained");
+    assert_eq!(
+        user.content,
+        vec![tinyinference_llm::message::ContentBlock::Thinking {
+            text: r#"{"safe":true}"#.to_string(),
+            signature: None,
+        }]
+    );
+}
+
+#[tokio::test]
 async fn hosted_turn_screens_and_redacts_provider_extension_user_blocks() {
     let model = Arc::new(ScriptedModel::replies(vec!["ok"]));
     let host = crate::host::HostCapabilities::new(
@@ -1066,6 +1137,56 @@ async fn hosted_definition_tool_allowlist_filters_schemas_and_rejects_fabricated
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
         ["noop"]
+    );
+}
+
+#[tokio::test]
+async fn hosted_allowlist_ignores_hidden_tool_when_structured_schema_name_collides() {
+    // `answer` is registered globally but deliberately not allowed for this
+    // hosted definition.  The structured-output schema may use that name: it
+    // only collides if it is actually present in this run's advertised tools.
+    let model = Arc::new(ScriptedModel::replies(vec![r#"{"ok":true}"#]));
+    let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop"]);
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.register_tool(Arc::new(AnswerCollisionTool));
+    harness.with_policy(RunPolicy {
+        default_response_format: Some(ResponseFormat::json_schema(
+            "answer",
+            json!({"type": "object"}),
+        )),
+        ..RunPolicy::default()
+    });
+    harness.with_host_capabilities(host);
+
+    let run = harness
+        .invoke_agent(
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("allowlisted-schema-collision"), ()),
+            &(),
+        )
+        .await
+        .expect("the hidden global tool must not collide with the schema");
+
+    assert_eq!(run.structured, Some(json!({"ok": true})));
+    let request = model.requests().pop().expect("model request");
+    assert_eq!(
+        request
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["noop"],
+        "only definition-allowed tools participate in collision detection"
     );
 }
 
