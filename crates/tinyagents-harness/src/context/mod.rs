@@ -598,6 +598,34 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
+    /// Attaches a durable tool-effect ledger (B5), so the agent loop writes a
+    /// `started` row before each tool call executes and a `completed`/
+    /// `failed` row after it settles. `None` (the default) disables all
+    /// ledger writes.
+    ///
+    /// See [`crate::tool::ToolEffectLedger`] and
+    /// [`RunContext::with_tool_effect_ledger_failure`] for how a `started`
+    /// write failure is handled.
+    #[must_use]
+    pub fn with_tool_effect_ledger(
+        mut self,
+        ledger: std::sync::Arc<dyn crate::tool::ToolEffectLedger>,
+    ) -> Self {
+        self.tool_effect_ledger = Some(ledger);
+        self
+    }
+
+    /// Sets how the agent loop reacts when [`crate::tool::ToolEffectLedger::started`]
+    /// itself fails. Defaults to [`crate::tool::LedgerFailure::Abort`].
+    #[must_use]
+    pub fn with_tool_effect_ledger_failure(
+        mut self,
+        failure: crate::tool::LedgerFailure,
+    ) -> Self {
+        self.tool_effect_ledger_failure = failure;
+        self
+    }
+
     /// Emits `event` on this run's event sink, returning the recorded entry.
     pub fn emit(&self, event: AgentEvent) -> EventRecord {
         self.events.emit(event)
