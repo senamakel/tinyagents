@@ -232,6 +232,21 @@ where
         self.graph.emit(event);
     }
 
+    /// Whether this run's cooperative-cancellation token (if any) has been
+    /// cancelled (I4 part 2).
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(tinyagents_harness::CancellationToken::is_cancelled)
+    }
+
+    /// Disarms this run's [`RunDropGuard`] — called at the top of every
+    /// terminal exit path of `execute_run` so a normal completion never
+    /// races a spurious `Cancelled` write from `Drop`.
+    pub(super) fn disarm_drop_guard(&mut self) {
+        self.drop_guard.disarm();
+    }
+
     /// Forwards to the owning graph's status store (a no-op without one).
     pub(super) async fn save_status(&self, status: GraphRunStatus) {
         self.graph.save_status(status).await;
