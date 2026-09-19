@@ -369,6 +369,11 @@ pub struct RunContext<Ctx = ()> {
     /// loop (stop with a final response, or interrupt). Drained by the agent
     /// loop at its safe checkpoints via [`RunContext::take_control`].
     pub control: std::sync::Arc<std::sync::Mutex<Option<MiddlewareControl>>>,
+    /// Queued [`StateUpdate`]s a middleware or tool requested via
+    /// [`MiddlewareControl::UpdateState`], drained by a host through
+    /// [`RunContext::take_state_updates`]. See that method's docs for why the
+    /// loop cannot apply these itself.
+    pub(crate) state_updates: std::sync::Arc<std::sync::Mutex<Vec<StateUpdate>>>,
     /// The isolated workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather
