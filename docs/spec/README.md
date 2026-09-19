@@ -152,7 +152,6 @@ crates/
   tinyagents-graph/             # durable typed state graphs
   tinyagents-registry/          # named capabilities and model catalog
   tinyagents-session/           # durable session history and run ledger
-  tinyagents-tracing/           # shared opt-in tracing macros
   tinyagents-integration-tests/ # cross-crate tests and runnable examples
 ```
 
