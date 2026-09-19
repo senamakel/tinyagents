@@ -119,29 +119,21 @@ Acceptance criteria:
 
 Status: mostly implemented (runtime-comparison Phase 3, C1).
 
-`MessageDelta { text, reasoning, tool_call }`
-(`vendor/tinyinference/crates/tinyinference-llm/src/message/types.rs`)
-carries a dedicated `reasoning` fragment alongside visible text, and
-`ModelDelta` events carry that delta. Block start/end channels now exist too:
+`MessageDelta { text, reasoning, tool_call }` carries reasoning alongside
+visible text. Block start/end channels now exist too:
 `ModelStreamItem::{BlockStart, BlockDelta, BlockEnd}`
-(`vendor/tinyinference/crates/tinyinference-llm/src/model/types.rs`) give a
-`BlockKind::{Text, Thinking, ToolCall { id, name }}` per index, so a consumer
-can tell exactly when a tool-call block opens/closes without inferring it
-from delta content; `ToolDelta::content_index` carries the same index on the
-flat compatibility channel. The Anthropic adapter maps `content_block_start` /
-`_delta` / `_stop` 1:1 onto these (`providers/anthropic/stream.rs`); the
-OpenAI chat-completions adapter stamps `content_index` on `ToolCallDelta` but
-does not yet derive `BlockStart`/`BlockEnd` from its delta shape (OpenAI's
-Responses API has no streaming path in this crate at all). A mid-stream
-failure's `ProviderFailed` now also carries `partial_message` and
-`stop_reason`, so a caller can keep or discard the interrupted turn instead
-of losing it. Remaining gap: OpenAI block-boundary derivation, and true
-mid-execution *tool* progress streaming (as opposed to the model streaming a
-tool call's arguments) — `tinytools::Tool` has no progress-callback surface
-for a running tool to report through, so
-`MiddlewareStack::run_on_tool_delta`/`AgentEvent::ToolProgress` still have no
-real caller; wiring that needs a `tinytools` capability, not just a harness
-change.
+(`vendor/tinyinference/.../model/types.rs`) give a `BlockKind::{Text,
+Thinking, ToolCall { id, name }}` per index, so a consumer can tell exactly
+when a tool-call block opens/closes without inferring it from delta content;
+`ToolDelta::content_index` carries the same index on the flat compatibility
+channel. The Anthropic adapter maps `content_block_start`/`_delta`/`_stop`
+1:1 onto these; the OpenAI chat-completions adapter stamps `content_index`
+but does not yet derive `BlockStart`/`BlockEnd` (Responses has no streaming
+path here). `ProviderFailed` now also carries `partial_message` and
+`stop_reason` for a mid-stream failure. Remaining: OpenAI block-boundary
+derivation, and true mid-execution *tool* progress streaming — `tinytools::Tool`
+has no progress-callback surface, so `run_on_tool_delta`/`ToolProgress` still
+have no real caller; that needs a `tinytools` capability, not a harness change.
 
 Implement:
 
