@@ -198,7 +198,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Ok(None);
         }
         if call.name == TOOL_SEARCH_NAME {
-            let result = crate::tool::discover::answer_tool_search(
+            let (result, matched) = crate::tool::discover::answer_tool_search(
                 &catalog,
                 &self.policy.discovery,
                 &call.arguments,
@@ -211,17 +211,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                matched: result.is_error.then_some(0).unwrap_or_else(|| {
-                    catalog
-                        .search(
-                            call.arguments
-                                .get("query")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default(),
-                            self.policy.discovery.max_limit,
-                        )
-                        .len()
-                }),
+                matched,
             });
             status.set_last_event(record.id);
             return Ok(Some(ResolvedToolCall::Answered(result)));

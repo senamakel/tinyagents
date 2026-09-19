@@ -92,22 +92,26 @@ fn tool_call_schema() -> ToolSchema {
     }
 }
 
-/// Answers a `tool_search` call against the run's catalogue.
+/// Answers a `tool_search` call against the run's catalogue, returning the
+/// result to hand the model and how many tools it named.
 #[must_use]
 pub fn answer_tool_search(
     catalog: &DeferredCatalog,
     policy: &ToolDiscoveryPolicy,
     arguments: &Value,
-) -> ToolResult {
+) -> (ToolResult, usize) {
     let query = arguments
         .get("query")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
     if query.is_empty() {
-        return ToolResult::error(format!(
-            "`{TOOL_SEARCH_NAME}` needs a `query` describing what you want to do."
-        ));
+        return (
+            ToolResult::error(format!(
+                "`{TOOL_SEARCH_NAME}` needs a `query` describing what you want to do."
+            )),
+            0,
+        );
     }
     let limit = arguments
         .get("limit")
@@ -118,11 +122,14 @@ pub fn answer_tool_search(
 
     let matches = catalog.search(query, limit);
     if matches.is_empty() {
-        return ToolResult::success(format!(
-            "No deferred tool matches \"{query}\". {} tool(s) are searchable; everything \
-             else you can use is already in your tool list.",
-            catalog.len()
-        ));
+        return (
+            ToolResult::success(format!(
+                "No deferred tool matches \"{query}\". {} tool(s) are searchable; everything \
+                 else you can use is already in your tool list.",
+                catalog.len()
+            )),
+            0,
+        );
     }
     let payload: Vec<Value> = matches
         .iter()
@@ -135,11 +142,14 @@ pub fn answer_tool_search(
         })
         .collect();
     let rendered = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "[]".to_string());
-    ToolResult::success(format!(
-        "{} match(es). Invoke one with `{TOOL_CALL_NAME}` {{\"name\", \"arguments\"}} or by \
-         its own name, using the parameters shown.\n{rendered}",
-        payload.len()
-    ))
+    let matched = payload.len();
+    (
+        ToolResult::success(format!(
+            "{matched} match(es). Invoke one with `{TOOL_CALL_NAME}` {{\"name\", \"arguments\"}} \
+             or by its own name, using the parameters shown.\n{rendered}"
+        )),
+        matched,
+    )
 }
 
 /// Unwraps a `tool_call` payload into the real `(name, arguments)` pair.

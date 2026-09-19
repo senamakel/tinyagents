@@ -109,6 +109,27 @@ pub enum AgentEvent {
         schema_bytes: usize,
     },
 
+    /// The model searched the deferred-tool catalogue through the intrinsic
+    /// `tool_search` bridge.
+    ToolSearched {
+        /// Identifier of the `tool_search` call.
+        call_id: CallId,
+        /// The model's query, verbatim.
+        query: String,
+        /// Number of deferred tools returned.
+        matched: usize,
+    },
+
+    /// The model invoked a deferred tool through the intrinsic `tool_call`
+    /// bridge; the call was unwrapped to `tool_name` before admission, so the
+    /// following `ToolStarted` names the real tool.
+    DeferredToolCall {
+        /// Identifier of the bridge call (shared with the unwrapped call).
+        call_id: CallId,
+        /// The real tool the call was unwrapped to.
+        tool_name: String,
+    },
+
     /// A tool-selection middleware filtered the model-visible tool set before a
     /// model call. Makes exposure decisions auditable: a UI or log can see
     /// which tools were withheld from the model and by which policy.
@@ -650,6 +671,8 @@ impl AgentEvent {
             AgentEvent::ModelCompleted { .. } => "model.completed",
             AgentEvent::ControlApplied { .. } => "control.applied",
             AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
+            AgentEvent::ToolSearched { .. } => "tool.searched",
+            AgentEvent::DeferredToolCall { .. } => "tool.deferred_call",
             AgentEvent::ToolsFiltered { .. } => "tool.filtered",
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",
