@@ -304,6 +304,53 @@ pub struct PendingActivation {
     pub task_id: TaskId,
 }
 
+/// One task that completed in the step a checkpoint's boundary closes,
+/// checkpoint format v2's replacement for the v1
+/// `completed_tasks: Vec<NodeId>` / `completed_routes: Vec<Vec<RouteTarget>>`
+/// pair (see [`Checkpoint::completed`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CompletedTask {
+    /// The task that completed, unique within the superstep that produced
+    /// it. Empty (`TaskId::from(String::new())`) for a task carried forward
+    /// from a checkpoint written before task identities existed, or derived
+    /// from a v1 record's `completed_tasks` (which carried no task id at
+    /// all).
+    #[serde(default = "empty_task_id", skip_serializing_if = "task_id_is_empty")]
+    pub task_id: TaskId,
+    /// The node that completed.
+    pub node: NodeId,
+    /// The explicit `Command::goto` routing this task returned, or empty when
+    /// it returned none (route via static/conditional edges instead).
+    #[serde(default)]
+    pub routes: Vec<RouteTarget>,
+}
+
+impl CompletedTask {
+    /// Builds a completed-task record with no explicit `Command::goto`
+    /// routing (route via static/conditional edges).
+    pub fn new(task_id: impl Into<TaskId>, node: impl Into<NodeId>) -> Self {
+        Self {
+            task_id: task_id.into(),
+            node: node.into(),
+            routes: Vec::new(),
+        }
+    }
+
+    /// Builds a completed-task record carrying an explicit `Command::goto`
+    /// routing.
+    pub fn with_routes(
+        task_id: impl Into<TaskId>,
+        node: impl Into<NodeId>,
+        routes: Vec<RouteTarget>,
+    ) -> Self {
+        Self {
+            task_id: task_id.into(),
+            node: node.into(),
+            routes,
+        }
+    }
+}
+
 /// The persisted arrivals recorded against one barrier (waiting-edge) join node:
 /// the predecessors that have already routed to it but whose join has not yet
 /// fired.
