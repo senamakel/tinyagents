@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use crate::builder::{GraphBuilder, NodeContext};
-use crate::command::NodeResult;
 use crate::compiled::CompiledGraph;
 use tinyagents_harness::error::Result;
 use tinyagents_harness::runtime::AgentHarness;
