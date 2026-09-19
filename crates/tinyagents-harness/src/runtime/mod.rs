@@ -7,6 +7,10 @@
 //! re-entrant runtime is what makes "agents calling agents" and self-authored
 //! workflows recurse on one consistent set of capabilities rather than spinning
 //! up disjoint engines.
+//! Hosted roots may attach an [`InvocationRuntime`] for their model, tool, and
+//! middleware surface. It is invocation-local and every hosted child must
+//! inherit it; a missing overlay is rejected rather than falling back to a
+//! child's durable harness.
 //!
 //! Per-tool deadlines are enabled separately from [`RunPolicy`] through
 //! [`AgentHarness::with_tool_timeout_settings`]. Expiry becomes a recoverable

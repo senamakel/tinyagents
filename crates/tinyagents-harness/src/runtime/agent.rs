@@ -463,7 +463,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             // explicit helper records that otherwise non-obvious lifetime
             // relationship at the one boundary where the owned hosted
             // invocation meets the borrowed stream API.
-            inner: Some(unsafe { extend_overlay_stream_lifetime::<State, Ctx>(Box::pin(stream)) }),
+            inner: Some(unsafe { extend_overlay_stream_lifetime(Box::pin(stream)) }),
             runtime,
             cancellation,
             terminal_observer,
@@ -661,7 +661,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
 /// the overlay alongside `inner`, and field order drops `inner` first. The
 /// other borrowed inputs (`&self` and `&State`) already have the public `'a`
 /// lifetime. No reference can escape the private `AgentStream` wrapper.
-unsafe fn extend_overlay_stream_lifetime<'a, State: Send + Sync + 'static, Ctx: Send + Sync>(
+unsafe fn extend_overlay_stream_lifetime<'a>(
     stream: Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + '_>>,
 ) -> Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>> {
     // SAFETY: documented above; the owning Arc is retained by AgentStream.

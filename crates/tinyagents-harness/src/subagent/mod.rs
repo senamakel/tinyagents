@@ -357,6 +357,11 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
                 self.name
             )));
         }
+        let runtime = binding.runtime.clone().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "hosted subagent invocation is missing its parent runtime overlay".into(),
+            )
+        })?;
 
         let events = ctx.events.clone();
         events.emit(AgentEvent::SubAgentStarted {
@@ -367,7 +372,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             binding.host.clone(),
             crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
             ctx,
-            binding.runtime.clone(),
+            Some(runtime),
         );
         // A hosted parent always re-enters through this exact capability
         // bundle. The child harness supplies durable mechanics only; it cannot
