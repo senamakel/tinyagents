@@ -128,7 +128,7 @@ struct PreparedAgentTurn<State: Send + Sync> {
     run_id: crate::ids::RunId,
     input_text: String,
     messages: Vec<tinyinference_llm::message::Message>,
-    progress: Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>>,
+    progress: Option<tokio::sync::mpsc::Sender<ProgressEvent>>,
 }
 
 impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
@@ -363,6 +363,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 host: host.clone(),
                 agent_id: request.agent_id.clone(),
                 model_pin: definition.model,
+                role: definition.role,
                 allowed_tools: definition.tools.into_iter().collect(),
                 progress: progress.clone(),
             },
@@ -440,7 +441,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let Some(progress) = binding.progress else {
             return;
         };
-        let _ = progress.send(event);
+        if progress.try_send(event).is_err() {
+            tinyagents_tracing::debug!(
+                "[host] dropping progress event because the bounded queue is full or closed"
+            );
+        }
     }
 }
 
@@ -452,6 +457,11 @@ fn spawn_host_finalizer<State: Send + Sync + 'static>(
 ) {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.spawn(async move { finish_host_turn(prepared, run, succeeded, error).await });
+    } else {
+        tinyagents_tracing::warn!(
+            run_id = %prepared.run_id,
+            "[host] dropping terminal host bookkeeping because no Tokio runtime is available"
+        );
     }
 }
 
@@ -465,12 +475,12 @@ async fn finish_host_turn<State: Send + Sync>(
     // consumer completely outside the agent's critical path.
     if let Some(progress) = &prepared.progress {
         if let Some(message) = error {
-            let _ = progress.send(ProgressEvent::Error {
+            let _ = progress.try_send(ProgressEvent::Error {
                 run: prepared.run_id.clone(),
                 message,
             });
         } else {
-            let _ = progress.send(ProgressEvent::Finished {
+            let _ = progress.try_send(ProgressEvent::Finished {
                 run: prepared.run_id.clone(),
                 usage: Some(run.usage.usage),
             });
@@ -514,10 +524,12 @@ async fn finish_host_turn<State: Send + Sync>(
 
 fn start_progress_dispatcher(
     sink: Option<std::sync::Arc<dyn crate::host::ProgressSink>>,
-) -> Option<tokio::sync::mpsc::UnboundedSender<ProgressEvent>> {
+) -> Option<tokio::sync::mpsc::Sender<ProgressEvent>> {
     let sink = sink?;
     let handle = tokio::runtime::Handle::try_current().ok()?;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // Progress is observational. Bound it so a slow sink cannot retain every
+    // streamed token; producers use `try_send` and drop overflowed updates.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
     handle.spawn(async move {
         while let Some(event) = rx.recv().await {
             sink.emit(event).await;

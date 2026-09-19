@@ -1153,7 +1153,10 @@ async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
         )
         .await
         .expect("after_tool runs");
-    assert_eq!(result.output(), "abcd");
+    assert_eq!(
+        result.output(),
+        "abcd\ntool result exceeded max_result_bytes (4)"
+    );
     assert_eq!(result.markdown_formatted.as_deref(), Some("abcd"));
     assert!(result.is_error);
 }

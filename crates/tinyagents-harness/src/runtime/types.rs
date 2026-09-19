@@ -44,12 +44,13 @@ pub(crate) struct HostRunBinding<State: Send + Sync> {
     /// Definition-selected pin passed to the host resolver at every provider
     /// call. It is advisory; the host remains the routing authority.
     pub(crate) model_pin: Option<String>,
+    pub(crate) role: Option<String>,
     /// Canonical names the resolved definition authorizes for this exact run.
     /// An empty list retains the legacy unrestricted catalogue; a non-empty
     /// list is a host boundary enforced for schemas and dispatch alike.
     pub(crate) allowed_tools: HashSet<String>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
-    pub(crate) progress: Option<tokio::sync::mpsc::UnboundedSender<crate::host::ProgressEvent>>,
+    pub(crate) progress: Option<tokio::sync::mpsc::Sender<crate::host::ProgressEvent>>,
 }
 
 impl<State: Send + Sync> Clone for HostRunBinding<State> {
@@ -58,6 +59,7 @@ impl<State: Send + Sync> Clone for HostRunBinding<State> {
             host: self.host.clone(),
             agent_id: self.agent_id.clone(),
             model_pin: self.model_pin.clone(),
+            role: self.role.clone(),
             allowed_tools: self.allowed_tools.clone(),
             progress: self.progress.clone(),
         }

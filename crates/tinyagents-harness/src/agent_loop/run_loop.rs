@@ -349,10 +349,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if ctx.depth() == 0 {
                     resolve_request = resolve_request.as_team_lead();
                 }
+                if let Some(role) = host_run.role.clone() {
+                    resolve_request = resolve_request.with_role(role);
+                }
                 if let Some(model_pin) = host_run.model_pin.clone() {
                     resolve_request = resolve_request.with_model_pin(model_pin);
                 }
-                let model = host_run.host.models.resolve(&resolve_request).await?;
+                let model = host_run.host.models.resolve(&resolve_request).await.map_err(|error| {
+                    tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed");
+                    TinyAgentsError::Model("host model resolution failed".to_string())
+                })?;
                 let name = model
                     .profile()
                     .and_then(|profile| profile.model.clone())
@@ -523,7 +529,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let model_started_at_ms = crate::ids::now_ms();
             let record = ctx.emit(AgentEvent::ModelStarted {
                 call_id: call_id.clone(),
-                model: model_name,
+                model: model_name.clone(),
             });
             status.set_last_event(record.id);
 
@@ -557,17 +563,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .await?
                 .into_response();
 
-            status.mark_running(HarnessPhase::Middleware);
-            self.middleware
-                .run_after_model(ctx, state, &mut response)
-                .await?;
-
             // Providers occasionally put a text-dialect call in visible
             // content even when a native tool channel was offered. Use the
             // canonical TinyTools-Agent parser rather than the retired
             // harness prompt parser, and only recover when the provider did
             // not already supply structured calls.
             recover_text_dialect_calls(&mut response, &call_id, request_has_tools);
+
+            status.mark_running(HarnessPhase::Middleware);
+            self.middleware
+                .run_after_model(ctx, state, &mut response)
+                .await?;
 
             // Accounting.
             run.model_calls += 1;
@@ -596,8 +602,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 if !response.served_from_cache
                     && let Some((budget, _permit)) = &host_budget
+                    && let Err(error) = budget.record(&usage).await
                 {
-                    budget.record(&usage).await?;
+                    let record = ctx.emit(AgentEvent::ModelFailed {
+                        call_id: call_id.clone(),
+                        model: model_name.clone(),
+                        started_at_ms: Some(model_started_at_ms),
+                        attempts: None,
+                        error: error.to_string(),
+                    });
+                    status.set_last_event(record.id);
+                    return Err(error);
                 }
             }
             // The permit guards a provider call, not the tools it may request.

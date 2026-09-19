@@ -1386,7 +1386,7 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_differently_hosted_child()
         )
         .await
         .expect_err("parent policy denies the child before its host can run");
-    assert!(error.to_string().contains("not authorized to delegate"));
+    assert_eq!(error.to_string(), "tool error: tool dispatch failed");
     assert!(
         child_model.requests().is_empty(),
         "the differently-hosted child was never allowed to select its own policy"

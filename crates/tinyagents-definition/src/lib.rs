@@ -51,6 +51,9 @@ pub struct AgentDefinition {
     pub name: String,
     /// Concise capability summary for a delegating parent.
     pub description: String,
+    /// Host-defined routing role, when the host classifies this agent.
+    #[serde(default)]
+    pub role: Option<String>,
     /// Preferred model identifier, if this agent pins one.
     #[serde(default)]
     pub model: Option<String>,
@@ -74,6 +77,7 @@ impl AgentDefinition {
             id: id.into(),
             name: name.into(),
             description: description.into(),
+            role: None,
             model: None,
             subagents: Vec::new(),
             tools: Vec::new(),
@@ -106,6 +110,13 @@ impl AgentDefinition {
         S: Into<String>,
     {
         self.tools = tools.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Sets the host-defined routing role.
+    #[must_use]
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
         self
     }
 

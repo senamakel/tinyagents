@@ -744,22 +744,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     reasoning: message_delta.reasoning.clone(),
                     tool_call: message_delta.tool_call.clone(),
                 };
+                self.middleware
+                    .run_on_model_delta(ctx, state, &mut model_delta)
+                    .await?;
+                let forwarded_delta = MessageDelta {
+                    text: model_delta.content.clone(),
+                    reasoning: model_delta.reasoning.clone(),
+                    tool_call: model_delta.tool_call.clone(),
+                };
                 ctx.emit(AgentEvent::ModelDelta {
                     run_id: ctx.config.run_id.clone(),
                     call_id: call_id.clone(),
-                    delta: message_delta,
+                    delta: forwarded_delta,
                 });
                 self.emit_host_progress(
                     ctx.instance_id(),
                     crate::host::ProgressEvent::Token {
                         run: ctx.run_id().clone(),
-                        text: model_delta.content.clone(),
+                        text: model_delta.content,
                     },
                 );
                 *deltas_emitted += 1;
-                self.middleware
-                    .run_on_model_delta(ctx, state, &mut model_delta)
-                    .await?;
             }
 
             accumulator.push(&item);

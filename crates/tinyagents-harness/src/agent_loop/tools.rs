@@ -395,9 +395,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // then returns the value we validate and execute.
         let injected_values = match dispatch.injected_arguments(&canonical_call) {
             Ok(values) => values,
-            Err(error) => {
+            Err(_) => {
                 return Err(TinyAgentsError::Validation(format!(
-                    "failed to prepare injected arguments for tool `{}`: {error}",
+                    "failed to prepare injected arguments for tool `{}`",
                     call.name
                 )));
             }
@@ -1064,7 +1064,9 @@ fn tool_message_from_result(
 /// and a tool failure may be surfaced to the model or an event consumer.
 pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
     match error.downcast::<TinyAgentsError>() {
-        Ok(error) => error,
+        Ok(TinyAgentsError::Cancelled) => TinyAgentsError::Cancelled,
+        Ok(TinyAgentsError::Timeout(message)) => TinyAgentsError::Timeout(message),
+        Ok(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
         Err(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
     }
 }
