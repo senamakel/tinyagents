@@ -34,10 +34,12 @@ use serde_json::json;
 
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventSink, RecordingListener};
-use tinyinference_llm::message::MessageDelta;
+use serde_json::Value;
+use tinyinference_llm::message::{AssistantMessage, MessageDelta};
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem, StreamAccumulator,
 };
+use tinyinference_llm::tool::ToolCall;
 use tinytools::{Tool, ToolResult};
 
 pub use types::*;
