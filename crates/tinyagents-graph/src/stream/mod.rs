@@ -13,16 +13,24 @@
 //! [`GraphEvent`]s into an optional [`GraphEventSink`]; callers can plug in a
 //! [`NoopSink`], a test-friendly [`CollectingSink`], or any custom transport.
 
+pub mod project;
 mod types;
 
-pub use types::{GraphEvent, StreamMode};
+pub use project::project_graph_event;
+pub use types::{GraphEvent, GraphEventEnvelope, StreamMode};
 
 use std::sync::{Arc, Mutex};
 
 /// A pluggable target for low-level graph events.
+///
+/// Every event is delivered wrapped in a [`GraphEventEnvelope`], which
+/// carries the run id, checkpoint namespace, and a monotonic sequence number
+/// alongside the [`GraphEvent`] itself — see [`GraphEventEnvelope`] for what
+/// each field means and how it is scoped.
 pub trait GraphEventSink: Send + Sync {
-    /// Receives one graph event. Implementations must not block the executor.
-    fn emit(&self, event: GraphEvent);
+    /// Receives one enveloped graph event. Implementations must not block the
+    /// executor.
+    fn emit(&self, envelope: GraphEventEnvelope);
 
     /// Blocks until every event emitted so far has been durably handled.
     ///
