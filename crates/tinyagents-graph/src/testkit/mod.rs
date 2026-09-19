@@ -191,7 +191,7 @@ where
 /// value arrives, then emits `on_resume`.
 ///
 /// On an activation with no resume value it returns
-/// [`NodeResult::Interrupt`](crate::NodeResult::Interrupt) carrying
+/// [`NodeResult::Interrupt`] carrying
 /// `payload`; on a resumed activation (a non-empty
 /// [`NodeContext::resume`](crate::NodeContext)) it returns
 /// `NodeResult::Update(on_resume)`. Requires a checkpointer to actually pause
