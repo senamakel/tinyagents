@@ -407,15 +407,16 @@ fn steering_queue_recovers_from_poisoned_lock() {
     assert!(handle.is_empty());
 }
 
-// ── LOOP-8(a): the batch is validated before anything is applied ──────────────
+// ── I-5/M-7: a disallowed command in a batch is rejected individually ─────────
 
 #[test]
-fn a_rejected_command_leaves_no_earlier_command_applied() {
-    // Regression test (LOOP-8a): `apply_pending_steering` drained the whole
-    // batch up front and then validated lazily *while applying*, so a policy
-    // violation at position 2 left commands 0 and 1 already in the transcript,
-    // command 3 silently dropped, and the run erroring. The checkpoint must be
-    // atomic: reject the batch, change nothing.
+fn a_rejected_command_in_a_batch_does_not_drop_the_allowed_ones() {
+    // Regression test (I-5/M-7): `apply_pending_steering` used to validate
+    // the whole drained batch up front and refuse it entirely — including
+    // commands the policy *did* permit — the moment one command in it was
+    // disallowed, and the caller's `?` then killed the run. A command the
+    // policy disallows must be rejected on its own; every allowed command in
+    // the same batch still applies, and the checkpoint does not error.
     let recorder = EventRecorder::new();
     let handle = SteeringHandle::new(
         SteeringPolicy::new()
@@ -426,7 +427,7 @@ fn a_rejected_command_leaves_no_earlier_command_applied() {
     handle.send(SteeringCommand::SetMetadata {
         metadata: serde_json::json!({"tag": "applied"}),
     });
-    // Not allowed → the whole batch must be refused.
+    // Not allowed → rejected individually, the rest of the batch still runs.
     handle.send(SteeringCommand::Cancel);
     handle.send(SteeringCommand::InjectMessage(Message::user("last")));
 
@@ -435,25 +436,40 @@ fn a_rejected_command_leaves_no_earlier_command_applied() {
         .with_steering(handle);
     let mut messages = Vec::new();
 
-    let err = apply_pending_steering(&mut ctx, &mut messages).unwrap_err();
-    assert!(matches!(err, TinyAgentsError::Steering(_)), "got {err:?}");
+    let outcome = apply_pending_steering(&mut ctx, &mut messages).unwrap();
+    assert_eq!(outcome, SteeringOutcome::Continue);
 
-    assert!(
-        messages.is_empty(),
-        "an earlier command in a rejected batch was applied: {messages:?}"
+    assert_eq!(
+        messages,
+        vec![Message::user("first"), Message::user("last")],
+        "allowed commands in the batch should still have applied"
     );
     assert_eq!(
         ctx.config.metadata,
-        serde_json::Value::Null,
-        "metadata was mutated by a rejected batch"
+        serde_json::json!({"tag": "applied"}),
+        "the allowed SetMetadata command should still have applied"
     );
-    // Exactly one event, for the offending command.
+    // Every command gets its own event: accepted, accepted, rejected, accepted.
     assert_eq!(
         recorder.events(),
-        vec![AgentEvent::Steered {
-            command_kind: "cancel".to_string(),
-            accepted: false,
-        }]
+        vec![
+            AgentEvent::Steered {
+                command_kind: "inject_message".to_string(),
+                accepted: true,
+            },
+            AgentEvent::Steered {
+                command_kind: "set_metadata".to_string(),
+                accepted: true,
+            },
+            AgentEvent::Steered {
+                command_kind: "cancel".to_string(),
+                accepted: false,
+            },
+            AgentEvent::Steered {
+                command_kind: "inject_message".to_string(),
+                accepted: true,
+            },
+        ]
     );
 }
 
