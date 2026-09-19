@@ -85,6 +85,7 @@ pub struct EventMapper {
 }
 
 impl EventMapper {
+    /// Creates an empty mapper for a fresh turn.
     pub fn new() -> Self {
         Self::default()
     }
@@ -300,6 +301,9 @@ impl EventMapper {
     }
 }
 
+/// Extracts token counts from a `result` event's `usage` object.
+/// `reasoning_tokens` and `charged_amount_usd` are not part of this payload
+/// and are filled in separately by the caller.
 fn parse_usage(v: &Value) -> UsageInfo {
     let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
     UsageInfo {

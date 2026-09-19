@@ -180,7 +180,7 @@ pub struct NodeDecl {
 /// diagnostic. The AST node exists so the documented grammar still parses (and
 /// so tooling can read the declaration), not because compilation accepts it.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct SteeringDeclPlaceholder {
+pub struct SteeringDecl {
     /// Steering commands a parent orchestrator run may send (`parent allow [...]`).
     pub parent_allow: Vec<String>,
     /// Steering commands a human may send (`human allow [...]`).
