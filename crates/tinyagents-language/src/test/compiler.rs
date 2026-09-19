@@ -124,18 +124,16 @@ fn unknown_next_target_is_a_compile_error() {
 
 #[test]
 fn mixing_next_and_routes_is_a_compile_error() {
-    // M13: the redundant "mixes static routing" check was removed; this is
-    // now reported solely by the `routing_sources` conflict check.
     let src = "graph g { start a node a { next b routes { x -> b } } node b { } }";
     let err = compile(&parse_str(src).unwrap()).unwrap_err();
-    assert!(err.to_string().contains("conflicting routing sources"), "{err}");
+    assert!(err.to_string().contains("mixes static routing"), "{err}");
 }
 
 #[test]
 fn mixing_edge_and_routes_is_a_compile_error() {
     let src = "graph g { start a node a { routes { x -> b } } node b { } a -> b }";
     let err = compile(&parse_str(src).unwrap()).unwrap_err();
-    assert!(err.to_string().contains("conflicting routing sources"), "{err}");
+    assert!(err.to_string().contains("mixes static routing"), "{err}");
 }
 
 #[test]
