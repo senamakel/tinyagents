@@ -646,6 +646,7 @@ where
             state: boundary.state.clone(),
             next_nodes: activation_nodes(boundary.pending),
             completed_tasks: activation_nodes(boundary.completed_tasks),
+            completed_routes: boundary.completed_routes.to_vec(),
             pending_writes: Self::completion_writes(boundary.completed_tasks),
             pending_activations: Some(
                 boundary
