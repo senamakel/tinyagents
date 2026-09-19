@@ -268,9 +268,24 @@ Acceptance criteria:
 Status: partially present.
 
 TinyAgents has `ModelProfile`, including provider, model, modalities, tool
-calling, streaming, structured output, reasoning, and token windows. OpenHuman
-still has provider catalog logic and local model capability inference that drive
-fallback, token budgeting, and routing.
+calling, streaming, structured output, reasoning, and token windows, plus
+behavioral fields (`schema_transform`, `default_structured_mode`,
+`prompted_output_template`, `thinking_tags`, `thinking_level_map`, `compat:
+ProviderCompat`) so an adapter's request/response shaping can be driven by
+data instead of hand-written per-model branches. The registry now owns a
+generator (`cargo run -p tinyagents-registry --bin catalog_gen`) that refreshes
+`crates/tinyagents-registry/model-catalog.snapshot.json` from
+`https://models.dev/api.json` with tiered pricing, and
+`ModelCatalogSnapshot::validate`/`validate_with_providers` reject a malformed
+snapshot (duplicate ids, negative prices, missing source, an output limit
+exceeding the input context, alias collisions, bad dates, and — opt-in — an
+unrecognized provider id) before it is loaded. `ModelRouter` was renamed to
+`WorkloadRouter` (deprecated alias kept) and is now projectable through
+`CapabilityRegistry::route_workload(tier)`. OpenHuman still has provider
+catalog logic and local model capability inference that drive fallback, token
+budgeting, and routing; `ModelCatalog::available_for(auth)` credential-aware
+filtering and the generalized `CredentialStore`/OAuth flow remain OpenHuman's
+to own (credential handling was scoped out of this SDK pass).
 
 Implement:
 
