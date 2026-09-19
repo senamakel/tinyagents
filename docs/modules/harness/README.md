@@ -242,6 +242,7 @@ Feature details:
 - [State graph runtime feature](state-graph.md)
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
+- [Tool execution context and rich returns (B1/B2)](tool-context.md)
 - [Tool exposure, discovery, and schema budgets](tool-discovery.md)
 - [Tool dialects](tool-dialect.md)
 - [Workspace isolation feature](workspace.md)
