@@ -248,6 +248,45 @@ pub struct Checkpoint<State> {
     /// empty set (the pre-field behavior, where arrivals were run-local).
     #[serde(default)]
     pub barrier_arrivals: Vec<BarrierArrivals>,
+    /// Cumulative per-channel version counters as of this boundary (I5/R3):
+    /// name -> a monotonically-increasing count of writes to that channel.
+    ///
+    /// For a [`crate::channel::ChannelState`] graph this is
+    /// [`crate::channel::ChannelState::channel_versions`] verbatim. For a
+    /// plain whole-`State` graph (any other `State` type) it is the single
+    /// entry `{"state": <boundary count>}`, bumped once per checkpoint —
+    /// see `compiled::channel_bookkeeping`, the one function every
+    /// checkpoint-construction call site (a normal superstep boundary,
+    /// `update_state`, `fork_state`) uses to fill this field, so replay and
+    /// a manual write cannot disagree about it.
+    ///
+    /// `#[serde(default)]` for back-compat: a checkpoint written before this
+    /// field existed decodes with it empty.
+    #[serde(default)]
+    pub channel_versions: BTreeMap<String, u64>,
+    /// Per-node snapshot of [`Checkpoint::channel_versions`] as of the last
+    /// time each node ran, keyed by node id string (`NodeId` itself has no
+    /// `Ord` impl to key a `BTreeMap` on). Backs
+    /// [`crate::builder::NodeContext::changed_since_last_run`): a node
+    /// compares its own entry here (what it last observed) against the
+    /// checkpoint's live `channel_versions` (what is current) to tell
+    /// whether a channel changed since it last ran.
+    ///
+    /// `#[serde(default)]` for back-compat.
+    #[serde(default)]
+    pub versions_seen: BTreeMap<String, BTreeMap<String, u64>>,
+    /// Per-step delta-channel write history (I5/R3): for every channel
+    /// registered with [`crate::channel::ChannelSet::with_delta`], the raw
+    /// values written to it *in the step that produced this checkpoint*
+    /// (not cumulative — each checkpoint carries only its own step's
+    /// writes, which is what keeps per-checkpoint size bounded for a
+    /// long-running append channel). Replayed across a thread's lineage by
+    /// [`crate::Checkpointer::delta_history`].
+    ///
+    /// `#[serde(default)]` for back-compat and for every checkpoint of a
+    /// graph that declares no delta-tracked channels (always empty there).
+    #[serde(default)]
+    pub channel_deltas: BTreeMap<String, Vec<serde_json::Value>>,
     /// Free-form metadata (source, step, etc.).
     pub metadata: serde_json::Value,
 
