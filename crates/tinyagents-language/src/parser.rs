@@ -227,8 +227,12 @@ impl Parser<'_> {
 
     fn parse_graph_item(&mut self, graph: &mut GraphDecl) -> Result<()> {
         if self.is_keyword("start") {
+            let span = self.span();
             self.advance();
             let (name, _) = self.expect_ident()?;
+            if graph.start.is_some() {
+                return Err(self.error("duplicate `start` in graph body", span));
+            }
             graph.start = Some(name);
         } else if self.is_keyword("defaults") {
             self.advance();
@@ -240,12 +244,20 @@ impl Parser<'_> {
             self.advance();
             graph.output = self.parse_io_shape_block()?;
         } else if self.is_keyword("checkpoint") {
+            let span = self.span();
             self.advance();
             let (policy, _) = self.expect_ident()?;
+            if graph.checkpoint.is_some() {
+                return Err(self.error("duplicate `checkpoint` in graph body", span));
+            }
             graph.checkpoint = Some(policy);
         } else if self.is_keyword("interrupt") {
+            let span = self.span();
             self.advance();
             let (policy, _) = self.expect_ident()?;
+            if graph.interrupt.is_some() {
+                return Err(self.error("duplicate `interrupt` in graph body", span));
+            }
             graph.interrupt = Some(policy);
         } else if self.is_keyword("channel") {
             graph.channels.push(self.parse_channel()?);
