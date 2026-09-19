@@ -10,14 +10,17 @@ selectors and resume-by-interrupt-id maps, is a **target — not implemented**
 (verified by grep against `crates/tinyagents-graph/src`; see
 `docs/runtime-comparison/plan.md`).
 
-The struct actually shipped today is smaller than the one below — no
-`task_id` or `order` field:
+The struct actually shipped today is smaller than the one below — `id` is a
+bare `String` (not `InterruptId`) and there is no `order` field, but
+`task_id` is now a typed field (R5), stamped by the interrupt boundary with
+the pausing branch's task id:
 
 ```rust
 pub struct Interrupt {
     pub id: String,
     pub node: NodeId,
     pub payload: serde_json::Value,
+    pub task_id: Option<TaskId>,
 }
 ```
 
@@ -52,11 +55,19 @@ Rules (implemented today unless marked target):
 - interrupted executions are returned only after the checkpoint needed for
   resume has been persisted
 - the interrupted node restarts from the beginning
-- **Target (not implemented):** multiple interrupts inside one task are
-  matched by order or interrupt id — today `Interrupt` carries no `order`
-  field and `Command::resume` carries a single `serde_json::Value`, not a map
-- **Target (not implemented):** resume values as a map from interrupt id to
-  value — today `Command::resume(value)` is one value per resume call
+- every branch of a step that interrupts is surfaced (`GraphExecution::interrupts`
+  carries all of them, not just the lowest-index one) — a `Send` fan-out of
+  one node interrupting on several concurrent activations is matched by task
+  id, each stamped onto its own `Interrupt::task_id`, rather than by an
+  `order` field
+- resume values as a map from task id to value: `Command::resume_tasks(..)` /
+  `Command::resume_by_task` deliver a distinct value per interrupted task in
+  one resume call, keyed by `TaskId` — `Command::resume(value)` (one value,
+  fanned to every task named by the checkpoint's stamped `interrupted_nodes`
+  or, absent that, to every pending task) still works and is consulted as the
+  fallback for any task the map does not name
+- **Target (not implemented):** resume values as a map keyed by interrupt id
+  specifically (rather than task id)
 - node code before an interrupt must be deterministic or idempotent
 - side effects before an interrupt must be guarded by idempotency keys
 - **Target (not implemented):** interrupts configured before or after named
