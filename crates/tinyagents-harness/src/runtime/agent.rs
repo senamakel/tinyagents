@@ -747,23 +747,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         request: AgentTurnRequest,
         context: &RunContext<Ctx>,
     ) -> Result<PreparedAgentTurn<State, Ctx>> {
-        let cancellation = context.cancellation.clone();
         let preparation = self.prepare_agent_turn(host, request, context);
-        match self.host_io_budget(context) {
-            Some(remaining) => tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                result = tokio::time::timeout(remaining, preparation) => result.map_err(|_| TinyAgentsError::Timeout(format!(
+        context
+            .bounded(self.host_io_budget(context), preparation, || {
+                format!(
                     "host turn preparation for run `{}` exceeded its remaining wall-clock budget",
                     context.run_id()
-                )))?,
-            },
-            None => tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                result = preparation => result,
-            },
-        }
+                )
+            })
+            .await
     }
 
     /// The wall-clock time left for host I/O (definition lookup, security
