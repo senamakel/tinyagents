@@ -1,0 +1,273 @@
+//! End-to-end coverage for tool dialects through the harness.
+//!
+//! The protocol crate (`tinytools-agent`) owns how a call is rendered and
+//! parsed; these tests pin the *host* half: a native model that narrates a
+//! call as text — in any grammar — still dispatches it with a harness-minted
+//! id; a forced text dialect strips the schemas off the wire and renders the
+//! protocol instead; streamed text never shows tool-call markup to a
+//! consumer; and a P-Format run parses positional calls.
+
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use serde_json::json;
+
+use tinyagents_harness::config::ToolDispatcher;
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::events::{AgentEvent, RecordingListener};
+use tinyagents_harness::middleware::Middleware;
+use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
+use tinyinference_llm::message::{Message, MessageDelta};
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse, ModelStreamItem};
+use tinyinference_llm::providers::MockModel;
+
+struct CaptureMiddleware {
+    listener: Arc<RecordingListener>,
+}
+
+#[async_trait]
+impl Middleware<(), ()> for CaptureMiddleware {
+    fn name(&self) -> &str {
+        "capture"
+    }
+
+    async fn before_agent(
+        &self,
+        ctx: &mut RunContext<()>,
+        _state: &(),
+    ) -> tinyagents_harness::Result<()> {
+        ctx.events.subscribe(self.listener.clone());
+        Ok(())
+    }
+}
+
+/// Every tool-call id the run dispatched, from the tool-started events.
+fn dispatched_ids(listener: &RecordingListener) -> Vec<String> {
+    listener
+        .events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+            AgentEvent::ToolStarted { call_id, .. } => Some(call_id.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A native-profile model that answers with text only, once, then finishes.
+fn narrating_model(text: &str) -> MockModel {
+    MockModel::with_responses(vec![
+        ModelResponse::assistant(text),
+        ModelResponse::assistant("done"),
+    ])
+}
+
+fn harness_with(model: Arc<dyn ChatModel<()>>, listener: &Arc<RecordingListener>) -> AgentHarness<()> {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model)
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }));
+    harness
+}
+
+#[tokio::test]
+async fn a_native_model_narrating_a_call_in_any_grammar_dispatches_it() {
+    for text in [
+        "Let me check. <tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
+        "<｜DSML｜tool_calls><｜DSML｜invoke name=\"lookup\">{\"q\":\"x\"}</｜DSML｜invoke></｜DSML｜tool_calls>",
+        "<｜tool▁call▁begin｜>lookup<｜tool▁sep｜>{\"q\":\"x\"}<｜tool▁call▁end｜>",
+        "<|channel|>commentary to=functions.lookup<|message|>{\"q\":\"x\"}<|call|>",
+        "<tool_call>{\"name\":\"functions.lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
+    ] {
+        let listener = Arc::new(RecordingListener::new());
+        let harness = harness_with(Arc::new(narrating_model(text)), &listener);
+        let run = harness
+            .invoke_default(&(), vec![Message::user("go")])
+            .await
+            .expect("run succeeds");
+        assert_eq!(run.tool_calls, 1, "{text}");
+        let ids = dispatched_ids(&listener);
+        assert_eq!(ids.len(), 1, "{text}");
+        assert!(ids[0].ends_with("-tool-1"), "harness-minted id, got {}: {text}", ids[0]);
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_narrated_tool_is_not_invented_into_a_known_one() {
+    let listener = Arc::new(RecordingListener::new());
+    let harness = harness_with(
+        Arc::new(narrating_model(
+            "<tool_call>{\"name\":\"launch_missiles\",\"arguments\":{}}</tool_call>",
+        )),
+        &listener,
+    );
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run completes under the default unknown-tool policy");
+    assert!(dispatched_ids(&listener).is_empty(), "nothing dispatches");
+    assert!(run.model_calls >= 1);
+}
+
+#[tokio::test]
+async fn a_forced_xml_dialect_renders_the_protocol_and_sends_no_schemas() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
+        "done",
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model.clone(), &listener);
+    harness.with_policy(RunPolicy {
+        tool_dialect: ToolDispatcher::Xml,
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert!(request.tools.is_empty(), "no schema goes on the wire");
+        let system = request
+            .messages
+            .iter()
+            .find(|m| matches!(m, Message::System(_)))
+            .expect("a system turn carries the protocol")
+            .text();
+        assert!(system.contains("## Tool Use Protocol"));
+        assert!(system.contains("**lookup**"));
+    }
+    // The second request replays the call as text and folds the result.
+    let replay = &requests[1];
+    let assistant = replay
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::Assistant(_)))
+        .expect("assistant turn replayed")
+        .text();
+    assert!(assistant.contains("<tool_call>"), "{assistant}");
+    assert!(
+        replay.messages.iter().any(|m| m.text().contains("<tool_result id=")),
+        "results folded into the text envelope"
+    );
+    assert!(!replay.messages.iter().any(|m| matches!(m, Message::Tool(_))));
+}
+
+#[tokio::test]
+async fn a_forced_pformat_dialect_parses_positional_calls() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup[0|needle]</tool_call>",
+        "done",
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(
+            FakeTool::returning("lookup", "tool-output").with_schema(json!({
+                "type": "object",
+                "properties": { "q": { "type": "string" } },
+                "required": ["q"]
+            })),
+        ))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Pformat,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+    let system = model.requests()[0]
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(system.contains("P-Format"), "{system}");
+    assert!(system.contains("lookup[0|<q>]"), "{system}");
+}
+
+/// Middleware recording every visible text delta the harness emits.
+struct DeltaRecorder {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl Middleware<(), ()> for DeltaRecorder {
+    fn name(&self) -> &str {
+        "deltas"
+    }
+
+    async fn on_model_delta(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        delta: &mut tinyagents_harness::middleware::ModelDelta,
+    ) -> tinyagents_harness::Result<()> {
+        self.seen.lock().unwrap().push(delta.content.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn streamed_tool_call_markup_never_reaches_consumers() {
+    let chunks = [
+        "Sure, ",
+        "<tool_",
+        "call>{\"name\":\"lookup\",",
+        "\"arguments\":{\"q\":\"x\"}}</tool_call>",
+        " checking.",
+    ];
+    let full: String = chunks.concat();
+    let mut items = vec![ModelStreamItem::Started];
+    items.extend(
+        chunks
+            .iter()
+            .map(|chunk| ModelStreamItem::MessageDelta(MessageDelta::text(*chunk))),
+    );
+    items.push(ModelStreamItem::Completed(ModelResponse::assistant(full)));
+    // The scripted stream replays the same call every turn; one model call is
+    // enough to observe the dispatch and the scrubbed deltas.
+    let model = Arc::new(StreamingMock::new(items));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model, &listener);
+    harness
+        .push_middleware(Arc::new(DeltaRecorder { seen: seen.clone() }))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let _ = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await;
+
+    let deltas = seen.lock().unwrap().clone();
+    let joined = deltas.concat();
+    assert!(!joined.contains("<tool_call"), "markup leaked: {deltas:?}");
+    assert!(!joined.contains("</tool_call>"), "markup leaked: {deltas:?}");
+    assert!(joined.contains("Sure, "), "{deltas:?}");
+    assert!(joined.contains(" checking."), "{deltas:?}");
+    let ids = dispatched_ids(&listener);
+    assert_eq!(ids.len(), 1, "the scrubbed call still dispatches once");
+    assert!(ids[0].ends_with("-tool-1"));
+}
