@@ -138,10 +138,18 @@ impl<State> SqliteCheckpointer<State> {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn.lock().map_err(|_| {
-            TinyAgentsError::Checkpoint("sqlite checkpointer: connection lock poisoned".to_string())
-        })
+        lock_conn(&self.conn)
     }
+}
+
+/// Locks a checkpointer's shared connection, mapping a poisoned mutex to a
+/// [`TinyAgentsError`]. Free function (rather than a method) so it can be
+/// called from inside a `spawn_blocking` closure that only holds the cloned
+/// `Arc<Mutex<Connection>>`, not `&self`.
+fn lock_conn(conn: &Arc<Mutex<Connection>>) -> Result<std::sync::MutexGuard<'_, Connection>> {
+    conn.lock().map_err(|_| {
+        TinyAgentsError::Checkpoint("sqlite checkpointer: connection lock poisoned".to_string())
+    })
 }
 
 /// Table + indexes. `seq` preserves insertion order; the indexes serve thread
