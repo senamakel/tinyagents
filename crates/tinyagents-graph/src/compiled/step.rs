@@ -5,19 +5,21 @@
 //! [`StepRunner`] drives the active node set's handlers, sequentially or
 //! concurrently, and hands back a [`StepOutcome`] carrying every
 //! `(Activation, Result<NodeResult<Update>>)` pair it actually produced.
-//! [`StepRunner::fold_step`] then folds that outcome into a [`StepRun`] —
-//! the same fold this executor has always done: applied in active-set index
-//! order, stopping at the first error or interrupt.
+//! [`StepRunner::fold_step`] then folds that outcome into a [`StepRun`].
 //!
 //! Running and folding are deliberately kept as separate steps (rather than
 //! folding inline as each branch completes, as the pre-split code did) so a
-//! future change to the fold policy — running every branch of a parallel
-//! step to completion and keeping *all* their results instead of discarding
-//! completed higher-index siblings on an interrupt/failure (see the C1/C2
-//! findings in `docs/runtime-comparison/code-review-graph.md`) touches only
-//! `fold_step`. This PR does not change that policy: `fold_step` still stops
-//! at the first error/interrupt in `outcome.results`, exactly like the
-//! former inline folds did.
+//! change to the fold policy touches only `fold_step`. Per the C1/C2
+//! findings in `docs/runtime-comparison/code-review-graph.md`, `fold_step`
+//! now folds **every** `Ok` result regardless of its position in the active
+//! set: a parallel step always drives every branch to completion
+//! ([`StepRunner::run_parallel`]), so a higher-index branch that completed
+//! before a lower-index one interrupted or failed must not be discarded and
+//! re-run on resume. `fold_step` partitions the step's results into
+//! `completed` (every branch that produced an `Update`/`Command`, in
+//! original active-set-index order) and `stalled` (the branches that
+//! errored or interrupted, which become the boundary's `pending` set) —
+//! see [`StepRun`].
 
 use super::*;
 
