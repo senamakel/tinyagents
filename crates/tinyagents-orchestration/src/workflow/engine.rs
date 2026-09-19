@@ -450,19 +450,24 @@ where
                     &mut phase_states,
                     "workflow interrupted; phase will retry on resume",
                 );
-                if let Err(error) = self.persist(
-                    &run,
-                    PersistRequest {
-                        phase_states,
-                        child_run_ids: run.child_run_ids.clone(),
-                        status: WorkflowRunStatus::Interrupted,
-                        summary: None,
-                        terminal: false,
-                    },
-                    &owner,
-                ) {
-                    if self.owner_lost(run_id, &owner)
-                        || self.emit_recorded_terminal(run_id, total_spawned as usize)
+                if let Err(error) = self
+                    .persist(
+                        &run,
+                        PersistRequest {
+                            phase_states,
+                            child_run_ids: run.child_run_ids.clone(),
+                            status: WorkflowRunStatus::Interrupted,
+                            summary: None,
+                            terminal: false,
+                        },
+                        &owner,
+                    )
+                    .await
+                {
+                    if self.owner_lost(run_id, &owner).await
+                        || self
+                            .emit_recorded_terminal(run_id, total_spawned as usize)
+                            .await
                     {
                         return Ok(());
                     }
