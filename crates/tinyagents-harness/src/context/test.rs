@@ -425,3 +425,35 @@ fn token_estimation_includes_json_user_blocks() {
         3
     );
 }
+
+#[test]
+fn token_estimation_includes_structured_blocks_for_every_role() {
+    use tinyinference_llm::message::{
+        AssistantMessage, ContentBlock, Message, SystemMessage, ToolMessage, UserMessage,
+    };
+    let json = serde_json::json!({"payload": "one two"});
+    let messages = vec![
+        Message::System(SystemMessage {
+            content: vec![ContentBlock::ProviderExtension(json.clone())],
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Json(json.clone())],
+        }),
+        Message::Assistant(AssistantMessage {
+            id: None,
+            content: vec![ContentBlock::ProviderExtension(json.clone())],
+            tool_calls: vec![],
+            usage: None,
+        }),
+        Message::Tool(ToolMessage {
+            tool_call_id: "call".into(),
+            content: vec![ContentBlock::Json(json)],
+            trusted_verbatim: false,
+            artifact: None,
+        }),
+    ];
+    assert_eq!(
+        estimate_context_tokens(&messages, |text| text.split_whitespace().count()),
+        8
+    );
+}

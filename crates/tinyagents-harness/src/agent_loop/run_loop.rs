@@ -347,55 +347,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // same-id concurrent runs from borrowing each other's model.
             let binding = if let Some(binding) = self.resolve_host_model(ctx, &request).await? {
                 binding
-            } else if let Some(host_run) = self.host_run_binding(ctx.instance_id())? {
-                let mut resolve_request =
-                    crate::host::ModelResolveRequest::new(host_run.agent_id.clone());
-                if ctx.depth() == 0 {
-                    resolve_request = resolve_request.as_team_lead();
-                }
-                if let Some(role) = host_run.role.clone() {
-                    resolve_request = resolve_request.with_role(role);
-                }
-                if let Some(model_pin) = host_run.model_pin.clone() {
-                    resolve_request = resolve_request.with_model_pin(model_pin);
-                }
-                if let Some(capabilities) = request.required_capabilities.clone() {
-                    resolve_request = resolve_request.with_required_capabilities(capabilities);
-                }
-                let resolve = host_run.host.models.resolve(&resolve_request);
-                let model = match ctx.remaining_wall_clock() {
-                    Some(remaining) => tokio::select! {
-                        _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                        resolved = tokio::time::timeout(remaining, resolve) => resolved
-                            .map_err(|_| TinyAgentsError::Timeout(format!(
-                                "host model resolution for run `{}` exceeded its remaining wall-clock deadline",
-                                ctx.run_id()
-                            )))?,
-                    },
-                    None => tokio::select! {
-                        _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                        resolved = resolve => resolved,
-                    },
-                }
-                .map_err(|error| match error {
-                    TinyAgentsError::Timeout(_) => error,
-                    _ => {
-                        tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed");
-                        TinyAgentsError::Model("host model resolution failed".to_string())
-                    }
-                })?;
-                let name = model
-                    .profile()
-                    .and_then(|profile| profile.model.clone())
-                    .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
-                ResolvedModelBinding {
-                    resolved: tinyinference_llm::model::ResolvedModel {
-                        name,
-                        requested: host_run.model_pin,
-                        source: tinyinference_llm::model::ModelResolutionSource::AgentDefault,
-                    },
-                    model,
-                }
             } else {
                 self.models
                     .resolve_request(&request, None, None)

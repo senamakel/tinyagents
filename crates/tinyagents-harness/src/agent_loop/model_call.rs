@@ -45,10 +45,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let resolution = host_run.host.models.resolve(&resolve);
         let model = match self.call_budget(ctx) {
             Some(remaining) => tokio::select! {
+                biased;
                 _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
                 result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its remaining wall-clock budget", ctx.run_id())))?,
             },
             None => tokio::select! {
+                biased;
                 _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
                 result = resolution => result,
             },
