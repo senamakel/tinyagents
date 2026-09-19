@@ -1064,13 +1064,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 response.message.content = content;
             }
             if let ModelStreamItem::Completed(response) = &mut item
-                && response.message.tool_calls.is_empty()
                 && text_scrubber
                     .as_ref()
                     .is_some_and(super::dialect::DeltaScrubber::has_calls)
                 && let Some(scrubber) = text_scrubber.take()
             {
-                response.message.tool_calls = scrubber.into_calls();
+                // The streamed text held complete tool-call blocks, scrubbed
+                // from the reconciled text above, so this is the only place
+                // they can be dispatched from. Appended, not assigned: a
+                // provider can legitimately return a native structured call
+                // *and* narrate a second one as text in the same turn, and
+                // gating this on `tool_calls.is_empty()` used to silently
+                // drop the narrated one whenever a native call was present.
+                response.message.tool_calls.extend(scrubber.into_calls());
             }
             if let ModelStreamItem::Completed(response) = &mut item
                 && saw_tool_delta
