@@ -65,10 +65,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolSet<State, Ctx> for RenamedToolSe
 
     async fn call(&self, name: &str, args: Value, ctx: &RunContext<Ctx>) -> Result<ToolResult> {
         let declared = self.declared_name(name);
-        // Confirm the declared name is one the inner toolset (still) exposes
-        // this turn, so a stale rename target does not silently reach it.
-        let exposed = self.inner.tools(ctx).await?;
-        if !exposed.iter().any(|tool| tool.name() == declared) {
+        // Confirm `name` is one this wrapper currently advertises, so an
+        // un-renamed original name (or a stale rename target) does not
+        // silently reach the inner toolset.
+        let exposed = self.tools(ctx).await?;
+        if !exposed.iter().any(|tool| tool.name() == name) {
             return Err(TinyAgentsError::ToolNotFound(name.to_string()));
         }
         self.inner.call(&declared, args, ctx).await
