@@ -42,6 +42,13 @@ pub enum GraphEvent {
         /// Rendered error.
         error: String,
     },
+    /// The run was cooperatively cancelled via a [`tinyagents_harness::CancellationToken`]
+    /// (I4 part 2), either between supersteps or while a superstep's node
+    /// handlers were still in flight.
+    RunCancelled {
+        /// The run that was cancelled.
+        run_id: RunId,
+    },
     /// A superstep started with the given active node set.
     StepStarted {
         /// 1-based step number.
