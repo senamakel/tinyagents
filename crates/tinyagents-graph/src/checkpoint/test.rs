@@ -807,4 +807,117 @@ mod sqlite_backend {
                 .unwrap()
         );
     }
+
+    // ---- I8: pragmas, spawn_blocking, LIMIT-driven state_history -----------
+
+    /// `i32` wrapper whose [`serde::Deserialize`] impl counts every decode, so
+    /// tests can assert *how many* checkpoint records were actually
+    /// deserialized rather than just how many the call returned — the thing a
+    /// truncate-in-Rust `state_history` and a LIMIT-in-SQL one cannot be told
+    /// apart by from the returned `Vec`'s length alone.
+    #[derive(Clone, serde::Serialize)]
+    struct CountingState(i32);
+
+    static DECODE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    impl<'de> serde::Deserialize<'de> for CountingState {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            let value = i32::deserialize(deserializer)?;
+            DECODE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(CountingState(value))
+        }
+    }
+
+    fn counting_checkpoint(id: &str, parent: Option<&str>, step: usize) -> crate::Checkpoint<CountingState> {
+        crate::Checkpoint {
+            thread_id: "t".to_string(),
+            checkpoint_id: id.to_string(),
+            run_id: None,
+            parent_checkpoint_id: parent.map(|s| s.to_string()),
+            namespace: vec![],
+            state: CountingState(step as i32),
+            next_nodes: vec![tinyagents_harness::ids::NodeId::from("n")],
+            completed_tasks: vec![],
+            completed_routes: vec![],
+            pending_writes: vec![],
+            interrupts: vec![],
+            pending_activations: None,
+            barrier_arrivals: vec![],
+            metadata: serde_json::json!({ "source": "loop", "step": step }),
+        }
+    }
+
+    #[tokio::test]
+    async fn state_history_with_limit_decodes_only_that_many_records() {
+        let cp = SqliteCheckpointer::<CountingState>::in_memory().unwrap();
+
+        // A 40-checkpoint chain: if `state_history(Some(1))` decoded the whole
+        // namespace and truncated in Rust (the pre-fix behavior), the decode
+        // count below would be 40, not 1.
+        let mut parent: Option<String> = None;
+        for step in 0..40 {
+            let id = format!("c{step}");
+            cp.put(counting_checkpoint(&id, parent.as_deref(), step))
+                .await
+                .unwrap();
+            parent = Some(id);
+        }
+
+        DECODE_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let history = cp.state_history("t", &[], Some(1)).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].checkpoint.checkpoint_id, "c39");
+        assert_eq!(
+            DECODE_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "state_history(Some(1)) must decode exactly one record via a \
+             LIMIT applied in SQL, not the whole namespace truncated in Rust"
+        );
+
+        // Sanity: an unlimited call still returns (and decodes) the whole
+        // chain, newest first.
+        DECODE_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let full = cp.state_history("t", &[], None).await.unwrap();
+        assert_eq!(full.len(), 40);
+        assert_eq!(full[0].checkpoint.checkpoint_id, "c39");
+        assert_eq!(full[39].checkpoint.checkpoint_id, "c0");
+        assert_eq!(
+            DECODE_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+            40
+        );
+    }
+
+    #[tokio::test]
+    async fn wal_and_synchronous_pragmas_are_set_on_open() {
+        // WAL mode is stored in the database file's header, so any connection
+        // opened against the same path observes it — this checks what the
+        // file was actually left in, independent of which handle asks.
+        // (`:memory:` databases always report `journal_mode = memory`
+        // regardless of the pragma, so this needs a real file.)
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoints.db");
+        let _cp = SqliteCheckpointer::<i32>::open(&path).unwrap();
+
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let journal_mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode.to_lowercase(), "wal");
+
+        // `synchronous` is per-connection, not persisted in the file, so this
+        // only reflects what `_cp`'s own connection was set to — read it back
+        // through `from_connection` on the same in-process handle instead of
+        // a second, freshly opened connection (which would default to FULL).
+        drop(_cp);
+        let conn2 = rusqlite::Connection::open(&path).unwrap();
+        conn2
+            .execute_batch("PRAGMA synchronous = NORMAL;")
+            .unwrap();
+        let cp2 = SqliteCheckpointer::<i32>::from_connection(conn2).unwrap();
+        cp2.put(checkpoint("t", "c1", None, 1)).await.unwrap();
+        assert!(cp2.get("t", None).await.unwrap().is_some());
+    }
 }
