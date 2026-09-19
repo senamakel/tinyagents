@@ -250,17 +250,43 @@ pub struct PauseState {
 /// The handle is std-only — it carries no async runtime dependency. Delivery is
 /// pull-based: enqueued commands become visible to the loop on its next
 /// checkpoint, never mid-stream.
+///
+/// # Routing
+///
+/// A plain `clone()` is a bare alias: it shares this handle's identity
+/// (`run_id`/`is_root`) as well as its queue, so it drains exactly the same
+/// commands this handle would. When a run spawns a child,
+/// [`crate::context::RunContext::child`] calls [`SteeringHandle::for_child`]
+/// (not `clone`) so the child only drains commands addressed to it or to
+/// [`SteeringTarget::All`] — see that method's docs.
 #[derive(Clone)]
 pub struct SteeringHandle {
     pub(crate) inner: Arc<SteeringInner>,
+    /// The identity of the run *this handle instance* drains for.
+    pub(crate) run_id: RunId,
+    /// Whether `run_id` is the root of the steering tree, for matching
+    /// [`SteeringTarget::Root`].
+    pub(crate) is_root: bool,
+    /// This handle's own pause/checkpoint state. Deliberately **not** shared
+    /// with a parent/child handle derived via [`SteeringHandle::for_child`]:
+    /// a pause addressed to one run must not latch every run sharing the
+    /// underlying queue.
+    pub(crate) local: Arc<SteeringLocal>,
 }
 
-/// Shared interior of a [`SteeringHandle`].
+/// Shared interior of a [`SteeringHandle`]: the queue and policy every level
+/// of a steering tree drains from.
 pub(crate) struct SteeringInner {
-    /// FIFO queue of pending commands.
-    pub(crate) queue: Mutex<VecDeque<SteeringCommand>>,
+    /// FIFO queue of pending, addressed commands.
+    pub(crate) queue: Mutex<VecDeque<(SteeringTarget, SteeringCommand)>>,
     /// The allowlist gating which drained commands may be applied.
     pub(crate) policy: SteeringPolicy,
+}
+
+/// Per-run steering state: **not** shared across a [`SteeringHandle::for_child`]
+/// boundary, so a pause or checkpoint count is scoped to the run it belongs to.
+#[derive(Default)]
+pub(crate) struct SteeringLocal {
     /// The latched pause, if one is in effect. Survives across checkpoints so a
     /// [`SteeringCommand::Resume`] delivered in a *later* batch can lift it.
     pub(crate) paused: Mutex<Option<PauseState>>,
