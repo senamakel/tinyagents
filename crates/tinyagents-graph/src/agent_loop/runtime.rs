@@ -289,8 +289,14 @@ where
     let mut request = request;
     rt.harness
         .middleware()
-        .run_before_model(&mut ctx_guard, &rt.app_state, &mut request)
+        .run_before_model(&mut ctx_guard, rt.app_state, &mut request)
         .await?;
+
+    let started_record = ctx_guard.emit(AgentEvent::ModelStarted {
+        call_id: call_id.clone(),
+        model: model_name.clone(),
+    });
+    status_guard.set_last_event(started_record.id);
 
     let base = DirectModelBase {
         model: binding.model.as_ref(),
@@ -298,7 +304,7 @@ where
     let (mut response, wrap_control) = rt
         .harness
         .middleware()
-        .run_wrapped_model(&mut ctx_guard, &rt.app_state, request, &base)
+        .run_wrapped_model(&mut ctx_guard, rt.app_state, request, &base)
         .await?
         .into_response_with_control();
     if let Some(control) = wrap_control {
@@ -315,8 +321,17 @@ where
 
     rt.harness
         .middleware()
-        .run_after_model(&mut ctx_guard, &rt.app_state, &mut response)
+        .run_after_model(&mut ctx_guard, rt.app_state, &mut response)
         .await?;
+
+    let completed_record = ctx_guard.emit(AgentEvent::ModelCompleted {
+        call_id: call_id.clone(),
+        started_at_ms: None,
+        usage: response.usage,
+        input: None,
+        output: None,
+    });
+    status_guard.set_last_event(completed_record.id);
 
     loop_state.model_calls = run_guard.model_calls;
     loop_state.last_call_id = Some(call_id.to_string());
