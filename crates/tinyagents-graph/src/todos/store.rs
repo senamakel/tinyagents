@@ -1,5 +1,5 @@
 //! CRUD for the per-thread task board, on the harness
-//! [`Store`](tinyagents_harness::store::Store).
+//! [`Store`].
 //!
 //! Each thread's board is a single serialized [`TaskBoard`] value under the
 //! [`TODOS_NAMESPACE`] namespace, keyed by the hex-encoded thread id. Every
