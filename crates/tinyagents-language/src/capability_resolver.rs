@@ -413,16 +413,49 @@ impl CapabilityResolver {
     ///
     /// # Errors
     ///
-    /// Returns [`TinyAgentsError::Compile`] for an unknown node kind, and
-    /// [`TinyAgentsError::Capability`] for the first unregistered model, tool,
-    /// subgraph, router, agent, script, or reducer reference.
+    /// Returns [`TinyAgentsError::Diagnostics`] carrying every unresolved
+    /// reference and unknown node kind (not just the first), rendered through
+    /// [`Blueprint::provenance`] spans when the blueprint was compiled with
+    /// provenance tracking, or a span-less position otherwise.
     pub fn bind_blueprint(&self, blueprint: &Blueprint) -> Result<()> {
+        let diagnostics = self.bind_blueprint_diagnostics(blueprint);
+        if diagnostics.is_empty() {
+            Ok(())
+        } else {
+            Err(into_diagnostics_error(diagnostics, None))
+        }
+    }
+
+    /// Runs the same checks as [`bind_blueprint`](Self::bind_blueprint), but
+    /// collects *every* offending reference and node kind instead of stopping
+    /// at the first, so a caller (or `bind_blueprint` itself) can surface them
+    /// together.
+    ///
+    /// An empty result means every reference resolves and every node kind is
+    /// allowed.
+    pub fn bind_blueprint_diagnostics(&self, blueprint: &Blueprint) -> Vec<Diagnostic> {
+        let span_for = |name: &str| -> Span {
+            blueprint
+                .provenance()
+                .and_then(|p| p.node_span(name))
+                .unwrap_or_else(|| Span::new(0, 0))
+        };
+        let mut out = Vec::new();
+
         for node in &blueprint.nodes {
             if !self.node_kind_allowed(&node.kind) {
-                return Err(TinyAgentsError::Compile(format!(
-                    "node `{}` has unknown kind `{}`",
-                    node.name, node.kind
-                )));
+                out.push(
+                    Diagnostic::error(
+                        format!("node `{}` has unknown kind `{}`", node.name, node.kind),
+                        span_for(&node.name),
+                    )
+                    .with_code(CODE_INVALID_NODE_KIND)
+                    .with_primary_label("not an allowed node kind"),
+                );
+                // The kind drives which reference is checked below; an
+                // unknown kind falls through to a model check, mirroring the
+                // compiler default, so the loop still validates whatever
+                // reference the node otherwise carries instead of skipping it.
             }
 
             // Prefer the dedicated `graph "name"` reference, falling back to the
@@ -436,12 +469,19 @@ impl CapabilityResolver {
                 node.script.as_deref(),
             ) && !self.reference_allowed(reference.class, reference.target)
             {
-                return Err(TinyAgentsError::Capability(format!(
-                    "node `{}` references unknown {} `{}`",
-                    node.name,
-                    reference.class.word(),
-                    reference.target
-                )));
+                out.push(
+                    Diagnostic::error(
+                        format!(
+                            "node `{}` references unknown {} `{}`",
+                            node.name,
+                            reference.class.word(),
+                            reference.target
+                        ),
+                        span_for(&node.name),
+                    )
+                    .with_code(code_for(reference.class))
+                    .with_primary_label(format!("{} not registered or not allowed", reference.class.word())),
+                );
             }
 
             if let Some(model) = Self::secondary_model_reference(
@@ -450,32 +490,50 @@ impl CapabilityResolver {
                 node.subgraph.is_some(),
             ) && !self.model_allowed(model)
             {
-                return Err(TinyAgentsError::Capability(format!(
-                    "node `{}` references unknown model `{}`",
-                    node.name, model
-                )));
+                out.push(
+                    Diagnostic::error(
+                        format!("node `{}` references unknown model `{}`", node.name, model),
+                        span_for(&node.name),
+                    )
+                    .with_code(CODE_UNKNOWN_MODEL)
+                    .with_primary_label("model not registered or not allowed"),
+                );
             }
 
             for tool in &node.tools {
                 if !self.tool_allowed(tool) {
-                    return Err(TinyAgentsError::Capability(format!(
-                        "node `{}` references unknown tool `{tool}`",
-                        node.name
-                    )));
+                    out.push(
+                        Diagnostic::error(
+                            format!("node `{}` references unknown tool `{tool}`", node.name),
+                            span_for(&node.name),
+                        )
+                        .with_code(CODE_UNKNOWN_TOOL)
+                        .with_primary_label("tool not registered or not allowed"),
+                    );
                 }
             }
         }
 
         for channel in &blueprint.channels {
             if !self.reducer_allowed(&channel.reducer) {
-                return Err(TinyAgentsError::Capability(format!(
-                    "channel `{}` references unknown reducer `{}`",
-                    channel.name, channel.reducer
-                )));
+                out.push(
+                    Diagnostic::error(
+                        format!(
+                            "channel `{}` references unknown reducer `{}`",
+                            channel.name, channel.reducer
+                        ),
+                        blueprint
+                            .provenance()
+                            .and_then(|p| p.channel_span(&channel.name))
+                            .unwrap_or_else(|| Span::new(0, 0)),
+                    )
+                    .with_code(CODE_UNKNOWN_REDUCER)
+                    .with_primary_label("reducer not registered or not allowed"),
+                );
             }
         }
 
-        Ok(())
+        out
     }
 }
 
