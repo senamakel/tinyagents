@@ -3528,7 +3528,7 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
     );
 
     let before = cp.get("t-send-update", None).await.unwrap().unwrap();
-    let before_pending = before.pending_activations.clone().unwrap_or_default();
+    let before_pending = before.tasks.clone();
     assert_eq!(
         before_pending
             .iter()
@@ -3536,14 +3536,13 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
             .filter_map(|a| a.send_arg.as_ref().and_then(|v| v.as_i64()))
             .collect::<Vec<_>>(),
         vec![1],
-        "only the genuinely-interrupted arg-1 worker is pending, got {:?}",
-        before_pending
+        "only the genuinely-interrupted arg-1 worker is pending, got {before_pending:?}"
     );
     assert_eq!(
         before
-            .completed_tasks
+            .completed
             .iter()
-            .filter(|n| n.as_str() == "worker")
+            .filter(|c| c.node.as_str() == "worker")
             .count(),
         2,
         "the two completed workers are recorded as completed, not pending"
@@ -3554,10 +3553,7 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
         .await
         .unwrap();
     let written = cp.get("t-send-update", None).await.unwrap().unwrap();
-    let pending = written
-        .pending_activations
-        .clone()
-        .expect("an attributed write must persist the merged activations");
+    let pending = written.tasks.clone();
     let args: Vec<i64> = pending
         .iter()
         .filter(|a| a.node.as_str() == "worker")
@@ -3577,11 +3573,6 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
     assert!(
         pending.iter().any(|a| a.node.as_str() == "tail"),
         "the attributed node's successor is scheduled alongside it"
-    );
-    assert_eq!(
-        pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
-        written.next_nodes,
-        "pending activations and next nodes must describe the same schedule"
     );
 }
 
