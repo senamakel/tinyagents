@@ -22,6 +22,10 @@ pub fn resolve_keyed_transcript_path(workspace_dir: &Path, stem: &str) -> Result
     resolve_keyed_transcript_path_in_dir(&raw_dir, stem)
 }
 
+/// Like [`resolve_keyed_transcript_path`], but takes the raw session
+/// directory directly rather than deriving it from a workspace root — the
+/// seam tests use to point at a tempdir without going through the full
+/// `{workspace}/session_raw` layout.
 pub fn resolve_keyed_transcript_path_in_dir(raw_dir: &Path, stem: &str) -> Result<PathBuf> {
     fs::create_dir_all(raw_dir)
         .with_context(|| format!("create session_raw dir {}", raw_dir.display()))?;
