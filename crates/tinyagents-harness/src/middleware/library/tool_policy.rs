@@ -517,4 +517,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for HumanAppro
         }
         Ok(())
     }
+
+    /// Control-outcome override (A1): a flagged, unapproved call now requests
+    /// [`MiddlewareControl::Interrupt`] instead of erroring the run out
+    /// directly. The agent loop drains the request at its next safe
+    /// checkpoint — the same place any other interrupt is honored — and
+    /// surfaces the identical [`TinyAgentsError::Interrupted`], so callers
+    /// driving the harness through the ordinary loop see no behavior change;
+    /// what changes is that the interrupt is now expressed in the shared
+    /// control vocabulary a durable HITL host can also inspect via
+    /// [`RunContext::take_control`][crate::context::RunContext::take_control]
+    /// before it is drained, rather than only as a thrown error.
+    async fn before_tool_control(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        call: &mut ToolCall,
+    ) -> Result<MiddlewareControl> {
+        if self.flagged.contains(&call.name) {
+            let approved = self
+                .approve
+                .as_ref()
+                .map(|approve| approve(call))
+                .unwrap_or(false);
+            if !approved {
+                return Ok(MiddlewareControl::Interrupt {
+                    node: "tool".to_string(),
+                    message: format!("tool `{}` requires human approval", call.name),
+                });
+            }
+        }
+        Ok(MiddlewareControl::Continue)
+    }
 }
