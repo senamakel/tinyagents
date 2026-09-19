@@ -2557,7 +2557,6 @@ impl Middleware<(), ()> for RewriteToolDelta {
         ));
         Ok(())
     }
-    ..Default::default()
 }
 
 #[tokio::test]
