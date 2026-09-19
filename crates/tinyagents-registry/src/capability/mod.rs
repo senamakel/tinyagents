@@ -553,6 +553,84 @@ impl<State: Send + Sync> Default for CapabilityRegistry<State> {
     }
 }
 
+// ===========================================================================
+// tinyagents_definition::DefinitionRegistry bridge
+// ===========================================================================
+//
+// `HostCapabilities.definitions: Arc<dyn DefinitionRegistry>` is a required
+// async host capability, while `CapabilityRegistry::register_agent` stores
+// the same `AgentDefinition` synchronously — before this bridge, nothing
+// implemented `DefinitionRegistry` for `CapabilityRegistry`, so a host that
+// registered agents in the registry had to build a second, separately
+// populated `InMemoryDefinitionRegistry` by hand (see W-I9 in
+// `docs/runtime-comparison/code-review-workspace.md`).
+//
+// This is written out by hand, matching the exact signature the
+// `#[async_trait]` macro in `tinyagents-definition` expands
+// `DefinitionRegistry`'s methods to, instead of applying `#[async_trait]`
+// here: `tinyagents-registry` only has `async-trait` as a *dev*-dependency
+// (used by its own tests), so the macro is unavailable to non-test library
+// code without adding it as a normal dependency — a `Cargo.toml` edit outside
+// this change's file boundary while other in-flight work owns the manifests.
+impl<State: Send + Sync> tinyagents_definition::DefinitionRegistry for CapabilityRegistry<State> {
+    fn resolve<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        id: &'life1 str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = tinyagents_definition::Result<
+                        Option<tinyagents_definition::AgentDefinition>,
+                    >,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { Ok(self.agent(id).cloned()) })
+    }
+
+    fn list<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = tinyagents_definition::Result<Vec<tinyagents_definition::AgentDefinition>>,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { Ok(self.agents.values().cloned().collect()) })
+    }
+
+    fn delegates_for<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        id: &'life1 str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = tinyagents_definition::Result<Vec<String>>> + Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move {
+            Ok(self
+                .agent(id)
+                .map(|definition| definition.subagents.clone())
+                .unwrap_or_default())
+        })
+    }
+}
+
 impl<State: Send + Sync> std::fmt::Debug for CapabilityRegistry<State> {
     /// Renders the registered names per kind. Executable model/tool handles are
     /// opaque trait objects, so only their names appear.
