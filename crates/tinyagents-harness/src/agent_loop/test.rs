@@ -1208,7 +1208,7 @@ async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allow
 /// capability-specific patch wiring is needed.
 #[tokio::test]
 async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patches_the_transcript()
- {
+{
     let profile = ModelProfile {
         tool_calling: true,
         mid_conversation_system_messages: true,
@@ -1307,7 +1307,10 @@ async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patc
         .iter()
         .map(|schema| schema.name.as_str())
         .collect();
-    assert_eq!(turn1_added, vec![crate::capability::LOAD_CAPABILITY_TOOL_NAME]);
+    assert_eq!(
+        turn1_added,
+        vec![crate::capability::LOAD_CAPABILITY_TOOL_NAME]
+    );
     assert!(
         !turn1_added.contains(&"advanced-tool"),
         "the deferred capability's tool must not be advertised before load_capability runs"
@@ -1337,7 +1340,10 @@ async fn defer_loading_capability_is_exposed_only_after_load_capability_and_patc
     names.sort();
     assert_eq!(
         names,
-        vec!["advanced-tool", crate::capability::LOAD_CAPABILITY_TOOL_NAME]
+        vec![
+            "advanced-tool",
+            crate::capability::LOAD_CAPABILITY_TOOL_NAME
+        ]
     );
 }
 

@@ -276,7 +276,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ///   capability's set fields win over an earlier one's.
     ///
     /// Returns `&mut Self` for chaining.
-    pub fn with_capability(&mut self, capability: crate::capability::Capability<State, Ctx>) -> &mut Self
+    pub fn with_capability(
+        &mut self,
+        capability: crate::capability::Capability<State, Ctx>,
+    ) -> &mut Self
     where
         State: 'static,
         Ctx: 'static,
@@ -292,7 +295,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         self.capabilities.push(capability);
 
-        let capability_toolset = crate::capability::CapabilityToolSet::new(self.capabilities.clone());
+        let capability_toolset =
+            crate::capability::CapabilityToolSet::new(self.capabilities.clone());
 
         // The `load_capability` tool needs no `RunContext`/`State` to run, so
         // it is registered directly into `self.tools` — the one part of a

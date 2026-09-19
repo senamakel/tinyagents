@@ -132,8 +132,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> Capability<State, Ctx> {
     /// Returns [`TinyAgentsError::Capability`] if `value` does not match the
     /// spec shape, or if `name` is missing or blank.
     pub fn from_spec(value: Value) -> Result<Self> {
-        let spec: CapabilitySpec = serde_json::from_value(value)
-            .map_err(|err| TinyAgentsError::Capability(format!("invalid capability spec: {err}")))?;
+        let spec: CapabilitySpec = serde_json::from_value(value).map_err(|err| {
+            TinyAgentsError::Capability(format!("invalid capability spec: {err}"))
+        })?;
         if spec.name.trim().is_empty() {
             return Err(TinyAgentsError::Capability(
                 "capability spec is missing a non-blank `name`".to_string(),
@@ -172,14 +173,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> Capability<State, Ctx> {
             instructions: self.instructions.clone(),
             exposure: self.exposure.into(),
             defer_loading: self.defer_loading,
-            model_defaults: self.model_defaults.as_ref().map(|defaults| ModelDefaultsSpec {
-                response_format: defaults.default_response_format.clone(),
-                fallback_models: defaults
-                    .fallback
-                    .as_ref()
-                    .map(|fallback| fallback.models.clone())
-                    .unwrap_or_default(),
-            }),
+            model_defaults: self
+                .model_defaults
+                .as_ref()
+                .map(|defaults| ModelDefaultsSpec {
+                    response_format: defaults.default_response_format.clone(),
+                    fallback_models: defaults
+                        .fallback
+                        .as_ref()
+                        .map(|fallback| fallback.models.clone())
+                        .unwrap_or_default(),
+                }),
         };
         serde_json::to_value(spec).expect("CapabilitySpec always serializes")
     }

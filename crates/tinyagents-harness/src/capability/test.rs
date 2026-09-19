@@ -211,7 +211,11 @@ async fn no_load_capability_tool_when_nothing_defers() {
     let toolset = CapabilityToolSet::new(vec![capability]);
 
     let tools = toolset.tools(&ctx()).await.expect("tools resolve");
-    assert!(!tools.iter().any(|tool| tool.name() == LOAD_CAPABILITY_TOOL_NAME));
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.name() == LOAD_CAPABILITY_TOOL_NAME)
+    );
 }
 
 #[test]
