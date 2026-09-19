@@ -1260,11 +1260,13 @@ async fn interrupted_and_uninterrupted_runs_reach_the_same_state() {
     let baseline_hi = Arc::new(AtomicUsize::new(0));
     let baseline_lo = Arc::new(AtomicUsize::new(0));
     let baseline_y = Arc::new(AtomicUsize::new(0));
+    let baseline_y_observed = Arc::new(std::sync::atomic::AtomicI32::new(-1));
     let baseline_graph = build(
         false,
         baseline_hi.clone(),
         baseline_lo.clone(),
         baseline_y.clone(),
+        baseline_y_observed.clone(),
     );
     let baseline = baseline_graph
         .run(Counter {
