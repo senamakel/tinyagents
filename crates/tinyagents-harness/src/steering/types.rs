@@ -15,7 +15,28 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ids::RunId;
 use tinyinference_llm::message::Message;
+
+/// Which run in the recursion tree a queued [`SteeringCommand`] is addressed
+/// to.
+///
+/// Every [`SteeringHandle`] clone shares one underlying queue (so an
+/// orchestrator can hand a single handle to a deeply nested tree and still
+/// reach any run in it), but each level of the tree only *drains* the entries
+/// addressed to itself — see [`SteeringHandle::for_child`]. Without this, a
+/// command meant for the orchestrating run could be consumed by whichever
+/// sub-agent happened to reach a checkpoint first.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SteeringTarget {
+    /// The root run of the tree this handle belongs to. This is the default
+    /// target for [`SteeringHandle::send`].
+    Root,
+    /// A specific run, named by [`RunId`].
+    Run(RunId),
+    /// Every run currently draining this handle (root and every descendant).
+    All,
+}
 
 /// A typed runtime control instruction delivered to a running agent loop.
 ///
