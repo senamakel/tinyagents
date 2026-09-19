@@ -27,7 +27,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use tinyagents_harness::TinyAgentsError;
-use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use tinyagents_harness::cost::ModelPricing;
 use tinyagents_harness::events::AgentEvent;
 use tinyagents_harness::middleware::{
