@@ -176,6 +176,8 @@ fn kind_of(value: &Value) -> &'static str {
     }
 }
 
+/// Wraps a validation failure message as the error variant used throughout
+/// this module.
 fn invalid(message: String) -> TinyAgentsError {
     TinyAgentsError::StructuredOutput(message)
 }

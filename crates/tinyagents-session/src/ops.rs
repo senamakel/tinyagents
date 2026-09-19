@@ -307,6 +307,11 @@ pub fn record_tool_call(
     })
 }
 
+/// Fetches a single session by id.
+///
+/// Returns `Err(TinyAgentsError::Storage)` (not `Option`) when no row
+/// matches, since every current caller reads back a session it expects to
+/// already exist.
 pub fn get_session(workspace_dir: &Path, id: &str) -> Result<SessionRecord> {
     with_connection(workspace_dir, |conn| {
         let mut stmt = conn.prepare(
@@ -328,6 +333,10 @@ pub fn get_session(workspace_dir: &Path, id: &str) -> Result<SessionRecord> {
     })
 }
 
+/// Lists sessions, most-recently-started first, with optional status/parent
+/// filters and pagination.
+///
+/// `limit` is capped at 500 regardless of the requested value.
 pub fn list_sessions(
     workspace_dir: &Path,
     limit: Option<u32>,
