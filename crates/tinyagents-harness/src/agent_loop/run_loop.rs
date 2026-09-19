@@ -360,9 +360,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if let Some(capabilities) = request.required_capabilities.clone() {
                     resolve_request = resolve_request.with_required_capabilities(capabilities);
                 }
-                let model = host_run.host.models.resolve(&resolve_request).await.map_err(|error| {
-                    tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed");
-                    TinyAgentsError::Model("host model resolution failed".to_string())
+                let resolve = host_run.host.models.resolve(&resolve_request);
+                let model = match ctx.remaining_wall_clock() {
+                    Some(remaining) => tokio::select! {
+                        _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                        resolved = tokio::time::timeout(remaining, resolve) => resolved
+                            .map_err(|_| TinyAgentsError::Timeout(format!(
+                                "host model resolution for run `{}` exceeded its remaining wall-clock deadline",
+                                ctx.run_id()
+                            )))?,
+                    },
+                    None => tokio::select! {
+                        _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
+                        resolved = resolve => resolved,
+                    },
+                }
+                .map_err(|error| match error {
+                    TinyAgentsError::Timeout(_) => error,
+                    _ => {
+                        tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed");
+                        TinyAgentsError::Model("host model resolution failed".to_string())
+                    }
                 })?;
                 let name = model
                     .profile()

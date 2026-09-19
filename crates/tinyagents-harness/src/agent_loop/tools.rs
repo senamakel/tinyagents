@@ -227,6 +227,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
     ) -> Result<ResolvedToolCall<State, Ctx>> {
+        // Preserve the exact attacker-controlled provider payload for host
+        // authorization/audit. `call.arguments` is later canonicalized for
+        // execution and must not overwrite what the gate evaluates.
+        let model_arguments = call.arguments.clone();
         // Safe cancellation checkpoint: stop before invoking the next
         // (side-effecting) tool if cancellation was requested.
         if ctx.cancellation.is_cancelled() {
@@ -474,7 +478,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // identified from its explicit RunContext binding; the lower-level SDK
         // path has no implicit host policy.
         if let Some(binding) = self.host_run_binding(ctx.instance_id())? {
-            let request = crate::host::ToolCallRequest::from_tool_call(call, binding.agent_id);
+            let request = crate::host::ToolCallRequest::new(
+                call.name.clone(),
+                model_arguments,
+                binding.agent_id,
+            )
+            .with_call_id(CallId::new(call.id.clone()));
             let decision = binding.host.security.authorize_tool(&request).await?;
             if !decision.is_allowed() {
                 let reason = decision
