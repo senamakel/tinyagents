@@ -5,7 +5,6 @@
 //! routing, and the explicit recursive-dispatch handoff.
 
 pub mod discover;
-mod prompt;
 mod schema;
 mod schema_compact;
 mod schema_prepare;
@@ -20,7 +19,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
-pub use prompt::*;
 pub use schema::*;
 pub use schema_compact::*;
 pub use schema_prepare::*;

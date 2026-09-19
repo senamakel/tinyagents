@@ -1266,13 +1266,23 @@ pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
 
 /// Repairs provider-neutral argument shape defects before schema validation.
 ///
-/// Schema-valid arguments are already canonical. A string containing valid
-/// JSON is decoded, optionally through a markdown code fence, and the decoded
-/// value is preserved for validation even when it remains invalid. Undecodable
-/// or non-string values become an empty object only for object-capable schemas
-/// that declare no required fields; required-field schemas retain the original
-/// value so the validation error remains precise and model-visible.
+/// Schema-valid arguments are already canonical. Otherwise the protocol
+/// crate's argument repairs ([`tinytools_agent::repair::args`]) are applied in
+/// order — a stringified (possibly fenced, possibly relaxed) JSON document is
+/// decoded; an object buried one level down in an envelope the model invented
+/// is unwrapped; string scalars are coerced to the types the schema declares —
+/// and each rewrite is kept only when the result validates, or (for the
+/// decode) when it is at least the object the model meant, so the validation
+/// error the model sees stays precise. Undecodable or non-object values become
+/// an empty object only for object-capable schemas that declare no required
+/// fields; required-field schemas retain the original value.
+///
+/// This is host policy, not parsing: it runs only under a recovering
+/// [`InvalidArgsPolicy`](crate::runtime::InvalidArgsPolicy), and the schema
+/// validator that gates every rewrite is the harness's.
 fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
+    use tinytools_agent::repair::args;
+
     // Never rewrite a value the declared schema already accepts. In
     // particular, an object-capable union may validly accept a primitive too.
     if schema.validate_call(call).is_ok() {
@@ -1280,39 +1290,59 @@ fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
     }
 
     let parameters = &schema.parameters;
-    let accepts_object = parameters.get("type").is_some_and(|kind| {
-        kind.as_str() == Some("object")
-            || kind
-                .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("object")))
-    }) || parameters.get("properties").is_some()
-        || parameters.get("required").is_some()
-        || parameters
-            .get("enum")
-            .and_then(Value::as_array)
-            .is_some_and(|values| values.iter().any(Value::is_object));
-    if !accepts_object {
+    if !args::accepts_object(parameters) {
         return;
     }
 
+    let template = ToolCall::new(call.id.clone(), call.name.clone(), Value::Null);
+    let validates = |arguments: &Value| {
+        let mut candidate = template.clone();
+        candidate.arguments = arguments.clone();
+        schema.validate_call(&candidate).is_ok()
+    };
+
     if let Some(raw) = call.arguments.as_str() {
-        let candidate = strip_markdown_code_fence(raw);
-        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
-            let mut normalized = call.clone();
-            normalized.arguments = value;
+        let candidate = tinytools_agent::repair::json::strip_code_fence(raw);
+        let decoded = serde_json::from_str::<Value>(candidate)
+            .ok()
+            .or_else(|| tinytools_agent::repair::json::recover_object(candidate));
+        if let Some(value) = decoded {
             // Decoding must be lossless even when the decoded value is still
             // schema-invalid. Preserve it so the validation below reports the
             // actual bad field/type instead of silently replacing it with `{}`.
-            call.arguments = normalized.arguments;
-            return;
+            call.arguments = value;
+            if validates(&call.arguments) {
+                return;
+            }
+            // A successfully decoded non-object value (e.g. the stringified
+            // JSON `true`) is not an object, so it never reaches the
+            // `is_object` repair branch below — it would otherwise fall
+            // through to the has-no-required-fields fallback further down
+            // and get silently replaced with `{}`, discarding the decoded
+            // scalar the model actually sent and making an invalid-typed
+            // call quietly "succeed" with fabricated empty arguments instead
+            // of surfacing its real validation error. Only a value that
+            // never decoded at all should reach that fallback.
+            if !call.arguments.is_object() {
+                return;
+            }
         }
     }
 
     // A provider-native object is already the shape normalization is trying to
-    // recover. If its contents violate the schema, preserve them so the model
-    // sees the real validation error instead of executing with an empty object.
+    // recover. If its contents violate the schema, try the envelope unwrap and
+    // the scalar coercion, each kept only when it validates; otherwise
+    // preserve them so the model sees the real validation error instead of
+    // executing with an empty object.
     if call.arguments.is_object() {
-        unwrap_wrapped_arguments(call, schema);
+        if let Some(inner) = args::unwrap_envelope(&call.arguments, parameters, &validates) {
+            call.arguments = inner;
+            return;
+        }
+        let coerced = args::coerce_to_schema(call.arguments.clone(), parameters);
+        if coerced != call.arguments && validates(&coerced) {
+            call.arguments = coerced;
+        }
         return;
     }
 
@@ -1323,94 +1353,6 @@ fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
     if !has_required_fields {
         call.arguments = serde_json::json!({});
     }
-}
-
-/// Keys under which a model commonly buries the real arguments object.
-///
-/// `properties` is the JSON-Schema echo; the rest are the wrapper names small
-/// models invent when they confuse the *call* envelope with its payload. All of
-/// them were observed on local runtimes — see [`unwrap_wrapped_arguments`].
-const ARGUMENT_WRAPPER_KEYS: [&str; 7] = [
-    "properties",
-    "arguments",
-    "args",
-    "parameters",
-    "params",
-    "param",
-    "input",
-];
-
-/// Recovers arguments a model buried one level deep inside an envelope.
-///
-/// Small local models (observed on `llama3.2:3b` via Ollama) routinely send
-/// something other than a bare arguments object. All three of these are real
-/// captures for a tool declaring one required `city` string:
-///
-/// ```text
-/// {"type":"object","required":["city"],"properties":{"city":"Paris"}}
-/// {"properties":{...},"required":[...],"arguments":{"city":"Paris"}}
-/// {"param":{"city":"Paris"}}
-/// ```
-///
-/// In each case the intended `{"city":"Paris"}` is present, one level down.
-/// Without this the call fails validation, costs a repair round trip, and on
-/// the default [`InvalidArgsPolicy::Fail`] aborts the run outright.
-///
-/// The rewrite is deliberately conservative and cannot corrupt a legitimate
-/// call. For each candidate key it applies only when the outer object is
-/// already schema-invalid, when the tool does not itself declare an argument of
-/// that name (so the key is not meaningfully the model's own data), and when
-/// the unwrapped value *does* validate. If no candidate satisfies all three the
-/// original arguments are left untouched, so the model still sees a precise
-/// validation error rather than a rewritten one.
-///
-/// [`InvalidArgsPolicy::Fail`]: crate::runtime::InvalidArgsPolicy::Fail
-fn unwrap_wrapped_arguments(call: &mut ToolCall, schema: &ToolSchema) {
-    let declared = schema
-        .parameters
-        .get("properties")
-        .and_then(Value::as_object);
-
-    for key in ARGUMENT_WRAPPER_KEYS {
-        // A tool that genuinely takes an argument of this name must never have
-        // it unwrapped — for such a tool the key is data, not an envelope.
-        if declared.is_some_and(|declared| declared.contains_key(key)) {
-            continue;
-        }
-        let Some(inner) = call
-            .arguments
-            .get(key)
-            .filter(|inner| inner.is_object())
-            .cloned()
-        else {
-            continue;
-        };
-
-        let mut candidate = call.clone();
-        candidate.arguments = inner;
-        if schema.validate_call(&candidate).is_ok() {
-            call.arguments = candidate.arguments;
-            return;
-        }
-    }
-}
-
-fn strip_markdown_code_fence(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    let Some(after_open) = trimmed.strip_prefix("```") else {
-        return trimmed;
-    };
-    let body = match after_open.find('\n') {
-        Some(newline)
-            if after_open[..newline]
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric()) =>
-        {
-            &after_open[newline + 1..]
-        }
-        _ => after_open,
-    };
-    body.trim().strip_suffix("```").unwrap_or(body).trim()
 }
 
 pub(super) fn timeout_result(

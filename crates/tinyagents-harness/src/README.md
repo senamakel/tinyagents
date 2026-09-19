@@ -38,7 +38,6 @@ the module map below.
 | `observability` | Durable observability — journals, status stores, sinks — making the live event stream persistent. See [`observability/README.md`](observability/README.md). |
 | `prompt` | Prompt assembly — templates and `PromptBuilder` turning runtime values into the final request. |
 | `providers` | Model adapters whose behavior depends on TinyAgents-specific prompt dialects (e.g. Claude Code/Agent SDK). |
-| `relaxed_json` (crate-private) | Best-effort repair of malformed JSON small local models emit for tool-call arguments. |
 | `retriever` | Provider-neutral retrieval contracts (`Retriever`) for injecting ranked context into a prompt. See [`retriever/README.md`](retriever/README.md). |
 | `retry` | Retry/backoff, model fallback, and rate-limiting policies applied uniformly to every model call. See [`retry/README.md`](retry/README.md). |
 | `run_queue` | A generic multi-lane FIFO queue (steer/followup/collect) for messages arriving during an active run. See [`run_queue/README.md`](run_queue/README.md). |
