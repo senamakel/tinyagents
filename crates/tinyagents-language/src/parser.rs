@@ -514,6 +514,15 @@ impl Parser<'_> {
                 }
                 node.script = Some(value);
             }
+            "router" => {
+                let span = tok.span;
+                self.advance();
+                let value = self.expect_string()?;
+                if node.router.is_some() {
+                    return dup(self, span, "router");
+                }
+                node.router = Some(value);
+            }
             "input" => {
                 let span = tok.span;
                 self.advance();
