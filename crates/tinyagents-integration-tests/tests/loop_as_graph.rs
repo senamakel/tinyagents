@@ -188,14 +188,16 @@ async fn limit_stop_scenario_matches_direct_and_graph() {
         }
     }
 
-    assert!(matches!(
-        direct_err.unwrap(),
-        TinyAgentsError::LimitExceeded(_)
-    ));
-    assert!(matches!(
-        graph_err.unwrap(),
-        TinyAgentsError::LimitExceeded(_)
-    ));
+    let direct_err = direct_err.unwrap();
+    let graph_err = graph_err.unwrap();
+    assert!(
+        matches!(direct_err, TinyAgentsError::LimitExceeded(_)),
+        "direct: {direct_err:?}"
+    );
+    assert!(
+        matches!(graph_err, TinyAgentsError::LimitExceeded(_)),
+        "graph: {graph_err:?}"
+    );
 }
 
 // ── Scenario 4: approval interrupt ──────────────────────────────────────────
