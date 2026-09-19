@@ -20,7 +20,7 @@ use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
 use tinyinference_llm::cache::CachePolicy;
 
-impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
     pub(super) async fn resolve_host_model(
         &self,
         ctx: &RunContext<Ctx>,
