@@ -1,3 +1,6 @@
+//! Unit tests for `parse_auth_status_json`, covering the subscription,
+//! API-key, signed-out, and malformed/unknown-shape branches.
+
 use super::*;
 
 #[test]
