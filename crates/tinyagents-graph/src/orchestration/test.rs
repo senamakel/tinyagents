@@ -40,9 +40,7 @@ fn raw(result: &ToolResult) -> &serde_json::Value {
         .iter()
         .find_map(|content| match content {
             ToolContent::Json { data } => Some(data),
-            ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => {
-                None
-            }
+            ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => None,
         })
         .expect("orchestration tool returns a JSON payload")
 }
