@@ -923,7 +923,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // reconciliation and let the provider's raw (unscrubbed)
                     // `Completed` content silently restore the exact text the
                     // middleware had just suppressed.
-                    saw_streamed_content = true;
+                    saw_streamed_content |= !model_delta.content.is_empty();
                     streamed_text.push_str(&model_delta.content);
                     ctx.emit(AgentEvent::ModelDelta {
                         run_id: ctx.config.run_id.clone(),
