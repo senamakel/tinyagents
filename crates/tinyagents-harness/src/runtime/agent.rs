@@ -539,9 +539,15 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             .resolve(&request.agent_id)
             .await
             .map_err(|error| {
-                let _ = error;
-                tracing::warn!(agent_id = %request.agent_id, "[host] definition lookup failed");
-                TinyAgentsError::Validation("agent definition lookup failed".to_string())
+                tracing::warn!(
+                    agent_id = %request.agent_id,
+                    error = %error,
+                    "[host] definition lookup failed"
+                );
+                TinyAgentsError::Validation(format!(
+                    "agent definition lookup failed for `{}`: {error}",
+                    request.agent_id
+                ))
             })?
             .ok_or_else(|| {
                 TinyAgentsError::Validation(format!(
