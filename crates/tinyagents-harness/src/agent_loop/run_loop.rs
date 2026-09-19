@@ -178,6 +178,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .into_iter()
             .filter(|schema| host_allows(&schema.name))
             .collect::<Vec<_>>();
+        // Composable toolset chain (gap B3, `AgentHarness::with_toolset`):
+        // additive to the registry's own `Direct` schemas above — a name the
+        // registry already advertises keeps the registry's declaration, so a
+        // registered tool always wins a collision. This run's toolset is
+        // consulted once here, matching the registry's own once-per-run
+        // schema build a few lines up (the comment above explains why: the
+        // resulting request tool list feeds the provider prompt cache, so
+        // rebuilding it every turn would defeat that cache). A caller that
+        // genuinely needs true per-turn variance can still call
+        // [`crate::tool::toolset::ToolSet::tools`] directly from a
+        // `before_model` middleware, which *does* run every turn.
+        if let Some(toolset) = &self.toolset {
+            let existing: std::collections::HashSet<&str> =
+                tool_schemas.iter().map(|schema| schema.name.as_str()).collect();
+            let mut extra: Vec<_> = toolset
+                .tools(ctx)
+                .await?
+                .into_iter()
+                .filter(|tool| tool.exposure() == tinytools::ToolExposure::Direct)
+                .filter(|tool| host_allows(tool.name()))
+                .filter(|tool| !existing.contains(tool.name()))
+                .map(|tool| crate::tool::provider_schema(tool.as_ref()))
+                .collect();
+            if let Some(preparation) = &self.policy.tool_schemas {
+                extra = crate::tool::prepare_tool_schemas(&extra, preparation);
+            }
+            tool_schemas.extend(extra);
+            // Keep the combined set name-sorted: every consumer of
+            // `tool_schemas` below (and the provider request it feeds) relies
+            // on the sort for wire-byte/prompt-cache stability.
+            tool_schemas.sort_by(|left, right| left.name.cmp(&right.name));
+        }
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
