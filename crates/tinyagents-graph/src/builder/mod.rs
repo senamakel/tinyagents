@@ -179,11 +179,9 @@ where
         F: Fn(State, NodeContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
     {
-        let id = id.into();
         self.nodes.insert(
-            id.clone(),
+            id.into(),
             BuilderNode {
-                id,
                 handler: Arc::new(move |state, ctx| Box::pin(handler(state, ctx))),
             },
         );
