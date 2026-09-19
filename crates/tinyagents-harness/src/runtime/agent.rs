@@ -255,14 +255,34 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> Drop for AgentStream<'_, St
     }
 }
 
+/// Everything a hosted turn needs to run, assembled by
+/// [`AgentHarness::prepare_agent_turn`] before the loop starts.
+///
+/// Bundles the per-invocation host binding with the composed transcript so the
+/// unary and streaming entry points can share one preparation path and one
+/// terminal-observer closure.
 struct PreparedAgentTurn<State: Send + Sync, Ctx: Send + Sync> {
+    /// Host capability bundle and definition-derived routing facts for this run.
     binding: HostInvocationBinding<State, Ctx>,
+    /// Thread the prepared turn belongs to (derived from the run id when the
+    /// caller supplied none).
     thread_id: ThreadId,
+    /// Run id of the invocation this turn was prepared for.
     run_id: crate::ids::RunId,
+    /// Screened user-visible text, used for memory recall and later stamped
+    /// onto the turn summary and experience record.
     input_text: String,
+    /// The fully composed transcript (system prompt, preamble, user messages)
+    /// handed to the agent loop.
     messages: Vec<tinyinference_llm::message::Message>,
 }
 
+/// Bounded, best-effort fan-out from the agent loop to a host's
+/// [`crate::host::ProgressSink`].
+///
+/// Backed by a bounded channel plus a semaphore so a slow or absent consumer
+/// cannot retain unbounded memory for a long-running turn; see
+/// [`start_progress_dispatcher`] for the slot accounting this coordinates with.
 #[derive(Clone)]
 pub(crate) struct ProgressSender {
     tx: tokio::sync::mpsc::Sender<ProgressEvent>,
@@ -270,6 +290,13 @@ pub(crate) struct ProgressSender {
 }
 
 impl ProgressSender {
+    /// Sends a non-terminal progress event, dropping it if no nonterminal slot
+    /// is free.
+    ///
+    /// Never blocks: `try_acquire_owned` and `try_send` both fail fast rather
+    /// than stalling the turn on a slow sink. The permit is intentionally
+    /// forgotten on success — it is returned later when the dispatcher observes
+    /// the event was consumed, not when this call returns.
     fn send_nonterminal(&self, event: ProgressEvent) {
         let Ok(permit) = self.nonterminal_slots.clone().try_acquire_owned() else {
             return;
@@ -279,6 +306,12 @@ impl ProgressSender {
         }
     }
 
+    /// Sends the one terminal event for this turn (`Finished` or `Error`).
+    ///
+    /// Bypasses the nonterminal-slot semaphore: the channel reserves a slot
+    /// specifically for this so a saturated stream of progress updates can
+    /// never suppress the outcome. Still best-effort — a full channel drops it
+    /// rather than blocking the finalizer.
     fn send_terminal(&self, event: ProgressEvent) {
         let _ = self.tx.try_send(event);
     }
