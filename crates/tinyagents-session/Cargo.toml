@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Durable TinyAgents session history and run ledger."
 
 [dependencies]
+async-trait = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { workspace = true }
@@ -26,6 +27,7 @@ tracing = ["tinyagents-harness/tracing"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

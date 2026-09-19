@@ -5,6 +5,7 @@
 //! Split out of `agent_loop/mod.rs`; see that module's doc comment for
 //! the full loop lifecycle, limits, and backoff design.
 
+use super::handoff_transform;
 use super::model_call::ModelCallBase;
 use super::tool_changes;
 use super::*;
@@ -644,6 +645,29 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     requested: requested.clone(),
                     resolved: model_name.clone(),
                 });
+            }
+
+            // Cross-provider handoff: rewrite any part of the outgoing
+            // transcript that a mid-session provider/model switch left
+            // unsafe to replay verbatim (foreign signed/redacted thinking,
+            // non-conforming tool-call ids, unsupported images) right before
+            // this request is sent. A no-op (same-origin run, the common
+            // case) allocates nothing — see `handoff_transform`. Runs before
+            // the schema/reasoning adjustments below so a rewritten
+            // transcript (rather than the pre-handoff one) is what those
+            // adjustments and the eventual request see.
+            if let Some(profile) = binding.model.profile() {
+                let target_origin = handoff_transform::target_origin_for(profile);
+                let outcome = handoff_transform::prepare_for_model(
+                    &request.messages,
+                    profile,
+                    &target_origin,
+                );
+                let changes = outcome.changes;
+                if changes > 0 {
+                    request.messages = outcome.messages.into_owned();
+                    ctx.emit(AgentEvent::HandoffTransformApplied { changes });
+                }
             }
 
             // Apply the resolved model's schema transform (for example

@@ -488,4 +488,33 @@ pub struct RunContext<Ctx = ()> {
     /// spawner in the same order derive identical ordinals, and therefore
     /// identical child run ids.
     pub(crate) child_ordinal: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Durable tool-effect ledger for this run, when a host wants crash-safe
+    /// bookkeeping of tool-call side effects (B5). `None` (the default) means
+    /// no ledger writes happen and [`crate::tool::ToolPolicy`]'s
+    /// `runtime.replay` declaration has nothing to guard resume against — the
+    /// agent loop behaves exactly as it did before this existed. Attach one
+    /// with [`RunContext::with_tool_effect_ledger`]; a child context inherits
+    /// its parent's ledger, matching how `stores`/`events` propagate.
+    pub tool_effect_ledger: Option<std::sync::Arc<dyn crate::tool::ToolEffectLedger>>,
+    /// How the agent loop reacts when a `started` write to
+    /// [`Self::tool_effect_ledger`] itself fails, before the tool call it was
+    /// about to journal has executed. See
+    /// [`crate::tool::LedgerFailure`] for the two modes; defaults to
+    /// [`crate::tool::LedgerFailure::Abort`].
+    pub tool_effect_ledger_failure: crate::tool::LedgerFailure,
+    /// Durable sink for [`crate::summarization::CompactionRecord`]s this run
+    /// produces, when a host wants every compaction persisted somewhere
+    /// durable rather than only kept in
+    /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
+    /// in-process buffer.
+    ///
+    /// `None` (the default) means compaction runs exactly as it did before
+    /// this existed — no persistence side effect. Attach one with
+    /// [`RunContext::with_compaction_sink`]; a child context inherits its
+    /// parent's sink, matching how `stores`/`events`/`tool_effect_ledger`
+    /// propagate. `tinyagents-harness` cannot depend on
+    /// `tinyagents-session` (the dependency runs the other way), so this is
+    /// a trait object rather than a concrete `Arc<EntryTree>` — see
+    /// [`crate::summarization::CompactionSink`]'s docs.
+    pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
 }

@@ -251,6 +251,7 @@ Feature details:
 - [Structured output feature](structured-output.md)
 - [Limits, retry, fallback, and rate limiting](limits-retry.md)
 - [Summarization feature](summarization.md)
+- [Compaction: rules, split turns, iterative summaries, overflow recovery](compaction.md)
 - [Usage feature](usage.md)
 - [Cost feature](cost.md)
 - [Cache feature](cache.md)

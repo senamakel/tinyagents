@@ -78,6 +78,7 @@ fn interleaved_stream_items() -> Vec<ModelStreamItem> {
                     json!({"q": 1}),
                 )],
                 usage: Some(Usage::new(5, 7)),
+                origin: None,
             },
             usage: Some(Usage::new(5, 7)),
             finish_reason: Some("tool_use".into()),
@@ -260,6 +261,7 @@ fn provider_failed_frame_carries_partial_message_and_stop_reason() {
                 content: vec![ContentBlock::Text("partial".into())],
                 tool_calls: Vec::new(),
                 usage: None,
+                origin: None,
             }),
             ..Default::default()
         },

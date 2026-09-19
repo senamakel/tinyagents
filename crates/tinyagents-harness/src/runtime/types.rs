@@ -325,6 +325,34 @@ pub struct RunPolicy {
     /// the next boundary. Only consulted when the run's
     /// [`RunContext`][crate::context::RunContext] carries a queue.
     pub queue_mode: QueueMode,
+    /// Which engine [`AgentHarness::invoke`][super::AgentHarness::invoke] (and
+    /// friends) drives the loop with (A5).
+    ///
+    /// Defaults to [`LoopExecution::Direct`]: the built-in
+    /// [`crate::agent_loop`] body, unchanged. Setting
+    /// [`LoopExecution::Graph`] selects an [`AgentHarness::loop_driver`
+    /// ][super::AgentHarness::loop_driver] instead — install one with
+    /// [`AgentHarness::with_loop_driver`][super::AgentHarness::with_loop_driver]
+    /// (`tinyagents-graph`'s `GraphLoopDriver` is the intended implementor;
+    /// see `tinyagents_graph::agent_loop`). Selecting `Graph` with no driver
+    /// installed fails the run with
+    /// [`crate::error::TinyAgentsError::Validation`] rather than silently
+    /// falling back to `Direct`.
+    pub execution: LoopExecution,
+}
+
+/// See [`RunPolicy::execution`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoopExecution {
+    /// Drive the run with the built-in [`crate::agent_loop`] body
+    /// (`run_loop`/`run_loop_body`). The default; behavior-identical to
+    /// every release before A5.
+    #[default]
+    Direct,
+    /// Drive the run with the installed
+    /// [`AgentHarness::loop_driver`][super::AgentHarness::loop_driver]
+    /// instead (a compiled-graph rendition of the loop, in the common case).
+    Graph,
 }
 
 /// See [`RunPolicy::structured_strategy_override`].
@@ -474,6 +502,7 @@ impl Default for RunPolicy {
             end_strategy: EndStrategy::default(),
             structured_strategy_override: None,
             queue_mode: QueueMode::default(),
+            execution: LoopExecution::default(),
         }
     }
 }
@@ -554,6 +583,11 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// [`Self::toolset`] keeps composing with it, instead of losing it to
     /// the first capability's rebuild.
     pub(crate) capability_base_toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
+    /// Alternate loop engine selected when [`RunPolicy::execution`] is
+    /// [`LoopExecution::Graph`] (A5). See
+    /// [`crate::agent_loop::phases::LoopDriver`] and
+    /// [`AgentHarness::with_loop_driver`].
+    pub(crate) loop_driver: Option<Arc<dyn crate::agent_loop::phases::LoopDriver<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.

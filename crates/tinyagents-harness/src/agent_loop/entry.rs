@@ -169,6 +169,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// naming the unresolved ids before anything runs.
     ///
     /// Equivalent to `invoke_in_context(state, ctx.with_deferred_results(results), messages)`.
+    ///
+    /// Deliberately does **not** call
+    /// [`AgentHarness::reconcile_tool_effects`] first: that reconciler
+    /// classifies *every* unanswered call on the last assistant turn with an
+    /// unresolved [`crate::tool::ToolEffectLedger`] row as a crash artifact
+    /// and, for the default [`tinytools::ToolReplay::Never`], synthesizes an
+    /// "interrupted" answer for it instead of letting it run — but a call
+    /// this run's own `execution_deferral` filed (mid-execution
+    /// `ApprovalRequired`/`CallDeferred`, which leaves exactly the same
+    /// `started`/unanswered shape) is not a crash: it is precisely the call
+    /// `results` is here to resolve. Calling the reconciler unconditionally
+    /// here would silently pre-empt that answer for every default-policy
+    /// tool, before `results` ever got a chance to run it. Reconciling a
+    /// genuine crash (no live `results` for the pending call at all) remains
+    /// a host's explicit, separate call to
+    /// [`AgentHarness::reconcile_tool_effects`] before it reaches for
+    /// `resume_deferred`.
     pub async fn resume_deferred(
         &self,
         state: &State,
@@ -334,17 +351,50 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
-        match self
-            .run_loop(
-                state,
-                &mut ctx,
-                &mut terminal.run,
-                &mut status,
-                input,
-                streaming,
-            )
-            .await
-        {
+        // A5: `RunPolicy::execution` selects the loop engine. `Direct` (the
+        // default) is the built-in `run_loop` below, unchanged from every
+        // release before A5. `Graph` delegates to the installed
+        // `LoopDriver` (see `agent_loop::phases::LoopDriver`) — typically
+        // `tinyagents-graph`'s `GraphLoopDriver` — which owns this same
+        // contract (RunStarted..RunCompleted/RunFailed/pause, writing every
+        // produced message onto `run.messages` on every exit path).
+        // Selecting `Graph` with no driver installed fails closed rather than
+        // silently falling back to `Direct`.
+        let outcome = match self.policy.execution {
+            crate::runtime::LoopExecution::Graph => match self.loop_driver.clone() {
+                Some(driver) => {
+                    driver
+                        .drive(
+                            self,
+                            state,
+                            &mut ctx,
+                            &mut terminal.run,
+                            &mut status,
+                            input,
+                            streaming,
+                        )
+                        .await
+                }
+                None => Err(TinyAgentsError::Validation(
+                    "RunPolicy::execution is LoopExecution::Graph but no LoopDriver is \
+                     installed; call AgentHarness::with_loop_driver first"
+                        .to_string(),
+                )),
+            },
+            crate::runtime::LoopExecution::Direct => {
+                self.run_loop(
+                    state,
+                    &mut ctx,
+                    &mut terminal.run,
+                    &mut status,
+                    input,
+                    streaming,
+                )
+                .await
+            }
+        };
+
+        match outcome {
             Ok(()) => {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical

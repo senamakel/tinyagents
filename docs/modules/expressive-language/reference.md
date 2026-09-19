@@ -276,26 +276,38 @@ Node-level policies:
 
 ```tinyagents
 node agent {
-  timeout 30s
+  timeout "30s"
   retry {
-    max_attempts: 3
-    backoff: "exponential"
+    max_attempts 3
+    initial_backoff_ms 200
   }
 }
 ```
+
+`defaults { … }`/`retry { … }`/`metadata { … }` entries are `key value` pairs
+with no separator between them (no `:`, no comma) — see "Literal values and
+list separators" below. `timeout`'s value is a bare number (seconds, e.g.
+`timeout 30`) or a quoted `"<number><unit>"` string with unit `ms`/`s`/`m`/`h`
+(e.g. `timeout "500ms"`); a bare `30s` does **not** parse as one literal (the
+lexer reads `30` as a number and leaves a stray `s` identifier).
 
 Graph-level defaults:
 
 ```tinyagents
 graph support_agent {
   defaults {
-    timeout 60s
+    timeout 60
     recursion_limit 50
   }
 }
 ```
 
-Policies lower into graph node policies and harness request policies.
+Policies lower into graph node policies and harness request policies. For the
+exact node-level `timeout`/`retry` → `crates/tinyagents-graph` lowering
+(graph-wide only, both nodes must agree; the accepted `retry` keys are the
+`tinyagents_harness::retry::RetryPolicy` fields) see
+`docs/modules/expressive-language/implementation-status.md` ("`build_graph`:
+lowered vs rejected fields").
 
 ### Literal values and list separators
 

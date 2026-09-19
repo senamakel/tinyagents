@@ -249,6 +249,70 @@ pub(super) const MIGRATIONS: &[&str] = &[
      ALTER TABLE workflow_runs ADD COLUMN lease_owner TEXT;
      ALTER TABLE workflow_runs ADD COLUMN lease_expires_at TEXT;
      CREATE INDEX IF NOT EXISTS idx_workflow_runs_lease ON workflow_runs(lease_expires_at);",
+    // ---- 6: conversation entry tree (see `super::entry_tree`) -----------
+    //
+    // `entry_tree_entries` is the append-only write-once tree: every row is a
+    // node (`id`) with an optional `parent_id`, ordered by a monotonic
+    // per-session `ordinal` used both to allocate the next id and to recover
+    // file order for legacy linear data. `entry_tree_labels` names a tip.
+    // `branch_entries` is a **rebuildable** materialized index — the full
+    // root-to-tip ancestor chain for a given tip, in chronological order — so
+    // `build_context` need not walk `parent_id` on every call; see
+    // `entry_tree::rebuild_index`.
+    "CREATE TABLE IF NOT EXISTS entry_tree_entries (
+        session_id   TEXT NOT NULL,
+        id           TEXT NOT NULL,
+        parent_id    TEXT,
+        ordinal      INTEGER NOT NULL,
+        kind         TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        ts           TEXT NOT NULL,
+        PRIMARY KEY (session_id, id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_entry_tree_entries_parent
+        ON entry_tree_entries(session_id, parent_id);
+     CREATE INDEX IF NOT EXISTS idx_entry_tree_entries_ordinal
+        ON entry_tree_entries(session_id, ordinal);
+
+     CREATE TABLE IF NOT EXISTS entry_tree_labels (
+        session_id TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        entry_id   TEXT NOT NULL,
+        PRIMARY KEY (session_id, name)
+     );
+
+     CREATE TABLE IF NOT EXISTS branch_entries (
+        session_id TEXT NOT NULL,
+        tip_id     TEXT NOT NULL,
+        entry_id   TEXT NOT NULL,
+        ordinal    INTEGER NOT NULL,
+        PRIMARY KEY (session_id, tip_id, entry_id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_branch_entries_tip
+        ON branch_entries(session_id, tip_id, ordinal);",
+    // ---- 7: tool-effect ledger (B5, see `super::run_ledger::tool_effects`) -
+    //
+    // One row per admitted tool call, written `started` before the call
+    // executes and updated in place to a terminal status
+    // (`completed`/`failed`/`interrupted`) once it settles. A row still
+    // `started` for a run with no live driver is the signature of a crash
+    // between admission and settlement; `list_unresolved_tool_effects` finds
+    // exactly those rows so a resumed run can decide, per tool, whether it is
+    // safe to re-execute (see `tinytools::ToolReplay`).
+    "CREATE TABLE IF NOT EXISTS tool_effects (
+        run_id           TEXT NOT NULL,
+        call_id          TEXT NOT NULL,
+        tool             TEXT NOT NULL,
+        status           TEXT NOT NULL,
+        idempotency_key  TEXT,
+        effect_summary   TEXT,
+        started_at       TEXT NOT NULL,
+        settled_at       TEXT,
+        PRIMARY KEY (run_id, call_id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_tool_effects_status ON tool_effects(run_id, status);
+     CREATE INDEX IF NOT EXISTS idx_tool_effects_idempotency
+        ON tool_effects(idempotency_key);",
 ];
 
 /// Applies every migration newer than the database's recorded schema version.
@@ -353,7 +417,7 @@ mod test {
     fn migration_list_is_append_only() {
         assert_eq!(
             MIGRATIONS.len(),
-            6,
+            8,
             "MIGRATIONS is append-only — adding one is fine, reordering or \
              deleting one silently re-numbers every later migration"
         );

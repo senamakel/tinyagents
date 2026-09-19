@@ -41,6 +41,7 @@ fn role_label(message: &Message) -> &'static str {
         Message::User(_) => "user",
         Message::Assistant(_) => "assistant",
         Message::Tool(_) => "tool",
+        Message::Custom(_) => "custom",
     }
 }
 
@@ -105,6 +106,7 @@ pub fn render_message_for_summary(message: &Message) -> String {
         Message::User(m) => render_content(&m.content),
         Message::Assistant(m) => render_content(&m.content),
         Message::Tool(m) => render_content(&m.content),
+        Message::Custom(m) => return format!("custom: {}", m.display.clone().unwrap_or_default()),
     };
 
     match message {

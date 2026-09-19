@@ -87,7 +87,11 @@
 //!
 use super::model_call::ToolCallBase;
 use super::*;
-use crate::tool::{DeferredToolRequests, ToolDispatch, provider_schema};
+use crate::tool::{
+    DeferredToolRequests, LedgerFailure, ToolDispatch, ToolEffectSettle, ToolEffectStart,
+    ToolEffectStatus, provider_schema,
+};
+use sha2::{Digest, Sha256};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
@@ -213,6 +217,26 @@ struct PreparedToolCall {
     started_at_ms: u64,
     executed: bool,
     output_origin: crate::host::ContentOrigin,
+}
+
+/// Derives a best-effort deduplication key for one tool call from its name
+/// and arguments (B5).
+///
+/// `tinytools::ToolPolicy` does not currently declare an explicit
+/// idempotency key field, so this hashes `(tool name, arguments)` with
+/// SHA-256: two calls to the same tool with identical arguments derive the
+/// same key, which is exactly what a host wants to notice when deciding
+/// whether an orphaned effect might have already landed. This is content
+/// equality, not a cryptographic guarantee — a tool whose "same effect" notion
+/// differs from "identical arguments" (e.g. one that reads a clock) should
+/// not rely on this key alone.
+fn tool_call_idempotency_key(tool_name: &str, arguments: &Value) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(tool_name.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(serde_json::to_vec(arguments).unwrap_or_default());
+    let digest = hasher.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -881,6 +905,86 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
     }
 
+    /// Records a tool-effect-ledger `started` row for `prepared` (B5), if a
+    /// ledger is attached to `ctx`. A no-op when [`RunContext::tool_effect_ledger`]
+    /// is `None`.
+    ///
+    /// Must be called *before* the tool actually executes, so a crash between
+    /// this write and the call settling is observable on resume. When the
+    /// write itself fails, [`RunContext::tool_effect_ledger_failure`] decides
+    /// whether that is fatal ([`LedgerFailure::Abort`], the default — the
+    /// caller must fail the call and propagate the error) or merely logged
+    /// ([`LedgerFailure::Continue`] — the call proceeds unrecorded).
+    async fn record_tool_effect_started(
+        &self,
+        ctx: &RunContext<Ctx>,
+        arguments: &Value,
+        prepared: &PreparedToolCall,
+    ) -> Result<()> {
+        let Some(ledger) = ctx.tool_effect_ledger.clone() else {
+            return Ok(());
+        };
+        let idempotency_key = tool_call_idempotency_key(&prepared.tool_name, arguments);
+        let start = ToolEffectStart {
+            run_id: ctx.run_id().clone(),
+            call_id: prepared.call_id.clone(),
+            tool: prepared.tool_name.clone(),
+            idempotency_key,
+            effect_summary: None,
+        };
+        if let Err(err) = ledger.started(start).await {
+            return match ctx.tool_effect_ledger_failure {
+                LedgerFailure::Abort => Err(err),
+                LedgerFailure::Continue => {
+                    tracing::warn!(
+                        "[agent_loop::tools] tool-effect ledger `started` write failed for \
+                         call `{}` (tool `{}`): {err} — continuing per \
+                         LedgerFailure::Continue",
+                        prepared.call_id.as_str(),
+                        prepared.tool_name
+                    );
+                    Ok(())
+                }
+            };
+        }
+        Ok(())
+    }
+
+    /// Records a tool-effect-ledger terminal row for `prepared` (B5), if a
+    /// ledger is attached to `ctx`. A no-op when [`RunContext::tool_effect_ledger`]
+    /// is `None`.
+    ///
+    /// Deliberately best-effort and never fatal: by the time this is called
+    /// the tool has already executed (or its execution future has already
+    /// failed), so aborting the run over a *settle* write failure would
+    /// discard a real result rather than merely skip recording one. A failed
+    /// settle write is logged; the row stays `started` and will surface again
+    /// from [`crate::tool::ToolEffectLedger::unresolved`] on the next resume.
+    async fn record_tool_effect_settled(
+        &self,
+        ctx: &RunContext<Ctx>,
+        prepared: &PreparedToolCall,
+        status: ToolEffectStatus,
+    ) {
+        let Some(ledger) = ctx.tool_effect_ledger.clone() else {
+            return;
+        };
+        let settle = ToolEffectSettle {
+            run_id: ctx.run_id().clone(),
+            call_id: prepared.call_id.clone(),
+            status,
+            effect_summary: None,
+        };
+        if let Err(err) = ledger.settled(settle).await {
+            tracing::warn!(
+                "[agent_loop::tools] tool-effect ledger `settled` write failed for call `{}` \
+                 (tool `{}`): {err}",
+                prepared.call_id.as_str(),
+                prepared.tool_name
+            );
+        }
+    }
+
     /// Terminal partner of [`AgentEvent::ToolStarted`] on the abort path:
     /// emits [`AgentEvent::ToolFailed`] and closes the call's `active_tool_calls`
     /// entry.
@@ -1191,6 +1295,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let options = dispatch.call_options(&call.arguments);
         let prepared =
             self.start_tool_call(ctx, status, &call, options, true, dispatch.output_origin());
+        if let Err(err) = self
+            .record_tool_effect_started(ctx, &call.arguments, &prepared)
+            .await
+        {
+            self.fail_tool_call(
+                ctx,
+                status,
+                &prepared.call_id,
+                &prepared.tool_name,
+                prepared.started_at_ms,
+                &err,
+            );
+            return Err(err);
+        }
 
         // The real tool call is the innermost base of the tool-wrap
         // onion (same before -> wrap -> after ordering as the model
@@ -1224,9 +1342,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             Ok(pair) => pair,
             Err(err) => {
                 if let Some(request) = execution_deferral(&prepared.call, &err) {
+                    // Left `started` in the ledger: the call is genuinely
+                    // paused pending external resolution, not settled, and
+                    // `reconcile_tool_effects` (or the resume path) is what
+                    // eventually judges it.
                     self.defer_started_tool_call(ctx, status, &prepared, request, deferred);
                     return Ok(None);
                 }
+                self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Failed)
+                    .await;
                 self.fail_tool_call(
                     ctx,
                     status,
@@ -1246,6 +1370,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             ctx.request_control(control);
         }
 
+        self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Completed)
+            .await;
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
     }
@@ -1411,6 +1537,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 true,
                 dispatch.output_origin(),
             ));
+            let just_prepared = prepared.last().expect("just pushed");
+            if let Err(err) = self
+                .record_tool_effect_started(ctx, &call.arguments, just_prepared)
+                .await
+            {
+                // Every call in `prepared` so far (including this one) already
+                // emitted `ToolStarted`; give each one a terminal event before
+                // bailing, mirroring the sibling-abort handling in phase 4.
+                for sibling in &prepared {
+                    self.fail_tool_call(
+                        ctx,
+                        status,
+                        &sibling.call_id,
+                        &sibling.tool_name,
+                        sibling.started_at_ms,
+                        &err,
+                    );
+                }
+                return Err(err);
+            }
             slots.push(ToolSlot::Execute);
 
             // Each call is bounded by its recoverable tool policy inside the
@@ -1492,6 +1638,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 );
                                 continue;
                             }
+                            self.record_tool_effect_settled(
+                                ctx,
+                                &prepared,
+                                ToolEffectStatus::Failed,
+                            )
+                            .await;
                             self.fail_tool_call(
                                 ctx,
                                 status,
@@ -1514,6 +1666,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 "aborted: sibling tool call failed".to_string(),
                             );
                             for (sibling_prepared, _) in executed {
+                                self.record_tool_effect_settled(
+                                    ctx,
+                                    &sibling_prepared,
+                                    ToolEffectStatus::Failed,
+                                )
+                                .await;
                                 self.fail_tool_call(
                                     ctx,
                                     status,
@@ -1526,6 +1684,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             return Err(err);
                         }
                     };
+                    self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Completed)
+                        .await;
                     follow_ups.extend(
                         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
                             .await?,
@@ -1606,6 +1766,162 @@ fn execution_deferral(call: &ToolCall, error: &TinyAgentsError) -> Option<Deferr
             Some(metadata.clone()),
         )),
         _ => None,
+    }
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Reconciles unresolved tool-effect-ledger rows (B5) before resuming a
+    /// run from durable transcript `messages`.
+    ///
+    /// A crash between [`Self::record_tool_effect_started`] and the matching
+    /// settle write (or between the settle write and the tool result being
+    /// folded into `messages`) leaves a `started` row a resumed run must
+    /// resolve one way or another before it can safely feed `messages` back
+    /// into the loop: the last assistant turn may still carry a tool call
+    /// with no matching [`Message::Tool`] answer.
+    ///
+    /// For every tool call on the *last* assistant message that has no
+    /// [`Message::Tool`] answer yet **and** an unresolved (`started`) ledger
+    /// row, this consults the tool's declared
+    /// [`tinytools::ToolReplay`][tinytools::ToolPolicy::runtime]:
+    ///
+    /// - [`tinytools::ToolReplay::Safe`]: the call is left unanswered.
+    ///   `messages` is not appended to for that call, so the normal loop
+    ///   re-executes it exactly as it would a fresh call — the tool declared
+    ///   this safe.
+    /// - [`tinytools::ToolReplay::Never`] (the default): a synthesized
+    ///   tool-error result ("interrupted before settlement") is appended in
+    ///   place of a real answer, the ledger row is settled as
+    ///   [`crate::tool::ToolEffectStatus::Interrupted`], and the loop never
+    ///   re-attempts the call.
+    ///
+    /// A call whose tool is no longer registered on this harness (renamed,
+    /// removed since the interrupted run) is treated as [`ToolReplay::Never`]
+    /// — fail closed rather than blindly re-run an unknown effect.
+    ///
+    /// Returns the messages synthesized for `Never`-classified calls (already
+    /// appended to `messages` as well), so a caller that journals messages
+    /// separately from the in-memory transcript knows what changed. Returns
+    /// an empty `Vec` immediately, without any ledger I/O, when `ctx` has no
+    /// [`crate::tool::ToolEffectLedger`] attached or the transcript has no
+    /// pending tool calls.
+    ///
+    /// This is deliberately not wired into
+    /// [`crate::agent_loop::AgentHarness::resume_deferred`]: that entry point
+    /// exists (A2), but its `results` answers exactly the calls this
+    /// reconciler would otherwise treat as unresolved (a call `results` is
+    /// about to run mid-execution-deferred it — see
+    /// [`resume_deferred`][crate::agent_loop::AgentHarness::resume_deferred]'s
+    /// doc comment), so calling it there would pre-empt a live approval with
+    /// a synthesized crash answer. A host resuming a run from durable state
+    /// after a genuine crash — where no `results` exists for the pending
+    /// call at all — calls this explicitly, before re-entering the agent
+    /// loop with the recovered `messages`.
+    pub async fn reconcile_tool_effects(
+        &self,
+        ctx: &RunContext<Ctx>,
+        run_id: &str,
+        messages: &mut Vec<Message>,
+    ) -> Result<Vec<Message>> {
+        let mut synthesized = Vec::new();
+        let Some(ledger) = ctx.tool_effect_ledger.clone() else {
+            return Ok(synthesized);
+        };
+
+        // The calls a resumed run must judge are exactly the tool calls on
+        // the *last* assistant turn — any earlier assistant tool-call turn
+        // already has its answers folded in by definition, since the loop
+        // never advances past an unanswered turn.
+        let Some(pending_calls) = messages.iter().rev().find_map(|message| match message {
+            Message::Assistant(assistant) if !assistant.tool_calls.is_empty() => {
+                Some(assistant.tool_calls.clone())
+            }
+            _ => None,
+        }) else {
+            return Ok(synthesized);
+        };
+        let already_answered: std::collections::HashSet<&str> = messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::Tool(tool_message) => Some(tool_message.tool_call_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let unanswered: Vec<&ToolCall> = pending_calls
+            .iter()
+            .filter(|call| !already_answered.contains(call.id.as_str()))
+            .collect();
+        if unanswered.is_empty() {
+            return Ok(synthesized);
+        }
+
+        let unresolved = ledger.unresolved(run_id).await?;
+        for call in unanswered {
+            let Some(effect) = unresolved.iter().find(|effect| effect.call_id == call.id) else {
+                // No ledger row for this call: nothing was ever journaled as
+                // started for it (e.g. a ledger was attached only after the
+                // interrupted attempt began), so there is nothing to
+                // reconcile — leave it for the loop to handle as it always
+                // has.
+                continue;
+            };
+            let replay = self
+                .tools
+                .dispatch(&call.name)
+                .map(|dispatch| dispatch.tool().policy().runtime.replay)
+                .unwrap_or(tinytools::ToolReplay::Never);
+            match replay {
+                tinytools::ToolReplay::Safe => {
+                    ctx.emit(AgentEvent::ToolEffectReconciled {
+                        call_id: CallId::new(call.id.clone()),
+                        action: "re_execute".to_string(),
+                    });
+                    tracing::info!(
+                        "[agent_loop::tools] reconciling unresolved tool effect for call `{}` \
+                         (tool `{}`) as ToolReplay::Safe — leaving unanswered for re-execution",
+                        call.id,
+                        call.name
+                    );
+                }
+                tinytools::ToolReplay::Never => {
+                    let result = tinytools::ToolResult::error("interrupted before settlement");
+                    let tool_message = tool_message_from_result(
+                        call.id.clone(),
+                        &result,
+                        ToolCallOptions::default(),
+                    );
+                    messages.push(Message::Tool(tool_message.clone()));
+                    synthesized.push(Message::Tool(tool_message));
+                    if let Err(err) = ledger
+                        .settled(ToolEffectSettle {
+                            run_id: crate::ids::RunId::new(run_id),
+                            call_id: CallId::new(call.id.clone()),
+                            status: ToolEffectStatus::Interrupted,
+                            effect_summary: Some(effect.tool.clone()),
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            "[agent_loop::tools] failed to settle interrupted tool effect for \
+                             call `{}` (tool `{}`): {err}",
+                            call.id,
+                            call.name
+                        );
+                    }
+                    ctx.emit(AgentEvent::ToolEffectReconciled {
+                        call_id: CallId::new(call.id.clone()),
+                        action: "interrupted".to_string(),
+                    });
+                    tracing::info!(
+                        "[agent_loop::tools] reconciled unresolved tool effect for call `{}` \
+                         (tool `{}`) as ToolReplay::Never — synthesized an interrupted result",
+                        call.id,
+                        call.name
+                    );
+                }
+            }
+        }
+        Ok(synthesized)
     }
 }
 

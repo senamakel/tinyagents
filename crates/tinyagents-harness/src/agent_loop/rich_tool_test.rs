@@ -114,6 +114,7 @@ fn response(tool_calls: Vec<ToolCall>, text: &str) -> ModelResponse {
             content,
             tool_calls,
             usage: Some(Usage::new(1, 1)),
+            origin: None,
         },
         usage: Some(Usage::new(1, 1)),
         finish_reason: Some("stop".to_string()),
@@ -152,6 +153,7 @@ fn shape(messages: &[Message]) -> Vec<String> {
             }
             Message::Assistant(_) => "assistant".to_string(),
             Message::Tool(t) => format!("tool:{}", t.tool_call_id),
+            Message::Custom(_) => "custom".to_string(),
         })
         .collect()
 }

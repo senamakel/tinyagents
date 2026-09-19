@@ -455,6 +455,7 @@ fn structured_output_supports_provider_schema_and_tool_fallbacks() {
                 invalid: None,
             }],
             usage: None,
+            origin: None,
         },
         usage: None,
         finish_reason: Some("tool_calls".into()),

@@ -315,6 +315,9 @@ impl<Ctx> RunContext<Ctx> {
             deferred_results: None,
             approved_calls: std::collections::HashSet::new(),
             child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            tool_effect_ledger: None,
+            tool_effect_ledger_failure: crate::tool::LedgerFailure::default(),
+            compaction_sink: None,
         }
     }
 
@@ -436,6 +439,9 @@ impl<Ctx> RunContext<Ctx> {
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
         child.host_agent_id = self.host_agent_id.clone();
+        child.tool_effect_ledger = self.tool_effect_ledger.clone();
+        child.tool_effect_ledger_failure = self.tool_effect_ledger_failure;
+        child.compaction_sink = self.compaction_sink.clone();
         Ok(child)
     }
 
@@ -681,6 +687,46 @@ impl<Ctx> RunContext<Ctx> {
     /// boundary takes. Without this the loop consumes no queued messages.
     pub fn with_run_queue(mut self, queue: crate::run_queue::RunQueueHandle) -> Self {
         self.run_queue = Some(queue);
+        self
+    }
+
+    /// Attaches a durable tool-effect ledger (B5), so the agent loop writes a
+    /// `started` row before each tool call executes and a `completed`/
+    /// `failed` row after it settles. `None` (the default) disables all
+    /// ledger writes.
+    ///
+    /// See [`crate::tool::ToolEffectLedger`] and
+    /// [`RunContext::with_tool_effect_ledger_failure`] for how a `started`
+    /// write failure is handled.
+    #[must_use]
+    pub fn with_tool_effect_ledger(
+        mut self,
+        ledger: std::sync::Arc<dyn crate::tool::ToolEffectLedger>,
+    ) -> Self {
+        self.tool_effect_ledger = Some(ledger);
+        self
+    }
+
+    /// Sets how the agent loop reacts when [`crate::tool::ToolEffectLedger::started`]
+    /// itself fails. Defaults to [`crate::tool::LedgerFailure::Abort`].
+    #[must_use]
+    pub fn with_tool_effect_ledger_failure(mut self, failure: crate::tool::LedgerFailure) -> Self {
+        self.tool_effect_ledger_failure = failure;
+        self
+    }
+
+    /// Attaches a durable [`crate::summarization::CompactionSink`] so every
+    /// [`crate::summarization::CompactionRecord`] a compaction produces on
+    /// this run is persisted (typically into a session's entry tree),
+    /// instead of only living in
+    /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
+    /// in-process buffer. `None` (the default) disables persistence.
+    #[must_use]
+    pub fn with_compaction_sink(
+        mut self,
+        sink: std::sync::Arc<dyn crate::summarization::CompactionSink>,
+    ) -> Self {
+        self.compaction_sink = Some(sink);
         self
     }
 

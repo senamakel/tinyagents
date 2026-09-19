@@ -60,6 +60,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             toolset: None,
             capabilities: Vec::new(),
             capability_base_toolset: None,
+            loop_driver: None,
         }
     }
 
@@ -368,6 +369,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Returns a reference to the active run policy.
     pub fn policy(&self) -> &RunPolicy {
         &self.policy
+    }
+
+    /// Installs an alternate loop engine (A5), consulted by `invoke*` when
+    /// [`RunPolicy::execution`] is
+    /// [`LoopExecution`][crate::runtime::LoopExecution]`::Graph`. See
+    /// [`crate::agent_loop::phases::LoopDriver`]. Returns `&mut Self` for
+    /// chaining.
+    pub fn with_loop_driver(
+        &mut self,
+        driver: Arc<dyn crate::agent_loop::phases::LoopDriver<State, Ctx>>,
+    ) -> &mut Self {
+        self.loop_driver = Some(driver);
+        self
+    }
+
+    /// Returns the installed alternate loop engine, if any. See
+    /// [`Self::with_loop_driver`].
+    pub fn loop_driver(
+        &self,
+    ) -> Option<&Arc<dyn crate::agent_loop::phases::LoopDriver<State, Ctx>>> {
+        self.loop_driver.as_ref()
     }
 }
 

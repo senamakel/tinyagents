@@ -762,6 +762,15 @@ pub enum CompressionFailurePolicy {
     PassThrough,
 }
 
+/// The type of a `before_compaction` hook, consulted before every compaction
+/// [`ContextCompressionMiddleware`] runs. Named to keep the struct field's
+/// type simple (`clippy::type_complexity`).
+pub type BeforeCompactionHook = std::sync::Arc<
+    dyn Fn(&crate::summarization::CompactionContext) -> crate::summarization::CompactionDecision
+        + Send
+        + Sync,
+>;
+
 /// Middleware that summarizes/compresses the request transcript, but **only**
 /// when it nears the model's context window.
 ///
@@ -798,6 +807,25 @@ pub struct ContextCompressionMiddleware {
     pub(crate) max_records: usize,
     /// Recovery behaviour when [`Summarizer::summarize`] returns `Err`.
     pub(crate) on_failure: CompressionFailurePolicy,
+    /// The most recently produced compaction summary text, threaded into the
+    /// next compaction's [`crate::summarization::SummaryRequest::previous_summary`]
+    /// so an iterative [`Summarizer`] refines rather than restarts. `None`
+    /// until the first compaction on this middleware instance.
+    pub(crate) last_summary: Mutex<Option<String>>,
+    /// Token budget above which a single "turn" of messages handed to the
+    /// summarizer is itself split into two halves and merged (see
+    /// [`crate::summarization::summarize_with_split`]). `None` disables
+    /// splitting — the whole `to_summarize` slice is always summarized in one
+    /// call, matching the middleware's original behaviour.
+    pub(crate) max_turn_tokens: Option<u64>,
+    /// Classifies a model-call error as a provider context-window overflow,
+    /// consulted by [`ModelMiddleware::wrap_model`] for the
+    /// overflow → compact → retry recovery path.
+    pub(crate) overflow_classifier: crate::summarization::OverflowClassifier,
+    /// Optional hook consulted before every compaction (proactive or
+    /// overflow-triggered) that can decline it or substitute a summary. See
+    /// [`crate::summarization::CompactionDecision`].
+    pub(crate) before_compaction: Option<BeforeCompactionHook>,
 }
 
 // ── MicrocompactMiddleware ────────────────────────────────────────────────────

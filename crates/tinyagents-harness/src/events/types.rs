@@ -288,6 +288,24 @@ pub enum AgentEvent {
         error: String,
     },
 
+    /// A resumed run reconciled an unresolved tool-effect-ledger row left
+    /// behind by an interrupted prior attempt (B5).
+    ///
+    /// Emitted by
+    /// [`crate::runtime::AgentHarness::reconcile_tool_effects`] for each
+    /// `started`-but-never-settled effect belonging to the last assistant
+    /// tool-call turn, once it has decided what to do per the tool's
+    /// [`tinytools::ToolReplay`] declaration.
+    ToolEffectReconciled {
+        /// Identifier of the reconciled tool call.
+        call_id: CallId,
+        /// What the reconciliation did: `"re_execute"` when the call was left
+        /// pending for the loop to run again (`ToolReplay::Safe`), or
+        /// `"interrupted"` when a synthesized tool-error result was appended
+        /// instead (`ToolReplay::Never`).
+        action: String,
+    },
+
     /// A model call failed and the run is propagating the error.
     ///
     /// The terminal partner of [`AgentEvent::ModelStarted`] on the error path;
@@ -557,6 +575,27 @@ pub enum AgentEvent {
         to_tokens: u64,
     },
 
+    /// A durable, rule-driven compaction ran and produced a
+    /// [`crate::summarization::CompactionRecord`].
+    ///
+    /// Distinguished from [`Self::Compressed`] (the older, simpler
+    /// event `ContextCompressionMiddleware`'s original `before_model` path
+    /// emits) by carrying [`crate::summarization::CompactionReason`] and by
+    /// always being emitted for a compaction produced through
+    /// `crate::summarization::compaction` — including the
+    /// overflow → compact → retry recovery path, which has no other event of
+    /// its own. Both events fire for the same compaction on the `before_model`
+    /// path; a listener that only cares about *whether* the transcript shrank
+    /// can ignore `reason` and treat this exactly like `Compressed`.
+    Compacted {
+        /// Why this compaction ran.
+        reason: crate::summarization::CompactionReason,
+        /// Estimated total tokens of the transcript before compaction.
+        tokens_before: u64,
+        /// Estimated total tokens of the transcript after compaction.
+        tokens_after: u64,
+    },
+
     /// The final turn's structured-output extraction failed schema
     /// validation, or a registered
     /// [`crate::structured::OutputValidator`] rejected the value with
@@ -725,6 +764,22 @@ pub enum AgentEvent {
         error: String,
     },
 
+    /// A cross-provider handoff transform rewrote part of the outgoing
+    /// transcript immediately before a model call, because it carried
+    /// assistant content from a different provider/api/model than the one
+    /// about to receive it (a mid-session model switch, an explicit
+    /// per-request override, or a fallback to a different provider). Emitted
+    /// only when at least one message changed — same-origin runs (the
+    /// common case) never emit this.
+    ///
+    /// See the harness's cross-provider handoff transform for the exact
+    /// rules (redacted/signed thinking, tool-call id normalization, image
+    /// downgrade).
+    HandoffTransformApplied {
+        /// Number of messages rewritten by the transform for this call.
+        changes: usize,
+    },
+
     /// A streaming model call's chunk stream was closed (gracefully or by
     /// cancellation).
     ///
@@ -793,6 +848,7 @@ impl AgentEvent {
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",
             AgentEvent::ToolFailed { .. } => "tool.failed",
+            AgentEvent::ToolEffectReconciled { .. } => "tool.effect_reconciled",
             AgentEvent::ModelFailed { .. } => "model.failed",
             AgentEvent::SubAgentFailed { .. } => "subagent.failed",
             AgentEvent::UnknownToolCall { .. } => "tool.unknown",
@@ -819,6 +875,7 @@ impl AgentEvent {
             AgentEvent::SubAgentReused { .. } => "subagent.reused",
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
+            AgentEvent::Compacted { .. } => "context.compacted",
             AgentEvent::OutputRetry { .. } => "output.retry",
             AgentEvent::QueuedMessageApplied { .. } => "queue.applied",
             AgentEvent::RouteSelected { .. } => "route.selected",
@@ -830,6 +887,7 @@ impl AgentEvent {
             AgentEvent::ToolProgress { .. } => "tool.progress",
             AgentEvent::Custom { .. } => "custom",
             AgentEvent::MiddlewareFailed { .. } => "middleware.failed",
+            AgentEvent::HandoffTransformApplied { .. } => "handoff.transform_applied",
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",

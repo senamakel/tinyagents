@@ -349,6 +349,7 @@ impl<State: Send + Sync> ChatModel<State> for SchemaDrivenModel {
                     arguments,
                 )],
                 usage: None,
+                origin: None,
             },
             usage: None,
             finish_reason: None,

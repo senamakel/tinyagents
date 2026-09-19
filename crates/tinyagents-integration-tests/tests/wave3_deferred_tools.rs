@@ -61,6 +61,7 @@ fn assistant(tool_calls: Vec<ToolCall>, text: &str) -> ModelResponse {
             content,
             tool_calls,
             usage: Some(Usage::new(1, 1)),
+            origin: None,
         },
         usage: Some(Usage::new(1, 1)),
         finish_reason: Some("stop".to_string()),
