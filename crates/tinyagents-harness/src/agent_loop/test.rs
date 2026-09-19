@@ -1101,13 +1101,17 @@ async fn dynamic_toolset_change_folds_into_the_leading_system_message_by_default
     let Message::System(leading) = system_messages[0] else {
         unreachable!("filtered above");
     };
+    // Turn 1's diff runs against an as-yet-undeclared transcript, so it
+    // records the whole live set (both `search` and `browse`) in one fold —
+    // not just the later delta — which is what lets a replay reconstruct the
+    // complete effective tool set from the transcript alone.
     assert_eq!(
         leading
             .tools_added
             .iter()
             .map(|schema| schema.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["browse"]
+        vec!["browse", "search"]
     );
 }
 
