@@ -523,6 +523,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
             status.set_last_event(record.id);
 
+            // Captured before `binding.model` moves into `base` below: decides
+            // whether text-dialect recovery should even be attempted for this
+            // call's response (see the call site after the model returns).
+            let text_dialect_recovery_enabled = match self.policy.text_dialect_recovery {
+                crate::runtime::TextDialectRecovery::Off => false,
+                crate::runtime::TextDialectRecovery::On => true,
+                crate::runtime::TextDialectRecovery::Auto => !binding
+                    .model
+                    .profile()
+                    .map(|profile| profile.tool_calling)
+                    .unwrap_or(false),
+            };
+
             // The real model call (cache + retry + fallback core) is the
             // innermost base of the model-wrap onion. Lifecycle `before_model`
             // already ran above; the wrap onion runs here; lifecycle
