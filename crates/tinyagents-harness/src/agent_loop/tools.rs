@@ -143,6 +143,106 @@ struct PreparedToolCall {
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Builds the run's deferred-tool catalogue: every
+    /// [`tinytools::ToolExposure::Deferred`] registration the host allow-list
+    /// admits, or an empty catalogue when discovery is disabled.
+    pub(super) fn deferred_catalog(
+        &self,
+        host_allows: &dyn Fn(&str) -> bool,
+    ) -> crate::tool::discover::DeferredCatalog {
+        if !self.policy.discovery.enabled {
+            return crate::tool::discover::DeferredCatalog::default();
+        }
+        let mut schemas = self
+            .tools
+            .deferred_schemas()
+            .into_iter()
+            .filter(|schema| host_allows(&schema.name))
+            .collect::<Vec<_>>();
+        if let Some(preparation) = &self.policy.tool_schemas {
+            schemas = crate::tool::prepare_tool_schemas(&schemas, preparation);
+        }
+        crate::tool::discover::DeferredCatalog::build(schemas)
+    }
+
+    /// Resolves the discovery bridge for one call, when it is one.
+    ///
+    /// Returns `Some` with the answer for a `tool_search` call (no tool runs),
+    /// `None` after rewriting a `tool_call` in place to the real tool so
+    /// admission continues with it, and `None` untouched for any other name.
+    /// A malformed `tool_call` payload is answered with a tool error rather
+    /// than passed on, so the model can correct it.
+    fn answer_discovery_bridge(
+        &self,
+        ctx: &RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        call: &mut ToolCall,
+    ) -> Result<Option<ResolvedToolCall<State, Ctx>>> {
+        use crate::tool::discover::{TOOL_CALL_NAME, TOOL_SEARCH_NAME};
+        if !self.policy.discovery.enabled
+            || (call.name != TOOL_SEARCH_NAME && call.name != TOOL_CALL_NAME)
+        {
+            return Ok(None);
+        }
+        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+            .map(|binding| binding.allowed_tools);
+        let host_allows = |name: &str| {
+            allowed_tools
+                .as_ref()
+                .is_none_or(|allowed| allowed.is_empty() || allowed.contains(name))
+        };
+        let catalog = self.deferred_catalog(&host_allows);
+        if catalog.is_empty() {
+            // Nothing was deferred, so the bridge was never advertised; let
+            // the call fall through to the unknown-tool policy.
+            return Ok(None);
+        }
+        if call.name == TOOL_SEARCH_NAME {
+            let result = crate::tool::discover::answer_tool_search(
+                &catalog,
+                &self.policy.discovery,
+                &call.arguments,
+            );
+            let record = ctx.emit(AgentEvent::ToolSearched {
+                call_id: CallId::new(call.id.clone()),
+                query: call
+                    .arguments
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                matched: result.is_error.then_some(0).unwrap_or_else(|| {
+                    catalog
+                        .search(
+                            call.arguments
+                                .get("query")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                            self.policy.discovery.max_limit,
+                        )
+                        .len()
+                }),
+            });
+            status.set_last_event(record.id);
+            return Ok(Some(ResolvedToolCall::Answered(result)));
+        }
+        match crate::tool::discover::unwrap_tool_call(&call.arguments) {
+            Ok((name, arguments)) => {
+                let record = ctx.emit(AgentEvent::DeferredToolCall {
+                    call_id: CallId::new(call.id.clone()),
+                    tool_name: name.clone(),
+                });
+                status.set_last_event(record.id);
+                call.name = name;
+                call.arguments = arguments;
+                Ok(None)
+            }
+            Err(message) => Ok(Some(ResolvedToolCall::Answered(
+                tinytools::ToolResult::error(message),
+            ))),
+        }
+    }
+
     /// Resolves this tool's own timeout policy. The separate run wall-clock
     /// budget remains the outer hard deadline: a per-tool timeout becomes a
     /// recoverable tool-error result, while exhausting the run budget aborts.
@@ -918,8 +1018,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool,
                     call,
                 }),
-                ResolvedToolCall::ErrorMessage(message) => {
-                    admitted.push(AdmittedCall::Recovered { call, message })
+                ResolvedToolCall::Answered(result) => {
+                    admitted.push(AdmittedCall::Recovered { call, result })
                 }
             }
         }
@@ -939,8 +1039,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool,
                     call,
                 } => (dispatch, tool, call),
-                AdmittedCall::Recovered { call, message } => {
-                    slots.push(ToolSlot::Recovered { call, message });
+                AdmittedCall::Recovered { call, result } => {
+                    slots.push(ToolSlot::Recovered { call, result });
                     continue;
                 }
             };
@@ -996,8 +1096,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut executed = prepared.into_iter().zip(results);
         for slot in slots {
             match slot {
-                ToolSlot::Recovered { call, message } => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, message)
+                ToolSlot::Recovered { call, result } => {
+                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                 }
                 ToolSlot::Execute => {
