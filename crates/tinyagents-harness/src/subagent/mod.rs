@@ -720,11 +720,18 @@ where
     Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
-        Arc::new(SubAgentToolDeclaration {
-            name: self.tool_name.clone(),
-            description: self.subagent.description().to_owned(),
-            parameters: self.parameters.clone(),
-        })
+        // Built once and cached (M-4): `tool()` is called several times per
+        // admitted call and once per tool per run for `schemas()`, and a
+        // fresh `Arc<SubAgentToolDeclaration>` with a cloned `parameters`
+        // `Value` on every call is unnecessary allocation for a declaration
+        // that never changes after registration.
+        Arc::clone(self.declaration.get_or_init(|| {
+            Arc::new(SubAgentToolDeclaration {
+                name: self.tool_name.clone(),
+                description: self.subagent.description().to_owned(),
+                parameters: self.parameters.clone(),
+            })
+        }))
     }
 
     fn output_origin(&self) -> crate::host::ContentOrigin {
