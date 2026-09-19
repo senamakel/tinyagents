@@ -740,13 +740,15 @@ where
     /// The task id is persisted on the activation itself, so a resume can
     /// match a marker to one fan-out task rather than every task with its
     /// node.
-    fn completion_writes(completed_tasks: &[Activation]) -> Vec<crate::checkpoint::PendingWrite> {
-        completed_tasks
+    fn completion_writes(
+        completed: &[crate::checkpoint::CompletedTask],
+    ) -> Vec<crate::checkpoint::PendingWrite> {
+        completed
             .iter()
-            .map(|activation| {
+            .map(|task| {
                 crate::checkpoint::PendingWrite::completion_marker(
-                    activation.node.clone(),
-                    activation.task_id.clone(),
+                    task.node.clone(),
+                    task.task_id.clone(),
                 )
             })
             .collect()
