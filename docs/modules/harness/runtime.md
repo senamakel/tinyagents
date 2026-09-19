@@ -100,11 +100,18 @@ Detailed lifecycle:
 11. Emit model events and append assistant message.
 12. If tool calls exist, validate name, schema, and limits.
 13. Run `before_tool` middleware per call.
-14. Execute tools — concurrently when the turn has two or more calls and no
-    tool-wrap (`ToolMiddleware`) middleware is registered (wrap middleware
-    holds `&mut RunContext` across each call, so it forces the serial path);
-    results always fold back in original call order.
-15. Run `on_tool_delta` middleware for tool progress streams.
+14. Execute tools — concurrently only when *all* of: the turn has two or more
+    calls, zero lifecycle middleware is registered, zero tool-wrap
+    (`ToolMiddleware`) middleware is registered (wrap middleware holds
+    `&mut RunContext` across each call, so it forces the serial path), and
+    every call's tool reports `is_concurrency_safe() == true` (the trait
+    default is `false`, so concurrency is opt-in per tool); see
+    `should_execute_tools_concurrently` in
+    `crates/tinyagents-harness/src/agent_loop/tools.rs` (~1015-1022). Results
+    always fold back in original call order.
+15. `on_tool_delta` middleware exists on the `Middleware` trait and
+    `MiddlewareChain::run_on_tool_delta` is implemented, but the agent loop
+    does not call it yet — no tool progress stream is wired up today.
 16. Run `after_tool` middleware per result.
 17. Append tool messages.
 18. Repeat until no tool calls remain.
