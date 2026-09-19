@@ -150,6 +150,8 @@ fn resolve_image_data_uri(source: &str, max_bytes: usize) -> Result<String> {
     Ok(encode_data_uri(&mime, &decoded))
 }
 
+/// Fetches an `http(s)` image, checking size against both the `Content-Length`
+/// header and the measured body before detecting MIME and re-encoding.
 async fn resolve_remote_image(
     source: &str,
     max_bytes: usize,
