@@ -733,6 +733,7 @@ async fn dropped_tool_call_nudges_are_bounded() {
 struct ProfiledScriptedModel {
     profile: ModelProfile,
     queue: Mutex<std::collections::VecDeque<ModelResponse>>,
+    received: Mutex<Vec<ModelRequest>>,
 }
 
 impl ProfiledScriptedModel {
@@ -740,7 +741,13 @@ impl ProfiledScriptedModel {
         Self {
             profile,
             queue: Mutex::new(responses.into()),
+            received: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every request received so far, in order.
+    fn requests(&self) -> Vec<ModelRequest> {
+        self.received.lock().unwrap().clone()
     }
 }
 
@@ -753,8 +760,9 @@ impl ChatModel<()> for ProfiledScriptedModel {
     async fn invoke(
         &self,
         _state: &(),
-        _request: ModelRequest,
+        request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
+        self.received.lock().unwrap().push(request);
         self.queue
             .lock()
             .unwrap()
