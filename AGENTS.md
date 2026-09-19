@@ -9,7 +9,6 @@ typed state graphs), `crates/tinyagents-harness/` (provider-neutral model
 calls, tools, middleware, and streaming), `crates/tinyagents-language/` (the
 declarative `.rag` blueprint format), `crates/tinyagents-registry/` (the named
 capability catalog), and `crates/tinyagents-session/` (durable session data).
-`crates/tinyagents-tracing/` supplies shared opt-in tracing macros, while
 `crates/tinyagents-integration-tests/` owns cross-crate tests and examples.
 
 Prefer small, focused modules that do one thing extremely well. New feature

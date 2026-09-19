@@ -89,15 +89,17 @@ swallowed. Mismatched and single-quoted *keys* are repaired; single-quoted
 *values* deliberately are not, because an apostrophe in a value is ordinary
 English.
 
-### Invalid arguments abort the run by default
+### Invalid arguments recover by default, but without normalization
 
-`RunPolicy::invalid_args` defaults to `InvalidArgsPolicy::Fail`: the first
-schema-invalid tool call kills the whole run. That is defensible for a frontier
-model, where such a call is nearly always a genuine bug. For a 3B model it makes
-the loop unusable — and it disables the argument recovery above, which only runs
-under the recovering policy.
+`RunPolicy::invalid_args` defaults to `InvalidArgsPolicy::ReturnToolError`:
+a schema-invalid tool call is returned to the model as a tool error instead
+of aborting the run. (`Fail`, which aborts on the first schema-invalid call,
+is still available and defensible for a frontier model where such a call is
+nearly always a genuine bug — but it is no longer the default.) The default
+still does not run the provider-shape normalization pass above, which makes a
+3B model's malformed argument wrappers unusable without opting in further.
 
-**A host driving a local model should opt in:**
+**A host driving a local model should opt in to normalization:**
 
 ```rust
 harness.with_policy(RunPolicy {
