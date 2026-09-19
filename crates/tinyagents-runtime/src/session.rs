@@ -140,17 +140,15 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         if let Some(target) = self.target.as_mut() {
             target.meta = transcript.meta;
         }
-        // A successful explicit resume also fixes the target's history handle
-        // for later appends. Builder construction itself remains I/O-free.
-        if self.transcript.is_none() {
-            let target = self.target.as_ref().expect("target checked above");
-            self.transcript = Some(
-                target
-                    .locator
-                    .open_stem(&target.stem, target.meta.clone())
-                    .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-            );
-        }
+        // A successful explicit resume always rebinds the write handle to the
+        // selected transcript. Builder construction itself remains I/O-free.
+        let target = self.target.as_ref().expect("target checked above");
+        self.transcript = Some(
+            target
+                .locator
+                .open_stem(&target.stem, target.meta.clone())
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+        );
         Ok(SessionResume {
             loaded: true,
             history,
@@ -246,6 +244,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             Ok(outcome) => outcome,
             Err(failure) => {
                 if let Some(partial) = failure.partial {
+                    if cancellation.is_cancelled() {
+                        return Err(RuntimeError::Cancelled);
+                    }
                     let partial_history = self.with_prefix(partial.history);
                     let raw = self.encode(&self.history, &partial_history, &codec_options)?;
                     let turn_usage = self.turn_usage(&codec_options)?;

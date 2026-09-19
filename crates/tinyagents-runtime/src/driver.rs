@@ -84,6 +84,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
                 partial: None,
             });
         }
+        let input_len = request.history.len();
         let partial = if request.stream {
             self.harness
                 .invoke_streaming_in_context_collecting_partial(
@@ -101,10 +102,14 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
                 )
                 .await
         };
-        let output =
-            partial.run.messages.iter().rev().find_map(|message| {
-                matches!(message, Message::Assistant(_)).then(|| message.text())
-            });
+        let output = partial
+            .run
+            .messages
+            .get(input_len..)
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .find_map(|message| matches!(message, Message::Assistant(_)).then(|| message.text()));
         let outcome = DriverOutcome {
             history: partial.run.messages,
             output: output.clone(),

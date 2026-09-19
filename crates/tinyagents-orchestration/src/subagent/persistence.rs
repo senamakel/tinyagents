@@ -13,9 +13,9 @@ use super::{
 /// never a global lifecycle identity. The driver additionally suppresses
 /// duplicate records from repeated calls made through the same driver instance. A persistence
 /// future's successful return is its commit boundary: implementations must not
-/// make a write visible and then await again before returning `Ok(true)`. The
-/// driver races that boundary with cancellation and, when cancellation wins,
-/// records one truthful `Cancelled` terminal outcome instead.
+/// make a write visible and then await again before returning their
+/// disposition. The driver races that boundary with cancellation and, when
+/// cancellation wins, records one truthful `Cancelled` terminal outcome instead.
 #[async_trait]
 pub trait SubagentPersistence: Send + Sync {
     /// Returns a terminal outcome committed by another driver/process, if any.

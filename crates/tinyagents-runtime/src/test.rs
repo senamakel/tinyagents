@@ -54,7 +54,7 @@ struct WaitingDriver(Arc<tokio::sync::Notify>);
 #[async_trait]
 impl SessionDriver for WaitingDriver {
     async fn execute(&self, _: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
-        self.0.notify_waiters();
+        self.0.notify_one();
         std::future::pending().await
     }
 }
