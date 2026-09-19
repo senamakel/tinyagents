@@ -427,6 +427,7 @@ impl StructuredExtractor {
         Ok(StructuredOutput {
             value,
             raw_text: Some(raw),
+            variant: None,
         })
     }
 
@@ -463,12 +464,67 @@ impl StructuredExtractor {
             return Ok(StructuredOutput {
                 value,
                 raw_text: Some(raw.to_string()),
+                variant: None,
             });
         }
 
         Ok(StructuredOutput {
             value: call.arguments.clone(),
             raw_text: None,
+            variant: None,
+        })
+    }
+
+    /// [`StructuredStrategy::ToolCallUnion`] extraction: scans the response's
+    /// tool calls for the first one whose name matches a variant, validates
+    /// its arguments against *that variant's* schema (running the same
+    /// repair ladder [`Self::extract_tool_call`] does for unparseable
+    /// provider arguments), and records the matched variant name.
+    fn extract_tool_call_union(&self, response: &ModelResponse) -> Result<StructuredOutput> {
+        let variant_names: Vec<&str> = self.variants.iter().map(|(n, _)| n.as_str()).collect();
+        let call = response
+            .tool_calls()
+            .iter()
+            .find(|tc| variant_names.contains(&tc.name.as_str()))
+            .ok_or_else(|| {
+                TinyAgentsError::Validation(format!(
+                    "schema '{}': no tool call matching any of the union's variants {:?} was \
+                     found in response",
+                    self.schema_name, variant_names
+                ))
+            })?;
+        let (variant_name, variant_schema) = self
+            .variants
+            .iter()
+            .find(|(name, _)| name == &call.name)
+            .expect("matched call name came from variant_names");
+
+        let (value, raw_text) = if let Some(raw) = call.arguments.as_str()
+            && let Some((value, repair)) = repair::parse_lenient(raw)
+        {
+            if repair.is_repaired() {
+                tracing::debug!(
+                    "[structured] union variant '{}': recovered tool-call arguments with \
+                     repair `{}`",
+                    variant_name,
+                    repair.as_str()
+                );
+            }
+            (value, Some(raw.to_string()))
+        } else {
+            (call.arguments.clone(), None)
+        };
+
+        validate::validate_value(
+            variant_schema,
+            &value,
+            &format!("union variant '{variant_name}'"),
+        )?;
+
+        Ok(StructuredOutput {
+            value,
+            raw_text,
+            variant: Some(variant_name.clone()),
         })
     }
 }
