@@ -527,6 +527,18 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// [`AgentHarness::with_toolset`]. See that method's doc comment for
     /// exactly which turn behavior this changes.
     pub(crate) toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
+    /// Capability bundles installed via [`AgentHarness::with_capability`]
+    /// (gap G3), in installation order. Kept so each new `with_capability`
+    /// call can rebuild [`Self::toolset`]'s
+    /// [`crate::capability::CapabilityToolSet`] layer from the complete,
+    /// still-accumulating list rather than nesting one per call.
+    pub(crate) capabilities: Vec<crate::capability::Capability<State, Ctx>>,
+    /// The toolset chain that was installed (via [`AgentHarness::with_toolset`],
+    /// or `None`) before the first [`AgentHarness::with_capability`] call.
+    /// Captured once so every later `with_capability` rebuild of
+    /// [`Self::toolset`] keeps composing with it, instead of losing it to
+    /// the first capability's rebuild.
+    pub(crate) capability_base_toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
 }
 
 /// The non-serializable mechanics selected for one hosted invocation.
