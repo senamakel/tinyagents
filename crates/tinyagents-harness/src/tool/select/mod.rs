@@ -115,6 +115,8 @@ pub fn rank_tools_by_prompt(
 // Verb detection
 // ─────────────────────────────────────────────────────────────────────────
 
+/// English action words that map to a query's detected [`ToolVerb`], checked
+/// against whole words in the lowercased prompt by [`detect_verbs`].
 fn verb_aliases(v: ToolVerb) -> &'static [&'static str] {
     match v {
         ToolVerb::Create => &[

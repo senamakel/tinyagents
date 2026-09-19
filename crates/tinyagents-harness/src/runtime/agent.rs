@@ -916,6 +916,13 @@ fn start_progress_dispatcher(
     })
 }
 
+/// Screens every text/JSON block of every user message through the host's
+/// [`crate::host::SecurityGate`], rewriting redacted blocks in place, and
+/// returns the visible text joined by newlines for use as the turn's
+/// memory/experience recall query.
+///
+/// A [`ScreenOutcome::Block`] on any block aborts the whole turn — there is no
+/// partial admission of a user message once one piece of it is deemed unsafe.
 async fn screen_user_messages<State: Send + Sync>(
     host: &crate::host::HostCapabilities<State>,
     messages: &mut [tinyinference_llm::message::Message],
