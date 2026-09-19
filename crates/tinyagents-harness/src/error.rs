@@ -223,8 +223,11 @@ pub enum TinyAgentsError {
     /// A `.rag` source could not be tokenised or parsed.
     #[error("parse error at line {line}, column {column}: {message}")]
     Parse {
+        /// Human-readable description of what went wrong.
         message: String,
+        /// 1-based source line the error was detected on.
         line: usize,
+        /// 1-based source column the error was detected at.
         column: usize,
     },
 

@@ -315,8 +315,10 @@ impl<Ctx> RunContext<Ctx> {
     /// slot, and instance id.  It deliberately shares the capabilities that
     /// describe one recursive operation: cancellation, events, stores,
     /// workspace policy, steering, streaming mode, thread identity, output
-    /// cap, and depth cap.  The child starts with the parent's metadata; use
-    /// [`Self::child_with_metadata`] to shallowly overlay child-specific keys.
+    /// cap, and depth cap.  Metadata is shallow-merged automatically: any key
+    /// set on `child_config.metadata` overlays the parent's metadata object
+    /// (see [`shallow_merge_metadata`]), so callers only need to pass the
+    /// child-specific keys.
     pub fn child<ChildCtx>(
         &self,
         child_config: RunConfig,

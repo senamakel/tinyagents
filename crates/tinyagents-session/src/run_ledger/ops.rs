@@ -565,6 +565,10 @@ pub fn interrupt_orphaned_agent_runs(workspace_dir: &Path) -> Result<usize> {
     })
 }
 
+/// Lists agent runs, most-recently-updated first, with optional filters
+/// (status, kind, parent run, parent thread) and pagination.
+///
+/// `limit` is capped at 500 regardless of the requested value.
 pub fn list_agent_runs(
     workspace_dir: &Path,
     request: &AgentRunListRequest,
@@ -639,6 +643,10 @@ pub fn list_agent_runs(
     })
 }
 
+/// Lists a run's events in `sequence` order, optionally starting after a
+/// given cursor (`after_sequence`), for polling "what's new" incrementally.
+///
+/// `limit` is capped at 1000 regardless of the requested value.
 pub fn list_recent_run_events(
     workspace_dir: &Path,
     request: &RunEventListRequest,

@@ -69,18 +69,24 @@ pub trait TeamLedger: Send + Sync {
 
 /// [`TeamLedger`] backed by `tinyagents-session`'s run ledger at a caller
 /// supplied workspace root. It makes no workspace or host policy decision.
+///
+/// Delegates all operations to the session run-ledger functions, projecting
+/// the workspace path into each call. This is the default implementation when
+/// using TinyAgents' built-in session storage.
 #[derive(Debug, Clone)]
 pub struct SessionTeamLedger {
     workspace_dir: PathBuf,
 }
 
 impl SessionTeamLedger {
+    /// Creates a ledger wrapping the session layer at the specified workspace.
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
         }
     }
 
+    /// Returns the workspace directory used for all ledger operations.
     pub fn workspace_dir(&self) -> &Path {
         &self.workspace_dir
     }

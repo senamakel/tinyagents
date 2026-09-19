@@ -8,7 +8,7 @@
 //!
 //! The pieces:
 //!
-//! - [`SubAgentNode`] binds an agent [`ComponentId`] to an [`InputMapper`]
+//! - [`SubAgentNode`] binds an agent `ComponentId` to an [`InputMapper`]
 //!   (parent `State` → [`SubAgentInput`]), an [`OutputMapper`]
 //!   ([`SubAgentOutput`] → parent `Update`), and a [`SubAgentPolicy`].
 //! - [`subagent_node`] lowers a [`SubAgentNode`] into an ordinary graph node
