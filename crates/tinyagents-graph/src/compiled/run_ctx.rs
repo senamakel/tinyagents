@@ -55,6 +55,13 @@ pub(super) struct RunCtx<'a, State, Update> {
     /// Keyed by task id, falling back to node id (I1/R5); see
     /// [`super::executor::RunSeed::resume_map`].
     pub(super) resume_map: HashMap<String, serde_json::Value>,
+    /// Per-node snapshot of the channel versions as of the last time each
+    /// node ran (I5/R3), keyed by node id string. Loaded from the resumed
+    /// checkpoint's [`crate::checkpoint::Checkpoint::versions_seen`]
+    /// (`ResumeSeed::initial_versions_seen`); updated in [`Self::node_context`]
+    /// and persisted back onto every boundary checkpoint this run writes
+    /// (`compiled::boundary`).
+    pub(super) versions_seen: HashMap<String, std::collections::BTreeMap<String, u64>>,
     pub(super) visited: Vec<NodeId>,
     pub(super) all_child_runs: Vec<ChildRun>,
     pub(super) steps: usize,
