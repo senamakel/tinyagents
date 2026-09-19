@@ -685,31 +685,35 @@ unsafe fn extend_overlay_stream_lifetime<'a>(
 ///
 /// The binding is carried by the non-serializable context rather than the
 /// reusable harness, so concurrent roots have no shared mutable authority.
-#[allow(unsafe_code)]
-pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx: Send + Sync>(
+///
+/// `host_authority` is `Option<Arc<dyn Any + Send + Sync>>` and is installed
+/// only by the hosted entry points in this module, which require
+/// `State: 'static, Ctx: 'static` and store exactly
+/// `HostInvocationAuthority<State, Ctx>`. Nothing about [`RunContext`]
+/// prevents a caller from handing a hosted context to a *different* harness
+/// (a different `State`, or — via [`RunContext::child_with_data`] changing
+/// `Ctx`), so the erased type is checked with [`Any::downcast_ref`] rather
+/// than assumed. A mismatch fails closed with
+/// [`TinyAgentsError::Validation`] instead of reinterpreting memory through
+/// the wrong type. Absence of any authority is the ordinary, cheap case (an
+/// explicit-model run, or the generic loop when no hosted invocation
+/// installed one) and returns `Ok(None)` without touching `Any` at all, so
+/// this function itself still only needs `State: 'static, Ctx: 'static` on
+/// the (rare) hosted path — its callers already carry that bound.
+pub(crate) fn host_invocation_binding<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
     context: &RunContext<Ctx>,
-) -> Result<Option<HostInvocationBinding<State, Ctx>>> {
+) -> Result<Option<std::sync::Arc<HostInvocationBinding<State, Ctx>>>> {
     let Some(authority) = context.host_authority.as_ref() else {
         return Ok(None);
     };
-    // `host_authority` is crate-private and is installed only by the hosted
-    // entry points, which require `State: 'static` and store exactly
-    // `HostInvocationAuthority<State>`. Explicit-model entry points never
-    // install it, so they return at the `None` branch without requiring
-    // `State: 'static` or consulting `Any` at all. Keeping this cast at the
-    // private hosted-context boundary restores borrowed-state support to the
-    // generic loop without creating a harness registry or any cross-invocation
-    // authority channel.
-    //
-    // SAFETY: no public API can construct or mutate `host_authority`; its only
-    // assignment is the hosted `AgentInvocation` path in this module.
-    // `RunContext::child` clones that same `Arc` only for recursive calls with
-    // the same `State`. Thus a present authority always points at the concrete
-    // type requested here for the active harness invocation.
-    let authority = unsafe {
-        &*(std::sync::Arc::as_ptr(authority) as *const HostInvocationAuthority<State, Ctx>)
-    };
-    Ok(Some(authority.binding.clone()))
+    match authority.downcast_ref::<HostInvocationAuthority<State, Ctx>>() {
+        Some(authority) => Ok(Some(authority.binding.clone())),
+        None => Err(TinyAgentsError::Validation(
+            "host authority type mismatch: this run context was hosted by a different \
+             State/Ctx harness than the one reading it"
+                .to_string(),
+        )),
+    }
 }
 
 /// Best-effort progress projection. A host UI must never make the turn wait or
