@@ -208,6 +208,8 @@ async fn resolve_remote_image(
     Ok(encode_data_uri(&mime, bytes.as_ref()))
 }
 
+/// Reads a local image path, checking size (against metadata, then the
+/// measured read) before detecting MIME and re-encoding.
 async fn resolve_local_image(source: &str, max_bytes: usize) -> Result<String> {
     let path = Path::new(source);
     if !path.exists() || !path.is_file() {
