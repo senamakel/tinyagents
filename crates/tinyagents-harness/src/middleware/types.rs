@@ -552,18 +552,39 @@ pub enum CompressionFailurePolicy {
     PassThrough,
 }
 
-/// Middleware that condenses older transcript history into a summary when the
-/// transcript nears the model's context window. See
-/// [`ContextCompressionMiddleware::new`] and
-/// [`with_summarizer`](ContextCompressionMiddleware::with_summarizer) for
-/// construction, and [`CompressionFailurePolicy`] /
+/// Middleware that summarizes/compresses the request transcript, but **only**
+/// when it nears the model's context window.
+///
+/// In `before_model` it consults the configured [`SummarizationPolicy`]. The
+/// policy is normally built with a context window (for example via
+/// [`SummarizationPolicy::from_profile`] or
+/// [`SummarizationPolicy::with_context_window`]) and a `threshold_fraction`
+/// (default `0.9`). When the estimated transcript tokens are **below** the
+/// window threshold this middleware is a complete no-op: `request.messages` is
+/// left untouched and no event is emitted. When the threshold is reached, the
+/// older messages are condensed by the [`Summarizer`] into a single summary
+/// message, the recent window and system messages are kept verbatim, the
+/// resulting [`SummaryRecord`] (with its compression provenance) is recorded,
+/// and an [`AgentEvent::Compressed`][crate::events::AgentEvent::Compressed]
+/// event is emitted.
+///
+/// [`ConcatSummarizer`][crate::summarization::ConcatSummarizer] is used by
+/// default; supply any [`Summarizer`] via
+/// [`ContextCompressionMiddleware::with_summarizer`]. See
+/// [`ContextCompressionMiddleware::new`] for construction, and
+/// [`CompressionFailurePolicy`] /
 /// [`with_failure_policy`](ContextCompressionMiddleware::with_failure_policy)
 /// for how a summarizer error is recovered.
 pub struct ContextCompressionMiddleware {
+    /// Label reported in `MiddlewareStarted`/`MiddlewareCompleted` events.
     pub(crate) label: &'static str,
+    /// Threshold and context-window configuration consulted on each call.
     pub(crate) policy: SummarizationPolicy,
+    /// Condenses older messages into a summary once the threshold is reached.
     pub(crate) summarizer: Box<dyn Summarizer>,
+    /// Compression history, oldest first, capped at `max_records`.
     pub(crate) records: Mutex<VecDeque<SummaryRecord>>,
+    /// Eviction cap for `records`.
     pub(crate) max_records: usize,
     /// Recovery behaviour when [`Summarizer::summarize`] returns `Err`.
     pub(crate) on_failure: CompressionFailurePolicy,
