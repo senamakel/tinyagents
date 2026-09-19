@@ -495,8 +495,15 @@ impl<Ctx> RunContext<Ctx> {
     /// The agent loop drains the handle before each model call via
     /// [`crate::steering::apply_pending_steering`]. Without this the
     /// run accepts no steering.
+    ///
+    /// Binds the handle to this run's id as the **root** of its steering tree
+    /// (see [`crate::steering::SteeringTarget::Root`]); a child run created
+    /// from this context via [`Self::child`]/[`Self::child_with_data`] gets a
+    /// derived handle scoped to its own id instead of sharing this binding
+    /// (I-5).
     pub fn with_steering(mut self, steering: crate::steering::SteeringHandle) -> Self {
-        self.steering = Some(steering);
+        let root_run_id = self.lineage().root_run_id.clone();
+        self.steering = Some(steering.bind_root(root_run_id));
         self
     }
 
