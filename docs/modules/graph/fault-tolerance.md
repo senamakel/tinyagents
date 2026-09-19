@@ -125,5 +125,7 @@ node failures (resumable on a checkpointed thread):
 - Renew the durable execution lease mid-run for long-running steps that could
   outlive its TTL (today it is claimed once, at `execute` entry, and released
   at exit — no heartbeat loop).
+- Force-drain (not just best-effort track) in-flight async checkpoint writes
+  from the run-future drop guard.
 
 [retryable]: ../../../crates/tinyagents-harness/src/retry/mod.rs
