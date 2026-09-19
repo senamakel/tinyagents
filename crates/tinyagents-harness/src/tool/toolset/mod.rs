@@ -238,7 +238,6 @@ pub(crate) struct OverrideTool {
     pub(crate) name: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) parameters: Option<Value>,
-    #[expect(clippy::type_complexity, reason = "one-shot policy rewrite closure")]
     pub(crate) policy_transform: Option<Arc<dyn Fn(ToolPolicy) -> ToolPolicy + Send + Sync>>,
 }
 
