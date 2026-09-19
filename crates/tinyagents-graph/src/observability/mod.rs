@@ -55,7 +55,7 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 
 use crate::status::GraphRunStatus;
-use crate::stream::{GraphEvent, GraphEventSink};
+use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
 use tinyagents_harness::error::Result;
 use tinyagents_harness::ids::{CheckpointId, EventId, GraphId, NodeId, RunId, ThreadId, now_ms};
 use tinyagents_harness::observability::{AppendWorker, DEFAULT_DRAIN_CAPACITY};
