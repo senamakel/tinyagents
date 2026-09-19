@@ -69,13 +69,22 @@ Implemented today:
 - thread id
 - checkpoint namespace
 - run id
+- `version: u32` — the on-disk record shape. `2` (`CHECKPOINT_FORMAT_VERSION`)
+  for every record this crate writes; see "Checkpoint format v2" below.
+- `created_at: u64` — wall-clock write time in Unix millis
+  (`tinyagents_harness::ids::now_ms()`); `0` on a v1 record, which never
+  carried a timestamp.
 - committed state (`state: State`, not a per-channel value map)
-- next active nodes (`next_nodes`) and pending activations (`pending_activations`,
-  the richer `Send`-argument-carrying superset)
-- explicit routing for completed-but-not-yet-routed siblings (`completed_routes`,
-  positionally aligned with `completed_tasks`): persists a carried-forward
-  branch's `Command::goto` so it survives an interrupt/failure + resume
-  instead of re-resolving via static/conditional edges only
+- `tasks: Vec<PendingActivation>` — the single source of truth for what runs
+  on resume, preserving each pending node's `Send` argument and task id.
+- `completed: Vec<CompletedTask>` — the single source of truth for what
+  completed in the step that produced this checkpoint, each entry carrying
+  its own task id, node, and explicit `Command::goto` routing (empty when
+  the task returned none — route via static/conditional edges instead).
+  Replaces the v1 `completed_tasks`/`completed_routes` pair: persisting a
+  carried-forward branch's `Command::goto` is what lets it survive an
+  interrupt/failure + resume instead of re-resolving via static/conditional
+  edges only.
 - barrier (waiting-edge) arrivals (`barrier_arrivals`)
 - pending writes
 - interrupts
@@ -90,13 +99,88 @@ Implemented today:
 - metadata source: `input`, `loop`, `update`, or `fork` (`CheckpointMetadata::source`)
 
 **Target (not implemented):** the following LangGraph-derived fields do not
-exist on `Checkpoint`/`CheckpointMetadata` today — there is no `version` or
-`timestamp` field, no per-channel `channel_values`/`channel_versions`, no
-`versions_seen` map, no `updated_channels` list, no `graph_id` field, and no
-`task_outcomes` list (task completion is tracked as a flat `completed_tasks:
-Vec<NodeId>`, not a structured per-task outcome record). Introducing these
-would require a channel-based state model this crate does not have (state
-here is a single typed `State`, not a set of named channels).
+exist on `Checkpoint`/`CheckpointMetadata` today — no per-channel
+`channel_values`/`channel_versions`, no `versions_seen` map, no
+`updated_channels` list, no `graph_id` field, and no structured per-task
+outcome record beyond `completed`/`pending_writes`. Introducing these would
+require a channel-based state model this crate does not have (state here is a
+single typed `State`, not a set of named channels).
+
+## Checkpoint format v2
+
+Checkpoint format v2 (`Checkpoint::version == CHECKPOINT_FORMAT_VERSION == 2`)
+replaces four overlapping v1 projections of pending/completed work —
+`next_nodes: Vec<NodeId>`, `completed_tasks: Vec<NodeId>` +
+`completed_routes: Vec<Vec<RouteTarget>>` (a parallel pair that had to stay
+positionally aligned by convention, not by type), and
+`pending_activations: Option<Vec<PendingActivation>>` (an `Option`-wrapped
+superset of `next_nodes` carrying the same information) — with exactly two
+fields: `tasks: Vec<PendingActivation>` and `completed: Vec<CompletedTask>`.
+`pending_writes` and `barrier_arrivals` are unchanged; they already carried
+information (the resume/error/interrupt control-plane slots, and barrier
+arrival sets) that v1's schedule fields never could.
+
+### Decode path: `Checkpoint::normalize`
+
+The four v1 fields (`next_nodes`, `completed_tasks`, `completed_routes`,
+`pending_activations`) still exist on `Checkpoint<State>` as
+`#[serde(default, skip_serializing_if = "…")]` **decode-only** inputs: a
+record written by a build that predates checkpoint format v2 still
+deserializes, with `version` defaulting to `1` via
+`#[serde(default = "checkpoint_version_v1")]`. Every writer in this crate
+leaves those four fields at their empty default, so a freshly-written record
+serializes with none of them present — only `tasks`/`completed` describe
+pending/completed work going forward.
+
+`Checkpoint::normalize(&mut self)` is the single place that reads the legacy
+fields and folds them into the v2 shape: when `version < 2`, `tasks` is
+derived from `pending_activations` (falling back to `next_nodes`, projected
+to plain node activations with no `Send` arg and an empty task id) and
+`completed` is derived by zipping `completed_tasks` with `completed_routes`
+(padding a shorter/missing `completed_routes` with empty routing — the
+pre-`completed_routes` behavior); the legacy fields are then cleared and
+`version` is stamped to `2`. It is a no-op on an already-v2 record.
+
+Every bundled `Checkpointer` backend calls `normalize()` on every decode
+path — `get`, `get_scoped`, `list` (via a normalize-equivalent header
+projection that never needs a full-record decode; see "Listing" below),
+`state_history`, and `get_thread` — for all three backends
+(`InMemoryCheckpointer`, `FileCheckpointer`, `SqliteCheckpointer`). Callers
+outside this module therefore never observe a v1 record: `checkpoint.tasks`/
+`checkpoint.completed` are always populated and correct regardless of which
+format version the stored record was originally written in. Readers
+elsewhere in this crate (`compiled::resume`, `compiled::boundary`,
+`compiled::state_api`, `compiled::mod`) read `tasks`/`completed` only — the
+v1-derivation logic that used to live in those modules (a `next_nodes`
+fallback in `resume_from_inner`, a zip of `completed_tasks`/
+`completed_routes` in `boundary::advance`'s carried-completion handling) was
+deleted once `normalize()` centralized it.
+
+`Checkpoint::to_metadata()` (which backs `Checkpointer::list` and the
+inspection API) resolves the same v2-or-derived-from-v1 pending set without
+mutating `self`, so a listing path that only ever decodes a header (the file
+backend's `CheckpointHeader`, the SQLite backend's projected `next_nodes`
+column) can report the correct schedule for a v1 record without a full
+record decode.
+
+### Building a v2 checkpoint
+
+`Checkpoint::new(state, tasks)` builds a fresh v2 record with sensible
+defaults: a freshly-minted `checkpoint_id`, the current `created_at`,
+`version == CHECKPOINT_FORMAT_VERSION`, and empty `thread_id`/`completed`/
+`pending_writes`/`interrupts`/`barrier_arrivals`/`namespace` (`metadata` is
+`null`). `Checkpoint::builder(state)` is an alias with no pending tasks yet.
+Every field is also directly `pub`, but the fluent `with_*` setters
+(`with_thread_id`, `with_checkpoint_id`, `with_run_id`,
+`with_parent_checkpoint_id`, `with_namespace`, `with_tasks`,
+`with_completed`, `with_pending_writes`, `with_interrupts`,
+`with_barrier_arrivals`, `with_metadata`) are what every checkpoint
+construction site in this crate uses (`boundary::{advance,
+handle_failure_boundary, handle_interrupt_boundary, persist_cancel_checkpoint,
+persist_failure_checkpoint, build_loop_checkpoint}`,
+`state_api::{update_state, fork_state}`, the conformance suite) instead of a
+~15-field struct literal repeating the same four-projection duplication at
+every call site.
 
 Durability modes:
 
