@@ -1051,6 +1051,138 @@ async fn model_requests_tool_then_finishes() {
     assert_eq!(run.messages[2].text(), "tool-output");
 }
 
+/// B6: a toolset chain whose live set changes mid-run, against a model whose
+/// profile does *not* advertise `mid_conversation_system_messages` (the
+/// default `MockModel` profile), gets the delta **folded** into the leading
+/// system message rather than appended as a new one — no new
+/// [`Message::System`] appears anywhere in the transcript, but the delta is
+/// still fully recorded on the leading message.
+#[tokio::test]
+async fn dynamic_toolset_change_folds_into_the_leading_system_message_by_default() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("call-1", "search", json!({"q": "x"})),
+            text_response("done", 4, 2),
+        ])),
+    );
+    let search: Arc<dyn Tool> = Arc::new(FakeTool::new("search", "search-output"));
+    let browse: Arc<dyn Tool> = Arc::new(FakeTool::new("browse", "browse-output"));
+    let toolset = Arc::new(DynamicToolSet {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        search: search.clone(),
+        browse: browse.clone(),
+    });
+    harness.with_toolset(toolset.clone());
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset.clone(),
+        search,
+    )));
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset,
+        browse,
+    )));
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system("baseline persona"), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+
+    let system_messages: Vec<&Message> = run
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::System(_)))
+        .collect();
+    assert_eq!(system_messages.len(), 1, "no new system message was appended");
+    let Message::System(leading) = system_messages[0] else {
+        unreachable!("filtered above");
+    };
+    assert_eq!(
+        leading
+            .tools_added
+            .iter()
+            .map(|schema| schema.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["browse"]
+    );
+}
+
+/// B6 (insert path): the same toolset-change scenario against a model whose
+/// profile *does* advertise `mid_conversation_system_messages` gets the delta
+/// appended as exactly one new [`Message::System`] patch instead.
+#[tokio::test]
+async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allows_it() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    let profile = ModelProfile {
+        tool_calling: true,
+        mid_conversation_system_messages: true,
+        ..ModelProfile::default()
+    };
+    harness.register_model(
+        "mock",
+        Arc::new(ProfiledModel {
+            inner: MockModel::with_responses(vec![
+                tool_call_response("call-1", "search", json!({"q": "x"})),
+                text_response("done", 4, 2),
+            ]),
+            profile,
+        }),
+    );
+    let search: Arc<dyn Tool> = Arc::new(FakeTool::new("search", "search-output"));
+    let browse: Arc<dyn Tool> = Arc::new(FakeTool::new("browse", "browse-output"));
+    let toolset = Arc::new(DynamicToolSet {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        search: search.clone(),
+        browse: browse.clone(),
+    });
+    harness.with_toolset(toolset.clone());
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset.clone(),
+        search,
+    )));
+    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
+        toolset,
+        browse,
+    )));
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system("baseline persona"), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+
+    let system_messages: Vec<&Message> = run
+        .messages
+        .iter()
+        .filter(|message| matches!(message, Message::System(_)))
+        .collect();
+    // The original leading system message plus exactly one appended patch.
+    assert_eq!(system_messages.len(), 2, "exactly one patch was appended");
+    let Message::System(patch) = system_messages[1] else {
+        unreachable!("filtered above");
+    };
+    assert_eq!(
+        patch
+            .tools_added
+            .iter()
+            .map(|schema| schema.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["browse"]
+    );
+
+    // The reconstructed effective tool set matches what was actually offered.
+    let (_, effective_tools) = tinyinference_llm::message::replay_system_state(&run.messages);
+    let mut names: Vec<&str> = effective_tools.iter().map(|schema| schema.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["browse", "search"]);
+}
+
 #[tokio::test]
 async fn after_tool_receives_distinct_identity_for_same_named_calls() {
     let mut parallel_calls = ModelResponse::assistant("");
