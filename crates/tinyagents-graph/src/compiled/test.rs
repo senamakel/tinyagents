@@ -731,7 +731,9 @@ async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
         .add_node("lo", move |_s: Counter, c: NodeContext| {
             let seen = lo_resumes.clone();
             async move {
-                seen.lock().unwrap().push(("lo".to_string(), c.resume.clone()));
+                seen.lock()
+                    .unwrap()
+                    .push(("lo".to_string(), c.resume.clone()));
                 match c.resume {
                     Some(_) => Ok(NodeResult::Update(2)),
                     None => Ok(NodeResult::Interrupt(Interrupt::new("lo", json!({})))),
@@ -744,7 +746,9 @@ async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
         .add_node("y", move |_s: Counter, c: NodeContext| {
             let seen = y_resumes.clone();
             async move {
-                seen.lock().unwrap().push(("y".to_string(), c.resume.clone()));
+                seen.lock()
+                    .unwrap()
+                    .push(("y".to_string(), c.resume.clone()));
                 Ok(NodeResult::Update(5))
             }
         })
@@ -822,7 +826,9 @@ async fn resume_continues_step_counter_monotonically() {
     let interrupted_once = Arc::new(AtomicBool::new(false));
     let flag = interrupted_once.clone();
     let graph = GraphBuilder::<i32, i32>::overwrite()
-        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+        .add_node("a", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s + 1))
+        })
         .add_node("b", move |s, c: NodeContext| {
             let flag = flag.clone();
             async move {
@@ -832,7 +838,9 @@ async fn resume_continues_step_counter_monotonically() {
                 Ok(NodeResult::Update(s + 1))
             }
         })
-        .add_node("c", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+        .add_node("c", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s + 1))
+        })
         .set_entry("a")
         .add_edge("a", "b")
         .add_edge("b", "c")
