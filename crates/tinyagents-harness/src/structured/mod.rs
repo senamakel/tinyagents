@@ -65,11 +65,71 @@ mod validate;
 pub use repair::JsonRepair;
 pub use types::*;
 
+use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use tinyinference_llm::model::{ModelProfile, ModelResponse, ResponseFormat};
+
+// ---------------------------------------------------------------------------
+// OutputValidator
+// ---------------------------------------------------------------------------
+
+/// Validates an already schema-valid structured output, driving the
+/// output-validation retry loop (A3, `RunPolicy::output_retry`).
+///
+/// Registered on a harness via
+/// [`crate::runtime::AgentHarness::with_output_validator`]. Called once per
+/// final-turn extraction, after [`StructuredExtractor::extract_outcome`]
+/// already succeeded — a schema-invalid value never reaches the validator; it
+/// retries through the same loop for the extraction-failure reason instead.
+///
+/// Returning `Err(TinyAgentsError::ModelRetry(message))` asks the agent loop
+/// to push `message` back to the model as a repair prompt and try again
+/// (bounded by [`crate::runtime::RunPolicy::output_retry`]'s
+/// `max_attempts`); any other `Err` variant fails the run immediately,
+/// exactly like an error from any other fallible call in the loop. Mirrors
+/// Pydantic AI's `@agent.output_validator`.
+///
+/// # Example
+///
+/// ```rust
+/// use async_trait::async_trait;
+/// use tinyagents_harness::context::RunContext;
+/// use tinyagents_harness::error::{Result, TinyAgentsError};
+/// use tinyagents_harness::structured::OutputValidator;
+///
+/// struct NonEmpty;
+///
+/// #[async_trait]
+/// impl OutputValidator<()> for NonEmpty {
+///     async fn validate(
+///         &self,
+///         _ctx: &mut RunContext<()>,
+///         _state: &(),
+///         output: &serde_json::Value,
+///     ) -> Result<()> {
+///         if output.get("answer").and_then(|v| v.as_str()).is_none_or(str::is_empty) {
+///             return Err(TinyAgentsError::ModelRetry(
+///                 "`answer` must be a non-empty string".to_string(),
+///             ));
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait OutputValidator<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
+    /// Validates `output`. See the trait docs for how `Err` is handled.
+    async fn validate(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        output: &Value,
+    ) -> Result<()>;
+}
 
 // ---------------------------------------------------------------------------
 // Strategy selection
