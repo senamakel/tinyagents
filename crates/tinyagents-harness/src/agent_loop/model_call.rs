@@ -520,7 +520,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         request,
                         call_id,
                         &mut deltas_emitted,
-                        &shape.recovery,
+                        shape,
                     );
                     Self::with_call_budget(remaining, run_id.as_str(), "model call", bound, fut)
                         .await
@@ -819,8 +819,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         deltas_emitted: &mut usize,
-        recovery: &super::dialect::TextRecovery,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let recovery = &shape.recovery;
         let mut stream = model.stream(state, request.clone()).await?;
         let mut accumulator = StreamAccumulator::new();
         // Tool-call markup a model narrates as text is held back from live
