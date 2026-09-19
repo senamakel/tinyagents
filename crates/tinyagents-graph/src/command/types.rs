@@ -53,7 +53,13 @@ impl Send {
 /// A single routing target produced by a [`Command`]: either a plain node
 /// activation ([`RouteTarget::Node`]) or a [`Send`] packet carrying
 /// per-invocation input ([`RouteTarget::Send`]).
-#[derive(Clone, Debug)]
+///
+/// Serializable (R1 in `docs/runtime-comparison/code-review-graph.md`): a
+/// completed sibling's explicit `Command::goto` is persisted alongside
+/// `Checkpoint::completed_tasks` (see [`crate::Checkpoint::completed_routes`])
+/// so it survives a resume instead of being re-resolved via
+/// static/conditional edges only.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum RouteTarget {
     /// Activate the node against the shared committed state.
     Node(NodeId),

@@ -14,7 +14,7 @@
 
 use std::fmt;
 
-use crate::command::Interrupt;
+use crate::command::{Interrupt, RouteTarget};
 use tinyagents_harness::ids::NodeId;
 
 /// Why a checkpoint was written.
