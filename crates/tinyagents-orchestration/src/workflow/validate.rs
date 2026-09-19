@@ -1,0 +1,63 @@
+use tinyagents_graph::dag::{DagIssue, DagNode, validate_dag};
+
+use super::{DefinitionError, WorkflowDefinition};
+
+/// Validate properties that do not require a host agent registry.
+pub fn validate_structure(definition: &WorkflowDefinition) -> Vec<DefinitionError> {
+    if definition.phases.is_empty() {
+        return vec![DefinitionError::NoPhases];
+    }
+
+    let mut errors = definition
+        .phases
+        .iter()
+        .filter(|phase| phase.agent_ids.is_empty())
+        .map(|phase| DefinitionError::EmptyPhase {
+            phase: phase.name.clone(),
+        })
+        .collect::<Vec<_>>();
+    let nodes = definition
+        .phases
+        .iter()
+        .map(|phase| {
+            DagNode::new(
+                phase.name.as_str(),
+                phase.depends_on.iter().map(String::as_str),
+            )
+        })
+        .collect::<Vec<_>>();
+    errors.extend(validate_dag(&nodes).into_iter().map(|issue| match issue {
+        DagIssue::DuplicateNode { id } => DefinitionError::DuplicatePhase { name: id },
+        DagIssue::UnknownDependency { node, depends_on } => DefinitionError::UnknownDependency {
+            phase: node,
+            depends_on,
+        },
+        DagIssue::Cycle => DefinitionError::CyclicDependency,
+    }));
+    if definition.default_concurrency == 0 || definition.max_children == 0 {
+        errors.push(DefinitionError::InvalidConcurrency {
+            default_concurrency: definition.default_concurrency,
+            max_children: definition.max_children,
+        });
+    }
+    errors
+}
+
+/// Validate agent identifiers using a host-owned registry lookup.
+pub fn validate_agents<F>(definition: &WorkflowDefinition, is_known: F) -> Vec<DefinitionError>
+where
+    F: Fn(&str) -> bool,
+{
+    definition
+        .phases
+        .iter()
+        .flat_map(|phase| {
+            phase.agent_ids.iter().filter_map(|agent_id| {
+                (!is_known(agent_id)).then(|| DefinitionError::UnknownAgent {
+                    phase: phase.name.clone(),
+                    agent_id: agent_id.clone(),
+                })
+            })
+        })
+        .collect()
+}

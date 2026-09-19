@@ -10,6 +10,7 @@
 //! depend on this composition layer.
 
 pub mod teams;
+pub mod workflow;
 
 #[cfg(test)]
 mod boundary_tests {
@@ -34,5 +35,11 @@ mod boundary_tests {
     fn public_team_surface_compiles() {
         fn assert_ledger<L: crate::teams::TeamLedger>() {}
         let _ = assert_ledger::<crate::teams::SessionTeamLedger>;
+    }
+
+    #[test]
+    fn public_workflow_surface_compiles() {
+        fn assert_store<S: crate::workflow::WorkflowStore>() {}
+        let _ = assert_store::<crate::workflow::SessionWorkflowStore>;
     }
 }
