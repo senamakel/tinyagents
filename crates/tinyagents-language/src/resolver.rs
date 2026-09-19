@@ -34,7 +34,7 @@
 use crate::ast::{ChannelDecl, GraphDecl, NodeDecl, Program};
 use crate::capability_resolver::{
     CODE_INVALID_NODE_KIND, CODE_UNKNOWN_MODEL, CODE_UNKNOWN_REDUCER, CODE_UNKNOWN_TOOL,
-    CapabilityResolver, CapabilitySource, DEFAULT_NODE_KINDS, ReferenceClass, code_for,
+    CapabilityResolver, CapabilitySource, DEFAULT_NODE_KINDS, code_for,
 };
 use crate::compiler::compile;
 use crate::diagnostic::Diagnostic;
