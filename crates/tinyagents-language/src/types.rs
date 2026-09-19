@@ -107,17 +107,30 @@ pub const END: &str = "END";
 /// [`crate::compiler::NodeFactory`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Blueprint {
+    /// The blueprint schema version, for stored/diffed/reloaded blueprints
+    /// (`Blueprint` docs above) to detect and migrate old shapes. Defaults to
+    /// `1` — every blueprint compiled before this field existed is schema
+    /// version 1 — so a stored blueprint from before this field existed still
+    /// deserializes (M5 in `docs/runtime-comparison/code-review-workspace.md`).
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     /// The graph identifier.
+    #[serde(default)]
     pub graph_id: String,
     /// The validated start node name.
+    #[serde(default)]
     pub start: String,
     /// State channel specifications.
+    #[serde(default)]
     pub channels: Vec<ChannelSpec>,
     /// Node specifications.
+    #[serde(default)]
     pub nodes: Vec<NodeSpec>,
     /// Static edge specifications.
+    #[serde(default)]
     pub edges: Vec<EdgeSpec>,
     /// Graph default key/value entries.
+    #[serde(default)]
     pub defaults: Vec<(String, Literal)>,
     /// The declared graph input shape (empty when unspecified).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
