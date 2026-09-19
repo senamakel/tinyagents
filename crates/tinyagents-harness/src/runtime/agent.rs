@@ -756,7 +756,7 @@ pub(crate) fn host_invocation_binding<State: Send + Sync, Ctx: Send + Sync>(
 
 /// Best-effort progress projection. A host UI must never make the turn wait or
 /// fail, so delivery is detached and dropped when no Tokio runtime is available.
-pub(crate) fn emit_host_progress<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
+pub(crate) fn emit_host_progress<State: Send + Sync, Ctx: Send + Sync>(
     context: &RunContext<Ctx>,
     event: ProgressEvent,
 ) {
