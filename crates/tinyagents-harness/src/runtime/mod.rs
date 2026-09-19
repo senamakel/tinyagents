@@ -188,6 +188,49 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self
     }
 
+    /// Installs a composable [`crate::tool::toolset::ToolSet`] chain (gap
+    /// B3) as an additional source of tools, consulted alongside
+    /// [`Self::tools`].
+    ///
+    /// # What this changes
+    ///
+    /// - **Advertisement**: the agent loop's per-turn model-visible tool
+    ///   catalogue is built by projecting this toolset's
+    ///   [`crate::tool::toolset::ToolSet::tools`] (re-consulted every turn,
+    ///   so a [`crate::tool::toolset::PreparedToolSet`] or
+    ///   [`crate::tool::toolset::ApprovalRequiredToolSet`] in the chain can
+    ///   vary what is advertised turn to turn) **in addition to** the
+    ///   registry's own `Direct` schemas — a name the toolset does not
+    ///   mention falls back to the registry unchanged.
+    /// - **Dispatch**: a call for a name [`Self::tools`] does not itself
+    ///   resolve (via [`crate::tool::ToolRegistry::model_dispatch`]) is
+    ///   retried against this toolset before the run's
+    ///   [`crate::runtime::UnknownToolPolicy`] applies, so a tool this
+    ///   toolset owns (through [`crate::tool::toolset::CombinedToolSet`],
+    ///   say) executes through [`crate::tool::toolset::ToolSet::call`].
+    ///
+    /// A common construction wraps the harness's own registry:
+    /// `Arc::new(harness.tools().clone_handle())`, though nothing requires
+    /// the toolset chain to include the registry at all — see
+    /// [`crate::tool::toolset::CombinedToolSet`] to compose the two.
+    ///
+    /// `None` (never calling this) leaves every existing harness's turn
+    /// behavior exactly as before this field existed. Returns `&mut Self`
+    /// for chaining.
+    pub fn with_toolset(
+        &mut self,
+        toolset: Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>,
+    ) -> &mut Self {
+        self.toolset = Some(toolset);
+        self
+    }
+
+    /// Returns the installed toolset chain, if any. See
+    /// [`Self::with_toolset`].
+    pub fn toolset(&self) -> Option<&Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>> {
+        self.toolset.as_ref()
+    }
+
     /// Returns a reference to the model registry.
     pub fn models(&self) -> &ModelRegistry<State> {
         &self.models
