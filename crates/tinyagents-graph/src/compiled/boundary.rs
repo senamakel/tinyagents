@@ -550,6 +550,16 @@ where
         let thread = thread.clone();
         let checkpoint = self.build_loop_checkpoint(ctx, &thread, boundary, step, Vec::new(), &[]);
         let id = CheckpointId::new(checkpoint.checkpoint_id.clone());
+        // M5: mirror the synchronous path, which persists both the state
+        // record (`put`) and the write ledger (`put_writes`). Without this
+        // the ledger tooling sees no completion markers for any checkpoint
+        // written under `DurabilityMode::Async`.
+        let writes = checkpoint.pending_writes.clone();
+        let write_config = CheckpointConfig {
+            thread_id: checkpoint.thread_id.clone(),
+            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+            namespace: checkpoint.namespace.clone(),
+        };
 
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
@@ -557,6 +567,7 @@ where
                 let sink = self.event_sink.clone();
                 ctx.async_writes.spawn_ordered(&handle, async move {
                     let id = checkpointer.put(checkpoint).await?;
+                    checkpointer.put_writes(&write_config, &writes).await?;
                     if let Some(sink) = sink {
                         sink.emit(GraphEvent::CheckpointSaved {
                             checkpoint_id: id.clone(),
@@ -568,6 +579,7 @@ where
             }
             Err(_) => {
                 let id = checkpointer.put(checkpoint).await?;
+                checkpointer.put_writes(&write_config, &writes).await?;
                 self.emit(GraphEvent::CheckpointSaved {
                     checkpoint_id: id.clone(),
                 });
