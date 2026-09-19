@@ -137,28 +137,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
 /// observer even when a caller stops listening before a terminal item. The
 /// invocation's host authority is owned by that context, never by the harness.
 pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
+    // Owns its inputs (the harness borrow or the invocation-local runtime is
+    // moved into the driving future itself, inside `invoke_stream_with_runner`)
+    // so nothing outside this field needs to outlive it and no lifetime
+    // extension is required to store it here.
     inner: Option<Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>>,
-    // Kept after `inner` so Rust drops the borrowed stream before the overlay
-    // that owns its harness. See `extend_overlay_stream_lifetime`.
-    #[expect(
-        dead_code,
-        reason = "drop order keeps the invocation runtime alive until the borrowed stream is dropped"
-    )]
-    runtime: Option<std::sync::Arc<InvocationRuntime<State, Ctx>>>,
     cancellation: crate::CancellationToken,
     terminal_observer: std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>,
     terminal_observed: bool,
-    marker: std::marker::PhantomData<(&'a State, Ctx)>,
+    // `fn() -> Ctx` (rather than bare `Ctx`) keeps this marker `Unpin`
+    // regardless of `Ctx`, which is what lets `poll_next` use the safe
+    // `Pin::get_mut` below instead of `get_unchecked_mut`.
+    marker: std::marker::PhantomData<(&'a State, fn() -> Ctx)>,
 }
 
 impl<State: Send + Sync + 'static, Ctx: Send + Sync> Stream for AgentStream<'_, State, Ctx> {
     type Item = AgentStreamItem;
 
-    #[allow(unsafe_code)]
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // SAFETY: `inner` is pinned independently by `Box`; this projection
-        // never moves the boxed stream or any other field of `AgentStream`.
-        let stream = unsafe { self.get_unchecked_mut() };
+        // Every field is `Unpin` (`Option<Pin<Box<..>>>`, `CancellationToken`,
+        // an `Arc<Mutex<..>>`, `bool`, and a `fn()`-based `PhantomData`), so
+        // `AgentStream` itself is `Unpin` and this projection is safe.
+        let stream = self.get_mut();
         match stream.inner.as_mut() {
             Some(inner) => match inner.as_mut().poll_next(context) {
                 Poll::Ready(Some(item)) => {
