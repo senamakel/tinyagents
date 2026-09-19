@@ -61,20 +61,22 @@ impl CollectingSink {
         Self::default()
     }
 
-    /// Returns a clone of the recorded envelopes.
-    pub fn events(&self) -> Vec<GraphEventEnvelope> {
-        self.events.lock().map(|g| g.clone()).unwrap_or_default()
-    }
-
     /// Returns a clone of the recorded events, discarding their envelopes.
     ///
-    /// Convenience for callers (mostly tests) that only care about event
-    /// shape, not run/namespace/sequence attribution.
-    pub fn bare_events(&self) -> Vec<GraphEvent> {
-        self.events()
+    /// The pre-C3 shape most callers (mostly tests) still want: event kind
+    /// and payload only, with no run/namespace/sequence attribution. Use
+    /// [`Self::envelopes`] when that attribution matters.
+    pub fn events(&self) -> Vec<GraphEvent> {
+        self.envelopes()
             .into_iter()
             .map(|envelope| envelope.event)
             .collect()
+    }
+
+    /// Returns a clone of the recorded envelopes (event plus run/namespace/
+    /// sequence attribution).
+    pub fn envelopes(&self) -> Vec<GraphEventEnvelope> {
+        self.events.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// Returns the number of recorded events.
