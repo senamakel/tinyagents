@@ -41,7 +41,7 @@ use rows::{
     get_agent_run_inner, get_agent_team_inner, get_agent_team_member_inner,
     get_agent_team_task_inner, get_run_telemetry_inner, map_agent_run_row,
     map_agent_team_member_row, map_agent_team_row, map_agent_team_task_row, map_run_event_row,
-    map_run_telemetry_row, map_workflow_run_row,
+    map_workflow_run_row,
 };
 
 pub use team::{
