@@ -141,6 +141,9 @@ fn validate_type(type_spec: &Value, value: &Value, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether `value`'s runtime JSON kind satisfies the named schema `kind`.
+/// An unrecognised `kind` always matches (see the module doc's "supported
+/// subset" note).
 fn matches_type(value: &Value, kind: &str) -> bool {
     match kind {
         "null" => value.is_null(),
