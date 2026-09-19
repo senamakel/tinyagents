@@ -138,6 +138,25 @@ where
         }
     }
 
+    /// Runs one superstep's active node set — concurrently when the graph
+    /// opts into it (`with_parallel`) and more than one node is active, else
+    /// sequentially — and folds the result. This is the single entry point
+    /// `execute_run` calls per step.
+    pub(super) async fn run_step(
+        &self,
+        ctx: &mut RunCtx<'_, State, Update>,
+        active: &[Activation],
+        state: &State,
+        step: usize,
+    ) -> Result<StepRun<Update>> {
+        let outcome = if self.graph.parallel && active.len() > 1 {
+            self.run_parallel(ctx, active, state, step).await?
+        } else {
+            self.run_sequential(ctx, active, state, step).await?
+        };
+        Ok(self.fold_step(outcome, step, &mut ctx.visited))
+    }
+
     /// Runs the active node set one node at a time (default behavior).
     ///
     /// Stops invoking further branches at the first error (the run aborts)
