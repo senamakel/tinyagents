@@ -298,9 +298,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
 
             // Build the request from the working transcript, tool schemas, and
-            // policy response format.
+            // policy response format.  Go through `PromptBuilder` rather than
+            // constructing `ModelRequest` directly: a provider KV cache needs
+            // an explicit stable prefix, and the system instructions plus the
+            // name-sorted tool schemas are stable for this whole run.
             status.mark_running(HarnessPhase::BuildingRequest);
-            let mut request = ModelRequest::new(messages.clone()).with_tools(tool_schemas.clone());
+            let system_end = messages
+                .iter()
+                .take_while(|message| matches!(message, Message::System(_)))
+                .count();
+            let mut prompt = crate::prompt::PromptBuilder::new();
+            if system_end > 0 {
+                prompt.push_system("system", messages[..system_end].to_vec());
+            }
+            if !tool_schemas.is_empty() {
+                prompt.push_tools_segment("tools", tool_schemas.clone());
+            }
+            let mut request = prompt.build(messages[system_end..].to_vec());
             // Provider adapters that maintain an external conversation (for
             // example Claude Code's resumable CLI session) need the caller's
             // logical thread id, not a hash of prompt text. Carry the harness
