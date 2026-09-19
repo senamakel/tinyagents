@@ -162,24 +162,33 @@ fn resolve_structured_plan(
 /// The `plan` node body: builds the next [`ModelRequest`] from the working
 /// transcript, the harness's registered tools, and the policy's response
 /// format, and stashes it on [`LoopState::pending_request`].
+///
+/// Takes `harness`/`ctx` as plain borrows rather than the `Arc<LoopRuntime>`
+/// the other node bodies (which also need `run`/`status`) use, so this exact
+/// function serves two callers with different ownership shapes without
+/// duplicating its logic: [`super::compile`]'s graph closures call it against
+/// a locked `MutexGuard` inside an owned, `Arc`'d [`LoopRuntime`], and
+/// [`super::driver::GraphLoopDriver`] calls it directly against the
+/// short-lived `&mut RunContext` [`tinyagents_harness::agent_loop::phases::LoopDriver::drive`]
+/// is handed — see that module's doc for why it cannot build a `LoopRuntime`
+/// of its own.
 pub(crate) async fn plan_node<State, Ctx>(
-    rt: &Arc<LoopRuntime<State, Ctx>>,
+    harness: &AgentHarness<State, Ctx>,
+    ctx: &mut RunContext<Ctx>,
     mut loop_state: LoopState,
 ) -> Result<NodeResult<LoopState>>
 where
     State: Send + Sync,
     Ctx: Send + Sync,
 {
-    let mut ctx_guard = rt.ctx.lock().await;
-
-    if ctx_guard.cancellation.is_cancelled() {
+    if ctx.cancellation.is_cancelled() {
         return Err(TinyAgentsError::Cancelled);
     }
-    match apply_pending_steering(&mut ctx_guard, &mut loop_state.messages)? {
+    match apply_pending_steering(ctx, &mut loop_state.messages)? {
         SteeringOutcome::Cancel => return Err(TinyAgentsError::Cancelled),
         SteeringOutcome::Pause => {
             return Ok(NodeResult::Interrupt(Interrupt {
-                id: format!("{}-steering-pause", ctx_guard.run_id()),
+                id: format!("{}-steering-pause", ctx.run_id()),
                 node: NodeId::from(node::PLAN),
                 payload: serde_json::json!({ "reason": "steering paused the run" }),
                 task_id: None,
@@ -187,20 +196,20 @@ where
         }
         SteeringOutcome::Continue => {}
     }
-    if ctx_guard.check_deadline().is_err() {
+    if ctx.check_deadline().is_err() {
         return Err(TinyAgentsError::Timeout(format!(
             "run `{}` exceeded its wall-clock deadline",
-            ctx_guard.run_id()
+            ctx.run_id()
         )));
     }
 
-    let tool_schemas = rt.harness.tools().schemas();
+    let tool_schemas = harness.tools().schemas();
     let mut request = ModelRequest {
         messages: loop_state.messages.clone(),
         tools: tool_schemas,
         ..ModelRequest::default()
     };
-    if let Some(format) = &rt.harness.policy().default_response_format {
+    if let Some(format) = &harness.policy().default_response_format {
         request.response_format = Some(format.clone());
     }
 
@@ -211,8 +220,7 @@ where
     // strategy choice; an explicit `ResponseFormat::JsonSchema` is
     // unaffected either way. This is a documented simplification relative to
     // the direct loop, which resolves the model first.
-    let profile = rt
-        .harness
+    let profile = harness
         .models()
         .resolve_request(&request, None, None)
         .and_then(|binding| binding.model.profile().cloned());
