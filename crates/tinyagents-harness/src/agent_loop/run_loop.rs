@@ -1688,23 +1688,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         budget: &Arc<dyn crate::host::BudgetGate>,
         usage: &tinyinference_llm::usage::Usage,
     ) -> Result<()> {
-        let cancellation = ctx.cancellation.clone();
         let recording = budget.record(usage);
-        match self.call_budget(ctx) {
-            Some(remaining) => tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                result = tokio::time::timeout(remaining, recording) => result.map_err(|_| TinyAgentsError::Timeout(format!(
-                    "budget usage recording for run `{}` exceeded its remaining wall-clock deadline",
-                    ctx.run_id()
-                )))?,
-            },
-            None => tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                result = recording => result,
-            },
-        }
+        ctx.bounded(self.call_budget(ctx), recording, || {
+            format!(
+                "budget usage recording for run `{}` exceeded its remaining wall-clock deadline",
+                ctx.run_id()
+            )
+        })
+        .await
     }
 }
 
