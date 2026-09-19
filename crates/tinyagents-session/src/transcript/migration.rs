@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Marker file that signals the v1 session-layout migration has run for a
 /// workspace. It lives under `state/migrations/` to keep the workspace root
@@ -329,7 +329,8 @@ fn ddmmyyyy_to_yyyy_mm_dd(name: &str) -> Option<String> {
 }
 
 /// Return the migration marker path for `workspace_dir`.
-fn marker_path_for(workspace_dir: &Path) -> PathBuf {
+#[cfg(test)]
+fn marker_path_for(workspace_dir: &Path) -> std::path::PathBuf {
     workspace_dir.join(MIGRATION_MARKER)
 }
 
