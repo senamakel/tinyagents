@@ -423,17 +423,19 @@ where
                 &mut phase_states,
                 "workflow owner expired; phase will retry after lease takeover",
             );
-            run = self.persist(
-                &run,
-                PersistRequest {
-                    phase_states,
-                    child_run_ids: run.child_run_ids.clone(),
-                    status: WorkflowRunStatus::Running,
-                    summary: None,
-                    terminal: false,
-                },
-                &owner,
-            )?;
+            run = self
+                .persist(
+                    &run,
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: run.child_run_ids.clone(),
+                        status: WorkflowRunStatus::Running,
+                        summary: None,
+                        terminal: false,
+                    },
+                    &owner,
+                )
+                .await?;
         }
         self.emit(tinyagents_graph::GraphEvent::RunStarted {
             run_id: tinyagents_harness::ids::RunId::new(run_id),
