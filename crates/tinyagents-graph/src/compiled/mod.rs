@@ -29,12 +29,29 @@
 //! - All active branches in a parallel step start before any is awaited, and all
 //!   are driven to completion (`join_all`) before the step boundary runs.
 //! - Branch results are then folded in active-set index order. The reducer is
-//!   the fan-in / join: lower-index branches' updates are applied first.
+//!   the fan-in / join: every branch's update is applied — **every** branch
+//!   that completed this step, not only the ones with a lower index than a
+//!   sibling that errored or interrupted (see the C1 fix in
+//!   `docs/runtime-comparison/code-review-graph.md`: a completed higher-index
+//!   branch is no longer discarded and silently re-run on resume).
 //! - The *lowest-index* branch that errors or interrupts is the step's terminal
-//!   outcome. Updates produced by lower-index successful branches are still
-//!   applied/persisted; an error persists a resumable failure boundary (see
-//!   below) and aborts, an interrupt persists a checkpoint whose pending nodes
-//!   are that branch and every later active node.
+//!   outcome; any other branch that also errored/interrupted is still recorded
+//!   (not dropped, not mistaken for completed) but does not become *the*
+//!   surfaced failure/interrupt. Every branch that completed is folded into
+//!   committed state, but its *routing* is deferred rather than resolved
+//!   immediately (the C2 fix): resolving a completed branch's successor before
+//!   its stalled siblings are known would let that successor observe a state
+//!   missing whatever those siblings eventually write, which is exactly the
+//!   ordering bug an uninterrupted run never has. The deferred branches'
+//!   node ids are persisted (`Checkpoint::completed_tasks`) and carried
+//!   forward across however many times this step interrupts/fails and gets
+//!   resumed/retried; only once every branch of the step has completed does
+//!   the executor route them all together, in one call, against one
+//!   committed state — see [`boundary::CompiledGraph::advance`]'s
+//!   `carried_completed` handling. One caveat: a deferred branch's routing
+//!   is re-resolved via static/conditional edges only (an explicit
+//!   `Command::goto` it returned is not itself persisted across the
+//!   boundary — see `StepRun::completed`).
 //! - Because branches run on cloned snapshots and never share mutable state,
 //!   concurrency is data-race free; the reducer alone resolves conflicting
 //!   writes (deterministically, by index).
