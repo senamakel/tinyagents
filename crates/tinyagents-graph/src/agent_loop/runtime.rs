@@ -317,10 +317,6 @@ where
         ));
     loop_state.turn += 1;
 
-    if let Some(control) = ctx.take_control() {
-        return apply_control(ctx, &mut loop_state, control, node::MODEL);
-    }
-
     let tool_calls = response.tool_calls().to_vec();
     loop_state.pending_tool_calls = tool_calls.clone();
 
@@ -329,6 +325,15 @@ where
     } else {
         node::TOOLS
     };
+
+    // Computed above `take_control` (rather than the reverse) so a
+    // `MiddlewareControl::Continue`/`UpdateState` control — which means "no
+    // override, proceed with whatever the turn would have done anyway" —
+    // has the real tool-routing decision to fall through to instead of an
+    // arbitrary default.
+    if let Some(control) = ctx.take_control() {
+        return apply_control(ctx, &mut loop_state, control, node::MODEL, route);
+    }
     // Stash the response for `settle` to extract structured output from.
     // Reusing `pending_request`'s sibling field would need a new field; keep
     // it simple by re-deriving what `settle` needs from `messages` (the
