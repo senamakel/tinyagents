@@ -26,6 +26,7 @@ use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
 use crate::model_registry::ModelRegistry;
 use crate::retry::{FallbackPolicy, RetryPolicy};
+use crate::run_queue::QueueMode;
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::cache::CachePolicy;
 use tinyinference_llm::model::ResponseFormat;
