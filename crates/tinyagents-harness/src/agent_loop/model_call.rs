@@ -912,7 +912,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     self.middleware
                         .run_on_model_delta(ctx, state, &mut model_delta)
                         .await?;
-                    saw_streamed_content |= !model_delta.content.is_empty();
+                    // Unconditional, not gated on the post-middleware content:
+                    // the pre-middleware tail here is always non-empty (the
+                    // surrounding `if` already checked it), matching the
+                    // ordinary delta path below, which ORs the *pre*-middleware
+                    // text against the post-middleware one. Gating on
+                    // `model_delta.content` alone meant a middleware that
+                    // suppressed the whole tail to `""` left
+                    // `saw_streamed_content` false, which skipped terminal
+                    // reconciliation and let the provider's raw (unscrubbed)
+                    // `Completed` content silently restore the exact text the
+                    // middleware had just suppressed.
+                    saw_streamed_content = true;
                     streamed_text.push_str(&model_delta.content);
                     ctx.emit(AgentEvent::ModelDelta {
                         run_id: ctx.config.run_id.clone(),
