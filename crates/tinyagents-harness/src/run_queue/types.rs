@@ -1,7 +1,10 @@
 //! Public types for the active-run queue.
 
+use serde::{Deserialize, Serialize};
+
 /// A queue lane consumed by the agent runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum QueueLane {
     /// Inject at the next safe iteration boundary as an instruction.
     Steer,
@@ -9,6 +12,36 @@ pub enum QueueLane {
     Followup,
     /// Inject at the next safe boundary as additional context.
     Collect,
+}
+
+impl QueueLane {
+    /// Returns a stable, snake_case name for this lane, suitable for logging
+    /// and event labels (e.g. `"followup"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QueueLane::Steer => "steer",
+            QueueLane::Followup => "followup",
+            QueueLane::Collect => "collect",
+        }
+    }
+}
+
+/// How many queued items the agent loop takes from a lane at one safe
+/// boundary. Mirrors pi's `QueueMode` (`"one-at-a-time" | "all"`).
+///
+/// Set on [`crate::runtime::RunPolicy::queue_mode`]; consulted by
+/// [`RunQueue::take`][crate::run_queue::RunQueue::take].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueMode {
+    /// Apply only the oldest queued item per boundary; the rest wait for the
+    /// next one. Gives the model a chance to react to each instruction
+    /// separately.
+    OneAtATime,
+    /// Apply every item queued in the lane at the boundary, in FIFO order.
+    /// The default.
+    #[default]
+    All,
 }
 
 /// Snapshot of the queue depth per lane.

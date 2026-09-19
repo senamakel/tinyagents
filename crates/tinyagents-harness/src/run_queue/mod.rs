@@ -20,7 +20,7 @@ mod types;
 
 use tokio::sync::Mutex;
 
-pub use types::{QueueLane, QueueStatus};
+pub use types::{QueueLane, QueueMode, QueueStatus};
 
 /// Thread-safe FIFO queue split into steer, follow-up, and collect lanes.
 #[derive(Debug)]
@@ -70,6 +70,28 @@ impl<T> RunQueue<T> {
             QueueLane::Steer => std::mem::take(&mut inner.steers),
             QueueLane::Followup => std::mem::take(&mut inner.followups),
             QueueLane::Collect => std::mem::take(&mut inner.collects),
+        }
+    }
+
+    /// Takes items from `lane` in FIFO order according to `mode`: the oldest
+    /// item only under [`QueueMode::OneAtATime`], or the whole lane under
+    /// [`QueueMode::All`]. Returns an empty vec when the lane is empty.
+    pub async fn take(&self, lane: QueueLane, mode: QueueMode) -> Vec<T> {
+        match mode {
+            QueueMode::All => self.drain(lane).await,
+            QueueMode::OneAtATime => {
+                let mut inner = self.inner.lock().await;
+                let items = match lane {
+                    QueueLane::Steer => &mut inner.steers,
+                    QueueLane::Followup => &mut inner.followups,
+                    QueueLane::Collect => &mut inner.collects,
+                };
+                if items.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![items.remove(0)]
+                }
+            }
         }
     }
 
