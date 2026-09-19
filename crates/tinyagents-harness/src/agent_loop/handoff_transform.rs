@@ -73,6 +73,37 @@ pub(super) struct HandoffTransformOutcome<'a> {
     pub(super) changes: usize,
 }
 
+/// Derives the [`MessageOrigin`] a resolved model's [`ModelProfile`]
+/// represents, for use as [`prepare_for_model`]'s `target_origin`.
+///
+/// [`ModelProfile`] does not itself carry an API-surface tag (a request can
+/// reach the same OpenAI-family provider through Chat Completions or the
+/// Responses API, and both share one profile shape), so `api` is a
+/// best-effort hint derived from `provider`: Anthropic's native Messages API
+/// is named exactly, every other known provider is assumed to be an
+/// OpenAI-compatible Chat Completions endpoint (true for OpenAI itself and
+/// every local/compatible preset), and an unknown/absent provider gets an
+/// empty `api`. This under-distinguishes an OpenAI Responses-API call from a
+/// Chat Completions call against the same model id — both compare equal to
+/// this function's own output, so a within-run switch between the two APIs
+/// is not treated as foreign. A caller with more precise knowledge (for
+/// example a host that resolved a real API surface) should build a
+/// [`MessageOrigin`] directly instead of calling this helper.
+pub(super) fn target_origin_for(profile: &ModelProfile) -> MessageOrigin {
+    let provider = profile.provider.clone().unwrap_or_default();
+    let api = match provider.as_str() {
+        "anthropic" => "messages",
+        "" => "",
+        _ => "chat_completions",
+    }
+    .to_string();
+    MessageOrigin {
+        provider,
+        api,
+        model: profile.model.clone().unwrap_or_default(),
+    }
+}
+
 /// Prepares a transcript for a call against `target`/`target_origin`,
 /// rewriting only the messages a cross-provider handoff makes unsafe to
 /// replay verbatim. See the module documentation for the exact rules.
