@@ -430,28 +430,23 @@ where
         let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &ctx.thread_id) else {
             return Ok(None);
         };
-        let checkpoint = Checkpoint {
-            thread_id: thread.to_string(),
-            checkpoint_id: next_checkpoint_id(),
-            run_id: Some(ctx.run_id.to_string()),
-            parent_checkpoint_id: ctx.parent_checkpoint.clone(),
-            namespace: self.namespace.clone(),
-            state: state.clone(),
-            next_nodes: activation_nodes(pending),
-            completed_tasks: Vec::new(),
-            completed_routes: Vec::new(),
-            pending_writes: Vec::new(),
-            interrupts: Vec::new(),
-            pending_activations: Some(pending.iter().map(PendingActivation::from).collect()),
-            barrier_arrivals: barriers_to_persisted(&ctx.barrier_arrivals),
-            metadata: serde_json::json!({
-                "source": "loop",
-                "step": ctx.steps,
-                "recursion": ctx.recursion_meta,
-                "cancelled": true,
-                "node_visits": node_visits_to_json(&ctx.node_visits),
-            }),
-        };
+        let checkpoint = Checkpoint::new(
+            state.clone(),
+            pending.iter().map(PendingActivation::from).collect(),
+        )
+        .with_thread_id(thread.to_string())
+        .with_checkpoint_id(next_checkpoint_id())
+        .with_run_id(ctx.run_id.to_string())
+        .with_parent_checkpoint_id(ctx.parent_checkpoint.clone())
+        .with_namespace(self.namespace.clone())
+        .with_barrier_arrivals(barriers_to_persisted(&ctx.barrier_arrivals))
+        .with_metadata(serde_json::json!({
+            "source": "loop",
+            "step": ctx.steps,
+            "recursion": ctx.recursion_meta,
+            "cancelled": true,
+            "node_visits": node_visits_to_json(&ctx.node_visits),
+        }));
         let id = checkpointer.put(checkpoint).await?;
         self.emit(GraphEvent::CheckpointSaved {
             checkpoint_id: id.clone(),
