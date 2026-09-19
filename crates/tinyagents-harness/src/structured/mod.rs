@@ -347,6 +347,7 @@ impl StructuredExtractor {
                 value: Some(output.value),
                 raw: response.clone(),
                 error: None,
+                variant: output.variant,
             },
             Err(error) => {
                 let error = error.to_string();
@@ -358,6 +359,7 @@ impl StructuredExtractor {
                     value: None,
                     raw: response.clone(),
                     error: Some(error),
+                    variant: None,
                 }
             }
         }
