@@ -141,6 +141,10 @@ impl SchemaCleanr {
         defs
     }
 
+    /// Recursion entry point shared by every cleaning path: dispatches on the
+    /// JSON value's shape and threads `defs`/`ref_stack` through nested
+    /// objects and arrays so ref resolution and cycle detection stay
+    /// consistent at every depth.
     fn clean_with_defs(
         schema: Value,
         defs: &HashMap<String, Value>,
