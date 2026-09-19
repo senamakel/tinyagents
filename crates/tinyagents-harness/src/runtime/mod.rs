@@ -202,12 +202,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ///   vary what is advertised turn to turn) **in addition to** the
     ///   registry's own `Direct` schemas — a name the toolset does not
     ///   mention falls back to the registry unchanged.
-    /// - **Dispatch**: a call for a name [`Self::tools`] does not itself
-    ///   resolve (via [`crate::tool::ToolRegistry::model_dispatch`]) is
-    ///   retried against this toolset before the run's
-    ///   [`crate::runtime::UnknownToolPolicy`] applies, so a tool this
-    ///   toolset owns (through [`crate::tool::toolset::CombinedToolSet`],
-    ///   say) executes through [`crate::tool::toolset::ToolSet::call`].
+    /// - **Dispatch is not automatically wired to this toolset.** The agent
+    ///   loop's admission path (`agent_loop/tools.rs`) resolves calls through
+    ///   [`Self::tools`] only, exactly as before this field existed. A tool
+    ///   that only the toolset chain exposes must also be reachable through
+    ///   the registry to be *callable* (not just advertised) — bridge it
+    ///   explicitly with
+    ///   [`crate::tool::toolset::ToolSetDispatchBridge`] and
+    ///   [`Self::register_tool_dispatch`]. See that bridge's doc comment for
+    ///   why: it requires `State: 'static, Ctx: 'static`, a bound the loop's
+    ///   generic admission path deliberately does not carry (recursive
+    ///   sub-agent dispatch stays callable with a borrowed, non-`'static`
+    ///   `State`/`Ctx`).
     ///
     /// A caller building a fresh [`crate::tool::ToolRegistry`] separately
     /// (rather than through [`Self::register_tool`]) can pass it here
