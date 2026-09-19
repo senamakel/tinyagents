@@ -4,7 +4,7 @@
 //! This is the gate that makes recursive self-authoring safe. A `.rag` plan —
 //! whether hand-written or emitted by a model running inside the harness — is
 //! semantically validated, then bound *by name* against a live registry through
-//! [`CapabilityResolver`]/[`bind_capabilities_with_registry`], so the resulting
+//! [`crate::CapabilityResolver`]/[`bind_capabilities_with_registry`], so the resulting
 //! topology can only reach capabilities Rust has already registered and allowed.
 //! Runnable node behaviour is never part of this crate's output: materialising a
 //! [`Blueprint`] into a runnable graph (via a caller-supplied `NodeFactory`) is
@@ -17,8 +17,8 @@
 //!
 //! 1. [`compile`] — semantic validation of the AST and lowering into one
 //!    serializable [`Blueprint`] per graph.
-//! 2. [`bind_capabilities`] — checks every model/tool reference in a blueprint
-//!    against an allowlist ([`CapabilityResolver`]). This is the registry
+//! 2. [`crate::bind_capabilities`] — checks every model/tool reference in a blueprint
+//!    against an allowlist ([`crate::CapabilityResolver`]). This is the registry
 //!    binding gate: declarative source can only reference capabilities that
 //!    Rust has already registered and allowed.
 
