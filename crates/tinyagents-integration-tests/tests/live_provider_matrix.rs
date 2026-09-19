@@ -559,7 +559,7 @@ fn merge_env_overrides(
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
+#[ignore = "network: set PROVIDER_MATRIX=1 and run with --ignored"]
 async fn live_provider_matrix() {
     // Dialling is opt-in. Without this the matrix would make real network calls
     // (and could fail on a provider's billing or quota, not on our code) during
