@@ -319,6 +319,10 @@ fn thread_key_from_request(request: &ModelRequest) -> String {
     format!("ephemeral_{}", uuid::Uuid::new_v4())
 }
 
+/// Converts a `ModelRequest` into the flattened [`ChatMessage`] list this
+/// provider sends downstream: prompt-tool coalescing/instructions applied
+/// first, then any structured [`ResponseFormat`] is appended as a trailing
+/// system instruction (see [`response_format_instruction`]).
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
     let mut messages = coalesce_prompt_tool_results(&request.messages);
     if !request.tools.is_empty() {
@@ -365,6 +369,10 @@ fn response_format_instruction(format: Option<&ResponseFormat>) -> Option<String
     ))
 }
 
+/// Flattens a message's content blocks to plain text: text and reasoning
+/// blocks pass through, JSON/extension blocks are stringified, an image
+/// becomes an `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
+/// and redacted-thinking blocks are dropped (nothing to show).
 fn render_content(content: &[ContentBlock]) -> String {
     content
         .iter()
