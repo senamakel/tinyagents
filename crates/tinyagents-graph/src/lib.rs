@@ -53,8 +53,8 @@ pub use builder::{
     RouterFn, START,
 };
 pub use channel::{
-    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, Delta, Ephemeral,
-    LastValue, Messages, NamedBarrier, Topic, Untracked,
+    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
+    Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
 #[cfg(feature = "sqlite")]
 pub use checkpoint::SqliteCheckpointer;
