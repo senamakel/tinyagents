@@ -4145,6 +4145,55 @@ async fn independent_tool_calls_in_one_turn_run_concurrently() {
 }
 
 #[tokio::test]
+async fn max_tool_concurrency_bounds_how_many_tools_run_at_once() {
+    // I-8 regression test: with 4 concurrency-safe tools requested in one
+    // turn and `RunLimits::max_tool_concurrency` set to 2, at most 2 may be
+    // in flight at once, even though all 4 are eligible for the concurrent
+    // path. `max_seen` is an atomic high-water mark, so any window where 3+
+    // ran together would be caught regardless of scheduling order.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            multi_tool_call_response(vec![
+                ("call-a", "alpha"),
+                ("call-b", "beta"),
+                ("call-c", "gamma"),
+                ("call-d", "delta"),
+            ]),
+            text_response("done", 4, 2),
+        ])),
+    );
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for name in ["alpha", "beta", "gamma", "delta"] {
+        harness.register_tool(Arc::new(ConcurrencyProbeTool {
+            name,
+            reply: "out",
+            delay: std::time::Duration::from_millis(60),
+            active: active.clone(),
+            max_seen: max_seen.clone(),
+        }));
+    }
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_tool_concurrency(Some(2)),
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.tool_calls, 4);
+    assert_eq!(
+        max_seen.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "no more than max_tool_concurrency (2) tools should ever be in flight at once"
+    );
+}
+
+#[tokio::test]
 async fn parallel_tool_results_keep_original_call_order_and_ids() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(
