@@ -230,6 +230,7 @@ impl CapabilityResolver {
             reducers: collect(CapabilityKind::Reducer),
             agents: collect(CapabilityKind::Agent),
             scripts: collect(CapabilityKind::Script),
+            capabilities: collect(CapabilityKind::Capability),
             node_kinds: DEFAULT_NODE_KINDS.iter().map(|k| (*k).to_owned()).collect(),
         }
     }
