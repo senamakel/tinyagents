@@ -214,7 +214,12 @@ async fn a_structured_hit_does_not_discard_sibling_real_tool_calls() {
         1,
         "the real tool requested in the same turn must still be executed"
     );
-    assert_eq!(run.structured, Some(json!({"answer": "final"})));
+    // A6: `RunPolicy::end_strategy` defaults to `Graceful` — the structured
+    // answer already recorded on the mixed turn is the one that counts once
+    // the accompanying real tool call has run; the loop finishes rather than
+    // giving the model a second turn (the scripted second response is never
+    // reached).
+    assert_eq!(run.structured, Some(json!({"answer": "42"})));
 }
 
 /// TOOL-8b: a schema name that collides with a registered tool would put two
