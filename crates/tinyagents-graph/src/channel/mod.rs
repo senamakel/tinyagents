@@ -545,6 +545,35 @@ impl ChannelSet {
         Ok(())
     }
 
+    /// The single dispatch point for one channel write, folding an ordinary
+    /// [`ChannelWrite::Merge`] through [`ChannelSet::apply_update`] or
+    /// replacing the value outright for a [`ChannelWrite::Overwrite`] (which
+    /// bypasses the channel's merge rule and becomes the new baseline for
+    /// any merge/delta tracking that follows). Returns the channel's value
+    /// after the write.
+    ///
+    /// This is the one write path every channel-graph write funnels through
+    /// — a normal executor superstep boundary
+    /// ([`ChannelState::merge`]/[`crate::channel::ChannelUpdate`]),
+    /// `CompiledGraph::update_state`, and `CompiledGraph::fork_state`'s copy
+    /// — so replay and a manual update can never disagree about what a
+    /// write means (I5/R3; see `docs/modules/graph/state-channels.md`).
+    pub fn apply_channel_write(&mut self, name: &str, write: &ChannelWrite) -> Result<Value> {
+        match write {
+            ChannelWrite::Merge(value) => {
+                self.apply_update(name, value.clone())?;
+                Ok(self.values.get(name).cloned().unwrap_or(Value::Null))
+            }
+            ChannelWrite::Overwrite(value) => {
+                // Validate the channel exists (same contract as `apply_update`)
+                // before mutating.
+                self.channel(name)?;
+                self.values.insert(name.to_string(), value.clone());
+                Ok(value.clone())
+            }
+        }
+    }
+
     /// Returns the tracked channel values as an ordered map, excluding
     /// [`Untracked`] channels. This is the durable/inspectable state view.
     pub fn snapshot(&self) -> BTreeMap<String, Value> {
