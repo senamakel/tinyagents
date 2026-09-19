@@ -411,3 +411,127 @@ async fn cache_key_receives_send_arg_per_fanout_activation() {
         "neither fan-out activation invoked the handler"
     );
 }
+
+// ── A.3: on_error recovery ────────────────────────────────────────────────
+
+/// `on_error` is consulted only after the retry budget is exhausted (or the
+/// error is non-retryable); returning `Some(command)` recovers the node with
+/// that command's update instead of failing the run.
+#[tokio::test]
+async fn on_error_recovers_after_retries_are_exhausted() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let graph = flaky_builder(usize::MAX, attempts.clone())
+        .with_node_policy(
+            "flaky",
+            NodePolicy {
+                retry: Some(
+                    RetryPolicy::default()
+                        .with_max_attempts(2)
+                        .with_backoff_sleep(false),
+                ),
+                on_error: Some(Arc::new(|state: &i32, _err: &TinyAgentsError| {
+                    Some(Command {
+                        update: Some(state + 100),
+                        goto: vec![],
+                        resume: None,
+                        resume_by_task: Default::default(),
+                    })
+                })),
+                ..NodePolicy::default()
+            },
+        )
+        .compile()
+        .unwrap();
+
+    let run = graph.run(10).await.unwrap();
+    assert_eq!(run.state, 110, "on_error's command update was applied");
+    assert_eq!(
+        attempts.load(AtomicOrdering::SeqCst),
+        2,
+        "1 try + 1 retry, then on_error recovered instead of a 3rd attempt"
+    );
+}
+
+/// `on_error` returning `None` falls through to the ordinary escalation —
+/// the run still fails with the underlying error.
+#[tokio::test]
+async fn on_error_none_falls_through_to_the_original_error() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let graph = flaky_builder(usize::MAX, attempts.clone())
+        .with_node_policy(
+            "flaky",
+            NodePolicy {
+                on_error: Some(Arc::new(|_state: &i32, _err: &TinyAgentsError| None)),
+                ..NodePolicy::default()
+            },
+        )
+        .compile()
+        .unwrap();
+
+    let err = graph.run(10).await.unwrap_err();
+    assert!(matches!(err, TinyAgentsError::Model(_)), "got {err:?}");
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1, "no retry policy set");
+}
+
+// ── A.4: real defer ──────────────────────────────────────────────────────
+
+/// A deferred node fanned out to alongside a non-deferred sibling is held
+/// back: it runs in a later superstep than its sibling, once the sibling's
+/// own successor leaves nothing non-deferred in the frontier — not
+/// concurrently with it, which is what a purely cosmetic `mark_deferred`
+/// marker (metadata-only, no scheduling effect) would have produced.
+#[tokio::test]
+async fn deferred_node_runs_only_once_the_frontier_has_no_other_work() {
+    let graph = GraphBuilder::<Vec<String>, Vec<String>>::new()
+        .set_reducer(ClosureStateReducer::new(
+            |mut s: Vec<String>, u: Vec<String>| {
+                s.extend(u);
+                Ok(s)
+            },
+        ))
+        .add_node("start", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Command(Command {
+                update: None,
+                goto: vec![
+                    RouteTarget::Node(NodeId::from("worker")),
+                    RouteTarget::Node(NodeId::from("synth")),
+                ],
+                resume: None,
+                resume_by_task: Default::default(),
+            }))
+        })
+        .add_node("worker", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(vec!["worker".to_string()]))
+        })
+        .add_node("synth", |_s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(vec!["synth".to_string()]))
+        })
+        .mark_command_routing("start")
+        .mark_deferred("synth")
+        .set_entry("start")
+        .set_finish("worker")
+        .set_finish("synth")
+        .compile()
+        .unwrap();
+
+    let sink = Arc::new(CollectingSink::new());
+    let graph = graph.with_event_sink(sink.clone());
+    let run = graph.run(vec![]).await.unwrap();
+    let mut got = run.state.clone();
+    got.sort();
+    assert_eq!(got, vec!["synth", "worker"], "both branches still ran");
+
+    let started_step = |name: &str| {
+        sink.events().into_iter().find_map(|e| match e {
+            GraphEvent::NodeStarted { node, step } if node.as_str() == name => Some(step),
+            _ => None,
+        })
+    };
+    let worker_step = started_step("worker").expect("worker started");
+    let synth_step = started_step("synth").expect("synth started");
+    assert!(
+        synth_step > worker_step,
+        "the deferred node must run in a later superstep than its \
+         non-deferred sibling, got worker={worker_step} synth={synth_step}"
+    );
+}
