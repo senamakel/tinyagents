@@ -422,13 +422,36 @@ pub trait ToolBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
 pub enum MiddlewareModelOutcome {
     /// The response to use as the result of the wrapped model call.
     Response(ModelResponse),
+    /// Short-circuit with a [`MiddlewareControl`] instead of a response — for
+    /// example a wrap middleware that decides, before ever calling `next`,
+    /// that the run should stop or jump. There is no response to hand back in
+    /// this case, so callers that need one (see [`Self::into_response`]) get
+    /// an empty placeholder; the control itself is recovered separately, via
+    /// [`Self::into_response_with_control`], and applied through the same
+    /// [`RunContext::request_control`][crate::context::RunContext::request_control]
+    /// path a lifecycle hook's control-outcome return uses.
+    Command {
+        /// The control outcome to apply.
+        control: MiddlewareControl,
+    },
 }
 
 impl MiddlewareModelOutcome {
-    /// Unwraps the contained [`ModelResponse`].
+    /// Unwraps the contained [`ModelResponse`], or an empty placeholder for
+    /// [`Self::Command`] (see that variant's docs — prefer
+    /// [`Self::into_response_with_control`] when a `Command` must not be
+    /// silently discarded).
     pub fn into_response(self) -> ModelResponse {
+        self.into_response_with_control().0
+    }
+
+    /// Splits this outcome into a [`ModelResponse`] (a placeholder for
+    /// [`Self::Command`]) and the [`MiddlewareControl`] to apply, when this
+    /// was a `Command` outcome.
+    pub fn into_response_with_control(self) -> (ModelResponse, Option<MiddlewareControl>) {
         match self {
-            Self::Response(response) => response,
+            Self::Response(response) => (response, None),
+            Self::Command { control } => (ModelResponse::assistant(String::new()), Some(control)),
         }
     }
 }
