@@ -121,6 +121,61 @@ before falling back to a bare `Ident`.
   implemented: `compile_with_provenance` (`compiler.rs:442`) exists alongside
   `compile`.
 
+## Diagnostics (Phase 1c)
+
+`Diagnostic`/`Label`/`Severity` now derive `Serialize`/`Deserialize`
+(`Span` already did). `tinyagents_harness::error::TinyAgentsError::Diagnostics(Vec<RenderedDiagnostic>)`
+is a new variant carrying one or more language diagnostics together, instead
+of every language error folding to the first offending reference/construct.
+`RenderedDiagnostic` is a small serializable struct (`code`, `message`,
+`line`, `column`, `rendered`) defined in harness rather than the language
+crate's `Diagnostic` type itself, because `tinyagents-language` depends on
+`tinyagents-harness` for `Result`/`TinyAgentsError` — holding the language
+crate's structured type in the harness error enum would be a dependency
+cycle. `tinyagents_language::diagnostic::into_diagnostics_error` builds the
+variant from a `Vec<Diagnostic>`.
+
+**What actually collects every diagnostic now:**
+
+- `Resolver::resolve_program` (AST-level, spanned) already did before Phase
+  1c and still does.
+- `CapabilityResolver::bind_blueprint_diagnostics` (new) collects every
+  unresolved reference/unknown node kind for a compiled `Blueprint`, using
+  spans from `Blueprint::provenance()` when present. `bind_blueprint_all`
+  (new) folds that into `TinyAgentsError::Diagnostics`.
+- `Resolver::resolve_blueprint` now delegates to
+  `CapabilityResolver::bind_blueprint` (I7: one binding gate, not two
+  hand-kept copies of the same loop) — but **keeps its historical fold-to-first
+  `TinyAgentsError::Compile`/`Capability` shape**, not `Diagnostics`, so
+  `crates/tinyagents-integration-tests/tests/feature_language_resolver_diagnostics.rs`
+  (outside this change's file boundary) keeps passing. Use
+  `bind_blueprint_all`/`bind_blueprint_diagnostics` directly for the
+  collect-everything behaviour.
+- `compile_source` (compiler.rs) is now a thin wrapper around
+  `resolve_source`, reducing the two facades to one implementation — but it
+  is **not** `#[deprecated]`: several integration tests and examples outside
+  this change's file boundary still call it directly, and
+  `cargo clippy --workspace -D warnings` would turn each call site into a
+  hard build failure this change cannot fix. `resolve_source`/`check_program`
+  still fold to the first diagnostic (not all of them) for the same reason —
+  `e2e_language_contracts.rs` and `e2e_registry_binding.rs` pin
+  `TinyAgentsError::Capability`/`Compile` with plain message-substring
+  assertions on both facades.
+- `compiler::compile`/`compile_graph` (the syntactic/semantic AST → Blueprint
+  pass) is **unchanged**: it still returns `TinyAgentsError::Compile(String)`
+  on the first structural error, without a span. Its many checks are
+  interdependent (duplicate names feed later target-existence checks, routing
+  conflicts feed routing-lowering, …), so batching them into one
+  `Vec<Diagnostic>` pass safely is a larger rewrite than this change's scope,
+  and several integration tests pin the exact `Compile(String)` shape and
+  message text. Left for a follow-up.
+
+`schema_version: u32` (default `1`) was added to `Blueprint`, and every
+`Blueprint`/`NodeSpec` field now has `#[serde(default)]`, so a blueprint
+stored before either existed still deserializes (`Routing` gained a
+`#[default]` `Terminal` variant to support this). `Literal` gained a `Bool`
+variant (see above).
+
 Note: an earlier draft of this list also said the `CapabilityResolver`
 agent-name allowlist was unimplemented and sub-agent names were not
 registry-validated. That is stale — `CapabilityResolver::agent_allowed`
