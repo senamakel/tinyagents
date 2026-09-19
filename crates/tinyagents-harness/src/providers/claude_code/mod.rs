@@ -16,15 +16,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use tinyinference_llm::prompt_tools::{
-    TextScrubber, coalesce_tool_results, recover_tool_calls, with_tool_instructions,
-};
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
     ResponseFormat,
+};
+use tinyinference_llm::prompt_tools::{
+    TextScrubber, coalesce_tool_results, recover_tool_calls, with_tool_instructions,
 };
 use tinyinference_llm::usage::Usage;
 use tokio::sync::Semaphore;

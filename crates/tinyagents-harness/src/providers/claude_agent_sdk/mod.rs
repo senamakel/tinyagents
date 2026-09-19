@@ -2,11 +2,13 @@
 
 mod protocol;
 
-use tinyinference_llm::prompt_tools::{coalesce_tool_results, recover_tool_calls, with_tool_instructions};
 use anyhow::Context;
 use async_trait::async_trait;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
+use tinyinference_llm::prompt_tools::{
+    coalesce_tool_results, recover_tool_calls, with_tool_instructions,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};

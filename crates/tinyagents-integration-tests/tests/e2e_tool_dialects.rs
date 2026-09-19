@@ -20,8 +20,8 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{ChatModel, ModelDelta, ModelResponse, ModelStreamItem};
-use tinytools::{Tool, ToolResult};
 use tinyinference_llm::providers::MockModel;
+use tinytools::{Tool, ToolResult};
 
 struct CaptureMiddleware {
     listener: Arc<RecordingListener>,
@@ -89,7 +89,10 @@ fn narrating_model(text: &str) -> MockModel {
     ])
 }
 
-fn harness_with(model: Arc<dyn ChatModel<()>>, listener: &Arc<RecordingListener>) -> AgentHarness<()> {
+fn harness_with(
+    model: Arc<dyn ChatModel<()>>,
+    listener: &Arc<RecordingListener>,
+) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
         .register_model("mock", model)
@@ -119,7 +122,11 @@ async fn a_native_model_narrating_a_call_in_any_grammar_dispatches_it() {
         assert_eq!(run.tool_calls, 1, "{text}");
         let ids = dispatched_ids(&listener);
         assert_eq!(ids.len(), 1, "{text}");
-        assert!(ids[0].ends_with("-tool-1"), "harness-minted id, got {}: {text}", ids[0]);
+        assert!(
+            ids[0].ends_with("-tool-1"),
+            "harness-minted id, got {}: {text}",
+            ids[0]
+        );
     }
 }
 
@@ -192,10 +199,18 @@ async fn a_forced_xml_dialect_renders_the_protocol_and_sends_no_schemas() {
         .text();
     assert!(assistant.contains("<tool_call>"), "{assistant}");
     assert!(
-        replay.messages.iter().any(|m| m.text().contains("<tool_result id=")),
+        replay
+            .messages
+            .iter()
+            .any(|m| m.text().contains("<tool_result id=")),
         "results folded into the text envelope"
     );
-    assert!(!replay.messages.iter().any(|m| matches!(m, Message::Tool(_))));
+    assert!(
+        !replay
+            .messages
+            .iter()
+            .any(|m| matches!(m, Message::Tool(_)))
+    );
 }
 
 #[tokio::test]
@@ -295,7 +310,10 @@ async fn streamed_tool_call_markup_never_reaches_consumers() {
     let deltas = seen.lock().unwrap().clone();
     let joined = deltas.concat();
     assert!(!joined.contains("<tool_call"), "markup leaked: {deltas:?}");
-    assert!(!joined.contains("</tool_call>"), "markup leaked: {deltas:?}");
+    assert!(
+        !joined.contains("</tool_call>"),
+        "markup leaked: {deltas:?}"
+    );
     assert!(joined.contains("Sure, "), "{deltas:?}");
     assert!(joined.contains(" checking."), "{deltas:?}");
     let ids = dispatched_ids(&listener);
@@ -346,6 +364,9 @@ async fn dropped_tool_call_nudges_are_bounded() {
         .invoke_default(&(), vec![Message::user("go")])
         .await
         .expect("run ends instead of looping");
-    assert_eq!(run.model_calls, 4, "three nudges, then the answer is taken as final");
+    assert_eq!(
+        run.model_calls, 4,
+        "three nudges, then the answer is taken as final"
+    );
     assert_eq!(run.tool_calls, 0);
 }

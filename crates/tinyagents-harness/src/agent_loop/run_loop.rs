@@ -164,7 +164,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .collect::<Vec<_>>();
         // The dialect is a run-level policy decision; the text protocols need
         // a registry built from these same schemas.
-        let run_dialect = super::dialect::RunDialect::resolve(self.policy.tool_dialect, &tool_schemas);
+        let run_dialect =
+            super::dialect::RunDialect::resolve(self.policy.tool_dialect, &tool_schemas);
 
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool. Under the tool-call strategy the schema is sent as an

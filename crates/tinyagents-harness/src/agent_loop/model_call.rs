@@ -874,12 +874,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 && !delta.text.is_empty()
             {
                 delta.text = scrubber.feed(&delta.text);
-                if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none() {
+                if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none()
+                {
                     continue;
                 }
             }
-            if let (Some(scrubber), ModelStreamItem::Completed(_)) =
-                (text_scrubber.as_mut(), &item)
+            if let (Some(scrubber), ModelStreamItem::Completed(_)) = (text_scrubber.as_mut(), &item)
             {
                 let tail = scrubber.flush();
                 if !tail.is_empty() {
@@ -1008,7 +1008,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             if let ModelStreamItem::Completed(response) = &mut item
                 && response.message.tool_calls.is_empty()
-                && text_scrubber.as_ref().is_some_and(super::dialect::DeltaScrubber::has_calls)
+                && text_scrubber
+                    .as_ref()
+                    .is_some_and(super::dialect::DeltaScrubber::has_calls)
                 && let Some(scrubber) = text_scrubber.take()
             {
                 // The provider returned no structured calls, but the text it

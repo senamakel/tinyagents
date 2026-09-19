@@ -160,10 +160,8 @@ pub(super) fn recover_text_calls(
         .enumerate()
         .map(|(index, call)| to_tool_call(call, model_call_id, index + 1))
         .collect();
-    response.message.content = replace_text_blocks(
-        std::mem::take(&mut response.message.content),
-        outcome.text,
-    );
+    response.message.content =
+        replace_text_blocks(std::mem::take(&mut response.message.content), outcome.text);
 }
 
 /// Keeps every non-text block in place and substitutes one cleaned text at
@@ -238,7 +236,8 @@ impl DeltaScrubber {
     fn collect(&mut self, calls: Vec<ParsedToolCall>) {
         for call in calls {
             let slot = self.calls.len() + 1;
-            self.calls.push(to_tool_call(call, &self.model_call_id, slot));
+            self.calls
+                .push(to_tool_call(call, &self.model_call_id, slot));
         }
     }
 
