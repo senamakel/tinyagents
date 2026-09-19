@@ -352,6 +352,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             self.middleware
                 .run_before_model(ctx, state, &mut request)
                 .await?;
+            refresh_prompt_cache_fingerprint(&mut request);
 
             // Resolve the model for the event/log name before invoking.
             // Hosted turns install their routing decision against this live
@@ -938,6 +939,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
         }
     }
+}
+
+/// Refreshes the harness-owned stable-prefix annotation after request middleware.
+///
+/// `before_model` middleware may add or rewrite leading system messages. The
+/// request builder initially fingerprints those messages together with the
+/// tool schemas, but the provider prompt-cache key is derived only after the
+/// hook runs. Rebuilding that annotation here keeps cache routing tied to the
+/// bytes that will actually be sent to the provider.
+fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
+    if !request
+        .cache_segments
+        .iter()
+        .any(|segment| segment.cacheable)
+    {
+        return;
+    }
+
+    let system_end = request
+        .messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    let mut prompt = crate::prompt::PromptBuilder::new();
+    if system_end > 0 {
+        prompt.push_system("system", request.messages[..system_end].to_vec());
+    }
+    if !request.tools.is_empty() {
+        prompt.push_tools_segment("tools", request.tools.clone());
+    }
+    request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
 }
 
 /// Applies a host budget hint before the provider sees the request.
