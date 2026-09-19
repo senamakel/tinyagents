@@ -136,7 +136,17 @@ async fn an_unknown_narrated_tool_is_not_invented_into_a_known_one() {
         .invoke_default(&(), vec![Message::user("go")])
         .await
         .expect("run completes under the default unknown-tool policy");
-    assert!(dispatched_ids(&listener).is_empty(), "nothing dispatches");
+    // The name reaches the unknown-tool policy as written; it is never
+    // fuzzed onto the one registered tool.
+    let started: Vec<String> = listener
+        .events()
+        .into_iter()
+        .filter_map(|record| match record.event {
+            AgentEvent::ToolStarted { tool_name, .. } => Some(tool_name),
+            _ => None,
+        })
+        .collect();
+    assert!(!started.iter().any(|name| name == "lookup"), "{started:?}");
     assert!(run.model_calls >= 1);
 }
 
