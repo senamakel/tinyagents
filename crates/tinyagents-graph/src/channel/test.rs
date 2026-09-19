@@ -744,3 +744,218 @@ async fn delta_history_replays_from_checkpoints() {
         vec![json!("item-1"), json!("item-2"), json!("item-3")]
     );
 }
+
+/// A long-running delta-tracked append channel's *per-checkpoint* byte size
+/// must grow ~linearly with step count (each checkpoint carries only its own
+/// step's delta, not a cumulative history) — comparing the whole checkpoint
+/// record's serialized size at step 100 vs step 200 bounds the ratio well
+/// under the quadratic blowup a cumulative (or naive full-replay) design
+/// would produce.
+#[tokio::test]
+async fn delta_channel_checkpoint_bytes_grow_linearly_over_two_hundred_steps() {
+    use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 100_000); // no periodic full-snapshot marker in range.
+    let base = ChannelState {
+        set,
+        ..ChannelState::new()
+    };
+
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .add_edge("append", "append")
+        .set_entry("append")
+        .set_finish("append")
+        .with_recursion_limit(205)
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let _ = graph.run_with_thread("linear-thread", base).await;
+
+    let metas = cp.list("linear-thread").await.unwrap();
+    let id_at = |step: usize| -> String {
+        metas
+            .iter()
+            .find(|m| m.step == step)
+            .unwrap_or_else(|| panic!("no checkpoint at step {step}"))
+            .checkpoint_id
+            .clone()
+    };
+    let bytes_at = |id: &str| -> usize {
+        let checkpoint = cp
+            .get("linear-thread", Some(id))
+            .await
+            .unwrap()
+            .expect("checkpoint exists");
+        serde_json::to_vec(&checkpoint).unwrap().len()
+    };
+    let bytes_at_100 = bytes_at(&id_at(100)).await;
+    let bytes_at_200 = bytes_at(&id_at(200)).await;
+
+    let ratio = bytes_at_200 as f64 / bytes_at_100 as f64;
+    assert!(
+        ratio < 2.5,
+        "checkpoint bytes should grow ~linearly (step100={bytes_at_100}, step200={bytes_at_200}, ratio={ratio})"
+    );
+}
+
+// --- `update_state`/`fork_state` share the delta/version write path ---
+
+#[tokio::test]
+async fn update_state_after_delta_writes_round_trips() {
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 1000);
+    let base = ChannelState {
+        set,
+        ..ChannelState::new()
+    };
+
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .set_entry("append")
+        .set_finish("append")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let exec = graph.run_with_thread("update-thread", base).await.unwrap();
+    assert_eq!(exec.state.get("log"), Some(&json!(["item-1"])));
+
+    // A manual write layers on top through the same channel write path.
+    let config = graph
+        .update_state(
+            "update-thread",
+            ChannelUpdate::new().set("log", "manual"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let checkpoint = cp
+        .get(&config.thread_id, config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .expect("checkpoint exists");
+    assert_eq!(
+        checkpoint.state.get("log"),
+        Some(&json!(["item-1", "manual"]))
+    );
+    // The manual write's own delta is recorded, honoring the same
+    // per-checkpoint delta-tracking contract a normal boundary uses.
+    assert_eq!(
+        checkpoint.channel_deltas.get("log"),
+        Some(&vec![json!("manual")])
+    );
+
+    // The delta history across the whole lineage includes both the normal
+    // boundary's write and the manual one, in order.
+    let history_config = CheckpointConfig::latest("update-thread");
+    let history = cp.delta_history(&history_config, "log").await.unwrap();
+    assert_eq!(history, vec![json!("item-1"), json!("manual")]);
+}
+
+#[tokio::test]
+async fn update_state_overwrite_resets_baseline_for_subsequent_appends() {
+    use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let base = ChannelState::new().with_channel("log", Topic);
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("noop", |_s: ChannelState, _c: NodeContext| async move {
+            Ok(NodeResult::Update(ChannelUpdate::new().set("log", "a")))
+        })
+        .set_entry("noop")
+        .set_finish("noop")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    graph.run_with_thread("reset-thread", base).await.unwrap();
+    graph
+        .update_state(
+            "reset-thread",
+            ChannelUpdate::new().overwrite("log", json!(["reset"])),
+            None,
+        )
+        .await
+        .unwrap();
+    let config = graph
+        .update_state("reset-thread", ChannelUpdate::new().set("log", "b"), None)
+        .await
+        .unwrap();
+
+    let checkpoint = cp
+        .get(&config.thread_id, config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .expect("checkpoint exists");
+    assert_eq!(checkpoint.state.get("log"), Some(&json!(["reset", "b"])));
+}
+
+#[tokio::test]
+async fn state_history_reconstruction_equals_live_state_at_every_step() {
+    use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let base = ChannelState::new().with_channel("log", Topic);
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .add_edge("append", "append")
+        .set_entry("append")
+        .set_finish("append")
+        .with_recursion_limit(6)
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let _ = graph.run_with_thread("history-thread", base).await;
+
+    let history = cp
+        .state_history("history-thread", &[], None)
+        .await
+        .unwrap();
+    for tuple in &history {
+        let step = tuple.checkpoint.to_metadata().step;
+        let expected: Vec<Value> = (1..=step).map(|n| json!(format!("item-{n}"))).collect();
+        assert_eq!(
+            tuple.checkpoint.state.get("log"),
+            Some(&Value::Array(expected)),
+            "checkpoint state at step {step} did not match the expected live sequence"
+        );
+    }
+    assert!(!history.is_empty());
+}
