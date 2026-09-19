@@ -9,6 +9,7 @@ use tinyagents_harness::retry::RetryPolicy;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::time::Duration;
 
 /// A single-node graph whose handler fails (with a retryable model error)
 /// the first `fail_times` invocations, then succeeds with `+1`.
@@ -86,4 +87,54 @@ async fn per_node_retry_policy_applies_without_graph_wide_retry() {
     let run = graph.run(10).await.unwrap();
     assert_eq!(run.state, 11);
     assert_eq!(attempts.load(AtomicOrdering::SeqCst), 2);
+}
+
+/// A node's own `NodePolicy::timeout` (shorter than the graph-wide
+/// `with_node_timeout`) is what bounds it: the handler times out at the
+/// per-node value even though the graph default would have let it finish.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_node_timeout_overrides_graph_wide_timeout() {
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .with_node_timeout(Duration::from_secs(5))
+        .add_node("slow", |s: i32, _c: NodeContext| async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Ok(NodeResult::Update(s))
+        })
+        .with_node_policy(
+            "slow",
+            NodePolicy::default().with_timeout(Duration::from_millis(20)),
+        )
+        .set_entry("slow")
+        .set_finish("slow")
+        .compile()
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let err = graph.run(0).await.unwrap_err();
+    assert!(matches!(err, TinyAgentsError::Timeout(_)), "got {err:?}");
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "the per-node 20ms timeout fired, not the 5s graph-wide one"
+    );
+}
+
+/// `set_node_defaults` is the middle precedence layer: a node with no
+/// per-node timeout uses the defaults' timeout over the legacy graph-wide
+/// `with_node_timeout`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn node_defaults_timeout_beats_legacy_graph_wide_timeout() {
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .with_node_timeout(Duration::from_millis(20))
+        .set_node_defaults(NodePolicy::default().with_timeout(Duration::from_secs(5)))
+        .add_node("slow", |s: i32, _c: NodeContext| async move {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            Ok(NodeResult::Update(s + 1))
+        })
+        .set_entry("slow")
+        .set_finish("slow")
+        .compile()
+        .unwrap();
+
+    let run = graph.run(0).await.unwrap();
+    assert_eq!(run.state, 1, "the 5s default timeout let the 60ms node finish");
 }
