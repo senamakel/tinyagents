@@ -214,14 +214,16 @@ async fn discover(
 /// switch is unset or nothing is listening, which is what lets these tests pass
 /// on a machine with no local runtime at all.
 async fn reachable_runtimes() -> Vec<LocalRuntime> {
-    if std::env::var("LOCAL_MODEL_TESTS")
-        .ok()
-        .filter(|v| !v.trim().is_empty() && v != "0")
-        .is_none()
+    // Local runtimes need no credential, so `require_live`'s "is this key
+    // present" check does not apply here; the opt-in is `LOCAL_MODEL_TESTS=1`,
+    // kept in addition to the shared `TINYAGENTS_LIVE=1` so either one works.
+    if !(common::live::is_flag_on("LOCAL_MODEL_TESTS")
+        || common::live::is_flag_on("TINYAGENTS_LIVE"))
     {
         eprintln!(
-            "skipping live local-model tests: set LOCAL_MODEL_TESTS=1 to dial local runtimes \
-             (LOCAL_MODEL_TESTS=1 cargo test --test live_local_models -- --nocapture)"
+            "skipping live local-model tests: set LOCAL_MODEL_TESTS=1 (or TINYAGENTS_LIVE=1) to \
+             dial local runtimes (LOCAL_MODEL_TESTS=1 cargo test --test live_local_models -- \
+             --ignored --nocapture)"
         );
         return Vec::new();
     }
