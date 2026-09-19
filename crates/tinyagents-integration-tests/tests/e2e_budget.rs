@@ -538,16 +538,17 @@ async fn cached_input_budget_blocks_next_call() {
         "the tracker accumulates the reported cache-read tokens"
     );
 
-    // The next preflight blocks because 12 >= the 10-token cached-input budget.
+    // A1: the next preflight now requests `JumpTo(End)` (graceful stop)
+    // instead of erroring, because 12 >= the 10-token cached-input budget.
     let mut req = ModelRequest::new(vec![Message::user("next")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("the cached-input budget must block the next model call");
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("an exhausted cached-input budget stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(LoopTarget::End))
+    ));
     assert!(
         any_event(&recorder, |e| matches!(
             e,
