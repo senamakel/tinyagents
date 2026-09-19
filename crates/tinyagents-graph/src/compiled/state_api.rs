@@ -294,6 +294,7 @@ where
             state: new_state,
             next_nodes,
             completed_tasks,
+            completed_routes: Vec::new(),
             pending_writes: Vec::new(),
             interrupts,
             pending_activations,
