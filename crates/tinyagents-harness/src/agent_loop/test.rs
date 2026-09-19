@@ -1141,13 +1141,9 @@ async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allow
     });
     harness.with_toolset(toolset.clone());
     harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
-        toolset.clone(),
-        search,
+        toolset, search,
     )));
-    harness.register_tool_dispatch(Arc::new(crate::tool::toolset::ToolSetDispatchBridge::new(
-        toolset,
-        browse,
-    )));
+    let _ = browse;
 
     let run = harness
         .invoke_default(
