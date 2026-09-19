@@ -402,7 +402,10 @@ fn checkpoint_is_resumable(checkpoint: &Checkpoint<DelegationState>) -> bool {
     if checkpoint.state.final_output.is_some() {
         return false;
     }
-    checkpoint.next_nodes.iter().any(|n| n.as_str() != END)
+    // `checkpoint` was already normalized on read (every backend's decode
+    // path calls `Checkpoint::normalize`), so `tasks` is the single source
+    // of truth regardless of the stored record's original format version.
+    checkpoint.tasks.iter().any(|t| t.node.as_str() != END)
 }
 
 /// Rebuild the delegation graph (its node closures are not serializable — only
