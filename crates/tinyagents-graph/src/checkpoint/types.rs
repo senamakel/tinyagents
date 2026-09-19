@@ -517,6 +517,30 @@ impl<State> Checkpoint<State> {
         self
     }
 
+    /// Sets [`Checkpoint::channel_versions`].
+    pub fn with_channel_versions(mut self, channel_versions: BTreeMap<String, u64>) -> Self {
+        self.channel_versions = channel_versions;
+        self
+    }
+
+    /// Sets [`Checkpoint::versions_seen`].
+    pub fn with_versions_seen(
+        mut self,
+        versions_seen: BTreeMap<String, BTreeMap<String, u64>>,
+    ) -> Self {
+        self.versions_seen = versions_seen;
+        self
+    }
+
+    /// Sets [`Checkpoint::channel_deltas`].
+    pub fn with_channel_deltas(
+        mut self,
+        channel_deltas: BTreeMap<String, Vec<serde_json::Value>>,
+    ) -> Self {
+        self.channel_deltas = channel_deltas;
+        self
+    }
+
     /// The effective pending-task set: [`Checkpoint::tasks`] directly on a
     /// v2 record (`version >= 2`), or derived from the v1 fields
     /// (preferring `pending_activations`, falling back to `next_nodes`) on a
