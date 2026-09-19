@@ -385,7 +385,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         .filter(|name| {
                             allowed_tools
                                 .as_ref()
-                                .is_none_or(|allowed| allowed.is_empty() || allowed.contains(name))
+                                .is_none_or(|allowed| allowed.contains(name))
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
