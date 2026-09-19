@@ -438,8 +438,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for TracingMid
 
 // ── LoggingMiddleware ─────────────────────────────────────────────────────────
 
-// ── LoggingMiddleware ─────────────────────────────────────────────────────────
-
 impl LoggingMiddleware {
     /// Creates a logging middleware with the default label `"logging"`.
     pub fn new() -> Self {
@@ -577,8 +575,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for LoggingMid
         Ok(())
     }
 }
-
-// ── UsageAccountingMiddleware ─────────────────────────────────────────────────
 
 // ── UsageAccountingMiddleware ─────────────────────────────────────────────────
 
