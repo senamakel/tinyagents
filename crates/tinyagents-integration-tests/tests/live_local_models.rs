@@ -489,6 +489,7 @@ fn weather_schema() -> ToolSchema {
 /// the only way to learn a local runtime's model ids — there is no catalogue to
 /// hard-code.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn local_runtimes_advertise_their_loaded_models() {
     for runtime in reachable_runtimes().await {
         let listed = runtime
@@ -513,6 +514,7 @@ async fn local_runtimes_advertise_their_loaded_models() {
 
 /// A single-turn chat call must return non-empty assistant text.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn local_runtimes_answer_a_single_turn_chat() {
     for runtime in reachable_runtimes().await {
         let response = runtime
@@ -540,6 +542,7 @@ async fn local_runtimes_answer_a_single_turn_chat() {
 /// SSE event technically "streams" but breaks every incremental consumer, so
 /// the delta count is asserted, not just the merged text.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn local_runtimes_stream_incremental_deltas() {
     for runtime in reachable_runtimes().await {
         let mut stream = runtime
@@ -582,6 +585,7 @@ async fn local_runtimes_stream_incremental_deltas() {
 /// reject a *named* tool choice object, and the transport degrades that shape
 /// for local runtimes. This asserts the degradation actually works end to end.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn local_runtimes_emit_a_parseable_tool_call() {
     for runtime in reachable_runtimes().await {
         let model = runtime.model();
@@ -636,6 +640,7 @@ async fn local_runtimes_emit_a_parseable_tool_call() {
 /// grounded final answer is where small quantised local models — and any bug in
 /// how the adapter serialises tool results back onto the wire — actually break.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn local_runtimes_complete_a_full_tool_loop() {
     for runtime in reachable_runtimes().await {
         with_tool_reroll(&runtime, "full tool loop", || async {
@@ -721,6 +726,7 @@ async fn local_runtimes_complete_a_full_tool_loop() {
 /// local runtimes, and this asserts the degraded request is both accepted and
 /// honoured.
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn local_runtimes_produce_structured_json_output() {
     for runtime in reachable_runtimes().await {
         let mut request = base_request(vec![Message::user(
