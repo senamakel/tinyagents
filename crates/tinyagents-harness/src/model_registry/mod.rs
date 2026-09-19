@@ -12,7 +12,7 @@
 //! default — returning the first candidate that is both registered and
 //! [`model_eligible`]. [`ModelRegistry::resolve_request`] is the common-case
 //! entry point that builds a [`ModelSelection`] from one
-//! [`ModelRequest`][tinyinference_llm::model::ModelRequest].
+//! [`ModelRequest`].
 
 mod types;
 

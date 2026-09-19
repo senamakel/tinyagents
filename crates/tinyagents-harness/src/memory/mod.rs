@@ -6,14 +6,14 @@
 //! reuse-with-accumulating-context pattern that
 //! [`crate::subagent`] builds on). [`MemoryScope`] separates the
 //! thread-local short-term layer from the cross-thread long-term
-//! [`Store`][crate::store::Store].
+//! [`Store`].
 //!
 //! This module provides the harness memory capability: thread-scoped
 //! conversation history ([`ChatHistory`]) with both an ephemeral
 //! ([`InMemoryChatHistory`]) and a store-backed ([`StoreChatHistory`])
 //! implementation, plus a thin thread-scoped wrapper ([`ShortTermMemory`]) that
 //! applies an optional trimming policy. Long-term, cross-thread memory is the
-//! harness [`Store`][crate::store::Store] itself; the [`MemoryScope`]
+//! harness [`Store`] itself; the [`MemoryScope`]
 //! enum labels which layer a record belongs to.
 //!
 //! See `types` for the definitions.
