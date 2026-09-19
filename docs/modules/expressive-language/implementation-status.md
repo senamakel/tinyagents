@@ -104,6 +104,16 @@ requires the comma, matching `parse_ident_list`/`parse_string_list`.
 `Literal::Ident("true")`. `true`/`false` are recognised in `parse_literal`
 before falling back to a bare `Ident`.
 
+`compiler.rs` still has two checks that report the same "routes mixed with
+static routing" mistake with different messages (the `has_routes &&
+(has_next || has_static_edge)` check, subsumed by the general
+`routing_sources`/`active.len() > 1` conflict check just below it). Removing
+the redundant one is left undone:
+`crates/tinyagents-integration-tests/tests/feature_language_compiler_semantics.rs::mixing_routes_with_next_is_rejected`
+(outside this change's file boundary) asserts on the specific "mixes static
+routing" message text, so removing the check would need that test migrated
+in the same change.
+
 ## Not yet implemented
 
 - State-schema declarations (`state Name { … }`).
