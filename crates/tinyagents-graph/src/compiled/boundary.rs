@@ -568,6 +568,8 @@ where
             return Ok(None);
         };
         let pending_writes = Self::completion_writes(&boundary.completed);
+        let (channel_versions, channel_deltas, versions_seen) =
+            self.channel_checkpoint_fields(ctx, boundary.state);
         let checkpoint = Checkpoint::new(
             boundary.state.clone(),
             boundary
@@ -584,6 +586,9 @@ where
         .with_completed(boundary.completed)
         .with_pending_writes(pending_writes)
         .with_barrier_arrivals(barriers_to_persisted(&ctx.barrier_arrivals))
+        .with_channel_versions(channel_versions)
+        .with_channel_deltas(channel_deltas)
+        .with_versions_seen(versions_seen)
         .with_metadata(serde_json::json!({
             "source": "loop",
             "step": step,
