@@ -40,21 +40,12 @@
 //! started/completed pair, run `after_tool`, and account identically. The only
 //! difference is that no tool ran.
 //!
-//! ## Tool errors are policy-routed, not fatal by default
+//! ## Canonical tool failures
 //!
-//! An `Err` from a tool is routed through that tool's
-//! [`crate::tool::ToolErrorPolicy`]: the default
-//! [`Fail`][crate::tool::ToolErrorPolicy::Fail] still aborts the run,
-//! while `ReturnToError`/`Message` turn the failure into a model-visible error
-//! result. Cancellation and interruption bubble regardless of policy, and two
-//! error classes are deliberately kept **outside** the policy because they are
-//! not tool failures at all:
-//!
-//! - the run's remaining wall-clock budget expiring around the call
-//!   ([`AgentHarness::with_call_budget`]) — the run is over, not the tool, and
-//! - an error raised by *middleware* wrapping the call, which is how an
-//!   approval or allowlist gate refuses a call. Converting a refusal into "the
-//!   tool failed, carry on" would defeat the gate.
+//! TinyTools makes the contract explicit: `Err` aborts the run; a tool that
+//! can recover must return `Ok(ToolResult::error(..))`. Dispatch failures are
+//! sanitized before leaving this boundary; cancellation and timeout retain
+//! their typed classifications.
 //!
 //! ## Why tool-wrap middleware forces serial execution
 //!
@@ -78,16 +69,14 @@
 //!   budget, exactly as in serial mode.
 //! - **Cancellation**: observed between admissions (before each call starts),
 //!   matching the serial path, which also never interrupts a mid-flight tool.
-//! - **Errors**: a tool error that its [`ToolErrorPolicy`] keeps fatal fails
-//!   the turn at the first such call *in original call order*. Difference: in
+//! - **Errors**: an `Err` fails the turn at the first call in original order.
+//!   Difference: in
 //!   serial mode later calls never start after a failure; in concurrent mode
 //!   they were already in flight and run to completion (their results are
 //!   discarded). Tools that must not observe a sibling's failure should be run
 //!   under a tool-wrap middleware (serial) or a harness without
 //!   parallel-capable turns.
 //!
-//! [`ToolErrorPolicy`]: crate::tool::ToolErrorPolicy
-
 use super::model_call::ToolCallBase;
 use super::*;
 use crate::tool::{ToolDispatch, provider_schema};
