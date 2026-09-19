@@ -90,6 +90,7 @@ impl<State, Update> RunSeed<State, Update> {
             parent: None,
             binding: None,
             resume_seed: ResumeSeed::default(),
+            options: RunOptions::default(),
             _update: std::marker::PhantomData,
         }
     }
@@ -99,6 +100,11 @@ impl<State, Update> RunSeed<State, Update> {
         binding: crate::subagent_node::AgentInvocationBinding,
     ) -> Self {
         self.binding = Some(binding);
+        self
+    }
+
+    pub(super) fn with_options(mut self, options: RunOptions) -> Self {
+        self.options = options;
         self
     }
 }
