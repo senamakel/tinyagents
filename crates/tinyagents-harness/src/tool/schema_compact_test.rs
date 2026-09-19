@@ -157,6 +157,22 @@ fn compact_tool_schema_caps_description_on_a_char_boundary() {
     assert_eq!(short.description, "ok");
 }
 
+/// Regression: the `…` ellipsis marker is 3 bytes. A `max_bytes` below that
+/// used to still return the 3-byte marker (via `saturating_sub` leaving
+/// `budget = 0` and formatting `""` + `…`), silently exceeding the configured
+/// budget. The only value that respects a sub-3-byte budget is the empty
+/// string.
+#[test]
+fn clip_bytes_returns_empty_when_the_budget_cannot_hold_the_marker() {
+    let text = "hello world";
+    assert_eq!(clip_bytes(text, 0), "");
+    assert_eq!(clip_bytes(text, 1), "");
+    assert_eq!(clip_bytes(text, 2), "");
+    // At exactly the marker's byte length, the result must still respect it.
+    let clipped = clip_bytes(text, 3);
+    assert!(clipped.len() <= 3);
+}
+
 #[test]
 fn preparation_applies_compaction_after_cleaning() {
     let declared = vec![ToolSchema::new(
