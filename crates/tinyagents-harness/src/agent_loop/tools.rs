@@ -1135,6 +1135,7 @@ pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
     match error.downcast::<TinyAgentsError>() {
         Ok(TinyAgentsError::Cancelled) => TinyAgentsError::Cancelled,
         Ok(TinyAgentsError::Timeout(message)) => TinyAgentsError::Timeout(message),
+        Ok(TinyAgentsError::CallTimeout(message)) => TinyAgentsError::CallTimeout(message),
         Ok(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
         Err(_) => TinyAgentsError::Tool("tool dispatch failed".to_string()),
     }
