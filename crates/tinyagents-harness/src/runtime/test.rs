@@ -1718,11 +1718,9 @@ async fn security_gate_sees_raw_provider_arguments_while_tools_receive_prepared_
     let executed = Arc::new(Mutex::new(Vec::new()));
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["injected"]),
+        ])),
         gate.clone(),
         Arc::new(FixedModelResolver::new(model)),
     );
