@@ -69,9 +69,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             })
             .await
             .map_err(|error| match error {
-            TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
-            _ => { tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
-        })?;
+                TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+                _ => {
+                    tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed");
+                    TinyAgentsError::Model("host model resolution failed".to_string())
+                }
+            })?;
         let name = model
             .profile()
             .and_then(|profile| profile.model.clone())
