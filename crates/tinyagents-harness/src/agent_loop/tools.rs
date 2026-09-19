@@ -1576,9 +1576,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     );
                 }
                 tinytools::ToolReplay::Never => {
-                    let result = tinytools::ToolResult::error(
-                        "interrupted before settlement".to_string(),
-                    );
+                    let result = tinytools::ToolResult::error("interrupted before settlement");
                     let tool_message = tool_message_from_result(
                         call.id.clone(),
                         &result,
