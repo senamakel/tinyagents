@@ -28,7 +28,7 @@ pub(super) struct RunSeed<State, Update> {
     pub(super) barriers: HashMap<NodeId, HashSet<NodeId>>,
     pub(super) parent: Option<String>,
     pub(super) binding: Option<crate::subagent_node::AgentInvocationBinding>,
-    _update: std::marker::PhantomData<Update>,
+    pub(super) _update: std::marker::PhantomData<Update>,
 }
 
 impl<State, Update> RunSeed<State, Update> {
