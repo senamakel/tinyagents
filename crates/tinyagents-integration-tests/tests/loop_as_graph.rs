@@ -255,8 +255,8 @@ async fn approval_interrupt_scenario_matches_direct_and_graph() {
 
 #[tokio::test]
 async fn steering_inject_scenario_matches_direct_and_graph() {
-    let mut direct_requests = None;
-    let mut graph_requests = None;
+    let mut direct_messages = None;
+    let mut graph_messages = None;
 
     for execution in [LoopExecution::Direct, LoopExecution::Graph] {
         let model = Arc::new(MockModel::with_responses(vec![ModelResponse::assistant(
@@ -276,20 +276,19 @@ async fn steering_inject_scenario_matches_direct_and_graph() {
             .expect("run completes");
         assert_eq!(run.model_calls, 1);
 
-        let requests = model.requests();
-        let injected = requests[0]
+        let injected = run
             .messages
             .iter()
-            .any(|m| m.text().contains("ORCHESTRATOR"));
-        assert!(injected, "the injected steering message must reach the model");
+            .any(|message| message.text().contains("ORCHESTRATOR"));
+        assert!(injected, "the injected steering message must reach the transcript");
 
         match execution {
-            LoopExecution::Direct => direct_requests = Some(requests.len()),
-            LoopExecution::Graph => graph_requests = Some(requests.len()),
+            LoopExecution::Direct => direct_messages = Some(run.messages),
+            LoopExecution::Graph => graph_messages = Some(run.messages),
         }
     }
 
-    assert_eq!(direct_requests, graph_requests);
+    assert_eq!(direct_messages, graph_messages);
 }
 
 // ── Scenario 6: output retry ────────────────────────────────────────────────
