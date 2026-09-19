@@ -614,6 +614,7 @@ where
                 stalled: &step_run.stalled,
                 goto_map: &step_run.goto_map,
                 child_runs_meta: &child_runs_meta,
+                task_writes: &step_run.task_writes,
                 step,
             };
 

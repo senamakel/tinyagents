@@ -24,7 +24,27 @@
 use super::*;
 
 use crate::cache::TaskCacheKey;
-use crate::compiled::run_ctx::RunCtx;
+use crate::checkpoint::PendingWrite;
+use crate::compiled::run_ctx::{RunCtx, TaskPlan};
+
+/// One branch's settled outcome: the handler's (possibly executor-adjusted)
+/// result plus the task's replay memos — its [`NodeContext::durable_task`]
+/// writes and any deferred `interrupt_after` result — as they stood when it
+/// settled.
+type TaskOutput<Update> = (Result<NodeResult<Update>>, Vec<PendingWrite>);
+
+/// A boxed branch future; see [`StepRunner::run_parallel`] for why branches
+/// are boxed behind a concrete `Send` bound.
+type BranchFuture<'a, Update> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = TaskOutput<Update>> + Send + 'a>>;
+
+/// Builds the executor-injected interrupt an `interrupt_before` /
+/// `interrupt_after` selector records for `node`: payload
+/// `{"phase": "before"}` / `{"phase": "after"}`. The boundary stamps the
+/// task id on it like any other interrupt.
+fn injected_interrupt(node: &NodeId, phase: &str) -> Interrupt {
+    Interrupt::new(node.clone(), serde_json::json!({ "phase": phase }))
+}
 
 /// Counts how many activations of this step's active set target each node
 /// (I1): more than one is a `Send` fan-out of the same node, which
@@ -49,7 +69,7 @@ fn sibling_counts(active: &[Activation]) -> HashMap<NodeId, usize> {
 /// completion first (so `results` always covers the whole active set). Ready
 /// for [`StepRunner::fold_step`].
 pub(super) struct StepOutcome<Update> {
-    pub(super) results: Vec<(Activation, Result<NodeResult<Update>>)>,
+    pub(super) results: Vec<(Activation, TaskOutput<Update>)>,
 }
 
 /// The folded result of running a superstep's active node set, ready to
@@ -251,6 +271,120 @@ where
         }
     }
 
+    /// Runs one activation end to end under its [`TaskPlan`]: an
+    /// `interrupt_before` pause short-circuits to an injected interrupt
+    /// without touching the handler; a pending `interrupt_after` replay
+    /// decodes the deferred result instead of running the handler; otherwise
+    /// the handler runs under the node's retry policy and, for an
+    /// `interrupt_after` node, its result is deferred (see
+    /// [`Self::defer_result`]). Always returns the task's replay memos as
+    /// they stand afterwards, for the boundary to persist if the task
+    /// stalled.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_task(
+        &self,
+        node_id: &NodeId,
+        handler: &Arc<NodeHandler<State, Update>>,
+        state: &State,
+        ctx: NodeContext,
+        step: usize,
+        policy: &NodePolicy<State, Update>,
+        plan: TaskPlan,
+    ) -> TaskOutput<Update> {
+        if plan.inject_before {
+            return (
+                Ok(NodeResult::Interrupt(injected_interrupt(node_id, "before"))),
+                ctx.durable_writes_snapshot(),
+            );
+        }
+        if let Some(payload) = plan.replay_after {
+            return (
+                self.replay_deferred_result(node_id, payload),
+                ctx.durable_writes_snapshot(),
+            );
+        }
+        self.graph.emit(GraphEvent::NodeStarted {
+            node: node_id.clone(),
+            step,
+        });
+        let memo_ctx = ctx.clone();
+        let result = self
+            .run_node_with_retry(node_id, handler, state, ctx, step, policy)
+            .await;
+        let result = if plan.inject_after {
+            self.defer_result(node_id, &memo_ctx, result)
+        } else {
+            result
+        };
+        (result, memo_ctx.durable_writes_snapshot())
+    }
+
+    /// Holds an `interrupt_after` node's completed result back from this
+    /// step: encodes its `Update` (if any) with the graph's
+    /// [`UpdateCodec`] and its `goto` as a
+    /// [`PendingWrite::interrupt_after`] memo on the task's buffer (so the
+    /// interrupt boundary persists it), and substitutes an injected
+    /// `{"phase": "after"}` interrupt as the branch result. An `Err`, or a
+    /// node-emitted interrupt, passes through untouched — the node did not
+    /// complete, so there is nothing to defer and no second pause.
+    fn defer_result(
+        &self,
+        node_id: &NodeId,
+        ctx: &NodeContext,
+        result: Result<NodeResult<Update>>,
+    ) -> Result<NodeResult<Update>> {
+        let (update, goto) = match result {
+            Ok(NodeResult::Update(update)) => (Some(update), Vec::new()),
+            Ok(NodeResult::Command(command)) => (command.update, command.goto),
+            other => return other,
+        };
+        let codec = self.graph.update_codec.as_ref().ok_or_else(|| {
+            TinyAgentsError::Graph(format!(
+                "node `{node_id}` is an interrupt_after node but the graph has no Update codec"
+            ))
+        })?;
+        let encoded = match &update {
+            Some(update) => (codec.encode)(update).map_err(TinyAgentsError::Serialization)?,
+            None => serde_json::Value::Null,
+        };
+        let payload = serde_json::json!({ "update": encoded, "goto": goto });
+        ctx.lock_durable_writes().push(PendingWrite::interrupt_after(
+            node_id.clone(),
+            ctx.task_id.clone(),
+            payload,
+        ));
+        Ok(NodeResult::Interrupt(injected_interrupt(node_id, "after")))
+    }
+
+    /// Decodes a deferred `interrupt_after` result persisted by
+    /// [`Self::defer_result`] back into the `Command` the node originally
+    /// produced (update through the codec, `goto` verbatim), so the resumed
+    /// step applies it exactly as if the handler had just returned it.
+    fn replay_deferred_result(
+        &self,
+        node_id: &NodeId,
+        payload: serde_json::Value,
+    ) -> Result<NodeResult<Update>> {
+        let codec = self.graph.update_codec.as_ref().ok_or_else(|| {
+            TinyAgentsError::Graph(format!(
+                "node `{node_id}` has a deferred interrupt_after result but the graph has no \
+                 Update codec"
+            ))
+        })?;
+        let update = match payload.get("update") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(value) => Some((codec.decode)(value.clone()).map_err(TinyAgentsError::Serialization)?),
+        };
+        let goto: Vec<RouteTarget> = match payload.get("goto") {
+            None | Some(serde_json::Value::Null) => Vec::new(),
+            Some(value) => serde_json::from_value(value.clone())?,
+        };
+        let mut command = Command::new();
+        command.update = update;
+        command.goto = goto;
+        Ok(NodeResult::Command(command))
+    }
+
     /// Computes the [`TaskCacheKey`] for `node_id`'s activation, when it has
     /// a [`crate::NodeCachePolicy`] installed (via
     /// [`crate::CompiledGraph::with_cached_node`]). The policy's key
@@ -387,19 +521,15 @@ where
                 Some(key) => self.cache_get(node_id, key).await,
                 None => None,
             };
-            let result = if let Some(update) = cache_hit {
+            let output = if let Some(update) = cache_hit {
                 self.graph.emit(GraphEvent::TaskCompleted {
                     node: node_id.clone(),
                     step,
                     cached: true,
                 });
-                Ok(NodeResult::Update(update))
+                (Ok(NodeResult::Update(update)), Vec::new())
             } else {
-                self.graph.emit(GraphEvent::NodeStarted {
-                    node: node_id.clone(),
-                    step,
-                });
-
+                let plan = ctx.task_plan(activation);
                 let node_ctx = ctx.node_context(
                     activation,
                     step,
@@ -408,18 +538,18 @@ where
                     state,
                 );
                 let policy = self.graph.effective_policy(node_id);
-                let result = self
-                    .run_node_with_retry(node_id, &node.handler, state, node_ctx, step, &policy)
+                let output = self
+                    .run_task(node_id, &node.handler, state, node_ctx, step, &policy, plan)
                     .await;
                 if let (Some(key), Some((value, ttl))) =
-                    (&cache_key, self.prepare_cache_put(node_id, &result))
+                    (&cache_key, self.prepare_cache_put(node_id, &output.0))
                 {
                     self.store_cache_entry(key, value, ttl, node_id, step).await;
                 }
-                result
+                output
             };
-            let stop = matches!(result, Err(_) | Ok(NodeResult::Interrupt(_)));
-            results.push((activation.clone(), result));
+            let stop = matches!(output.0, Err(_) | Ok(NodeResult::Interrupt(_)));
+            results.push((activation.clone(), output));
             if stop {
                 break;
             }
@@ -490,23 +620,19 @@ where
                     cached: true,
                 });
                 cache_hits[index] = true;
-                let fut: std::pin::Pin<
-                    Box<dyn std::future::Future<Output = Result<NodeResult<Update>>> + Send + '_>,
-                > = Box::pin(async move { Ok(NodeResult::Update(update)) });
+                let fut: BranchFuture<'_, Update> =
+                    Box::pin(async move { (Ok(NodeResult::Update(update)), Vec::new()) });
                 futures.push(fut);
                 continue;
             }
 
-            self.graph.emit(GraphEvent::NodeStarted {
-                node: node_id.clone(),
-                step,
-            });
             self.graph.emit(GraphEvent::ContextForked {
                 node: node_id.clone(),
                 fork: index,
                 step,
             });
 
+            let plan = ctx.task_plan(activation);
             let fork = Some(ForkId::new(index, node_id.clone()));
             let node_ctx = ctx.node_context(
                 activation,
@@ -523,10 +649,8 @@ where
             // `max_concurrency` bound) from requiring a higher-ranked `Send`
             // proof over the borrowed recursion frames, which the compiler
             // cannot discharge for the bare `async` blocks.
-            let fut: std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<NodeResult<Update>>> + Send + '_>,
-            > = Box::pin(async move {
-                self.run_node_with_retry(&owned_node, &handler, state, node_ctx, step, &policy)
+            let fut: BranchFuture<'_, Update> = Box::pin(async move {
+                self.run_task(&owned_node, &handler, state, node_ctx, step, &policy, plan)
                     .await
             });
             futures.push(fut);
@@ -545,7 +669,7 @@ where
         let results = match self.graph.max_concurrency {
             Some(limit) if limit < futures.len() => {
                 let total = futures.len();
-                let mut slots: Vec<Option<Result<NodeResult<Update>>>> =
+                let mut slots: Vec<Option<TaskOutput<Update>>> =
                     (0..total).map(|_| None).collect();
                 let mut source = futures.into_iter().enumerate();
                 let mut running = Vec::with_capacity(limit);
@@ -581,7 +705,7 @@ where
             }
             if let (Some(key), Some((value, ttl))) = (
                 &cache_keys[index],
-                self.prepare_cache_put(&activation.node, &results[index]),
+                self.prepare_cache_put(&activation.node, &results[index].0),
             ) {
                 self.store_cache_entry(key, value, ttl, &activation.node, step)
                     .await;
@@ -674,8 +798,9 @@ where
         let mut stalled: Vec<(usize, Activation)> = Vec::new();
         let mut interrupted: Vec<(usize, Interrupt)> = Vec::new();
         let mut failure: Option<StepFailure> = None;
+        let mut task_writes: Vec<PendingWrite> = Vec::new();
 
-        for (index, (activation, result)) in outcome.results.into_iter().enumerate() {
+        for (index, (activation, (result, writes))) in outcome.results.into_iter().enumerate() {
             let node_id = activation.node.clone();
             match result {
                 Err(error) => {
@@ -690,12 +815,14 @@ where
                             error,
                         });
                     }
+                    task_writes.extend(writes);
                     stalled.push((index, activation));
                 }
                 Ok(result) => {
                     match self.fold_result(index, &node_id, step, result, &mut accum, visited) {
                         Some(found) => {
                             interrupted.push(found);
+                            task_writes.extend(writes);
                             stalled.push((index, activation));
                         }
                         None => completed.push((index, activation)),
@@ -711,6 +838,7 @@ where
             stalled,
             interrupted,
             failure,
+            task_writes,
         }
     }
 }
