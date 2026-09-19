@@ -188,13 +188,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             }
         }
-        let record = ctx.emit(AgentEvent::ToolsAdvertised {
-            direct: tool_schemas.len(),
-            deferred: deferred_catalog.len(),
-            schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
-        });
-        status.set_last_event(record.id);
-
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool. Under the tool-call strategy the schema is sent as an
         // extra `function` entry, so a collision puts two identically-named
@@ -225,6 +218,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         status.mark_running(HarnessPhase::Middleware);
         self.middleware.run_before_agent(ctx, state).await?;
+
+        // Announced after `before_agent` so a listener that subscribes there
+        // (the usual place) sees the run's tool surface.
+        let record = ctx.emit(AgentEvent::ToolsAdvertised {
+            direct: tool_schemas.len(),
+            deferred: deferred_catalog.len(),
+            schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
+        });
+        status.set_last_event(record.id);
 
         // Truncated-empty recovery state (see `RunPolicy::truncated_empty_retries`).
         // These persist across the retry `continue` within a single logical turn:
