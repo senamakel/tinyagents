@@ -65,8 +65,12 @@ pub struct Entry {
 }
 
 /// The payload carried by an [`Entry`].
+// `tag = "type"`, not `"kind"`: `EntryKind::Custom` wraps a `CustomEntry`
+// that itself has a `kind` field (a host-defined discriminator, distinct
+// from this enum's own variant tag), and serde's internally-tagged
+// representation rejects a payload field that collides with the tag name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum EntryKind {
     /// An ordinary conversation message.
     Message(TranscriptMessage),
