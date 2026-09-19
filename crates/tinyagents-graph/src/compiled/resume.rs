@@ -150,15 +150,16 @@ where
         // the lineage spine stays connected across the resume.
         let initial_parent = Some(checkpoint.checkpoint_id.clone());
 
-        self.execute(
-            checkpoint.state,
+        self.execute(RunSeed {
+            state: checkpoint.state,
             active,
-            Some(thread_id),
+            thread_id: Some(thread_id),
             resume_map,
-            initial_barriers,
-            initial_parent,
+            barriers: initial_barriers,
+            parent: initial_parent,
             binding,
-        )
+            _update: std::marker::PhantomData,
+        })
         .await
     }
 }
