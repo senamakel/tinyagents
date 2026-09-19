@@ -32,7 +32,7 @@ pub enum NodeResult<Update> {
 /// pointing at the *same* target node — and each scheduled invocation receives
 /// its own `arg`. Distinct from a plain `goto`, which simply activates a node
 /// against the shared state with no per-activation input.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Send {
     /// The node to schedule.
     pub node: NodeId,
