@@ -37,16 +37,20 @@
 //!
 //! # Skips gracefully
 //!
-//! Dialling is **opt-in** via `PROVIDER_MATRIX=1`, so a bare `cargo test` never
-//! touches the network even with a fully configured `providers.env`. A provider
-//! whose API key is blank in `providers.env`, in the process environment, and in
-//! the preset's own key variable (e.g. `OPENAI_API_KEY`) is reported as `SKIP`
-//! and never dialled.
+//! This test is `#[ignore]`d, so a bare `cargo test` never touches the
+//! network even with a fully configured `providers.env`. Running it at all
+//! additionally requires the **opt-in** `PROVIDER_MATRIX=1` (kept as this
+//! file's own switch, since — unlike every other `live_*.rs` test — a
+//! configured matrix has keys by definition, so it cannot key its gate off a
+//! single missing env var the way `tests/common/live.rs::require_live` does).
+//! A provider whose API key is blank in `providers.env`, in the process
+//! environment, and in the preset's own key variable (e.g. `OPENAI_API_KEY`)
+//! is reported as `SKIP` and never dialled.
 //!
 //! # Run
 //!
 //! ```text
-//! PROVIDER_MATRIX=1 cargo test --test live_provider_matrix -- --nocapture
+//! PROVIDER_MATRIX=1 cargo test --test live_provider_matrix -- --ignored --nocapture
 //! ```
 //!
 //! `--nocapture` is required to see the table. Set
