@@ -150,7 +150,10 @@ fn encode_then_reduce_round_trips_to_the_terminal_message() {
         panic!("expected a Completed terminal");
     };
     assert_eq!(stop_reason.as_deref(), Some("tool_use"));
-    assert_eq!(message.text(), "hello");
+    assert_eq!(
+        tinyinference_llm::message::Message::Assistant(message.clone()).text(),
+        "hello"
+    );
     assert_eq!(message.tool_calls.len(), 1);
 }
 
