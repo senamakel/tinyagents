@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::transcript::{
-    SessionTranscript, TranscriptHistory, TranscriptMeta, TranscriptRead, TranscriptTurn,
+    SessionTranscript, TranscriptHistory, TranscriptMessage, TranscriptMeta, TranscriptRead,
+    TranscriptTurn,
 };
-use crate::types::TranscriptMessage;
 
 /// A [`TranscriptHistory`] backed by a `Vec<TranscriptMessage>` behind a
 /// [`Mutex`], with no filesystem I/O at all.
