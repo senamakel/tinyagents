@@ -256,6 +256,50 @@ pub struct RunPolicy {
     /// Defaults to `1` (one retry, two attempts total). Set to `0` to disable
     /// for exact-replay callers that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// Whether the loop parses `<tool_call>`-style text-dialect markup out of
+    /// an assistant's visible text when the provider returned no native tool
+    /// calls.
+    ///
+    /// Defaults to [`TextDialectRecovery::Auto`], which only attempts
+    /// recovery when the resolved model's
+    /// [`ModelProfile::tool_calling`][tinyinference_llm::model::ModelProfile::tool_calling]
+    /// is not reported (a model that *does* report native tool calling and
+    /// still answered in prose was not making a tool call — it was
+    /// explaining, quoting, or documenting the format, and executing that
+    /// text as a real call would silently strip visible text the caller
+    /// asked to see). See [`TextDialectRecovery`].
+    pub text_dialect_recovery: TextDialectRecovery,
+}
+
+/// Policy for recovering `<tool_call>`-style text-dialect tool calls from an
+/// assistant's visible text.
+///
+/// Some providers/models emit tool calls as XML-ish markup inside ordinary
+/// text instead of (or in addition to failing to populate) the provider's
+/// native tool-call channel. Recovering that markup lets such a model still
+/// drive tools through the same loop as a model with native tool calling.
+///
+/// Left unconditional, this is a real correctness hazard: any assistant text
+/// that merely *quotes* `<tool_call>` markup — explaining the format to a
+/// user, echoing a worked example, or showing it in a fenced code block —
+/// gets executed as a real tool call, with the visible text silently
+/// stripped and replaced. [`TextDialectRecovery::Auto`] (the default) closes
+/// the common case of that hazard by skipping recovery for any model whose
+/// resolved profile reports native tool calling; recovery inside fenced code
+/// blocks is always skipped regardless of this policy, since a model
+/// demonstrating the syntax in a code fence is manifestly not making a call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDialectRecovery {
+    /// Never parse text-dialect tool calls.
+    Off,
+    /// Always attempt recovery when the provider returned no native tool
+    /// calls, regardless of the resolved model's advertised capabilities.
+    On,
+    /// Attempt recovery only when the resolved model's profile does not
+    /// report native tool calling (or the profile is unknown). This is the
+    /// default.
+    #[default]
+    Auto,
 }
 
 impl Default for RunPolicy {
