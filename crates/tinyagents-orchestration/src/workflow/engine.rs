@@ -200,7 +200,7 @@ struct PersistRequest {
     terminal: bool,
 }
 
-struct PhaseRegistration<S: WorkflowStore> {
+pub(crate) struct PhaseRegistration<S: WorkflowStore> {
     store: Arc<S>,
     owner: String,
     run: parking_lot::Mutex<WorkflowRun>,
@@ -209,6 +209,26 @@ struct PhaseRegistration<S: WorkflowStore> {
 }
 
 impl<S: WorkflowStore> PhaseRegistration<S> {
+    /// Exposed `pub(crate)` so `workflow::tests` can exercise
+    /// [`WorkflowChildRegistration::register`]'s CAS semantics directly,
+    /// from a real tokio async context, without going through the whole
+    /// [`WorkflowEngine::drive`] loop.
+    pub(crate) fn new(
+        store: Arc<S>,
+        owner: String,
+        run: WorkflowRun,
+        phase_states: Value,
+        lease_for: Duration,
+    ) -> Self {
+        Self {
+            store,
+            owner,
+            run: parking_lot::Mutex::new(run),
+            phase_states,
+            lease_for,
+        }
+    }
+
     fn current(&self) -> WorkflowRun {
         self.run.lock().clone()
     }
