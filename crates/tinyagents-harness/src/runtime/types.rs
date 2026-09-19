@@ -317,6 +317,34 @@ pub struct RunPolicy {
     /// `ResponseFormat::JsonSchema` always uses provider-native mode
     /// regardless of this field.
     pub structured_strategy_override: Option<StructuredStrategyOverride>,
+    /// Which engine [`AgentHarness::invoke`][super::AgentHarness::invoke] (and
+    /// friends) drives the loop with (A5).
+    ///
+    /// Defaults to [`LoopExecution::Direct`]: the built-in
+    /// [`crate::agent_loop`] body, unchanged. Setting
+    /// [`LoopExecution::Graph`] selects an [`AgentHarness::loop_driver`
+    /// ][super::AgentHarness::loop_driver] instead — install one with
+    /// [`AgentHarness::with_loop_driver`][super::AgentHarness::with_loop_driver]
+    /// (`tinyagents-graph`'s `GraphLoopDriver` is the intended implementor;
+    /// see `tinyagents_graph::agent_loop`). Selecting `Graph` with no driver
+    /// installed fails the run with
+    /// [`crate::error::TinyAgentsError::Validation`] rather than silently
+    /// falling back to `Direct`.
+    pub execution: LoopExecution,
+}
+
+/// See [`RunPolicy::execution`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LoopExecution {
+    /// Drive the run with the built-in [`crate::agent_loop`] body
+    /// (`run_loop`/`run_loop_body`). The default; behavior-identical to
+    /// every release before A5.
+    #[default]
+    Direct,
+    /// Drive the run with the installed
+    /// [`AgentHarness::loop_driver`][super::AgentHarness::loop_driver]
+    /// instead (a compiled-graph rendition of the loop, in the common case).
+    Graph,
 }
 
 /// See [`RunPolicy::structured_strategy_override`].
