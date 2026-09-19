@@ -81,13 +81,28 @@ The registry-backed binding path (`DEFAULT_NODE_KINDS`) accepts `agent`,
 
 `compile` rejects: duplicate nodes, missing/undefined `start`, unknown
 `next`/`route`/`edge`/`command goto`/`send`/`join` targets, duplicate route
-labels, and mixing static routing with `routes`. Registry binding additionally
-checks model/tool/subgraph/router/agent/script/reducer references and node
-kinds. A single shared policy (`CapabilityResolver::classify_reference`) maps
-each node kind to the reference it must resolve, so the compiler blueprint gate
-and both `Resolver` paths cannot drift: `subagent` binds its `agent` reference
-against the registered agents and `repl_agent` binds its `script` reference
-against the registered scripts.
+labels, mixing static routing with `routes`, and (Phase 1c) a duplicate
+single-value node item (`model`/`kind`/`prompt`/`agent`/`graph`/`script`/
+`router`/`input`/`command`/`checkpoint`/`timeout`/`steering`) or graph item
+(`start`/`checkpoint`/`interrupt`) — previously the second occurrence silently
+overwrote the first. Registry binding additionally checks
+model/tool/subgraph/router/agent/script/reducer references and node kinds. A
+single shared policy (`CapabilityResolver::classify_reference`) maps each node
+kind to the reference it must resolve, so the compiler blueprint gate and both
+`Resolver` paths cannot drift: `subagent` binds its `agent` reference against
+the registered agents and `repl_agent` binds its `script` reference against
+the registered scripts.
+
+List separators (`[a, b, c]` in `sources`/`tools`/`options`/`sends`/`join`)
+share one rule since Phase 1c: comma-separated with an optional trailing
+comma. `sends` previously accepted a comma between entries as optional even
+mid-list (`[send a send b]` parsed the same as `[send a, send b]`); it now
+requires the comma, matching `parse_ident_list`/`parse_string_list`.
+
+`Literal` has a `Bool` variant since Phase 1c (`Literal::Bool(bool)`), so
+`defaults { streaming true }` lowers to a real boolean instead of
+`Literal::Ident("true")`. `true`/`false` are recognised in `parse_literal`
+before falling back to a bare `Ident`.
 
 ## Not yet implemented
 
