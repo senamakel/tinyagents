@@ -44,7 +44,7 @@ compiled_graph
     .await?;
 ```
 
-Rules:
+Rules (implemented today unless marked target):
 
 - interrupts require both a checkpointer and a `thread_id`
 - if a node emits an interrupt without resumable durability, the run returns a
@@ -52,17 +52,32 @@ Rules:
 - interrupted executions are returned only after the checkpoint needed for
   resume has been persisted
 - the interrupted node restarts from the beginning
-- multiple interrupts inside one task are matched by order or interrupt id
-- resume values can be a single value or a map from interrupt id to value
+- **Target (not implemented):** multiple interrupts inside one task are
+  matched by order or interrupt id — today `Interrupt` carries no `order`
+  field and `Command::resume` carries a single `serde_json::Value`, not a map
+- **Target (not implemented):** resume values as a map from interrupt id to
+  value — today `Command::resume(value)` is one value per resume call
 - node code before an interrupt must be deterministic or idempotent
 - side effects before an interrupt must be guarded by idempotency keys
-- interrupts can be configured before or after named nodes
+- **Target (not implemented):** interrupts configured before or after named
+  nodes (see below)
 
-Compile-time `interrupt_before` and `interrupt_after` selectors are useful for
+**Target (not implemented; see `docs/runtime-comparison/plan.md`).**
+Compile-time `interrupt_before` and `interrupt_after` selectors — useful for
 debugging, approvals, and human review at arbitrary graph boundaries without
-editing node code.
+editing node code — do not exist in `crates/tinyagents-graph/src` today; a
+node must call the interrupt itself.
 
 ## Targeted Human Steering
+
+**Target (not implemented; see `docs/runtime-comparison/plan.md`).** Nothing
+below this point — `ResumeTarget` as a targeted-steering struct,
+`resume_targeted`, or per-run/per-task/per-namespace resume routing — exists
+in `crates/tinyagents-graph/src` today. The `ResumeTarget` type that does
+exist (`crates/tinyagents-graph/src/compiled/types.rs`) is unrelated: it is a
+`Latest`/`Checkpoint(CheckpointId)` enum selecting which checkpoint a resume
+replays from, not a target-selection struct with `run_id`/`task_id`/
+`interrupt_id`/`namespace` fields.
 
 Human input during an interrupt is one form of steering. A control surface
 should be able to target:
