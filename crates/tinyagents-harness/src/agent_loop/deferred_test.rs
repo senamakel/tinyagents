@@ -174,3 +174,185 @@ async fn approval_required_call_defers_the_run_after_its_siblings_execute() {
             if call_id == &CallId::new("call-delete") && reason == "approval_required"
     )));
 }
+
+// ── Resume ──────────────────────────────────────────────────────────────────
+
+/// Runs the mixed batch to its deferral and returns the harness, the tools,
+/// and the deferred run, ready to resume.
+async fn deferred_run(
+    recorder: &EventRecorder,
+) -> (
+    AgentHarness<()>,
+    Arc<RecordingTool>,
+    Arc<RecordingTool>,
+    crate::middleware::AgentRun,
+) {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            mixed_batch(),
+            response(Vec::new(), "all done"),
+        ])),
+    );
+    let delete = RecordingTool::approval_gated("delete", "deleted");
+    let lookup = RecordingTool::plain("lookup", "found");
+    harness.register_tool(delete.clone());
+    harness.register_tool(lookup.clone());
+    let ctx = RunContext::new(RunConfig::new("first"), ()).with_events(recorder.sink());
+    let run = harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("first leg defers");
+    assert!(run.deferred.is_some());
+    (harness, delete, lookup, run)
+}
+
+#[tokio::test]
+async fn resume_with_approve_runs_the_tool_and_continues_to_the_model() {
+    let recorder = EventRecorder::new();
+    let (harness, delete, lookup, first) = deferred_run(&recorder).await;
+    let pending: DeferredToolRequests = first.deferred.clone().unwrap();
+
+    let results = DeferredToolResults::new().approve("call-delete");
+    assert!(pending.remaining(&results).is_empty());
+    let ctx = RunContext::new(RunConfig::new("second"), ()).with_events(recorder.sink());
+    let run = harness
+        .resume_deferred(&(), ctx, first.messages.clone(), results)
+        .await
+        .expect("resume completes the run");
+
+    assert_eq!(delete.calls(), vec![json!({"path": "/tmp/x"})]);
+    assert_eq!(lookup.calls().len(), 1, "the sibling is not re-run on resume");
+    assert_eq!(
+        tool_result_text(&run.messages, "call-delete").as_deref(),
+        Some("deleted")
+    );
+    assert_eq!(run.text().as_deref(), Some("all done"));
+    assert!(run.deferred.is_none());
+    assert_eq!(run.model_calls, 1, "resume spends exactly one new model call");
+    assert!(recorder.events().iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolApproved { call_id } if call_id == &CallId::new("call-delete")
+    )));
+}
+
+#[tokio::test]
+async fn resume_with_approve_with_args_runs_the_tool_with_the_edited_arguments() {
+    let recorder = EventRecorder::new();
+    let (harness, delete, _lookup, first) = deferred_run(&recorder).await;
+
+    let results = DeferredToolResults::new()
+        .approve_with_args("call-delete", json!({"path": "/tmp/safer"}));
+    let ctx = RunContext::new(RunConfig::new("second"), ()).with_events(recorder.sink());
+    let run = harness
+        .resume_deferred(&(), ctx, first.messages.clone(), results)
+        .await
+        .expect("resume completes the run");
+
+    assert_eq!(delete.calls(), vec![json!({"path": "/tmp/safer"})]);
+    assert_eq!(
+        tool_result_text(&run.messages, "call-delete").as_deref(),
+        Some("deleted")
+    );
+    assert_eq!(run.text().as_deref(), Some("all done"));
+}
+
+#[tokio::test]
+async fn resume_with_deny_answers_the_call_with_the_message_and_never_runs_it() {
+    let recorder = EventRecorder::new();
+    let (harness, delete, _lookup, first) = deferred_run(&recorder).await;
+
+    let results = DeferredToolResults::new().deny("call-delete", "operator refused the delete");
+    let ctx = RunContext::new(RunConfig::new("second"), ()).with_events(recorder.sink());
+    let run = harness
+        .resume_deferred(&(), ctx, first.messages.clone(), results)
+        .await
+        .expect("a denial is not a failure");
+
+    assert!(delete.calls().is_empty());
+    let denial = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(tool) if tool.tool_call_id == "call-delete" => Some(tool.clone()),
+            _ => None,
+        })
+        .expect("the denial is a tool-result row");
+    assert_eq!(denial.content, vec![ContentBlock::Text("operator refused the delete".into())]);
+    assert_eq!(denial.artifact.as_ref().unwrap()["is_error"], true);
+    assert_eq!(run.text().as_deref(), Some("all done"));
+    assert!(!run.executed_tools.iter().any(|name| name == "delete"));
+    assert!(recorder.events().iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolDenied { call_id, message }
+            if call_id == &CallId::new("call-delete") && message == "operator refused the delete"
+    )));
+}
+
+#[tokio::test]
+async fn resume_refuses_an_incomplete_resolution_and_names_the_missing_ids() {
+    let recorder = EventRecorder::new();
+    let (harness, delete, _lookup, first) = deferred_run(&recorder).await;
+    let pending = first.deferred.clone().unwrap();
+
+    let results = DeferredToolResults::new();
+    assert_eq!(pending.remaining(&results), vec![CallId::new("call-delete")]);
+    let ctx = RunContext::new(RunConfig::new("second"), ());
+    let error = harness
+        .resume_deferred(&(), ctx, first.messages.clone(), results)
+        .await
+        .expect_err("nothing was resolved");
+    assert!(
+        matches!(&error, TinyAgentsError::Validation(message) if message.contains("call-delete")),
+        "{error}"
+    );
+    assert!(delete.calls().is_empty());
+}
+
+// ── External tools ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resume() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            response(
+                vec![ToolCall::new("call-ext", "browser_click", json!({"x": 1, "y": 2}))],
+                "",
+            ),
+            response(Vec::new(), "clicked"),
+        ])),
+    );
+    harness.tools_mut().register_external(tinyinference_llm::tool::ToolSchema {
+        name: "browser_click".into(),
+        description: "Click at a screen coordinate (runs in the client).".into(),
+        parameters: json!({"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}}),
+        format: tinyinference_llm::tool::ToolFormat::Json,
+    });
+
+    let first = harness
+        .invoke_default(&(), vec![Message::user("click it")])
+        .await
+        .expect("first leg defers");
+    let pending = first.deferred.clone().expect("external call is pending");
+    assert!(pending.approvals.is_empty());
+    assert_eq!(pending.calls.len(), 1);
+    assert_eq!(pending.calls[0].name, "browser_click");
+    assert_eq!(pending.calls[0].arguments, json!({"x": 1, "y": 2}));
+    assert!(tool_result_text(&first.messages, "call-ext").is_none());
+
+    let results = DeferredToolResults::new().respond("call-ext", ToolResult::success("ok: clicked (1,2)"));
+    let ctx = RunContext::new(RunConfig::new("second"), ());
+    let run = harness
+        .resume_deferred(&(), ctx, first.messages.clone(), results)
+        .await
+        .expect("resume completes the run");
+    assert_eq!(
+        tool_result_text(&run.messages, "call-ext").as_deref(),
+        Some("ok: clicked (1,2)")
+    );
+    assert_eq!(run.text().as_deref(), Some("clicked"));
+    assert!(run.executed_tools.is_empty(), "the harness never ran the external tool");
+}
