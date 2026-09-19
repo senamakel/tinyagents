@@ -811,6 +811,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// `deltas_emitted` is incremented for every delta actually handed to
     /// consumers, so the retry path can tell whether a failed attempt already
     /// published output that now has to be discarded.
+    // `deltas_emitted` must stay an out-parameter: on the error path the
+    // retry logic reads how much output already reached consumers, which a
+    // return value could not carry alongside the error.
+    #[allow(clippy::too_many_arguments)]
     async fn invoke_model_streaming_once(
         &self,
         state: &State,
