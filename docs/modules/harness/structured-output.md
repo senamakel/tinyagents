@@ -94,6 +94,33 @@ Tool strategy must handle:
 The artificial tool should not execute application side effects. It is a parse
 carrier only.
 
+## `EndStrategy`: output tool + function tools in one turn (A6)
+
+A single turn can both answer (call the structured-output schema tool, under
+`StructuredStrategy::ToolCall`/`ToolCallUnion`) *and* ask to run further
+tools. `RunPolicy::end_strategy: EndStrategy` decides what happens to the two,
+mirroring Pydantic AI's `end_strategy`:
+
+- **`Graceful`** (default) — run the accompanying function-tool calls (their
+  side effects and results are never silently dropped), then finish the run
+  with the structured output already recorded. Never spends an extra model
+  call once the model has already answered.
+- **`Early`** — finish immediately on the output-tool call. The accompanying
+  function-tool calls are **not** executed; their `tool_calls` entries are
+  closed with a synthetic "run stopped before this tool call was executed"
+  result so the transcript stays replayable for a future turn.
+- **`Exhaustive`** — ignore the output-tool call this turn entirely (never
+  recorded): run the function-tool calls and give the model another turn,
+  exactly as if the output tool had not been called. The run only finishes
+  once a later turn's output-tool call has no accompanying function-tool
+  calls.
+
+This replaces the pre-A6 behavior, which always recorded the structured value
+and then unconditionally continued the loop (equivalent to neither `Graceful`
+nor `Exhaustive` — it recorded early like `Graceful` but kept going like
+`Exhaustive`, discarding the recorded value the moment a later turn produced a
+different one).
+
 ## Error Policy: the output-validation retry loop (A3)
 
 Extraction itself is `StructuredExtractor::extract(&response)`
