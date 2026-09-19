@@ -117,9 +117,6 @@ async fn with_capability_installs_toolset_middleware_and_model_defaults() {
 
     // Middleware appended.
     assert_eq!(harness.middleware().len(), 1);
-    // Middleware `name()` is callable through the stack (proves it is the
-    // same instance, not a stub).
-    let _ = calls.load(Ordering::SeqCst);
 
     // Model defaults applied to the policy.
     assert_eq!(
