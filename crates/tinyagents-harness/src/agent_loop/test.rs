@@ -1254,6 +1254,63 @@ async fn prefix_mutating_wrap_middleware_refreshes_provider_cache_key() {
 }
 
 #[tokio::test]
+async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
+    use crate::cache::prompt_cache_key;
+    use tinyinference_llm::cache::CachePolicy;
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    struct CustomPrefix;
+
+    #[async_trait]
+    impl Middleware<(), ()> for CustomPrefix {
+        fn name(&self) -> &str {
+            "custom-prefix"
+        }
+
+        async fn before_model(
+            &self,
+            _ctx: &mut RunContext<()>,
+            _state: &(),
+            request: &mut ModelRequest,
+        ) -> Result<()> {
+            request.messages.insert(0, Message::system("tenant policy"));
+            request.cache_segments = vec![PromptSegment {
+                id: "tenant-policy".to_string(),
+                role: SegmentRole::Instructions,
+                cacheable: true,
+            }];
+            Ok(())
+        }
+    }
+
+    let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_policy(RunPolicy {
+        cache: CachePolicy {
+            protect_prompt_prefix: true,
+            ..CachePolicy::default()
+        },
+        ..RunPolicy::default()
+    });
+    harness.push_middleware(Arc::new(CustomPrefix));
+
+    harness
+        .invoke_default(&(), vec![Message::user("hello")])
+        .await
+        .expect("run succeeds");
+
+    let request = model
+        .requests()
+        .into_iter()
+        .next()
+        .expect("model received one request");
+    assert_eq!(request.cache_segments[0].id, "tenant-policy");
+    assert!(request.prompt_fingerprint.is_some());
+    assert!(prompt_cache_key(&request).is_some());
+}
+
+#[tokio::test]
 async fn usage_accumulates_across_calls() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model(

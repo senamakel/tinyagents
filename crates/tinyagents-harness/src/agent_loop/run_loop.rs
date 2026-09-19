@@ -956,7 +956,17 @@ pub(super) fn refresh_prompt_cache_fingerprint(
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
-    if request.cache_segments.is_empty() && protect_prompt_prefix {
+    let harness_layout = request.cache_segments.is_empty()
+        || request.cache_segments.iter().all(|segment| {
+            (segment.id == "system" && segment.role == SegmentRole::System)
+                || (segment.id == "tools" && segment.role == SegmentRole::Tools)
+        });
+
+    if harness_layout {
+        request.cache_segments.clear();
+        if !protect_prompt_prefix {
+            return;
+        }
         if system_end > 0 {
             request.cache_segments.push(PromptSegment {
                 id: "system".to_string(),
@@ -971,22 +981,38 @@ pub(super) fn refresh_prompt_cache_fingerprint(
                 cacheable: true,
             });
         }
-    }
-    if !request
-        .cache_segments
-        .iter()
-        .any(|segment| segment.cacheable)
-    {
+        if request.cache_segments.is_empty() {
+            request.prompt_fingerprint = None;
+            return;
+        }
+
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        if system_end > 0 {
+            prompt.push_system("system", request.messages[..system_end].to_vec());
+        }
+        if !request.tools.is_empty() {
+            prompt.push_tools_segment("tools", request.tools.clone());
+        }
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
         return;
     }
-    let mut prompt = crate::prompt::PromptBuilder::new();
-    if system_end > 0 {
-        prompt.push_system("system", request.messages[..system_end].to_vec());
-    }
-    if !request.tools.is_empty() {
-        prompt.push_tools_segment("tools", request.tools.clone());
-    }
-    request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+
+    // Custom segment annotations do not carry message boundaries, so the
+    // harness cannot safely rebuild their stable-prefix projection. Preserve
+    // middleware ownership and use a conservative digest over the full
+    // request instead: it sacrifices tail-only reuse but prevents distinct
+    // prefixes from sharing a provider routing key.
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(crate::cache::cache_key(request));
+    hasher.update(serde_json::to_vec(&request.cache_segments).unwrap_or_default());
+    let fingerprint = hasher.finalize();
+    request.prompt_fingerprint = Some(
+        fingerprint
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    );
 }
 
 /// Applies a host budget hint before the provider sees the request.
