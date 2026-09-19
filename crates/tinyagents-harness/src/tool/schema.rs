@@ -162,6 +162,9 @@ impl SchemaCleanr {
         }
     }
 
+    /// Cleans a single schema object: resolves a `$ref` or simplifies a union
+    /// before falling through to per-keyword filtering, since both of those
+    /// cases replace the object wholesale rather than editing it in place.
     fn clean_object(
         obj: Map<String, Value>,
         defs: &HashMap<String, Value>,
@@ -172,6 +175,9 @@ impl SchemaCleanr {
             return Self::resolve_ref(ref_value, &obj, defs, strategy, ref_stack);
         }
 
+        // A union that simplifies to a single non-null variant or a flat
+        // literal enum is preferred over keeping `anyOf`/`oneOf`, which some
+        // strategies reject outright.
         if (obj.contains_key("anyOf") || obj.contains_key("oneOf"))
             && let Some(simplified) = Self::try_simplify_union(&obj, defs, strategy, ref_stack)
         {

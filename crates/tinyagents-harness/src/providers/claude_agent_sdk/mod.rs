@@ -1,4 +1,14 @@
 //! Subprocess lifecycle for the Claude Agent SDK provider.
+//!
+//! [`ClaudeAgentSdkProvider`] implements `ChatModel<()>` by shelling out to
+//! `claude -p --output-format stream-json` once per [`invoke`][ChatModel::invoke]
+//! call: the harness never links against the Claude Agent SDK directly, it
+//! only speaks the CLI's stdin/stdout contract. This is the "prompt-guided"
+//! sibling of [`crate::providers::claude_code`], which drives the same CLI in
+//! full agentic (multi-turn, tool-using) mode via a long-lived session
+//! instead of a single stateless invocation; use this module when a plain
+//! one-shot completion is enough. Wire message shapes for the NDJSON stream
+//! live in [`protocol`].
 
 mod protocol;
 
