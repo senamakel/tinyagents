@@ -137,7 +137,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         request: &mut ModelRequest,
     ) -> Result<()> {
         // Below the window threshold: pass through untouched (no-op, no event).
-        if !self.policy.should_summarize(&request.messages) {
+        // The tool declarations count: they ride along on every request.
+        if !self
+            .policy
+            .should_summarize_with_tools(&request.messages, &request.tools)
+        {
             return Ok(());
         }
 
@@ -323,7 +327,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Microcompa
             } else {
                 total_message_tokens(&request.messages)
             };
-            if tokens <= budget {
+            // The schemas are part of what the model has to fit, so they are
+            // part of what is measured against the budget.
+            let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+                &request.tools,
+                &crate::token_estimation::TokenCountOptions::default(),
+            );
+            if tokens + schema_tokens <= budget {
                 return Ok(());
             }
         }
