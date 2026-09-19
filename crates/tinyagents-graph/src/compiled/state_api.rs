@@ -137,8 +137,11 @@ where
         // (I2) without its `completed_tasks` representing owed routing —
         // `update_state` always resolves every carried completion itself
         // before writing.
-        let base_source_is_loop =
-            base.metadata.get("source").and_then(serde_json::Value::as_str) == Some("loop");
+        let base_source_is_loop = base
+            .metadata
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            == Some("loop");
         let carried_completed: Vec<NodeId> = if base_source_is_loop
             && (base.metadata.get("interrupted_nodes").is_some()
                 || base.metadata.get("failed_node").is_some())

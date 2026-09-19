@@ -39,11 +39,8 @@ where
         let mut resolved: Vec<Vec<RouteTarget>> = Vec::with_capacity(completed.len());
         for (orig_index, activation) in completed.iter() {
             let node_id = &activation.node;
-            let targets = self.route(
-                node_id,
-                goto_map.get(orig_index).map(Vec::as_slice),
-                state,
-            )?;
+            let targets =
+                self.route(node_id, goto_map.get(orig_index).map(Vec::as_slice), state)?;
             resolved.push(targets.clone());
             for target in targets {
                 let tnode = target.node().clone();

@@ -2681,12 +2681,20 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
 
     let before = cp.get("t-fork-update", None).await.unwrap().unwrap();
     assert_eq!(
-        before.next_nodes.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+        before
+            .next_nodes
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>(),
         vec!["c".to_string()],
         "precondition: only the interrupted branch is pending, b's routing is deferred"
     );
     assert_eq!(
-        before.completed_tasks.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+        before
+            .completed_tasks
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>(),
         vec!["b".to_string()],
         "precondition: b completed this step but its routing was not yet resolved"
     );
@@ -2849,10 +2857,7 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
     );
 
     let before = cp.get("t-send-update", None).await.unwrap().unwrap();
-    let before_pending = before
-        .pending_activations
-        .clone()
-        .unwrap_or_default();
+    let before_pending = before.pending_activations.clone().unwrap_or_default();
     assert_eq!(
         before_pending
             .iter()

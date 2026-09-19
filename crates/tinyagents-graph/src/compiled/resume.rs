@@ -223,7 +223,9 @@ fn node_visits_from_persisted(metadata: &serde_json::Value) -> HashMap<NodeId, u
         .map(|obj| {
             obj.iter()
                 .filter_map(|(node, count)| {
-                    count.as_u64().map(|c| (NodeId::from(node.as_str()), c as usize))
+                    count
+                        .as_u64()
+                        .map(|c| (NodeId::from(node.as_str()), c as usize))
                 })
                 .collect()
         })
