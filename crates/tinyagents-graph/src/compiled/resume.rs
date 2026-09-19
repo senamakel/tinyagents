@@ -74,18 +74,46 @@ where
             namespace: self.namespace.clone(),
         };
         let recorded = checkpointer.get_writes(&completed_config).await?;
-        let done: HashSet<String> = if recorded.is_empty() {
-            checkpoint
-                .pending_writes
-                .iter()
-                .map(|w| w.task_id.as_str().to_string())
-                .collect()
+        let ledger: &[crate::checkpoint::PendingWrite] = if recorded.is_empty() {
+            &checkpoint.pending_writes
         } else {
-            recorded
-                .iter()
-                .map(|w| w.task_id.as_str().to_string())
-                .collect()
+            &recorded
         };
+        // Only a completion marker (or any other non-replay write) says a
+        // task ran. A replay memo — a `durable_task` write or a deferred
+        // `interrupt_after` result — belongs to a task that is still
+        // *pending* and must re-run (consuming the memo), so it is excluded
+        // here and grouped per task below instead.
+        let done: HashSet<String> = ledger
+            .iter()
+            .filter(|w| !w.is_task_replay())
+            .map(|w| w.task_id.as_str().to_string())
+            .collect();
+        let mut task_writes: HashMap<String, Vec<crate::checkpoint::PendingWrite>> =
+            HashMap::new();
+        for write in ledger.iter().filter(|w| w.is_task_replay()) {
+            task_writes
+                .entry(write.task_id.as_str().to_string())
+                .or_default()
+                .push(write.clone());
+        }
+        // Executor-injected `interrupt_before`/`interrupt_after` pauses this
+        // checkpoint recorded: resuming acknowledges them, so the re-run of
+        // that task skips the same phase instead of pausing again.
+        let acknowledged_interrupts: HashSet<String> = checkpoint
+            .interrupts
+            .iter()
+            .filter_map(|interrupt| {
+                let phase = interrupt.payload.get("phase")?.as_str()?;
+                if phase != "before" && phase != "after" {
+                    return None;
+                }
+                let task_id = interrupt.task_id.as_ref()?;
+                Some(crate::compiled::run_ctx::RunCtx::<State, Update>::interrupt_ack_key(
+                    phase, task_id,
+                ))
+            })
+            .collect();
         let active: Vec<Activation> = if done.is_empty() {
             active
         } else {
@@ -177,6 +205,13 @@ where
             }
         }
 
+        // Fail closed on `Interrupt::response_schema`: every value this resume
+        // would hand to a schema-bearing interrupt's task is validated *now*,
+        // before `execute` claims the thread or any boundary writes a
+        // checkpoint, so a rejected value leaves the thread's checkpoint
+        // exactly as it was.
+        self.validate_resume_values(&checkpoint, &active, &resume_map)?;
+
         // Restore accumulated barrier arrivals so a join's precondition survives
         // the interrupt/failure boundary this checkpoint recorded.
         let initial_barriers = barriers_from_persisted(&checkpoint.barrier_arrivals);
@@ -245,11 +280,62 @@ where
                 initial_node_visits,
                 initial_versions_seen,
                 carried_completed,
+                task_writes,
+                acknowledged_interrupts,
             },
             options,
             _update: std::marker::PhantomData,
         })
         .await
+    }
+
+    /// Validates the resume value each schema-bearing pending interrupt
+    /// would receive (see [`Interrupt::response_schema`]) against that
+    /// schema, via [`tinyagents_harness::tool::validate_against_schema`].
+    ///
+    /// The value is looked up exactly as [`RunCtx::node_context`] will hand
+    /// it out — by the interrupt's task id, falling back to its node id (the
+    /// legacy/whole-node key) — so what is validated is what the node would
+    /// see. An interrupt whose task receives no value at all (a bare
+    /// `retry`) has nothing to validate. Must be called before any
+    /// checkpoint write.
+    ///
+    /// [`RunCtx::node_context`]: crate::compiled::run_ctx::RunCtx::node_context
+    fn validate_resume_values(
+        &self,
+        checkpoint: &Checkpoint<State>,
+        active: &[Activation],
+        resume_map: &HashMap<String, serde_json::Value>,
+    ) -> Result<()> {
+        for interrupt in &checkpoint.interrupts {
+            let Some(schema) = &interrupt.response_schema else {
+                continue;
+            };
+            let value = interrupt
+                .task_id
+                .as_ref()
+                .and_then(|task| resume_map.get(task.as_str()))
+                .or_else(|| {
+                    // Node-keyed fallback, only when the interrupt's node is
+                    // actually pending (matching `node_context`'s lookup).
+                    active
+                        .iter()
+                        .any(|a| a.node == interrupt.node)
+                        .then(|| resume_map.get(interrupt.node.as_str()))
+                        .flatten()
+                });
+            let Some(value) = value else {
+                continue;
+            };
+            tinyagents_harness::tool::validate_against_schema(schema, value).map_err(|err| {
+                TinyAgentsError::Validation(format!(
+                    "resume value for interrupt `{}` (node `{}`) rejected by its response_schema: \
+                     {err}",
+                    interrupt.id, interrupt.node
+                ))
+            })?;
+        }
+        Ok(())
     }
 }
 
