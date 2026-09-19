@@ -181,6 +181,32 @@ fn render_object(object: &serde_json::Map<String, Value>, depth: usize) -> Strin
     out
 }
 
+/// Renders a JSON Schema property name as a TypeScript member key.
+///
+/// JSON Schema property names are arbitrary strings, not restricted to valid
+/// JavaScript identifiers: a schema can legally declare `"file-path"` or
+/// `"2fa_code"`. Rendered bare, `file-path: string` reads as a subtraction
+/// expression rather than a member, and a model can misparse it. A name that
+/// is a valid identifier (starts with a letter/`_`/`$`, and is otherwise
+/// alphanumeric/`_`/`$`) still renders bare, matching the common case and
+/// keeping the compact rendering's whole point of being terse; anything else
+/// is JSON-quoted, matching how TypeScript itself would need to write it as
+/// an object type member (`{"file-path": string}`).
+fn render_property_name(name: &str) -> String {
+    let is_identifier = name
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_alphabetic() || first == '_' || first == '$')
+        && name
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '$');
+    if is_identifier {
+        name.to_string()
+    } else {
+        serde_json::to_string(name).unwrap_or_else(|_| format!("{name:?}"))
+    }
+}
+
 #[cfg(test)]
 #[path = "signature_test.rs"]
 mod test;
