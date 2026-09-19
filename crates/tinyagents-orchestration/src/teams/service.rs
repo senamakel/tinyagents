@@ -157,16 +157,27 @@ impl TeamLedger for SessionTeamLedger {
 }
 
 /// Host-neutral service for durable, dependency-aware agent teams.
+///
+/// Provides a high-level API for team management: creating teams, adding
+/// members, creating and claiming tasks, composing prompts, and shutting down
+/// members. All mutations are durably persisted via a caller-supplied
+/// [`TeamLedger`]; the service enforces coordination invariants (no duplicate
+/// member names, valid task dependencies, no cycles).
+///
+/// Generic over the ledger to allow hosts to inject their own storage
+/// implementation or a test double.
 #[derive(Debug, Clone)]
 pub struct TeamService<L> {
     ledger: L,
 }
 
 impl<L> TeamService<L> {
+    /// Creates a service wrapping the provided [`TeamLedger`].
     pub fn new(ledger: L) -> Self {
         Self { ledger }
     }
 
+    /// Returns a reference to the underlying ledger.
     pub fn ledger(&self) -> &L {
         &self.ledger
     }
