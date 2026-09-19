@@ -200,6 +200,7 @@ where
         state: &State,
         step: usize,
     ) -> Result<StepOutcome<Update>> {
+        let siblings = sibling_counts(active);
         let mut results = Vec::with_capacity(active.len());
         for activation in active {
             let node_id = &activation.node;
@@ -218,7 +219,12 @@ where
                 step,
             });
 
-            let node_ctx = ctx.node_context(node_id, step, None, activation.send_arg.clone());
+            let node_ctx = ctx.node_context(
+                activation,
+                step,
+                None,
+                siblings.get(node_id).copied().unwrap_or(1),
+            );
             let result = self
                 .run_node_with_retry(node_id, &node.handler, state, node_ctx, step)
                 .await;
