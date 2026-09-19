@@ -453,16 +453,27 @@ mod file_backend {
         let loaded = cp.get("v1thread", None).await.unwrap().unwrap();
         assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
         assert_eq!(
-            loaded.tasks.iter().map(|t| t.node.to_string()).collect::<Vec<_>>(),
+            loaded
+                .tasks
+                .iter()
+                .map(|t| t.node.to_string())
+                .collect::<Vec<_>>(),
             vec!["b".to_string()],
             "tasks derived from the v1 next_nodes field"
         );
         assert_eq!(
-            loaded.completed.iter().map(|c| c.node.to_string()).collect::<Vec<_>>(),
+            loaded
+                .completed
+                .iter()
+                .map(|c| c.node.to_string())
+                .collect::<Vec<_>>(),
             vec!["a".to_string()],
             "completed derived from the v1 completed_tasks/completed_routes pair"
         );
-        assert!(loaded.next_nodes.is_empty(), "legacy fields cleared by normalize");
+        assert!(
+            loaded.next_nodes.is_empty(),
+            "legacy fields cleared by normalize"
+        );
         assert!(loaded.completed_tasks.is_empty());
 
         // get_scoped, list, state_history, and get_thread all go through the
@@ -470,12 +481,21 @@ mod file_backend {
         let scoped = cp.get_scoped("v1thread", None, &[]).await.unwrap().unwrap();
         assert_eq!(scoped.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
         let listed = cp.list("v1thread").await.unwrap();
-        assert_eq!(listed[0].next_nodes, vec![tinyagents_harness::ids::NodeId::from("b")]);
+        assert_eq!(
+            listed[0].next_nodes,
+            vec![tinyagents_harness::ids::NodeId::from("b")]
+        );
         let history = cp.state_history("v1thread", &[], None).await.unwrap();
         assert_eq!(history.len(), 1);
-        assert_eq!(history[0].checkpoint.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(
+            history[0].checkpoint.version,
+            crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+        );
         let thread = cp.get_thread("v1thread").await.unwrap();
-        assert_eq!(thread[0].version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(
+            thread[0].version,
+            crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+        );
     }
 
     #[tokio::test]
@@ -816,7 +836,10 @@ mod sqlite_backend {
                 .collect::<Vec<_>>(),
             vec!["a".to_string()]
         );
-        assert!(loaded.next_nodes.is_empty(), "legacy fields cleared by normalize");
+        assert!(
+            loaded.next_nodes.is_empty(),
+            "legacy fields cleared by normalize"
+        );
 
         let history = cp.state_history("v1thread", &[], None).await.unwrap();
         assert_eq!(history.len(), 1);

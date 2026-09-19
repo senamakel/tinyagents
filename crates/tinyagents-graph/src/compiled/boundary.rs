@@ -543,7 +543,11 @@ where
         let pending_writes = Self::completion_writes(&boundary.completed);
         let checkpoint = Checkpoint::new(
             boundary.state.clone(),
-            boundary.pending.iter().map(PendingActivation::from).collect(),
+            boundary
+                .pending
+                .iter()
+                .map(PendingActivation::from)
+                .collect(),
         )
         .with_thread_id(thread.to_string())
         .with_checkpoint_id(next_checkpoint_id())
@@ -778,7 +782,11 @@ where
         let pending_writes = Self::completion_writes(&boundary.completed);
         Checkpoint::new(
             boundary.state.clone(),
-            boundary.pending.iter().map(PendingActivation::from).collect(),
+            boundary
+                .pending
+                .iter()
+                .map(PendingActivation::from)
+                .collect(),
         )
         .with_thread_id(thread.to_string())
         .with_checkpoint_id(next_checkpoint_id())

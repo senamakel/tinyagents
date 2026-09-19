@@ -4107,7 +4107,10 @@ async fn resume_from_a_checkpoint_format_v1_json_record() {
     // The store normalized it on `get` before this handed it back — confirm
     // that directly before exercising resume through it.
     let normalized = cp.get("t-v1-record", None).await.unwrap().unwrap();
-    assert_eq!(normalized.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(
+        normalized.version,
+        crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+    );
     assert_eq!(normalized.tasks.len(), 1);
     assert_eq!(normalized.tasks[0].node, NodeId::from("gate"));
 

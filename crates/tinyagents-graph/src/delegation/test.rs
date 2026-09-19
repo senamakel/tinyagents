@@ -588,7 +588,7 @@ async fn incompatible_checkpoint_expires_to_a_fresh_run() {
     let legacy_cp: crate::checkpoint::FileCheckpointer<LegacyState> =
         crate::checkpoint::FileCheckpointer::new(dir.path());
     let legacy = Checkpoint::new(
-            LegacyState {
+        LegacyState {
             plan: Some("old".to_string()),
             executions: vec!["a".to_string(), "b".to_string()],
             reviews: vec![],
@@ -597,12 +597,12 @@ async fn incompatible_checkpoint_expires_to_a_fresh_run() {
             final_output: None,
             cancelled: false,
         },
-            Vec::new(),
-        )
-        .with_thread_id("legacy-1".to_string())
-        .with_checkpoint_id("cp-legacy".to_string())
-        .with_parent_checkpoint_id(None)
-        .with_metadata(json!({}));
+        Vec::new(),
+    )
+    .with_thread_id("legacy-1".to_string())
+    .with_checkpoint_id("cp-legacy".to_string())
+    .with_parent_checkpoint_id(None)
+    .with_metadata(json!({}));
     legacy_cp.put(legacy).await.expect("seed legacy checkpoint");
 
     // Reopen the SAME store as the current state type and resume: the
@@ -632,16 +632,16 @@ async fn checkpoint_below_current_schema_version_expires_to_fresh_run() {
     let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
         crate::checkpoint::FileCheckpointer::new(dir.path());
     let checkpoint = Checkpoint::new(
-            DelegationState {
+        DelegationState {
             plan: Some("stale".to_string()),
             ..Default::default()
         },
-            Vec::new(),
-        )
-        .with_thread_id("old-schema".to_string())
-        .with_checkpoint_id("cp-old".to_string())
-        .with_parent_checkpoint_id(None)
-        .with_metadata(json!({}));
+        Vec::new(),
+    )
+    .with_thread_id("old-schema".to_string())
+    .with_checkpoint_id("cp-old".to_string())
+    .with_parent_checkpoint_id(None)
+    .with_metadata(json!({}));
     assert_eq!(
         checkpoint.state.schema_version, 0,
         "an un-stamped record is version 0"
@@ -686,17 +686,17 @@ async fn checkpoint_above_current_schema_version_also_expires_to_fresh_run() {
     let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
         crate::checkpoint::FileCheckpointer::new(dir.path());
     let checkpoint = Checkpoint::new(
-            DelegationState {
+        DelegationState {
             plan: Some("from-the-future".to_string()),
             schema_version: CURRENT_SCHEMA_VERSION + 1,
             ..Default::default()
         },
-            Vec::new(),
-        )
-        .with_thread_id("future-schema".to_string())
-        .with_checkpoint_id("cp-future".to_string())
-        .with_parent_checkpoint_id(None)
-        .with_metadata(json!({}));
+        Vec::new(),
+    )
+    .with_thread_id("future-schema".to_string())
+    .with_checkpoint_id("cp-future".to_string())
+    .with_parent_checkpoint_id(None)
+    .with_metadata(json!({}));
     seed.put(checkpoint)
         .await
         .expect("seed future-schema checkpoint");
@@ -765,24 +765,22 @@ async fn cancelled_checkpoint_still_scheduling_finalize_is_resumed_not_terminal(
     let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
         crate::checkpoint::FileCheckpointer::new(dir.path());
     let checkpoint = Checkpoint::new(
-            DelegationState {
+        DelegationState {
             plan: Some("PLAN".to_string()),
             cancelled: true,
             schema_version: CURRENT_SCHEMA_VERSION,
             ..Default::default()
         },
-            vec![
-            PendingActivation {
-                node: tinyagents_harness::ids::NodeId::from("finalize"),
-                send_arg: None,
-                task_id: tinyagents_harness::ids::TaskId::from(String::new()),
-            },
-        ],
-        )
-        .with_thread_id("cancelled-mid-flight".to_string())
-        .with_checkpoint_id("cp-cancel".to_string())
-        .with_parent_checkpoint_id(None)
-        .with_metadata(json!({}));
+        vec![PendingActivation {
+            node: tinyagents_harness::ids::NodeId::from("finalize"),
+            send_arg: None,
+            task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+        }],
+    )
+    .with_thread_id("cancelled-mid-flight".to_string())
+    .with_checkpoint_id("cp-cancel".to_string())
+    .with_parent_checkpoint_id(None)
+    .with_metadata(json!({}));
     seed.put(checkpoint)
         .await
         .expect("seed cancelled-but-not-finalized checkpoint");
@@ -982,29 +980,27 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
     let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
         crate::checkpoint::FileCheckpointer::new(dir.path());
     let checkpoint = Checkpoint::new(
-            DelegationState {
+        DelegationState {
             plan: Some("PLAN".to_string()),
             schema_version: CURRENT_SCHEMA_VERSION + 1,
             ..Default::default()
         },
-            vec![
-            PendingActivation {
-                node: tinyagents_harness::ids::NodeId::from("approval"),
-                send_arg: None,
-                task_id: tinyagents_harness::ids::TaskId::from(String::new()),
-            },
-        ],
-        )
-        .with_thread_id("resume-future-schema".to_string())
-        .with_checkpoint_id("cp-future".to_string())
-        .with_parent_checkpoint_id(None)
-        .with_interrupts(vec![Interrupt {
-            id: "int-1".to_string(),
+        vec![PendingActivation {
             node: tinyagents_harness::ids::NodeId::from("approval"),
-            payload: json!({}),
-            task_id: None,
-        }])
-        .with_metadata(json!({}));
+            send_arg: None,
+            task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+        }],
+    )
+    .with_thread_id("resume-future-schema".to_string())
+    .with_checkpoint_id("cp-future".to_string())
+    .with_parent_checkpoint_id(None)
+    .with_interrupts(vec![Interrupt {
+        id: "int-1".to_string(),
+        node: tinyagents_harness::ids::NodeId::from("approval"),
+        payload: json!({}),
+        task_id: None,
+    }])
+    .with_metadata(json!({}));
     seed.put(checkpoint)
         .await
         .expect("seed future-schema checkpoint parked on approval");

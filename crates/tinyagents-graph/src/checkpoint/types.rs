@@ -574,11 +574,7 @@ impl<State> Checkpoint<State> {
             .get("step")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
-        let next_nodes = self
-            .effective_tasks()
-            .into_iter()
-            .map(|t| t.node)
-            .collect();
+        let next_nodes = self.effective_tasks().into_iter().map(|t| t.node).collect();
         CheckpointMetadata {
             thread_id: self.thread_id.clone(),
             checkpoint_id: self.checkpoint_id.clone(),

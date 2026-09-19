@@ -59,7 +59,7 @@ pub use channel::{
 #[cfg(feature = "sqlite")]
 pub use checkpoint::SqliteCheckpointer;
 pub use checkpoint::{
-    CHECKPOINT_FORMAT_VERSION, BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointMetadata,
+    BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
     FileCheckpointer, InMemoryCheckpointer, PendingActivation, PendingWrite,
 };

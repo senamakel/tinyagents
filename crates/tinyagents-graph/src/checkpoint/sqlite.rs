@@ -339,8 +339,10 @@ fn migrate_checkpoint_format_columns(conn: &Connection) -> Result<()> {
         .map_err(|e| sqlite_err("add format_version column", e))?;
     }
     if !existing.contains("created_at") {
-        conn.execute_batch("ALTER TABLE checkpoints ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;")
-            .map_err(|e| sqlite_err("add created_at column", e))?;
+        conn.execute_batch(
+            "ALTER TABLE checkpoints ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;",
+        )
+        .map_err(|e| sqlite_err("add created_at column", e))?;
     }
     Ok(())
 }
@@ -397,8 +399,8 @@ fn insert_checkpoint_row<State: Serialize>(
     // a v2 checkpoint (every write this crate performs) leaves that legacy
     // field empty, so reading it here would silently persist an empty
     // `next_nodes` listing column for every checkpoint going forward.
-    let next_nodes = serde_json::to_string(&meta.next_nodes)
-        .map_err(|e| sqlite_err("encode next_nodes", e))?;
+    let next_nodes =
+        serde_json::to_string(&meta.next_nodes).map_err(|e| sqlite_err("encode next_nodes", e))?;
     let record = serde_json::to_string(checkpoint).map_err(|e| sqlite_err("encode record", e))?;
     conn.execute(
         "INSERT INTO checkpoints (
