@@ -194,13 +194,52 @@ column keyed by run id, alongside a `Paused`/`Interrupted` status) is the
 natural slot, and a host that also wants per-call approval rows keeps those
 in its own tables keyed by `DeferredToolRequests` call ids.
 
-### `RunPolicy` fields added by Phase 2 (A1/A3/A6)
+### Queued steering and follow-ups (A4)
+
+A run can carry a `RunQueueHandle` (`Arc<RunQueue<Message>>`, attached with
+`RunContext::with_run_queue`). Anything with a clone of the handle — a UI, a
+parent agent, a tool — pushes `Message`s onto one of three lanes while the
+run is in flight, and the loop drains them only at safe boundaries:
+
+| Lane | Drained when | Effect |
+|---|---|---|
+| `Steer` | after a tool batch's results are all on the transcript (never mid-batch), and at a natural finish before any follow-up | appended to the transcript; the next model call sees it |
+| `Followup` | at a natural finish, only when no steer is pending | appended; the loop runs another turn instead of returning |
+| `Collect` | once, at run end, on every exit path | delivered on `AgentRun::collected`; never enters the transcript |
+
+`RunPolicy::queue_mode` picks how many items a boundary takes:
+`QueueMode::All` (default) applies every pending item; `OneAtATime` applies
+the oldest and leaves the rest for the next boundary. Each application emits
+`AgentEvent::QueuedMessageApplied { lane, count }`. A "natural finish" is
+the model producing a final answer (including a structured-output finish
+under `EndStrategy::Early`/`Graceful`); a middleware `StopWithFinal` /
+`JumpTo(End)`, a limit stop, a pause, or a deferral is terminal and leaves
+the queue untouched for the host. Follow-up turns count against
+`max_model_calls` like any other, which bounds a host that keeps queueing.
+
+The queue is content injection only. `SteeringHandle` / `SteeringCommand`
+(pause, resume, cancel, `InjectMessage`, `Redirect`) is the unchanged control
+channel and is drained at its own checkpoint before each model call; the two
+mechanisms are independent. A child context never inherits its parent's
+queue — a queue has no per-run addressing, so a child draining it would
+steal the parent's messages.
+
+```rust
+let queue: RunQueueHandle = Arc::new(RunQueue::new());
+let ctx = RunContext::new(RunConfig::new("r"), ()).with_run_queue(queue.clone());
+// ...from another task while the run is in flight:
+queue.push(QueueLane::Steer, Message::user("prefer the cheaper option")).await;
+queue.push(QueueLane::Followup, Message::user("now summarize what you did")).await;
+```
+
+### `RunPolicy` fields added by Phase 2 (A1/A3/A4/A6)
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `output_retry` | `OutputRetryPolicy { max_attempts: u8, message_template: String }` | `max_attempts = 1` | Bounds the output-validation retry loop. |
 | `end_strategy` | `EndStrategy` | `Graceful` | Resolves output-tool + function-tool turns. |
 | `structured_strategy_override` | `Option<StructuredStrategyOverride>` | `None` | Forces `Prompted`/`ToolCallUnion` for `ResponseFormat::Auto`. |
+| `queue_mode` | `QueueMode` | `All` | How many `RunQueue` items each boundary applies (A4). |
 
 `AgentHarness::with_output_validator(Arc<dyn OutputValidator<State, Ctx>>)`
 registers the validator the output-retry loop consults; only one may be
