@@ -23,6 +23,7 @@
 
 use super::*;
 
+use crate::cache::TaskCacheKey;
 use crate::compiled::run_ctx::RunCtx;
 
 /// Counts how many activations of this step's active set target each node
