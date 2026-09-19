@@ -84,7 +84,7 @@ A minimal typed graph — a whole-state agent/tool loop (trimmed from
 
 ```rust
 use tinyagents_graph::*;
-use tinyinference_llm::message::Message;
+use tinyagents_harness::tinyinference_llm::message::Message;
 
 #[derive(Clone, Debug)]
 struct AgentState {
@@ -128,8 +128,8 @@ A one-shot model call through the harness (`export OPENAI_API_KEY=...` then
 ```rust
 use std::sync::Arc;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyinference_llm::message::Message;
-use tinyinference_llm::providers::openai::OpenAiModel;
+use tinyagents_harness::tinyinference_llm::message::Message;
+use tinyagents_harness::tinyinference_llm::providers::openai::OpenAiModel;
 
 let model = OpenAiModel::from_env()?;
 let mut harness: AgentHarness<()> = AgentHarness::new();
