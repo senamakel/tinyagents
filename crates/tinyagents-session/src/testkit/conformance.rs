@@ -275,11 +275,14 @@ fn contract_meta() -> TranscriptMeta {
 /// one message at a time; `append_turn` sets the logical set to exactly its
 /// `next` argument (the extension-vs-compaction *diff* is a storage-format
 /// optimization some backends make and others do not, but the resulting
-/// logical view must always equal `next`); idempotent re-import (calling
-/// `append_turn` again with the same `next` — as a resumed host replaying its
-/// last turn would — leaves the logical set unchanged, never duplicated);
-/// `replace` overwrites the logical set outright; and `clear` empties it
-/// without erroring on a handle that was never written.
+/// logical view — via [`content_view`], role/content only — must always equal
+/// `next`; per-message bookkeeping like `preserve_request_id` is legitimately
+/// backend-specific, since a file-backed history stamps it `true` on every
+/// row it reads back); idempotent re-import (calling `append_turn` again with
+/// the same `next` — as a resumed host replaying its last turn would —
+/// leaves the logical set unchanged, never duplicated); `replace` overwrites
+/// the logical set outright; and `clear` empties it without erroring on a
+/// handle that was never written.
 pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
     // ── Fresh handle ─────────────────────────────────────────────────
     assert!(
