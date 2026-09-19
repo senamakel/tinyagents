@@ -174,6 +174,33 @@ where
         self
     }
 
+    /// Registers a named [`crate::Reducer<serde_json::Value>`] closure in the
+    /// process-wide [`crate::channel::ReducerRegistry`], returning the
+    /// builder for chaining.
+    ///
+    /// This is what makes a [`crate::BinaryAggregate`] channel serializable:
+    /// `BinaryAggregate::named(name)` looks the closure back up by name (see
+    /// its docs), and a channel built that way persists only `name` in its
+    /// [`crate::Channel::config`] — decoding a checkpoint later, in this or
+    /// another process, requires the same name to have been registered
+    /// first. The built-ins `"append"`, `"last"`, `"sum"`, `"max"`, `"min"`,
+    /// and `"set_union"` are always available with no registration.
+    ///
+    /// The registry is global rather than scoped to this builder because
+    /// checkpoint decode has no builder in scope at all — see
+    /// `crate::channel::registry`'s module docs.
+    pub fn register_reducer(
+        self,
+        name: impl Into<String>,
+        f: impl Fn(serde_json::Value, serde_json::Value) -> Result<serde_json::Value>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        crate::channel::ReducerRegistry::register(name, f);
+        self
+    }
+
     /// Adds an async node returning a [`NodeResult`].
     pub fn add_node<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
     where
