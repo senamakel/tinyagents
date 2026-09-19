@@ -46,9 +46,17 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) model_pin: Option<String>,
     pub(crate) role: Option<String>,
     /// Canonical names the resolved definition authorizes for this exact run.
-    /// An empty list retains the legacy unrestricted catalogue; a non-empty
-    /// list is a host boundary enforced for schemas and dispatch alike.
-    pub(crate) allowed_tools: HashSet<String>,
+    ///
+    /// `None` means the definition declared no tools at all (an empty or
+    /// absent list) — [`crate::agent_loop`]'s `resolve_tool_allowlist` treats
+    /// that as fail-closed (deny every tool) by default, controlled by
+    /// [`HostCapabilities::fail_closed_tool_allowlist`]. `Some(set)` is
+    /// always the declared set, checked by plain membership: an empty
+    /// `HashSet` is never stored here (a declared-but-empty list is
+    /// collapsed to `None` at construction, so "nothing declared" and
+    /// "declared empty" share one fail-closed code path instead of an empty
+    /// set silently meaning "unrestricted", as it used to (I-9)).
+    pub(crate) allowed_tools: Option<HashSet<String>>,
     /// Per-turn ordered, nonblocking projection to the optional progress sink.
     pub(crate) progress: Option<super::agent::ProgressSender>,
     /// The exact invocation-local runtime inherited by authorized children.
