@@ -226,6 +226,19 @@ where
     }
 
     let tool_schemas = harness.tools().schemas();
+    // Mirrors `run_loop_body`'s `AgentEvent::ToolsAdvertised`, emitted once
+    // per run there (right after `before_agent`) versus once per `plan`
+    // activation here — a documented, harmless divergence (see the module
+    // doc on `super`): the tool set does not change mid-run, so repeating
+    // the event on every turn only adds extra `tool.advertised` events, it
+    // never drops or reorders the one the direct loop's own listeners
+    // expect.
+    let advertised_record = ctx.emit(AgentEvent::ToolsAdvertised {
+        direct: tool_schemas.len(),
+        deferred: 0,
+        schema_bytes: tinyagents_harness::token_estimation::tool_schema_bytes(&tool_schemas),
+    });
+    let _ = advertised_record;
     let mut request = ModelRequest {
         messages: loop_state.messages.clone(),
         tools: tool_schemas,
