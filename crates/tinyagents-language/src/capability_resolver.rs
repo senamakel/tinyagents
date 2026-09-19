@@ -575,6 +575,22 @@ impl CapabilityResolver {
                     );
                 }
             }
+
+            if let Some(capability) = &node.capability
+                && !self.capability_allowed(capability)
+            {
+                out.push(
+                    Diagnostic::error(
+                        format!(
+                            "node `{}` references unknown capability `{capability}`",
+                            node.name
+                        ),
+                        span_for(&node.name),
+                    )
+                    .with_code(CODE_UNKNOWN_CAPABILITY)
+                    .with_primary_label("capability not registered or not allowed"),
+                );
+            }
         }
 
         for channel in &blueprint.channels {
