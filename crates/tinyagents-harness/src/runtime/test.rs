@@ -16,7 +16,7 @@ use crate::host::{
 use crate::limits::RunLimits;
 use crate::middleware::{LoggingMiddleware, ModelFallbackMiddleware};
 use crate::retry::{FallbackPolicy, RetryPolicy};
-use crate::runtime::{AgentHarness, AgentTurnRequest, RunPolicy};
+use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy};
 use crate::subagent::{ChildDataPolicy, SubAgent, SubAgentTool};
 use crate::testkit::ScriptedModel;
 use futures::StreamExt;
@@ -679,16 +679,18 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
     .with_learning(Arc::new(NoopLearningSink))
     .with_tool_outcomes(Arc::new(ErrorFieldClassifier))
     .with_experience(Arc::new(InMemoryExperienceStore::default()));
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
 
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("preference")],
+            AgentInvocation::new(
+                host.clone(),
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("preference")],
+                ),
+                RunContext::new(RunConfig::new("host-run").with_thread("thread"), ()),
             ),
-            RunContext::new(RunConfig::new("host-run").with_thread("thread"), ()),
             &(),
         )
         .await
@@ -711,23 +713,6 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
 }
 
 #[tokio::test]
-async fn host_driven_turn_requires_an_installed_bundle_before_model_resolution() {
-    let harness: AgentHarness<()> = AgentHarness::new();
-    let error = harness
-        .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("hello")],
-            ),
-            RunContext::new(RunConfig::new("missing-host"), ()),
-            &(),
-        )
-        .await
-        .expect_err("host entry point rejects missing configuration");
-    assert!(error.to_string().contains("with_host_capabilities"));
-}
-
-#[tokio::test]
 async fn initial_host_model_resolution_is_cancelled_while_the_resolver_is_pending() {
     let started = Arc::new(tokio::sync::Notify::new());
     let token = crate::CancellationToken::new();
@@ -743,14 +728,18 @@ async fn initial_host_model_resolution_is_cancelled_while_the_resolver_is_pendin
             started: started.clone(),
         }),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let invocation = harness.invoke_agent(
-        AgentTurnRequest::new(
-            "helper",
-            vec![tinyinference_llm::message::Message::user("go")],
+        AgentInvocation::new(
+            host.clone(),
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            RunContext::new(RunConfig::new("host-resolve-cancel"), ())
+                .with_cancellation(token.clone()),
         ),
-        RunContext::new(RunConfig::new("host-resolve-cancel"), ()).with_cancellation(token.clone()),
         &(),
     );
     tokio::pin!(invocation);
@@ -786,15 +775,17 @@ async fn policy_only_deadline_bounds_initial_host_resolution_with_a_timeout_erro
         limits: RunLimits::default().with_max_wall_clock_ms(Some(5)),
         ..RunPolicy::default()
     });
-    harness.with_host_capabilities(host);
 
     let error = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("policy-host-resolve-timeout"), ()),
             ),
-            RunContext::new(RunConfig::new("policy-host-resolve-timeout"), ()),
             &(),
         )
         .await
@@ -825,15 +816,17 @@ async fn per_model_call_limit_bounds_initial_host_resolution() {
         limits: RunLimits::default().with_max_model_call_ms(Some(5)),
         ..RunPolicy::default()
     });
-    harness.with_host_capabilities(host);
 
     let error = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("per-call-host-resolve-timeout"), ()),
             ),
-            RunContext::new(RunConfig::new("per-call-host-resolve-timeout"), ()),
             &(),
         )
         .await
@@ -870,17 +863,20 @@ async fn assert_rebound_host_resolution_stops(
             ..RunPolicy::default()
         });
     }
-    harness.with_host_capabilities(host);
+
     let mut context = RunContext::new(RunConfig::new("rebind-host-resolution"), ());
     if let Some(token) = token.clone() {
         context = context.with_cancellation(token);
     }
     let invocation = harness.invoke_agent(
-        AgentTurnRequest::new(
-            "helper",
-            vec![tinyinference_llm::message::Message::user("go")],
+        AgentInvocation::new(
+            host,
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            context,
         ),
-        context,
         &(),
     );
     tokio::pin!(invocation);
@@ -934,15 +930,17 @@ async fn hosted_model_fallback_rebinds_through_the_host_resolver_not_the_local_r
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("host-backup", Arc::new(MockModel::constant("local bypass")));
     harness.push_model_middleware(Arc::new(ModelFallbackMiddleware::new(["host-backup"])));
-    harness.with_host_capabilities(host);
 
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("hosted-fallback"), ()),
             ),
-            RunContext::new(RunConfig::new("hosted-fallback"), ()),
             &(),
         )
         .await
@@ -969,8 +967,8 @@ async fn hosted_turn_screens_and_redacts_json_user_blocks_before_model_submissio
         Arc::new(RedactJsonUserGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let message =
         tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
             content: vec![tinyinference_llm::message::ContentBlock::Json(
@@ -980,8 +978,11 @@ async fn hosted_turn_screens_and_redacts_json_user_blocks_before_model_submissio
 
     harness
         .invoke_agent(
-            AgentTurnRequest::new("helper", vec![message]),
-            RunContext::new(RunConfig::new("json-screen"), ()),
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new("helper", vec![message]),
+                RunContext::new(RunConfig::new("json-screen"), ()),
+            ),
             &(),
         )
         .await
@@ -1017,8 +1018,8 @@ async fn hosted_turn_screens_and_redacts_thinking_user_blocks_before_model_submi
         Arc::new(RedactJsonUserGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let message =
         tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
             content: vec![tinyinference_llm::message::ContentBlock::Thinking {
@@ -1029,8 +1030,11 @@ async fn hosted_turn_screens_and_redacts_thinking_user_blocks_before_model_submi
 
     harness
         .invoke_agent(
-            AgentTurnRequest::new("helper", vec![message]),
-            RunContext::new(RunConfig::new("thinking-screen"), ()),
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new("helper", vec![message]),
+                RunContext::new(RunConfig::new("thinking-screen"), ()),
+            ),
             &(),
         )
         .await
@@ -1067,8 +1071,8 @@ async fn hosted_turn_screens_and_redacts_provider_extension_user_blocks() {
         Arc::new(RedactJsonUserGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let message =
         tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
             content: vec![tinyinference_llm::message::ContentBlock::ProviderExtension(
@@ -1078,8 +1082,11 @@ async fn hosted_turn_screens_and_redacts_provider_extension_user_blocks() {
 
     harness
         .invoke_agent(
-            AgentTurnRequest::new("helper", vec![message]),
-            RunContext::new(RunConfig::new("extension-redaction"), ()),
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new("helper", vec![message]),
+                RunContext::new(RunConfig::new("extension-redaction"), ()),
+            ),
             &(),
         )
         .await
@@ -1115,8 +1122,8 @@ async fn hosted_turn_blocks_provider_extension_user_blocks_before_model_submissi
         Arc::new(BlockExtensionGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let message =
         tinyinference_llm::message::Message::User(tinyinference_llm::message::UserMessage {
             content: vec![tinyinference_llm::message::ContentBlock::ProviderExtension(
@@ -1126,8 +1133,11 @@ async fn hosted_turn_blocks_provider_extension_user_blocks_before_model_submissi
 
     let error = harness
         .invoke_agent(
-            AgentTurnRequest::new("helper", vec![message]),
-            RunContext::new(RunConfig::new("extension-block"), ()),
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new("helper", vec![message]),
+                RunContext::new(RunConfig::new("extension-block"), ()),
+            ),
             &(),
         )
         .await
@@ -1158,16 +1168,18 @@ async fn hosted_model_resolution_marks_only_root_contexts_as_team_leads() {
         Arc::new(AllowAllSecurityGate),
         resolver.clone(),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
 
     harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("root")],
+            AgentInvocation::new(
+                host.clone(),
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("root")],
+                ),
+                RunContext::new(RunConfig::new("root").with_max_depth(2), ()),
             ),
-            RunContext::new(RunConfig::new("root").with_max_depth(2), ()),
             &(),
         )
         .await
@@ -1179,11 +1191,14 @@ async fn hosted_model_resolution_marks_only_root_contexts_as_team_leads() {
         .expect("child context is valid");
     harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("child")],
+            AgentInvocation::new(
+                host.clone(),
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("child")],
+                ),
+                child,
             ),
-            child,
             &(),
         )
         .await
@@ -1220,15 +1235,17 @@ async fn hosted_definition_tool_allowlist_filters_schemas_and_rejects_fabricated
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
     harness.register_tool(Arc::new(BlockedTool));
-    harness.with_host_capabilities(host);
 
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("allowlist"), ()),
             ),
-            RunContext::new(RunConfig::new("allowlist"), ()),
             &(),
         )
         .await
@@ -1275,15 +1292,17 @@ async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
         )),
         ..RunPolicy::default()
     });
-    harness.with_host_capabilities(host);
 
     let error = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("allowlisted-schema-collision"), ()),
             ),
-            RunContext::new(RunConfig::new("allowlisted-schema-collision"), ()),
             &(),
         )
         .await
@@ -1323,15 +1342,17 @@ async fn host_security_denial_returns_a_tool_message_without_executing_the_tool(
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
-    harness.with_host_capabilities(host);
 
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("denied"), ()),
             ),
-            RunContext::new(RunConfig::new("denied"), ()),
             &(),
         )
         .await
@@ -1378,15 +1399,17 @@ async fn security_gate_sees_raw_provider_arguments_while_tools_receive_prepared_
     harness.register_tool(Arc::new(InjectedArgumentTool {
         executed: executed.clone(),
     }));
-    harness.with_host_capabilities(host);
 
     harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("raw-provider-args"), ()),
             ),
-            RunContext::new(RunConfig::new("raw-provider-args"), ()),
             &(),
         )
         .await
@@ -1439,17 +1462,19 @@ async fn denied_tool_calls_release_their_reserved_limit_for_a_later_approval() {
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
-    harness.with_host_capabilities(host);
 
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
-            ),
-            RunContext::new(
-                RunConfig::new("denial-limit-release").with_max_tool_calls(1),
-                (),
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(
+                    RunConfig::new("denial-limit-release").with_max_tool_calls(1),
+                    (),
+                ),
             ),
             &(),
         )
@@ -1487,17 +1512,20 @@ async fn hosted_streams_finalize_success_failure_and_drop_with_terminal_host_rec
         .with_progress(progress.clone())
         .with_learning(learning.clone())
         .with_experience(experience.clone());
-        let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_host_capabilities(host);
+        let harness: AgentHarness<()> = AgentHarness::new();
+
         let context = RunContext::new(RunConfig::new(run_id), ());
         let context_id = context.instance_id();
         let mut stream = harness
             .invoke_agent_stream(
-                AgentTurnRequest::new(
-                    "helper",
-                    vec![tinyinference_llm::message::Message::user("go")],
+                AgentInvocation::new(
+                    host,
+                    AgentTurnRequest::new(
+                        "helper",
+                        vec![tinyinference_llm::message::Message::user("go")],
+                    ),
+                    context,
                 ),
-                context,
                 &(),
             )
             .await
@@ -1594,6 +1622,7 @@ async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
         model: Arc<PartialThenPendingModel>,
     ) -> (
         Arc<AgentHarness<()>>,
+        crate::host::HostCapabilities<()>,
         Arc<RecordingLearning>,
         Arc<RecordingExperience>,
         Arc<RecordingMemory>,
@@ -1619,8 +1648,15 @@ async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
         .with_progress(progress.clone());
         let mut harness = AgentHarness::new();
         harness.register_tool(Arc::new(NoopTool));
-        harness.with_host_capabilities(host);
-        (Arc::new(harness), learning, experience, memory, progress)
+
+        (
+            Arc::new(harness),
+            host,
+            learning,
+            experience,
+            memory,
+            progress,
+        )
     }
 
     async fn wait_for_second_call(model: &PartialThenPendingModel) {
@@ -1628,17 +1664,20 @@ async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
     }
 
     let model = Arc::new(PartialThenPendingModel::default());
-    let (harness, learning, experience, memory, progress) =
+    let (harness, host, learning, experience, memory, progress) =
         host_with_partial_model(model.clone()).await;
     let task_harness = harness.clone();
     let task = tokio::spawn(async move {
         task_harness
             .invoke_agent(
-                AgentTurnRequest::new(
-                    "helper",
-                    vec![tinyinference_llm::message::Message::user("partial")],
+                AgentInvocation::new(
+                    host,
+                    AgentTurnRequest::new(
+                        "helper",
+                        vec![tinyinference_llm::message::Message::user("partial")],
+                    ),
+                    RunContext::new(RunConfig::new("unary-drop"), ()),
                 ),
-                RunContext::new(RunConfig::new("unary-drop"), ()),
                 &(),
             )
             .await
@@ -1670,15 +1709,18 @@ async fn dropped_host_invocations_finalize_the_actual_partial_run_once() {
     ));
 
     let model = Arc::new(PartialThenPendingModel::default());
-    let (harness, learning, experience, _memory, progress) =
+    let (harness, host, learning, experience, _memory, progress) =
         host_with_partial_model(model.clone()).await;
     let mut stream = harness
         .invoke_agent_stream(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("partial")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("partial")],
+                ),
+                RunContext::new(RunConfig::new("stream-drop"), ()),
             ),
-            RunContext::new(RunConfig::new("stream-drop"), ()),
             &(),
         )
         .await
@@ -1745,14 +1787,17 @@ async fn denied_tool_calls_do_not_enter_terminal_executed_tool_summary() {
     .with_learning(learning.clone());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
-    harness.with_host_capabilities(host);
+
     harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("denied-summary"), ()),
             ),
-            RunContext::new(RunConfig::new("denied-summary"), ()),
             &(),
         )
         .await
@@ -1793,14 +1838,17 @@ async fn retryable_classifier_changes_the_model_visible_result_without_redispatc
     .with_tool_outcomes(Arc::new(RetryableClassifier));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
-    harness.with_host_capabilities(host);
+
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("retryable-result"), ()),
             ),
-            RunContext::new(RunConfig::new("retryable-result"), ()),
             &(),
         )
         .await
@@ -1834,19 +1882,22 @@ async fn poisoned_host_binding_fails_closed_before_any_model_fallback() {
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _guard = harness.host_runs.lock().expect("fresh lock");
         panic!("poison host binding map");
     }));
     let error = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("go")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("poisoned-binding"), ()),
             ),
-            RunContext::new(RunConfig::new("poisoned-binding"), ()),
             &(),
         )
         .await
@@ -1862,9 +1913,25 @@ async fn poisoned_host_binding_fails_closed_before_any_model_fallback() {
 }
 
 #[tokio::test]
-async fn same_user_run_id_concurrent_host_turns_keep_distinct_bindings() {
-    let model = Arc::new(ScriptedModel::replies(vec!["first", "second"]));
-    let host = crate::host::HostCapabilities::new(
+async fn concurrent_roots_keep_progress_and_security_capabilities_isolated() {
+    fn tool_round(answer: &str) -> Vec<ModelResponse> {
+        let mut tool_call = ModelResponse::assistant("");
+        tool_call
+            .message
+            .tool_calls
+            .push(tinyinference_llm::tool::ToolCall::new(
+                "call",
+                "noop",
+                json!({}),
+            ));
+        vec![tool_call, ModelResponse::assistant(answer)]
+    }
+
+    let allowed_model = Arc::new(ScriptedModel::new(tool_round("allowed")));
+    let denied_model = Arc::new(ScriptedModel::new(tool_round("denied")));
+    let allowed_progress = Arc::new(RecordingProgressSink::new());
+    let denied_progress = Arc::new(RecordingProgressSink::new());
+    let allowed_host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
             "helper",
@@ -1872,29 +1939,63 @@ async fn same_user_run_id_concurrent_host_turns_keep_distinct_bindings() {
             "test helper",
         )])),
         Arc::new(AllowAllSecurityGate),
-        Arc::new(FixedModelResolver::new(model)),
-    );
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
-    let first = harness.invoke_agent(
-        AgentTurnRequest::new(
+        Arc::new(FixedModelResolver::new(allowed_model)),
+    )
+    .with_progress(allowed_progress.clone());
+    let denied_host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
             "helper",
-            vec![tinyinference_llm::message::Message::user("first")],
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(DenyToolGate),
+        Arc::new(FixedModelResolver::new(denied_model)),
+    )
+    .with_progress(denied_progress.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+
+    let first = harness.invoke_agent(
+        AgentInvocation::new(
+            allowed_host,
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("first")],
+            ),
+            RunContext::new(RunConfig::new("root-allowed"), ()),
         ),
-        RunContext::new(RunConfig::new("shared-id"), ()),
         &(),
     );
     let second = harness.invoke_agent(
-        AgentTurnRequest::new(
-            "helper",
-            vec![tinyinference_llm::message::Message::user("second")],
+        AgentInvocation::new(
+            denied_host,
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("second")],
+            ),
+            RunContext::new(RunConfig::new("root-denied"), ()),
         ),
-        RunContext::new(RunConfig::new("shared-id"), ()),
         &(),
     );
     let (first, second) = tokio::join!(first, second);
-    assert!(first.is_ok());
-    assert!(second.is_ok());
+    let first = first.expect("allowed invocation succeeds");
+    let second = second.expect("denied invocation returns a recoverable tool result");
+    assert_eq!(first.executed_tools, ["noop"]);
+    assert!(second.executed_tools.is_empty());
+    yield_until(|| allowed_progress.len() >= 2 && denied_progress.len() >= 2).await;
+    assert!(
+        allowed_progress
+            .events()
+            .iter()
+            .all(|event| event.run_id().as_str() == "root-allowed")
+    );
+    assert!(
+        denied_progress
+            .events()
+            .iter()
+            .all(|event| event.run_id().as_str() == "root-denied")
+    );
     assert!(harness.host_runs.lock().expect("binding lock").is_empty());
 }
 
@@ -1920,8 +2021,8 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
         Arc::new(FixedModelResolver::new(model.clone())),
     )
     .with_budget(budget.clone());
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
+
     let mut prior_tool_call = ModelResponse::assistant("");
     prior_tool_call
         .message
@@ -1941,8 +2042,11 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
     ];
     let run = harness
         .invoke_agent(
-            AgentTurnRequest::new("helper", original_messages.clone()),
-            RunContext::new(RunConfig::new("hard-compression"), ()),
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new("helper", original_messages.clone()),
+                RunContext::new(RunConfig::new("hard-compression"), ()),
+            ),
             &(),
         )
         .await
@@ -1995,14 +2099,20 @@ async fn public_hosted_stream_sanitizes_provider_middleware_and_budget_failures(
         )
     }
 
-    async fn collect(harness: &AgentHarness<()>) -> Vec<crate::agent_loop::AgentStreamItem> {
+    async fn collect(
+        harness: &AgentHarness<()>,
+        host: crate::host::HostCapabilities<()>,
+    ) -> Vec<crate::agent_loop::AgentStreamItem> {
         let mut stream = harness
             .invoke_agent_stream(
-                AgentTurnRequest::new(
-                    "helper",
-                    vec![tinyinference_llm::message::Message::user("go")],
+                AgentInvocation::new(
+                    host,
+                    AgentTurnRequest::new(
+                        "helper",
+                        vec![tinyinference_llm::message::Message::user("go")],
+                    ),
+                    RunContext::new(RunConfig::new("public-hosted-stream"), ()),
                 ),
-                RunContext::new(RunConfig::new("public-hosted-stream"), ()),
                 &(),
             )
             .await
@@ -2032,21 +2142,23 @@ async fn public_hosted_stream_sanitizes_provider_middleware_and_budget_failures(
         )));
     }
 
-    let mut provider = AgentHarness::new();
-    provider.with_host_capabilities(host(Arc::new(SecretProviderModel)));
-    let provider_items = collect(&provider).await;
+    let provider = AgentHarness::new();
+    let provider_items = collect(&provider, host(Arc::new(SecretProviderModel))).await;
     assert_sanitized(&provider_items, "provider-stream-secret");
 
     let mut middleware = AgentHarness::new();
-    middleware.with_host_capabilities(host(Arc::new(UsageReportingModel)));
     middleware.push_middleware(Arc::new(SecretAfterModelMiddleware));
-    assert_sanitized(&collect(&middleware).await, "middleware-stream-secret");
-
-    let mut budget = AgentHarness::new();
-    budget.with_host_capabilities(
-        host(Arc::new(UsageReportingModel)).with_budget(Arc::new(SecretRecordBudget)),
+    assert_sanitized(
+        &collect(&middleware, host(Arc::new(UsageReportingModel))).await,
+        "middleware-stream-secret",
     );
-    let budget_items = collect(&budget).await;
+
+    let budget = AgentHarness::new();
+    let budget_items = collect(
+        &budget,
+        host(Arc::new(UsageReportingModel)).with_budget(Arc::new(SecretRecordBudget)),
+    )
+    .await;
     assert_sanitized(&budget_items, "budget-stream-secret");
     assert!(budget_items.iter().any(|item| matches!(
         item,
@@ -2070,19 +2182,23 @@ async fn hard_budget_compression_fails_closed_when_only_system_instructions_rema
         Arc::new(FixedModelResolver::new(model.clone())),
     )
     .with_budget(Arc::new(RecordingBudget::hard()));
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
 
     let error = harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![
-                    tinyinference_llm::message::Message::system("do not remove this instruction"),
-                    tinyinference_llm::message::Message::system("nor this instruction"),
-                ],
+            AgentInvocation::new(
+                host.clone(),
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![
+                        tinyinference_llm::message::Message::system(
+                            "do not remove this instruction",
+                        ),
+                        tinyinference_llm::message::Message::system("nor this instruction"),
+                    ],
+                ),
+                RunContext::new(RunConfig::new("hard-system-only"), ()),
             ),
-            RunContext::new(RunConfig::new("hard-system-only"), ()),
             &(),
         )
         .await
@@ -2109,21 +2225,23 @@ async fn soft_budget_compression_hint_reduces_multiturn_context_without_blocking
         Arc::new(FixedModelResolver::new(model.clone())),
     )
     .with_budget(Arc::new(RecordingBudget::soft()));
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_host_capabilities(host);
+    let harness: AgentHarness<()> = AgentHarness::new();
 
     harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "helper",
-                vec![
-                    tinyinference_llm::message::Message::user("one ".repeat(20)),
-                    tinyinference_llm::message::Message::assistant("two ".repeat(20)),
-                    tinyinference_llm::message::Message::user("three ".repeat(20)),
-                    tinyinference_llm::message::Message::assistant("four ".repeat(20)),
-                ],
+            AgentInvocation::new(
+                host.clone(),
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![
+                        tinyinference_llm::message::Message::user("one ".repeat(20)),
+                        tinyinference_llm::message::Message::assistant("two ".repeat(20)),
+                        tinyinference_llm::message::Message::user("three ".repeat(20)),
+                        tinyinference_llm::message::Message::assistant("four ".repeat(20)),
+                    ],
+                ),
+                RunContext::new(RunConfig::new("soft-compression"), ()),
             ),
-            RunContext::new(RunConfig::new("soft-compression"), ()),
             &(),
         )
         .await
@@ -2154,14 +2272,17 @@ async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
     );
     let mut seed: AgentHarness<()> = AgentHarness::new();
     seed.with_response_cache(cache.clone());
-    seed.with_host_capabilities(seed_host);
+
     let mut seeded = seed
         .invoke_agent_stream(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("same")],
+            AgentInvocation::new(
+                seed_host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("same")],
+                ),
+                RunContext::new(RunConfig::new("cache-seed"), ()),
             ),
-            RunContext::new(RunConfig::new("cache-seed"), ()),
             &(),
         )
         .await
@@ -2178,15 +2299,18 @@ async fn cached_streaming_deltas_reach_events_and_progress_after_middleware() {
     .with_progress(progress.clone());
     let mut replay_harness: AgentHarness<()> = AgentHarness::new();
     replay_harness.with_response_cache(cache);
-    replay_harness.with_host_capabilities(replay_host);
+
     replay_harness.push_middleware(Arc::new(RedactDeltaMiddleware));
     let mut replay = replay_harness
         .invoke_agent_stream(
-            AgentTurnRequest::new(
-                "helper",
-                vec![tinyinference_llm::message::Message::user("same")],
+            AgentInvocation::new(
+                replay_host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("same")],
+                ),
+                RunContext::new(RunConfig::new("cache-replay"), ()),
             ),
-            RunContext::new(RunConfig::new("cache-replay"), ()),
             &(),
         )
         .await
@@ -2254,15 +2378,18 @@ async fn cached_host_response_does_not_re_record_provider_usage() {
     .with_budget(budget.clone());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_response_cache(Arc::new(crate::cache::InMemoryResponseCache::new()));
-    harness.with_host_capabilities(host);
+
     for run_id in ["cache-one", "cache-two"] {
         harness
             .invoke_agent(
-                AgentTurnRequest::new(
-                    "helper",
-                    vec![tinyinference_llm::message::Message::user("same")],
+                AgentInvocation::new(
+                    host.clone(),
+                    AgentTurnRequest::new(
+                        "helper",
+                        vec![tinyinference_llm::message::Message::user("same")],
+                    ),
+                    RunContext::new(RunConfig::new(run_id), ()),
                 ),
-                RunContext::new(RunConfig::new(run_id), ()),
                 &(),
             )
             .await
@@ -2310,14 +2437,17 @@ async fn host_delegate_registry_authorizes_recursive_children() {
         child,
         ChildDataPolicy::new(|_: &()| ()),
     )));
-    parent_harness.with_host_capabilities(host);
+
     let run = parent_harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "parent",
-                vec![tinyinference_llm::message::Message::user("delegate")],
+            AgentInvocation::new(
+                host.clone(),
+                AgentTurnRequest::new(
+                    "parent",
+                    vec![tinyinference_llm::message::Message::user("delegate")],
+                ),
+                RunContext::new(RunConfig::new("authorized-child"), ()),
             ),
-            RunContext::new(RunConfig::new("authorized-child"), ()),
             &(),
         )
         .await
@@ -2362,15 +2492,17 @@ async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
         child,
         ChildDataPolicy::new(|_: &()| ()),
     )));
-    parent_harness.with_host_capabilities(host);
 
     let mut stream = parent_harness
         .invoke_agent_stream(
-            AgentTurnRequest::new(
-                "parent",
-                vec![tinyinference_llm::message::Message::user("delegate")],
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "parent",
+                    vec![tinyinference_llm::message::Message::user("delegate")],
+                ),
+                RunContext::new(RunConfig::new("streaming-child"), ()),
             ),
-            RunContext::new(RunConfig::new("streaming-child"), ()),
             &(),
         )
         .await
@@ -2405,7 +2537,84 @@ async fn hosted_streaming_child_keeps_model_deltas_in_the_parent_stream() {
 }
 
 #[tokio::test]
-async fn hosted_parent_denial_cannot_be_bypassed_by_a_differently_hosted_child() {
+async fn hosted_streaming_child_inherits_its_parents_bundle_and_cancellation() {
+    let mut delegate = ModelResponse::assistant("");
+    delegate
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "delegate",
+            "worker",
+            json!({"input": "child task"}),
+        ));
+    let parent_model = Arc::new(ScriptedModel::new(vec![delegate]));
+    let child_resolution_started = Arc::new(tokio::sync::Notify::new());
+    let resolver = Arc::new(FirstThenPendingResolver {
+        initial: parent_model,
+        started: child_resolution_started.clone(),
+        calls: AtomicUsize::new(0),
+    });
+    let mut parent = AgentDefinition::new("parent", "Parent", "delegates");
+    parent.subagents.push("worker".into());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            parent,
+            AgentDefinition::new("worker", "Worker", "child"),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        resolver,
+    );
+    let local_child_model = Arc::new(ScriptedModel::replies(vec!["local bypass"]));
+    let mut child_harness = AgentHarness::new();
+    child_harness.register_model("local", local_child_model.clone());
+    let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
+    let mut parent_harness = AgentHarness::new();
+    parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
+        child,
+        ChildDataPolicy::new(|_: &()| ()),
+    )));
+
+    let cancellation = crate::CancellationToken::new();
+    let mut stream = parent_harness
+        .invoke_agent_stream(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "parent",
+                    vec![tinyinference_llm::message::Message::user("delegate")],
+                ),
+                RunContext::new(RunConfig::new("child-cancel"), ())
+                    .with_cancellation(cancellation.clone()),
+            ),
+            &(),
+        )
+        .await
+        .expect("stream starts");
+
+    tokio::select! {
+        _ = child_resolution_started.notified() => cancellation.cancel(),
+        item = stream.next() => panic!("stream ended before child resolution: {item:?}"),
+    }
+    let mut terminal = None;
+    while let Some(item) = stream.next().await {
+        if !matches!(item, crate::agent_loop::AgentStreamItem::Event(_)) {
+            terminal = Some(item);
+            break;
+        }
+    }
+    assert!(matches!(
+        terminal,
+        Some(crate::agent_loop::AgentStreamItem::Failed { .. })
+    ));
+    assert!(
+        local_child_model.requests().is_empty(),
+        "the child used the parent invocation's bundle instead of its local harness"
+    );
+}
+
+#[tokio::test]
+async fn hosted_parent_denial_cannot_be_bypassed_by_a_childs_local_harness() {
     let mut parent_tool_call = ModelResponse::assistant("");
     parent_tool_call
         .message
@@ -2430,33 +2639,26 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_differently_hosted_child()
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(parent_model)),
     );
-    let child_host = crate::host::HostCapabilities::new(
-        Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "worker",
-            "Worker",
-            "permissive child",
-        )])),
-        Arc::new(AllowAllSecurityGate),
-        Arc::new(FixedModelResolver::new(child_model.clone())),
-    );
     let mut child_harness = AgentHarness::new();
-    child_harness.with_host_capabilities(child_host);
+    child_harness.register_model("local", child_model.clone());
+
     let child = Arc::new(SubAgent::new("worker", "child", Arc::new(child_harness)));
     let mut parent_harness = AgentHarness::new();
     parent_harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
         child,
         ChildDataPolicy::new(|_: &()| ()),
     )));
-    parent_harness.with_host_capabilities(parent_host);
 
     let error = parent_harness
         .invoke_agent(
-            AgentTurnRequest::new(
-                "parent",
-                vec![tinyinference_llm::message::Message::user("delegate")],
+            AgentInvocation::new(
+                parent_host,
+                AgentTurnRequest::new(
+                    "parent",
+                    vec![tinyinference_llm::message::Message::user("delegate")],
+                ),
+                RunContext::new(RunConfig::new("denied-mismatched-child"), ()),
             ),
-            RunContext::new(RunConfig::new("denied-mismatched-child"), ()),
             &(),
         )
         .await
@@ -2467,6 +2669,6 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_differently_hosted_child()
     );
     assert!(
         child_model.requests().is_empty(),
-        "the differently-hosted child was never allowed to select its own policy"
+        "the child harness's local model was never allowed to select its own policy"
     );
 }

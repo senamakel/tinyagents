@@ -222,6 +222,40 @@ Feature ownership:
 - `workspace`: per-agent filesystem/sandbox isolation, allowed-root descriptors,
   and fail-closed path enforcement for tools that touch real files.
 
+### Host-authorized invocations
+
+`AgentHarness` is reusable process infrastructure: it owns durable model and
+tool registries, middleware, policy, and caches. A host capability bundle is
+instead supplied for each root through `runtime::AgentInvocation`:
+
+```rust,no_run
+use tinyagents_harness::{
+    context::{RunConfig, RunContext},
+    runtime::{AgentHarness, AgentInvocation, AgentTurnRequest},
+};
+
+# async fn example<State: Send + Sync + 'static>(
+#     harness: &AgentHarness<State>,
+#     host: tinyagents_harness::host::HostCapabilities<State>,
+#     state: &State,
+# ) -> tinyagents_harness::Result<()> {
+let invocation = AgentInvocation::new(
+    host,
+    AgentTurnRequest::new("assistant", vec![]),
+    RunContext::new(RunConfig::new("run-42"), ()),
+);
+let _run = harness.invoke_agent(invocation, state).await?;
+# Ok(())
+# }
+```
+
+This prevents concurrent roots from replacing one another's progress,
+security, approval, or other host authority. The live invocation bundle is
+never serializable or checkpointed. Recursive children inherit the exact
+parent bundle through their live context and cannot select a bundle from their
+own harness. The lower-level explicit-model `invoke*` APIs remain separate for
+SDK callers that intentionally assemble a run without host capabilities.
+
 ### Tool timeout policy
 
 Hosts enable per-tool deadlines with

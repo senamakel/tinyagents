@@ -301,28 +301,23 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         });
 
         let run = if let Some(authority) = parent_host {
-            let request = crate::runtime::AgentTurnRequest::new(self.name.clone(), messages);
+            let invocation = crate::runtime::AgentInvocation::new(
+                authority.host.clone(),
+                crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
+                ctx,
+            );
             // A hosted parent always re-enters the child through its own exact
-            // capability bundle. The child harness's installed host (including
-            // no host at all) is intentionally irrelevant here: allowing it
-            // to decide policy would make delegation authorization bypassable.
+            // capability bundle. The child harness's durable dependencies are
+            // intentionally irrelevant here: allowing a child-selected host
+            // bundle to decide policy would make delegation authorization
+            // bypassable.
             if streaming {
                 self.harness
-                    .invoke_agent_streaming_with_host_capabilities(
-                        authority.host.clone(),
-                        request,
-                        ctx,
-                        state,
-                    )
+                    .invoke_agent_streaming_with_capabilities(invocation, state)
                     .await?
             } else {
                 self.harness
-                    .invoke_agent_with_host_capabilities(
-                        authority.host.clone(),
-                        request,
-                        ctx,
-                        state,
-                    )
+                    .invoke_agent_with_capabilities(invocation, state)
                     .await?
             }
         } else if streaming {

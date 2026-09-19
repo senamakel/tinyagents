@@ -64,6 +64,44 @@ impl AgentTurnRequest {
     }
 }
 
+/// One host-authorized execution of an agent.
+///
+/// `AgentHarness` is intentionally reusable: it retains durable, process-wide
+/// dependencies such as model/tool registries, middleware, policy, and caches.
+/// A host bundle is not one of those dependencies. Progress observers,
+/// approval decisions, request security and other host capabilities can differ
+/// for two roots running at the same time, so they belong to this invocation
+/// object rather than the harness.
+///
+/// The contained [`RunContext`] is live-only and this type has no serialization
+/// implementation. Consequently neither the host bundle nor its authority can
+/// enter graph/checkpoint state. Recursive children receive a clone of this
+/// invocation's bundle through the parent context, never through a child
+/// harness configuration.
+pub struct AgentInvocation<State: Send + Sync, Ctx: Send + Sync = ()> {
+    /// The host capability bundle authorizing this one recursive run tree.
+    pub host: crate::host::HostCapabilities<State>,
+    /// Definition identifier and input messages for the root turn.
+    pub request: AgentTurnRequest,
+    /// Live execution context for this root run.
+    pub context: RunContext<Ctx>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
+    /// Creates a host-authorized invocation for `request` in `context`.
+    pub fn new(
+        host: crate::host::HostCapabilities<State>,
+        request: AgentTurnRequest,
+        context: RunContext<Ctx>,
+    ) -> Self {
+        Self {
+            host,
+            request,
+            context,
+        }
+    }
+}
+
 /// A caller-consumable hosted stream.
 ///
 /// Dropping it removes the per-context host routing entry even when a caller
@@ -226,42 +264,39 @@ impl<State: Send + Sync> Clone for PreparedAgentTurn<State> {
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
-    /// Runs an agent through the installed host-capability bundle.
+    /// Runs an agent through this invocation's host-capability bundle.
     ///
-    /// Missing capabilities fail before a provider call. Optional capabilities
-    /// remain genuinely optional: when absent they are neither constructed nor
-    /// called.
+    /// The invocation type requires the four mandatory capabilities at
+    /// construction; a caller cannot accidentally use this hosted path without
+    /// supplying them. Optional capabilities remain genuinely optional: when
+    /// absent they are neither constructed nor called.
     pub async fn invoke_agent(
         &self,
-        request: AgentTurnRequest,
-        context: RunContext<Ctx>,
+        invocation: AgentInvocation<State, Ctx>,
         state: &State,
     ) -> Result<AgentRun>
     where
         State: 'static,
     {
-        let host = self.host.clone().ok_or_else(|| {
-            TinyAgentsError::Validation(
-                "host-driven invocation requires AgentHarness::with_host_capabilities".into(),
-            )
-        })?;
-        self.invoke_agent_with_host_capabilities(host, request, context, state)
-            .await
+        self.invoke_agent_with_capabilities(invocation, state).await
     }
 
     /// Re-enters the canonical hosted entry point with the parent's exact
     /// capabilities. Used only by recursive delegation after the parent
     /// authority has authorized the child.
-    pub(crate) async fn invoke_agent_with_host_capabilities(
+    pub(crate) async fn invoke_agent_with_capabilities(
         &self,
-        host: crate::host::HostCapabilities<State>,
-        request: AgentTurnRequest,
-        mut context: RunContext<Ctx>,
+        invocation: AgentInvocation<State, Ctx>,
         state: &State,
     ) -> Result<AgentRun>
     where
         State: 'static,
     {
+        let AgentInvocation {
+            host,
+            request,
+            mut context,
+        } = invocation;
         let prepared = self
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
@@ -298,11 +333,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// parent's exact capability bundle. Recursive streaming delegation uses
     /// this rather than the unary entry point so model deltas and delta
     /// middleware remain part of the shared parent event stream.
-    pub(crate) async fn invoke_agent_streaming_with_host_capabilities(
+    pub(crate) async fn invoke_agent_streaming_with_capabilities(
         &self,
-        host: crate::host::HostCapabilities<State>,
-        request: AgentTurnRequest,
-        context: RunContext<Ctx>,
+        invocation: AgentInvocation<State, Ctx>,
         state: &State,
     ) -> Result<AgentRun>
     where
@@ -310,7 +343,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         State: 'static,
     {
         let stream = self
-            .invoke_agent_stream_with_host_capabilities(host, request, context, state)
+            .invoke_agent_stream_with_capabilities(invocation, state)
             .await?;
         futures::pin_mut!(stream);
         while let Some(item) = stream.next().await {
@@ -337,34 +370,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// observed; callers must drain (or drop) the stream to end the turn.
     pub async fn invoke_agent_stream<'a>(
         &'a self,
-        request: AgentTurnRequest,
-        context: RunContext<Ctx>,
+        invocation: AgentInvocation<State, Ctx>,
         state: &'a State,
     ) -> Result<AgentStream<'a, State, Ctx>>
     where
         Ctx: 'static,
         State: 'static,
     {
-        let host = self.host.clone().ok_or_else(|| {
-            TinyAgentsError::Validation(
-                "host-driven invocation requires AgentHarness::with_host_capabilities".into(),
-            )
-        })?;
-        self.invoke_agent_stream_with_host_capabilities(host, request, context, state)
+        self.invoke_agent_stream_with_capabilities(invocation, state)
             .await
     }
 
-    async fn invoke_agent_stream_with_host_capabilities<'a>(
+    async fn invoke_agent_stream_with_capabilities<'a>(
         &'a self,
-        host: crate::host::HostCapabilities<State>,
-        request: AgentTurnRequest,
-        mut context: RunContext<Ctx>,
+        invocation: AgentInvocation<State, Ctx>,
         state: &'a State,
     ) -> Result<AgentStream<'a, State, Ctx>>
     where
         Ctx: 'static,
         State: 'static,
     {
+        let AgentInvocation {
+            host,
+            request,
+            mut context,
+        } = invocation;
         let prepared = self
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;

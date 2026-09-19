@@ -325,8 +325,6 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// into it. Because it is owned by the harness rather than a single run, a
     /// repeated identical request can be served from an earlier run's result.
     pub(crate) response_cache: Option<Arc<dyn ResponseCache>>,
-    /// Host bundle used only by the explicit host-driven entry points.
-    pub(crate) host: Option<HostCapabilities<State>>,
     /// Per-live-context host model selections. The entry points install and
     /// remove these around a run so explicit-model SDK calls remain independent
     /// of host routing.
