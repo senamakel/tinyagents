@@ -53,6 +53,7 @@
 use serde_json::{Map, Value, json};
 
 use super::schema::{CleaningStrategy, SchemaCleanr};
+use super::schema_compact::{SchemaCompaction, compact_tool_schema};
 use tinyinference_llm::tool::ToolSchema;
 
 /// How a [`ToolSchema`] should be projected for a specific provider.
@@ -68,6 +69,10 @@ pub struct SchemaPreparation {
     /// — a previously optional argument becomes mandatory — so it belongs to the
     /// adapter that actually sends `strict: true`, not to the tool author.
     pub strict: bool,
+    /// Byte budgets applied after cleaning (see
+    /// [`SchemaCompaction`]). Off by default: compaction is lossy, so it is a
+    /// deliberate choice for schemas a host does not author itself.
+    pub compaction: SchemaCompaction,
 }
 
 impl SchemaPreparation {
@@ -77,6 +82,7 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::Gemini,
             strict: false,
+            compaction: SchemaCompaction::NONE,
         }
     }
 
@@ -85,6 +91,7 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::Anthropic,
             strict: false,
+            compaction: SchemaCompaction::NONE,
         }
     }
 
@@ -93,6 +100,7 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::OpenAI,
             strict: false,
+            compaction: SchemaCompaction::NONE,
         }
     }
 
@@ -101,12 +109,19 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::Conservative,
             strict: false,
+            compaction: SchemaCompaction::NONE,
         }
     }
 
     /// Enables the strict-mode sanitizer. See [`Self::strict`].
     pub const fn with_strict(mut self) -> Self {
         self.strict = true;
+        self
+    }
+
+    /// Applies byte budgets after cleaning. See [`SchemaCompaction`].
+    pub const fn with_compaction(mut self, compaction: SchemaCompaction) -> Self {
+        self.compaction = compaction;
         self
     }
 }
@@ -253,14 +268,20 @@ pub fn prepare_parameters(parameters: &Value, preparation: &SchemaPreparation) -
     set_additional_properties_false(required)
 }
 
-/// Projects one [`ToolSchema`] for a provider, leaving name, description, and
-/// format untouched.
+/// Projects one [`ToolSchema`] for a provider: clean the parameters, then
+/// apply any byte budget. Name and format are untouched; the description is
+/// only touched by an explicit [`SchemaCompaction::max_description_bytes`].
 pub fn prepare_tool_schema(schema: &ToolSchema, preparation: &SchemaPreparation) -> ToolSchema {
-    let prepared = ToolSchema {
+    let cleaned = ToolSchema {
         name: schema.name.clone(),
         description: schema.description.clone(),
         parameters: prepare_parameters(&schema.parameters, preparation),
         format: schema.format.clone(),
+    };
+    let prepared = if preparation.compaction.is_none() {
+        cleaned
+    } else {
+        compact_tool_schema(&cleaned, &preparation.compaction)
     };
     tinyagents_tracing::trace!(
         "[tool::schema] prepared `{}` for {:?} (strict={})",
