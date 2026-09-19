@@ -1,7 +1,5 @@
 use super::*;
-use tinyinference_llm::message::{
-    AssistantMessage, ImageRef, SystemMessage, ToolMessage, UserMessage,
-};
+use tinyinference_llm::message::{AssistantMessage, ImageRef, ToolMessage, UserMessage};
 use tinyinference_llm::tool::ToolCall;
 
 fn assistant_with_tool_call(id: &str) -> Message {
@@ -12,6 +10,7 @@ fn assistant_with_tool_call(id: &str) -> Message {
             id: id.into(),
             name: "search".into(),
             arguments: serde_json::json!({}),
+            invalid: None,
         }],
         usage: None,
     })
