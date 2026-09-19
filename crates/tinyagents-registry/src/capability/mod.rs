@@ -229,6 +229,26 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         Ok(self)
     }
 
+    /// Registers a tool under its [`Tool::name`] with explicit
+    /// [`ComponentMetadata`], atomically instead of a follow-up
+    /// [`set_metadata`](Self::set_metadata) call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::DuplicateComponent`] if a tool with the same
+    /// name is already registered.
+    pub fn register_tool_with(
+        &mut self,
+        tool: Arc<dyn Tool>,
+        metadata: ComponentMetadata,
+    ) -> Result<&mut Self> {
+        let name = tool.name().to_owned();
+        self.ensure_absent(ComponentKind::Tool, &name)?;
+        self.meta.insert((ComponentKind::Tool, name.clone()), metadata);
+        self.tools.insert(name, tool);
+        Ok(self)
+    }
+
     /// Registers or overwrites a tool under its [`Tool::name`], preserving any
     /// existing metadata.
     pub fn replace_tool(&mut self, tool: Arc<dyn Tool>) -> &mut Self {
