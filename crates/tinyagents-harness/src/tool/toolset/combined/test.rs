@@ -7,9 +7,8 @@ use serde_json::json;
 
 use super::CombinedToolSet;
 use crate::tool::ToolRegistry;
-use crate::tool::toolset::prefixed::PrefixedToolSet;
 use crate::tool::toolset::test::{EchoTool, ctx};
-use crate::tool::toolset::ToolSet;
+use crate::tool::toolset::{PrefixedToolSet, ToolSet};
 
 fn registry_with(name: &str) -> Arc<dyn ToolSet<(), ()>> {
     let mut registry: ToolRegistry<(), ()> = ToolRegistry::new();
