@@ -4,8 +4,10 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+pub mod discover;
 mod prompt;
 mod schema;
+mod schema_compact;
 mod schema_prepare;
 pub mod select;
 mod timeout;
@@ -19,6 +21,7 @@ use serde_json::Value;
 
 pub use prompt::*;
 pub use schema::*;
+pub use schema_compact::*;
 pub use schema_prepare::*;
 pub use select::*;
 pub use timeout::*;
@@ -131,9 +134,32 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         self
     }
 
-    /// Looks up the complete host dispatch entry.
+    /// Looks up the complete host dispatch entry, whatever its exposure.
+    ///
+    /// This is the host-side lookup: a `Hidden` tool resolves here so host code
+    /// (an unknown-tool rewrite target, a composite capability's inner step)
+    /// can still reach it. Model-originated calls go through
+    /// [`Self::model_dispatch`].
     pub(crate) fn dispatch(&self, name: &str) -> Option<Arc<dyn ToolDispatch<State, Ctx>>> {
         self.tools.get(name).cloned()
+    }
+
+    /// Looks up a dispatch entry the *model* is allowed to name.
+    ///
+    /// `Direct` and `Deferred` tools resolve; a `Hidden` tool does not, so a
+    /// model that guesses (or is told) a hidden name gets the same unknown-tool
+    /// answer as for a name that was never registered. The deferred case is
+    /// what makes discovery work: a tool `tool_search` revealed is callable by
+    /// its own name even though it never appeared in the request's `tools`.
+    pub(crate) fn model_dispatch(&self, name: &str) -> Option<Arc<dyn ToolDispatch<State, Ctx>>> {
+        self.dispatch(name)
+            .filter(|dispatch| dispatch.tool().exposure() != tinytools::ToolExposure::Hidden)
+    }
+
+    /// Returns how a registered tool enters the model-visible catalogue.
+    #[must_use]
+    pub fn exposure(&self, name: &str) -> Option<tinytools::ToolExposure> {
+        self.dispatch(name).map(|dispatch| dispatch.tool().exposure())
     }
 
     /// Looks up a canonical tool declaration.
@@ -141,7 +167,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         self.dispatch(name).map(|dispatch| dispatch.tool())
     }
 
-    /// Returns registered names in sorted order.
+    /// Returns registered names in sorted order, whatever their exposure.
     #[must_use]
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.tools.keys().cloned().collect();
@@ -149,13 +175,54 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         names
     }
 
-    /// Returns provider request schemas projected from canonical declarations.
+    /// Returns the names a model may call (`Direct` and `Deferred`), sorted.
+    #[must_use]
+    pub fn model_callable_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self
+            .tools
+            .iter()
+            .filter(|(_, dispatch)| {
+                dispatch.tool().exposure() != tinytools::ToolExposure::Hidden
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Returns the provider request schemas of every **directly advertised**
+    /// tool, projected from the canonical declarations and sorted by name.
+    ///
+    /// Only [`tinytools::ToolExposure::Direct`] tools are included. Deferred
+    /// tools are the model's to discover (see [`Self::deferred_schemas`] and
+    /// [`crate::tool::discover`]); hidden tools never reach a model. The sort
+    /// is what keeps the wire bytes stable across turns, which a provider
+    /// prompt cache depends on.
     #[must_use]
     pub fn schemas(&self) -> Vec<tinyinference_llm::tool::ToolSchema> {
+        self.schemas_with_exposure(tinytools::ToolExposure::Direct)
+    }
+
+    /// Returns the provider request schemas of every
+    /// [`tinytools::ToolExposure::Deferred`] tool, sorted by name.
+    ///
+    /// These are the schemas the agent loop indexes for `tool_search` instead
+    /// of sending on every request.
+    #[must_use]
+    pub fn deferred_schemas(&self) -> Vec<tinyinference_llm::tool::ToolSchema> {
+        self.schemas_with_exposure(tinytools::ToolExposure::Deferred)
+    }
+
+    fn schemas_with_exposure(
+        &self,
+        exposure: tinytools::ToolExposure,
+    ) -> Vec<tinyinference_llm::tool::ToolSchema> {
         let mut schemas: Vec<_> = self
             .tools
             .values()
-            .map(|dispatch| provider_schema(dispatch.tool().as_ref()))
+            .map(|dispatch| dispatch.tool())
+            .filter(|tool| tool.exposure() == exposure)
+            .map(|tool| provider_schema(tool.as_ref()))
             .collect();
         schemas.sort_by(|left, right| left.name.cmp(&right.name));
         schemas
