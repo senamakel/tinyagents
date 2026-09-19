@@ -60,6 +60,7 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
         .path()
         .join("session_raw")
         .join(format!("{stem}.jsonl"));
+    let companion_date = Local::now().format("%Y_%m_%d").to_string();
 
     let initial = vec![
         TranscriptMessage {
@@ -182,10 +183,7 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
                 && message.reasoning_content.as_deref() == Some("stream was cancelled")
     ));
 
-    let markdown = workspace
-        .path()
-        .join("sessions")
-        .join(Local::now().format("%Y_%m_%d").to_string());
+    let markdown = workspace.path().join("sessions").join(companion_date);
     let markdown = markdown.join(format!("{stem}.md"));
     assert!(
         markdown.is_file(),
