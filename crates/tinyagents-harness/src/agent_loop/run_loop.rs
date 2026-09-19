@@ -474,12 +474,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 // wire raw (see the `tool_schemas` and bridge
                                 // preparation above).
                                 request.tools.push(match &self.policy.tool_schemas {
-                                    Some(preparation) => {
-                                        crate::tool::prepare_tool_schema(
-                                            &fallback_schema,
-                                            preparation,
-                                        )
-                                    }
+                                    Some(preparation) => crate::tool::prepare_tool_schema(
+                                        &fallback_schema,
+                                        preparation,
+                                    ),
                                     None => fallback_schema,
                                 });
                                 // Force the schema tool **only** when it is the
