@@ -169,6 +169,11 @@ pub struct StructuredExtractor {
     /// The JSON Schema document. **Enforced**: every extracted value is checked
     /// against it by [`super::validate`] before it is returned, so a
     /// well-formed value of the wrong shape is a reported error rather than
-    /// silent garbage in `run.structured`.
+    /// silent garbage in `run.structured`. Unused (empty object) for
+    /// [`StructuredStrategy::ToolCallUnion`], which validates each match
+    /// against its own entry in [`Self::variants`] instead.
     pub(crate) schema: Value,
+    /// `(name, schema)` pairs for [`StructuredStrategy::ToolCallUnion`], one
+    /// per synthetic tool the model may call. Empty for every other strategy.
+    pub(crate) variants: Vec<(String, Value)>,
 }
