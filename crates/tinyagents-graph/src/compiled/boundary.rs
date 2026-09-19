@@ -216,6 +216,7 @@ where
         state: &State,
         fail: StepFailure,
     ) -> Result<GraphExecution<State>> {
+        ctx.disarm_drop_guard();
         let StepFailure {
             failed_index,
             error,
