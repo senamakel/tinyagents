@@ -238,9 +238,9 @@ pub enum TinyAgentsError {
     #[error("capability error: {0}")]
     Capability(String),
 
-    /// A named capability with the same [`crate::registry::ComponentKind`] and
+    /// A named capability with the same `ComponentKind` and
     /// name is already registered in a
-    /// [`crate::registry::CapabilityRegistry`]. The payload names the offending
+    /// `CapabilityRegistry` (in `tinyagents-registry`). The payload names the offending
     /// kind and name. Use an explicit `replace_*` method to overwrite an
     /// existing registration instead.
     #[error("duplicate component: {0}")]
@@ -254,7 +254,7 @@ pub enum TinyAgentsError {
 
     /// A durable-storage operation failed — opening, migrating, reading, or
     /// writing a backing database for the session store and run ledger
-    /// ([`crate::session`]).
+    /// (`tinyagents-session`).
     ///
     /// Distinct from [`TinyAgentsError::Checkpoint`], which covers graph
     /// checkpoint durability: a session-store failure means run *history* could
