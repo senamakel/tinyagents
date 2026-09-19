@@ -283,8 +283,13 @@ declarative steering lowering lands.",
             )));
         }
 
-        // Determine routing. Precedence: explicit `routes` > `next` > command
-        // `goto` > top-level edge > terminal.
+        // Determine routing. The `routing_sources` check above already
+        // rejected any node declaring more than one of `routes`/`next`/
+        // `command { goto … }`/a top-level edge, so at most one of the
+        // conditions below is ever true for a given node — this `if`/`else`
+        // chain's order is just which single source it checks first, not a
+        // precedence that resolves a real conflict (M13: no such conflict
+        // can reach here any more).
         let routing = if has_routes {
             Routing::Conditional(
                 node.routes
