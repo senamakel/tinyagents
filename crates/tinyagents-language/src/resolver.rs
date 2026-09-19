@@ -142,12 +142,14 @@ impl Resolver {
         //    classification policy so this path cannot drift from the blueprint
         //    gates.
         let subgraph_target = node.graph.as_deref().or(node.model.as_deref());
+        let router_target = node.router.as_deref().or(node.model.as_deref());
         if let Some(reference) = CapabilityResolver::classify_reference(
             kind,
             node.model.as_deref(),
             subgraph_target,
             node.agent.as_deref(),
             node.script.as_deref(),
+            router_target,
         ) {
             self.check_ref(
                 self.caps
