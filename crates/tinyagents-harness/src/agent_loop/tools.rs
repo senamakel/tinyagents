@@ -926,6 +926,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Fold phase for one completed call: the lifecycle `after_tool` hooks,
     /// accounting, the `ToolCompleted` emission, and the transcript append.
+    ///
+    /// Returns the result's `follow_up` content as a user message (B2), or
+    /// `None` when there is none. It is **not** appended here: a provider
+    /// requires every tool row of a batch to sit directly after the assistant
+    /// row that requested it, so the batch driver appends the follow-ups
+    /// only after its last tool row (see [`append_follow_ups`]).
     #[allow(clippy::too_many_arguments)]
     async fn finish_tool_call(
         &self,
@@ -936,7 +942,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         prepared: PreparedToolCall,
         mut result: tinytools::ToolResult,
-    ) -> Result<()> {
+    ) -> Result<Option<Message>> {
         // Canonical ToolResult is intentionally correlation-free. The harness
         // owns `PreparedToolCall` and uses it below for transcript pairing,
         // events, and elapsed time; a tool cannot forge any of those fields.
@@ -1075,6 +1081,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if prepared.executed {
             run.executed_tools.push(prepared.tool_name.clone());
         }
+        // Host-only metadata (B2): recorded on the run and on the event
+        // below, never rendered into the transcript row.
+        if let Some(metadata) = result.metadata.clone() {
+            run.tool_metadata.push(crate::middleware::ToolResultMetadata {
+                call_id: prepared.call_id.clone(),
+                tool_name: prepared.tool_name.clone(),
+                metadata,
+            });
+        }
         status.tool_calls = run.tool_calls;
         release_active_tool_call(status, &prepared.call_id);
         let model_output = result.output_for_llm(prepared.options.prefer_markdown);
@@ -1127,7 +1142,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             &result,
             prepared.options,
         )));
-        Ok(())
+        Ok(follow_up_message(&result.follow_up))
     }
 
     /// Executes requested tools one at a time (the historical semantics; used
@@ -1142,10 +1157,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         tool_calls: Vec<ToolCall>,
     ) -> Result<DeferredToolRequests> {
         let mut deferred = DeferredToolRequests::default();
+        let mut follow_ups = Vec::new();
         for call in tool_calls {
-            self.execute_tool_serially(state, ctx, run, status, messages, call, &mut deferred)
-                .await?;
+            follow_ups.extend(
+                self.execute_tool_serially(state, ctx, run, status, messages, call, &mut deferred)
+                    .await?,
+            );
         }
+        append_follow_ups(messages, follow_ups);
         Ok(deferred)
     }
 
@@ -1156,6 +1175,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// (`apply_deferred_results`), which re-runs an approved call through
     /// exactly this pipeline so admission, the wrap onion, and the fold are
     /// never duplicated.
+    ///
+    /// Returns the call's follow-up user message, if any, for the batch
+    /// driver to append after its last tool row (see [`append_follow_ups`]).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute_tool_serially(
         &self,
@@ -1166,7 +1188,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         mut call: ToolCall,
         deferred: &mut DeferredToolRequests,
-    ) -> Result<()> {
+    ) -> Result<Option<Message>> {
         let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
             ResolvedToolCall::Tool { dispatch, .. } => dispatch,
             ResolvedToolCall::Answered(result) => {
@@ -1176,7 +1198,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             ResolvedToolCall::Deferred(request) => {
                 self.defer_tool_call(ctx, status, request, deferred);
-                return Ok(());
+                return Ok(None);
             }
         };
 
@@ -1217,7 +1239,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             Err(err) => {
                 if let Some(request) = execution_deferral(&prepared.call, &err) {
                     self.defer_started_tool_call(ctx, status, &prepared, request, deferred);
-                    return Ok(());
+                    return Ok(None);
                 }
                 self.fail_tool_call(
                     ctx,
@@ -1313,7 +1335,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         call: &ToolCall,
         result: tinytools::ToolResult,
-    ) -> Result<()> {
+    ) -> Result<Option<Message>> {
         tracing::debug!(
             "[agent_loop::tools] answering call `{}` for `{}` without executing a tool",
             call.id,
@@ -1455,11 +1477,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // kept its failure fatal (in that order) fails the turn; siblings
         // already ran to completion.
         let mut executed = prepared.into_iter().zip(results);
+        let mut follow_ups = Vec::new();
         for slot in slots {
             match slot {
                 ToolSlot::Recovered { call, result } => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
-                        .await?;
+                    follow_ups.extend(
+                        self.recover_tool_call(state, ctx, run, status, messages, &call, result)
+                            .await?,
+                    );
                 }
                 ToolSlot::Deferred(request) => {
                     self.defer_tool_call(ctx, status, request, &mut deferred);
@@ -1515,13 +1540,67 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             return Err(err);
                         }
                     };
-                    self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
-                        .await?;
+                    follow_ups.extend(
+                        self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
+                            .await?,
+                    );
                 }
             }
         }
+        append_follow_ups(messages, follow_ups);
         Ok(deferred)
     }
+}
+
+/// Appends a batch's follow-up user messages (B2) after its last tool row,
+/// in the calls' original order.
+///
+/// One user message per call that returned `follow_up` content, rather than
+/// one merged message: each keeps its own block list, and a provider that
+/// merges adjacent user turns does so on the wire anyway.
+pub(super) fn append_follow_ups(messages: &mut Vec<Message>, follow_ups: Vec<Message>) {
+    messages.extend(follow_ups);
+}
+
+/// Builds the user message a result's `follow_up` blocks become (B2), or
+/// `None` when the result has none.
+///
+/// Block mapping — the same as the tool row's, except an image gets a real
+/// [`ContentBlock::Image`] because a *user* message may carry one:
+/// - `Text` → `Text`; `Json` → `Json`.
+/// - `Image` → `Image(ImageRef)`: a URL as-is, inline bytes as a
+///   `data:<media_type>;base64,<bytes>` URI; `mime_type` set from the block.
+/// - `File` → `Text("[file <name> (<media_type>)]")` (the vendor
+///   `ToolContent::render` placeholder), because the message model has no
+///   file block yet; the host still has the full block on the event side if
+///   it needs the bytes.
+fn follow_up_message(follow_up: &[tinytools::ToolContent]) -> Option<Message> {
+    if follow_up.is_empty() {
+        return None;
+    }
+    let content = follow_up
+        .iter()
+        .map(|block| match block {
+            tinytools::ToolContent::Text { text } => ContentBlock::Text(text.clone()),
+            tinytools::ToolContent::Json { data } => ContentBlock::Json(data.clone()),
+            tinytools::ToolContent::Image { media_type, data } => {
+                let url = match data {
+                    tinytools::ImageData::Url(url) => url.clone(),
+                    tinytools::ImageData::Base64(bytes) => {
+                        format!("data:{media_type};base64,{bytes}")
+                    }
+                };
+                ContentBlock::Image(tinyinference_llm::message::ImageRef {
+                    url,
+                    mime_type: Some(media_type.clone()),
+                })
+            }
+            file @ tinytools::ToolContent::File { .. } => ContentBlock::Text(file.render()),
+        })
+        .collect();
+    Some(Message::User(tinyinference_llm::message::UserMessage {
+        content,
+    }))
 }
 
 /// Turns an execution-time `ApprovalRequired`/`CallDeferred` (raised by the

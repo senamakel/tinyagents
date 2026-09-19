@@ -1414,19 +1414,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             )));
         }
         let mut deferred = crate::tool::DeferredToolRequests::default();
+        // Follow-up user messages (B2) trail the whole resumed batch, for
+        // the same provider-ordering reason as in `execute_tools`.
+        let mut follow_ups = Vec::new();
         for mut call in pending {
             let call_id = CallId::new(call.id.clone());
             if let Some(outcome) = results.calls.remove(&call_id) {
-                self.recover_tool_call(
-                    state,
-                    ctx,
-                    run,
-                    status,
-                    messages,
-                    &call,
-                    outcome.into_tool_result(),
-                )
-                .await?;
+                follow_ups.extend(
+                    self.recover_tool_call(
+                        state,
+                        ctx,
+                        run,
+                        status,
+                        messages,
+                        &call,
+                        outcome.into_tool_result(),
+                    )
+                    .await?,
+                );
                 continue;
             }
             let decision = results
@@ -1440,16 +1445,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         message: message.clone(),
                     });
                     status.set_last_event(record.id);
-                    self.recover_tool_call(
-                        state,
-                        ctx,
-                        run,
-                        status,
-                        messages,
-                        &call,
-                        tinytools::ToolResult::error(message),
-                    )
-                    .await?;
+                    follow_ups.extend(
+                        self.recover_tool_call(
+                            state,
+                            ctx,
+                            run,
+                            status,
+                            messages,
+                            &call,
+                            tinytools::ToolResult::error(message),
+                        )
+                        .await?,
+                    );
                 }
                 decision => {
                     if let crate::tool::ToolApprovalDecision::ApproveWithArgs(arguments) = decision
@@ -1459,19 +1466,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let record = ctx.emit(AgentEvent::ToolApproved { call_id });
                     status.set_last_event(record.id);
                     ctx.mark_call_approved(call.id.clone());
-                    self.execute_tool_serially(
-                        state,
-                        ctx,
-                        run,
-                        status,
-                        messages,
-                        call,
-                        &mut deferred,
-                    )
-                    .await?;
+                    follow_ups.extend(
+                        self.execute_tool_serially(
+                            state,
+                            ctx,
+                            run,
+                            status,
+                            messages,
+                            call,
+                            &mut deferred,
+                        )
+                        .await?,
+                    );
                 }
             }
         }
+        super::tools::append_follow_ups(messages, follow_ups);
         Ok(deferred)
     }
 
