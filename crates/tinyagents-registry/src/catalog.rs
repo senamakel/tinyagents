@@ -226,8 +226,7 @@ impl ModelCatalogSnapshot {
                 )));
             }
 
-            if let (Some(max_in), Some(max_out)) =
-                (entry.max_input_tokens, entry.max_output_tokens)
+            if let (Some(max_in), Some(max_out)) = (entry.max_input_tokens, entry.max_output_tokens)
                 && max_out > max_in
             {
                 return Err(fail(format!(
@@ -308,7 +307,9 @@ fn validate_date(value: &str, field: &str) -> Result<()> {
         && value.as_bytes().get(4) == Some(&b'-')
         && value.as_bytes().get(7) == Some(&b'-')
         && value.split('-').count() == 3
-        && value.split('-').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+        && value
+            .split('-')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
     let timestamp = chrono::DateTime::parse_from_rfc3339(value).is_ok();
     if plain_date || timestamp {
         Ok(())
@@ -541,21 +542,30 @@ mod tests {
     fn rejects_negative_flat_price() {
         let mut entry = base_entry();
         entry.pricing.input_per_token = Some(-0.01);
-        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        let error = base_snapshot(vec![entry])
+            .validate()
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("negative"), "got: {error}");
     }
 
     #[test]
     fn rejects_negative_tiered_price() {
         let mut entry = base_entry();
-        entry.pricing.tiers.push(tinyagents_harness::cost::PriceTier {
-            up_to_tokens: None,
-            input: Some(-1.0),
-            output: None,
-            cache_read: None,
-            cache_write: None,
-        });
-        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        entry
+            .pricing
+            .tiers
+            .push(tinyagents_harness::cost::PriceTier {
+                up_to_tokens: None,
+                input: Some(-1.0),
+                output: None,
+                cache_read: None,
+                cache_write: None,
+            });
+        let error = base_snapshot(vec![entry])
+            .validate()
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("negative"), "got: {error}");
     }
 
@@ -563,7 +573,10 @@ mod tests {
     fn rejects_missing_source() {
         let mut entry = base_entry();
         entry.source = String::new();
-        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        let error = base_snapshot(vec![entry])
+            .validate()
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("missing a source"), "got: {error}");
     }
 
@@ -572,7 +585,10 @@ mod tests {
         let mut entry = base_entry();
         entry.max_input_tokens = Some(1_000);
         entry.max_output_tokens = Some(2_000);
-        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        let error = base_snapshot(vec![entry])
+            .validate()
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("max_output_tokens"), "got: {error}");
     }
 
@@ -592,7 +608,10 @@ mod tests {
     fn rejects_invalid_date() {
         let mut entry = base_entry();
         entry.deprecation_date = Some("not-a-date".to_string());
-        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        let error = base_snapshot(vec![entry])
+            .validate()
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("not a valid date"), "got: {error}");
     }
 
@@ -609,7 +628,10 @@ mod tests {
     fn rejects_unknown_provider() {
         let mut entry = base_entry();
         entry.provider = "totally-unknown-vendor".to_string();
-        let error = base_snapshot(vec![entry]).validate().unwrap_err().to_string();
+        let error = base_snapshot(vec![entry])
+            .validate()
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("unrecognized provider"), "got: {error}");
     }
 

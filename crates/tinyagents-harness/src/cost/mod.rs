@@ -90,12 +90,8 @@ pub fn estimate_cost(pricing: &ModelPricing, usage: &Usage) -> CostTotals {
     let price = |rate: Option<f64>, tokens: u64| rate.unwrap_or(0.0) * tokens as f64;
 
     let tier = select_tier(pricing, usage.input_tokens);
-    let input_rate = tier
-        .and_then(|t| t.input)
-        .or(pricing.input_per_token);
-    let output_rate = tier
-        .and_then(|t| t.output)
-        .or(pricing.output_per_token);
+    let input_rate = tier.and_then(|t| t.input).or(pricing.input_per_token);
+    let output_rate = tier.and_then(|t| t.output).or(pricing.output_per_token);
     let cache_read_rate = tier
         .and_then(|t| t.cache_read)
         .or(pricing.cache_read_input_per_token);

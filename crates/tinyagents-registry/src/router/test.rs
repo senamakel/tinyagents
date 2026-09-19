@@ -1,6 +1,6 @@
 //! Unit tests for [`WorkloadRouter`](super::WorkloadRouter) / [`WorkloadRoute`].
 
-use super::{WorkloadRouter, WorkloadRoute};
+use super::{WorkloadRoute, WorkloadRouter};
 use tinyinference_llm::model::CapabilitySet;
 
 /// Mirrors OpenHuman's workload tiers so the tests exercise the exact projection

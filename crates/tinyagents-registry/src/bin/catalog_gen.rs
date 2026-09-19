@@ -30,10 +30,10 @@
 use std::process::Command;
 
 use serde_json::Value;
+use tinyagents_harness::cost::{ModelPricing, PriceTier};
 use tinyagents_registry::catalog::{
     ModelCapabilities, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
 };
-use tinyagents_harness::cost::{ModelPricing, PriceTier};
 
 /// `(models.dev provider id, our catalog provider id, max models to keep)`.
 ///
@@ -76,9 +76,7 @@ fn run() -> Result<(), String> {
     }
 
     let payload = match input {
-        Some(path) => {
-            std::fs::read_to_string(&path).map_err(|e| format!("reading {path}: {e}"))?
-        }
+        Some(path) => std::fs::read_to_string(&path).map_err(|e| format!("reading {path}: {e}"))?,
         None => fetch_via_curl(MODELS_DEV_URL)?,
     };
     let root: Value = serde_json::from_str(&payload).map_err(|e| format!("parsing JSON: {e}"))?;
@@ -104,7 +102,10 @@ fn run() -> Result<(), String> {
     }
 
     if models.is_empty() {
-        return Err("no models matched the curated provider list; upstream shape may have changed".to_string());
+        return Err(
+            "no models matched the curated provider list; upstream shape may have changed"
+                .to_string(),
+        );
     }
 
     let snapshot = ModelCatalogSnapshot {
@@ -228,7 +229,10 @@ fn to_entry(catalog_provider: &str, model_id: &str, model: &Value) -> Option<Mod
 
     let capabilities = ModelCapabilities {
         streaming: true,
-        tool_calling: model.get("tool_call").and_then(Value::as_bool).unwrap_or(false),
+        tool_calling: model
+            .get("tool_call")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         parallel_tool_calling: false,
         json_schema: model
             .get("structured_output")
@@ -240,7 +244,10 @@ fn to_entry(catalog_provider: &str, model_id: &str, model: &Value) -> Option<Mod
         audio_output: modalities_out.contains(&"audio"),
         pdf_input: modalities_in.contains(&"pdf"),
         prompt_caching: base_cache_read.is_some(),
-        reasoning: model.get("reasoning").and_then(Value::as_bool).unwrap_or(false),
+        reasoning: model
+            .get("reasoning")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     };
 
     Some(ModelCatalogEntry {
@@ -266,10 +273,7 @@ fn to_entry(catalog_provider: &str, model_id: &str, model: &Value) -> Option<Mod
         },
         capabilities,
         source: "models.dev".to_string(),
-        source_url: model
-            .get("doc")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        source_url: model.get("doc").and_then(Value::as_str).map(str::to_string),
         raw: model.clone(),
     })
 }

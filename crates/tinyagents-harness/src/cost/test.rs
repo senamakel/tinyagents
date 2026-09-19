@@ -158,7 +158,13 @@ fn no_tiers_declared_uses_flat_pricing() {
 #[test]
 fn select_tier_picks_the_smallest_sufficient_cap() {
     let pricing = tiered_pricing();
-    assert_eq!(select_tier(&pricing, 50_000).unwrap().up_to_tokens, Some(200_000));
-    assert_eq!(select_tier(&pricing, 200_000).unwrap().up_to_tokens, Some(200_000));
+    assert_eq!(
+        select_tier(&pricing, 50_000).unwrap().up_to_tokens,
+        Some(200_000)
+    );
+    assert_eq!(
+        select_tier(&pricing, 200_000).unwrap().up_to_tokens,
+        Some(200_000)
+    );
     assert_eq!(select_tier(&pricing, 200_001).unwrap().up_to_tokens, None);
 }

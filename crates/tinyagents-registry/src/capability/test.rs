@@ -579,7 +579,10 @@ async fn route_workload_resolves_tier_through_router_to_registered_model() {
     );
 
     let resolved = reg.route_workload("chat-v1").unwrap();
-    let response = resolved.invoke(&(), ModelRequest::new(vec![])).await.unwrap();
+    let response = resolved
+        .invoke(&(), ModelRequest::new(vec![]))
+        .await
+        .unwrap();
     assert_eq!(response.text(), "chat");
 }
 
@@ -605,9 +608,8 @@ fn route_workload_is_none_for_unknown_tier_or_unregistered_target() {
 fn with_router_builder_installs_the_routing_policy() {
     use crate::router::{WorkloadRoute, WorkloadRouter};
 
-    let mut reg: CapabilityRegistry = CapabilityRegistry::new().with_router(
-        WorkloadRouter::new().with_route(WorkloadRoute::new("chat-v1", "chat-v1")),
-    );
+    let mut reg: CapabilityRegistry = CapabilityRegistry::new()
+        .with_router(WorkloadRouter::new().with_route(WorkloadRoute::new("chat-v1", "chat-v1")));
     reg.register_model("chat-v1", Arc::new(FakeModel("chat")))
         .unwrap();
 
