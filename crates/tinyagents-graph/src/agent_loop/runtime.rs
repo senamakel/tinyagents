@@ -353,7 +353,7 @@ where
 
 /// Zero-sized marker used only to keep `response` "used" for readability at
 /// the call site above without over-cloning it into `LoopState`.
-struct ModelOutcomeShadow<'a>(&'a ModelResponse);
+struct ModelOutcomeShadow<'a>(#[allow(dead_code)] &'a ModelResponse);
 
 /// The `tools` node body: executes the batch [`model_node`] requested via
 /// [`phases::execute_tool_batch`] (the exact same admission /
