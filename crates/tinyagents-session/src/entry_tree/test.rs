@@ -183,9 +183,9 @@ fn build_context_returns_full_chain_without_compaction() {
 
     let context = tree.build_context(&c).expect("context");
     assert_eq!(context.len(), 3);
-    assert_eq!(context[0].text().unwrap(), "one");
-    assert_eq!(context[1].text().unwrap(), "two");
-    assert_eq!(context[2].text().unwrap(), "three");
+    assert_eq!(context[0].text(), "one");
+    assert_eq!(context[1].text(), "two");
+    assert_eq!(context[2].text(), "three");
 }
 
 #[test]
@@ -221,9 +221,9 @@ fn build_context_stops_at_newest_compaction_and_orders_chronologically() {
     let context = tree.build_context(&after).expect("context");
     // summary + kept_start ("three") + after ("four") — "one"/"two" dropped.
     assert_eq!(context.len(), 3);
-    assert_eq!(context[0].text().unwrap(), "summary of one/two");
-    assert_eq!(context[1].text().unwrap(), "three");
-    assert_eq!(context[2].text().unwrap(), "four");
+    assert_eq!(context[0].text(), "summary of one/two");
+    assert_eq!(context[1].text(), "three");
+    assert_eq!(context[2].text(), "four");
 
     // A second, newer compaction supersedes the first.
     let second_kept = tree
@@ -244,8 +244,8 @@ fn build_context_stops_at_newest_compaction_and_orders_chronologically() {
 
     let context = tree.build_context(&second_compaction).expect("context");
     assert_eq!(context.len(), 2);
-    assert_eq!(context[0].text().unwrap(), "summary through four");
-    assert_eq!(context[1].text().unwrap(), "five");
+    assert_eq!(context[0].text(), "summary through four");
+    assert_eq!(context[1].text(), "five");
 }
 
 #[test]
@@ -270,8 +270,8 @@ fn build_context_skips_labels_and_branch_summaries() {
 
     let context = tree.build_context(&b).expect("context");
     assert_eq!(context.len(), 2);
-    assert_eq!(context[0].text().unwrap(), "one");
-    assert_eq!(context[1].text().unwrap(), "two");
+    assert_eq!(context[0].text(), "one");
+    assert_eq!(context[1].text(), "two");
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn legacy_jsonl_messages_import_with_derived_linear_parents() {
     let tip = EntryId::derive("sess-legacy", 2);
     let context = tree.build_context(&tip).expect("context");
     assert_eq!(context.len(), 3);
-    assert_eq!(context[1].text().unwrap(), "hi");
+    assert_eq!(context[1].text(), "hi");
 
     // Re-importing the same source is a no-op: ids collide and are skipped,
     // so the tree stays exactly as before rather than erroring or duplicating.
@@ -374,7 +374,7 @@ fn legacy_sqlite_messages_import_with_derived_linear_parents() {
     let tip = EntryId::derive("sess-sql", 1);
     let context = tree.build_context(&tip).expect("context");
     assert_eq!(context.len(), 2);
-    assert_eq!(context[1].text().unwrap(), "hello");
+    assert_eq!(context[1].text(), "hello");
 }
 
 // ── Index rebuild ────────────────────────────────────────────────────
@@ -418,8 +418,8 @@ fn rebuild_index_matches_incremental_index() {
     assert_eq!(before_c.len(), 2);
     assert_eq!(after_b.len(), 2);
     assert_eq!(after_c.len(), 2);
-    assert_eq!(after_b[0].text().unwrap(), "one");
-    assert_eq!(after_c[1].text().unwrap(), "alt");
+    assert_eq!(after_b[0].text(), "one");
+    assert_eq!(after_c[1].text(), "alt");
 }
 
 // ── Serde round trip ─────────────────────────────────────────────────
