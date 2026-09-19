@@ -142,15 +142,16 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// parent thread when one is available.
     ///
     /// `parent` is `Some((parent_run_id, ordinal))` for every entry point that
-    /// has a live parent [`RunContext`] to derive from — `ordinal` is that
-    /// context's [`crate::limits::LimitTracker::tool_calls`] count, a
-    /// monotonically increasing, run-local number with no process-global
-    /// state. The child run id is then a pure function of the parent's run id
-    /// and that ordinal (`{name}-d{depth}-{parent_run_id}-{ordinal}`), so two
-    /// processes replaying the identical parent run derive the identical
-    /// child run ids (M-2) — unlike the historical `ids::next_seq()` suffix,
-    /// which restarts at a different value every process and made replayed
-    /// journals of nested runs diverge across processes.
+    /// has a live parent [`RunContext`] to derive from — `ordinal` comes from
+    /// [`RunContext::next_child_ordinal`], a counter scoped to that one
+    /// context instance (not process-global). The child run id is then a pure
+    /// function of the parent's run id and that ordinal
+    /// (`{name}-d{depth}-{parent_run_id}-{ordinal}`), so two processes
+    /// replaying the identical sequence of calls against the identical parent
+    /// run derive the identical child run ids (M-2) — unlike the historical
+    /// `ids::next_seq()` suffix, which restarts at a different value every
+    /// process and made replayed journals of nested runs diverge across
+    /// processes.
     ///
     /// `parent` is `None` only for the standalone entry points
     /// ([`Self::invoke`]/[`Self::invoke_with_events`]) that are not called
