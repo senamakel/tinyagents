@@ -115,6 +115,7 @@ use tinyinference_llm::model::{
 };
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
+mod dialect;
 mod entry;
 mod model_call;
 mod run_loop;
