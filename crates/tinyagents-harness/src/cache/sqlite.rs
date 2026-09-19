@@ -135,32 +135,43 @@ impl SqliteResponseCache {
 #[async_trait]
 impl ResponseCache for SqliteResponseCache {
     async fn get(&self, key: &str) -> Result<Option<ModelResponse>> {
-        let conn = self.lock()?;
-        let row: Option<(String, Option<i64>)> = conn
-            .query_row(
-                "SELECT value, expiry FROM response_cache WHERE ns = ?1 AND key = ?2",
-                params![self.namespace, key],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| sqlite_err("read entry", e))?;
-        let Some((value, expiry)) = row else {
-            return Ok(None);
-        };
-        // Lazy expiry purge: a stale row is deleted on the way past, so a cache
-        // that is read but never written still sheds expired entries.
-        if expiry.is_some_and(|at| at <= now_ms()) {
-            conn.execute(
-                "DELETE FROM response_cache WHERE ns = ?1 AND key = ?2",
-                params![self.namespace, key],
-            )
-            .map_err(|e| sqlite_err("purge expired entry", e))?;
-            tracing::debug!(key = %key, "[cache] sqlite entry expired; treating as miss");
-            return Ok(None);
-        }
-        let response: ModelResponse =
-            serde_json::from_str(&value).map_err(|e| sqlite_err("decode entry", e))?;
-        Ok(Some(response))
+        let conn = Arc::clone(&self.conn);
+        let namespace = self.namespace.clone();
+        let key = key.to_string();
+        // rusqlite is synchronous; run it off the tokio worker so a cache hit
+        // on the model hot path never stalls the runtime (see I-4).
+        crate::blocking::run_blocking(move || -> Result<Option<ModelResponse>> {
+            let conn = conn
+                .lock()
+                .map_err(|_| sqlite_err("connection lock", "poisoned"))?;
+            let row: Option<(String, Option<i64>)> = conn
+                .query_row(
+                    "SELECT value, expiry FROM response_cache WHERE ns = ?1 AND key = ?2",
+                    params![namespace, key],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| sqlite_err("read entry", e))?;
+            let Some((value, expiry)) = row else {
+                return Ok(None);
+            };
+            // Lazy expiry purge: a stale row is deleted on the way past, so a
+            // cache that is read but never written still sheds expired
+            // entries.
+            if expiry.is_some_and(|at| at <= now_ms()) {
+                conn.execute(
+                    "DELETE FROM response_cache WHERE ns = ?1 AND key = ?2",
+                    params![namespace, key],
+                )
+                .map_err(|e| sqlite_err("purge expired entry", e))?;
+                tracing::debug!(key = %key, "[cache] sqlite entry expired; treating as miss");
+                return Ok(None);
+            }
+            let response: ModelResponse =
+                serde_json::from_str(&value).map_err(|e| sqlite_err("decode entry", e))?;
+            Ok(Some(response))
+        })
+        .await
     }
 
     async fn put(&self, key: &str, value: ModelResponse) -> Result<()> {
@@ -175,30 +186,45 @@ impl ResponseCache for SqliteResponseCache {
     ) -> Result<()> {
         let encoded = serde_json::to_string(&value).map_err(|e| sqlite_err("encode entry", e))?;
         let expiry = ttl.map(|ttl| now_ms().saturating_add(ttl.as_millis() as i64));
-        let conn = self.lock()?;
-        conn.execute(
-            "INSERT OR REPLACE INTO response_cache (ns, key, value, expiry) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![self.namespace, key, encoded, expiry],
-        )
-        .map_err(|e| sqlite_err("write entry", e))?;
-        Ok(())
+        let conn = Arc::clone(&self.conn);
+        let namespace = self.namespace.clone();
+        let key = key.to_string();
+        crate::blocking::run_blocking(move || -> Result<()> {
+            let conn = conn
+                .lock()
+                .map_err(|_| sqlite_err("connection lock", "poisoned"))?;
+            conn.execute(
+                "INSERT OR REPLACE INTO response_cache (ns, key, value, expiry) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![namespace, key, encoded, expiry],
+            )
+            .map_err(|e| sqlite_err("write entry", e))?;
+            Ok(())
+        })
+        .await
     }
 
     async fn clear(&self) -> Result<()> {
-        let conn = self.lock()?;
-        let dropped = conn
-            .execute(
-                "DELETE FROM response_cache WHERE ns = ?1",
-                params![self.namespace],
-            )
-            .map_err(|e| sqlite_err("clear namespace", e))?;
-        tracing::debug!(
-            namespace = %self.namespace,
-            dropped,
-            "[cache] cleared the sqlite response cache namespace"
-        );
-        Ok(())
+        let conn = Arc::clone(&self.conn);
+        let namespace = self.namespace.clone();
+        crate::blocking::run_blocking(move || -> Result<()> {
+            let conn = conn
+                .lock()
+                .map_err(|_| sqlite_err("connection lock", "poisoned"))?;
+            let dropped = conn
+                .execute(
+                    "DELETE FROM response_cache WHERE ns = ?1",
+                    params![namespace],
+                )
+                .map_err(|e| sqlite_err("clear namespace", e))?;
+            tracing::debug!(
+                namespace = %namespace,
+                dropped,
+                "[cache] cleared the sqlite response cache namespace"
+            );
+            Ok(())
+        })
+        .await
     }
 
     fn stats(&self) -> CacheStats {
