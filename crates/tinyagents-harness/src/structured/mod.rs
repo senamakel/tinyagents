@@ -277,6 +277,9 @@ impl StructuredExtractor {
         format!("schema '{}'", self.schema_name)
     }
 
+    /// [`StructuredStrategy::ProviderSchema`] extraction: parses the
+    /// response's text as JSON (via the repair ladder), after special-casing
+    /// an empty response caused by hitting the output-token limit.
     fn extract_provider_schema(&self, response: &ModelResponse) -> Result<StructuredOutput> {
         let raw = response.text();
 
@@ -332,6 +335,10 @@ impl StructuredExtractor {
         })
     }
 
+    /// [`StructuredStrategy::ToolCall`] extraction: finds the tool call named
+    /// `schema_name` and takes its arguments as the structured value,
+    /// running the repair ladder over a preserved raw string when the
+    /// provider itself could not parse the call's arguments.
     fn extract_tool_call(&self, response: &ModelResponse) -> Result<StructuredOutput> {
         let call = response
             .tool_calls()
