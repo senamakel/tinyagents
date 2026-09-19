@@ -42,6 +42,13 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   name, plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage.
+- **`tinyagents-definition`** — the host-owned agent definition vocabulary:
+  identity, description, declared model/tools/delegates, and a read-only
+  catalogue seam. Authorization, prompt construction, and execution stay with
+  the host and harness.
+- **`tinyagents-orchestration`** — host-neutral composition of durable
+  multi-agent work (teams and workflows) over the graph, harness, and session
+  layers; depends one-way on those crates and stays host-free.
 - **`tinyagents-integration-tests`** — cross-crate tests and the runnable
   examples referenced below (not published, workspace-internal).
 
