@@ -3863,7 +3863,7 @@ async fn concurrent_tool_failure_fails_every_started_sibling_before_returning() 
     let started: Vec<_> = recorder
         .events()
         .iter()
-        .filter_map(|record| match &record.event {
+        .filter_map(|record| match record {
             AgentEvent::ToolStarted { call_id, .. } => Some(call_id.as_str().to_string()),
             _ => None,
         })
@@ -3871,7 +3871,7 @@ async fn concurrent_tool_failure_fails_every_started_sibling_before_returning() 
     let terminal: Vec<_> = recorder
         .events()
         .iter()
-        .filter_map(|record| match &record.event {
+        .filter_map(|record| match record {
             AgentEvent::ToolFailed { call_id, .. } => Some(call_id.as_str().to_string()),
             AgentEvent::ToolCompleted { call_id, .. } => Some(call_id.as_str().to_string()),
             _ => None,
