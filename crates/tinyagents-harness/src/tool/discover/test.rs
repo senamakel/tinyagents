@@ -90,7 +90,7 @@ fn manifest_degrades_full_to_names_to_count() {
 
 #[test]
 fn first_sentence_clips_and_ignores_inline_dots() {
-    assert_eq!(first_sentence("Read e.g. a file. Then more.", 60), "Read e.g. a file");
+    assert_eq!(first_sentence("Read v1.2 files. Then more.", 60), "Read v1.2 files");
     assert_eq!(first_sentence("No terminator here", 60), "No terminator here");
     assert_eq!(first_sentence("abcdefghij", 4), "abcd…");
     assert_eq!(first_sentence("  spaced\n\nout  ", 60), "spaced out");
