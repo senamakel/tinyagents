@@ -198,6 +198,55 @@ where
         Ok(Vec::new())
     }
 
+    // ---- Thread execution lease (C3/R4) ------------------------------------
+    //
+    // The durable half of the per-thread execution lock. The executor
+    // (`compiled::executor::execute`) already holds an in-process
+    // `ThreadLockMap` guard for a run's whole lifetime, which is sufficient
+    // to serialize concurrent calls *within one process*. This lease closes
+    // the cross-process gap: two different processes (or two restarts of the
+    // same host) racing `run_with_thread`/`resume` on the same thread id
+    // have no shared in-process lock to serialize on. A backend that
+    // implements this lets a dead owner's lease be reclaimed once it expires
+    // instead of stranding the thread forever, while a live owner's lease
+    // refuses a competing claim.
+    //
+    // Every method carries a default no-op body so an out-of-tree
+    // `Checkpointer` (and the in-memory backend, which has no cross-process
+    // audience to protect against) keeps compiling and behaves exactly as it
+    // did before this lease existed — `try_claim` always succeeds.
+
+    /// Attempts to claim the execution lease for `thread`, naming `owner`
+    /// (the run id) and expiring after `ttl`.
+    ///
+    /// Returns `Ok(true)` when the lease is unclaimed, already expired, or
+    /// already held by `owner` (idempotent re-claim); `Ok(false)` when a
+    /// different owner holds a still-live lease.
+    ///
+    /// The default body always returns `Ok(true)`.
+    async fn try_claim(&self, _thread: &str, _owner: &str, _ttl: std::time::Duration) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Extends `owner`'s already-held lease on `thread` by `ttl` from now.
+    ///
+    /// Returns `Ok(false)` when `owner` does not currently hold the lease
+    /// (it expired and was reclaimed, or was never claimed).
+    ///
+    /// The default body always returns `Ok(true)`.
+    async fn renew(&self, _thread: &str, _owner: &str, _ttl: std::time::Duration) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Releases `owner`'s lease on `thread`, when it holds one.
+    ///
+    /// A no-op (not an error) when `owner` does not hold the lease.
+    ///
+    /// The default body is a no-op.
+    async fn release(&self, _thread: &str, _owner: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Resolves the checkpoint id a **read** of writes addresses.
     ///
     /// Unlike [`Checkpointer::put_writes`] (where an unaddressed id is a caller
