@@ -196,7 +196,7 @@ pub(super) fn recover_text_calls(
     offered: &[ToolSchema],
     registry: Option<&PFormatRegistry>,
 ) {
-    if offered.is_empty() || !response.message.tool_calls.is_empty() {
+    if offered.is_empty() {
         return;
     }
     let known: Vec<String> = offered.iter().map(|tool| tool.name.clone()).collect();
@@ -212,12 +212,17 @@ pub(super) fn recover_text_calls(
     for diagnostic in &outcome.diagnostics {
         tinyagents_tracing::debug!(?diagnostic, "[agent_loop] text-dialect recovery");
     }
-    response.message.tool_calls = outcome
+    // Appended, not assigned: a provider can legitimately return one native
+    // structured call *and* narrate a second one as text in the same
+    // response (this is deliberately parsed even when `tool_calls` was
+    // already non-empty — see above), and overwriting the collection here
+    // used to silently drop whichever set ran second.
+    let recovered = outcome
         .calls
         .into_iter()
         .enumerate()
-        .map(|(index, call)| to_tool_call(call, model_call_id, index + 1))
-        .collect();
+        .map(|(index, call)| to_tool_call(call, model_call_id, index + 1));
+    response.message.tool_calls.extend(recovered);
     response.message.content =
         replace_text_blocks(std::mem::take(&mut response.message.content), outcome.text);
 }
