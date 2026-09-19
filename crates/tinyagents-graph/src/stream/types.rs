@@ -179,6 +179,7 @@ impl GraphEvent {
             GraphEvent::RunStarted { .. } => "run.started",
             GraphEvent::RunCompleted { .. } => "run.completed",
             GraphEvent::RunFailed { .. } => "run.failed",
+            GraphEvent::RunCancelled { .. } => "run.cancelled",
             GraphEvent::StepStarted { .. } => "step.started",
             GraphEvent::StepCompleted { .. } => "step.completed",
             GraphEvent::TaskScheduled { .. } => "task.scheduled",
