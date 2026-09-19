@@ -745,6 +745,181 @@ mod sqlite_backend {
     use super::checkpoint;
     use crate::checkpoint::{CheckpointConfig, Checkpointer, SqliteCheckpointer};
 
+    /// Inserts a v1-shaped row directly (bypassing `insert_checkpoint_row`,
+    /// which — this build — only ever writes v2), with `format_version`
+    /// defaulting to `1` and the JSON `record` blob carrying none of the v2
+    /// fields, exactly what a pre-v2 build's `INSERT` produced. Proves the
+    /// wire format decodes and normalizes, not just `Checkpoint::normalize`
+    /// agreeing with itself.
+    fn insert_v1_row(conn: &rusqlite::Connection, thread: &str, id: &str, parent: Option<&str>) {
+        let record = serde_json::json!({
+            "thread_id": thread,
+            "checkpoint_id": id,
+            "run_id": null,
+            "parent_checkpoint_id": parent,
+            "namespace": [],
+            "state": 1,
+            "next_nodes": ["b"],
+            "completed_tasks": ["a"],
+            "completed_routes": [[]],
+            "pending_writes": [],
+            "interrupts": [],
+            "pending_activations": null,
+            "barrier_arrivals": [],
+            "metadata": { "source": "loop", "step": 1 },
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO checkpoints (
+                thread_id, checkpoint_id, parent_checkpoint_id, run_id,
+                namespace, next_nodes, source, step, has_interrupts, record
+            ) VALUES (?1, ?2, ?3, NULL, '[]', '[\"b\"]', 'loop', 1, 0, ?4)",
+            rusqlite::params![thread, id, parent, record],
+        )
+        .expect("insert v1 row");
+    }
+
+    #[tokio::test]
+    async fn v1_row_decodes_to_normalized_v2_and_resumes() {
+        let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
+        {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            let _ = conn; // placeholder to keep the helper's shape obvious
+        }
+        // Insert the v1 row through the checkpointer's own (idempotent) schema
+        // by writing straight past `put`, using the same in-memory database:
+        // `SqliteCheckpointer::in_memory` already ran the DDL + migration, so
+        // the table has `format_version`/`created_at` with their defaults —
+        // exactly the shape a pre-v2 row would have left behind before this
+        // build ever wrote to it.
+        cp.put(checkpoint("v1thread", "placeholder", None, 0))
+            .await
+            .unwrap();
+        cp.delete_checkpoints("v1thread", &["placeholder".to_string()])
+            .await
+            .unwrap();
+
+        // `insert_v1_row` needs direct SQL access; reach it through a second
+        // handle backed by the same file so both share one database.
+        let tmp = std::env::temp_dir().join(format!(
+            "tinyagents-ckpt-sqlite-v1-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let cp = SqliteCheckpointer::<i32>::open(&tmp).unwrap();
+        {
+            let raw = rusqlite::Connection::open(&tmp).unwrap();
+            insert_v1_row(&raw, "v1thread", "c1", None);
+        }
+
+        let loaded = cp.get("v1thread", None).await.unwrap().unwrap();
+        assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(
+            loaded
+                .tasks
+                .iter()
+                .map(|t| t.node.to_string())
+                .collect::<Vec<_>>(),
+            vec!["b".to_string()]
+        );
+        assert_eq!(
+            loaded
+                .completed
+                .iter()
+                .map(|c| c.node.to_string())
+                .collect::<Vec<_>>(),
+            vec!["a".to_string()]
+        );
+        assert!(loaded.next_nodes.is_empty(), "legacy fields cleared by normalize");
+
+        let history = cp.state_history("v1thread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].checkpoint.version,
+            crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn mixed_v1_and_v2_thread_lists_and_walks_state_history() {
+        let tmp = std::env::temp_dir().join(format!(
+            "tinyagents-ckpt-sqlite-mixed-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let cp = SqliteCheckpointer::<i32>::open(&tmp).unwrap();
+        {
+            let raw = rusqlite::Connection::open(&tmp).unwrap();
+            insert_v1_row(&raw, "mixedthread", "c1", None);
+        }
+        cp.put(checkpoint("mixedthread", "c2", Some("c1"), 2))
+            .await
+            .unwrap();
+
+        let list = cp.list("mixedthread").await.unwrap();
+        assert_eq!(list.len(), 2, "both the v1 and v2 record are listed");
+
+        let history = cp.state_history("mixedthread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 2, "the walk crosses the v1/v2 boundary");
+        assert!(
+            history
+                .iter()
+                .all(|t| t.checkpoint.version == crate::checkpoint::CHECKPOINT_FORMAT_VERSION)
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn opening_a_pre_v2_database_migrates_the_schema_in_place() {
+        // A database whose `checkpoints` table predates the `format_version`/
+        // `created_at` columns — the shape a build before this migration
+        // existed would have created.
+        let tmp = std::env::temp_dir().join(format!(
+            "tinyagents-ckpt-sqlite-migrate-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let raw = rusqlite::Connection::open(&tmp).unwrap();
+            raw.execute_batch(
+                "CREATE TABLE checkpoints (
+                    seq                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id            TEXT    NOT NULL,
+                    checkpoint_id        TEXT    NOT NULL,
+                    parent_checkpoint_id TEXT,
+                    run_id               TEXT,
+                    namespace            TEXT    NOT NULL,
+                    next_nodes           TEXT    NOT NULL,
+                    source               TEXT    NOT NULL,
+                    step                 INTEGER NOT NULL,
+                    has_interrupts       INTEGER NOT NULL,
+                    record               TEXT    NOT NULL
+                );",
+            )
+            .unwrap();
+            insert_v1_row(&raw, "premigrate", "c1", None);
+        }
+
+        // Opening through the checkpointer must not error, and must add both
+        // missing columns.
+        let cp = SqliteCheckpointer::<i32>::open(&tmp).unwrap();
+        assert!(cp.has_checkpoints_column("format_version").unwrap());
+        assert!(cp.has_checkpoints_column("created_at").unwrap());
+        let loaded = cp.get("premigrate", None).await.unwrap().unwrap();
+        assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+
+        // New writes populate the migrated columns going forward.
+        cp.put(checkpoint("premigrate", "c2", Some("c1"), 2))
+            .await
+            .unwrap();
+        assert!(cp.get("premigrate", Some("c2")).await.unwrap().is_some());
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     #[tokio::test]
     async fn put_get_list_roundtrip_in_memory() {
         let cp = SqliteCheckpointer::<i32>::in_memory().unwrap();
