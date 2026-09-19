@@ -102,6 +102,21 @@ pub enum GraphEvent {
         /// The 1-based retry attempt about to be made.
         attempt: usize,
     },
+    /// A task (a node activation, cached or not) finished — the cache-aware
+    /// counterpart to [`GraphEvent::NodeCompleted`], emitted only for nodes
+    /// with an opt-in [`crate::NodeCachePolicy`] (see
+    /// [`crate::CompiledGraph::with_cached_node`]). `cached: true` means the
+    /// handler was skipped and the stored `Update` was replayed; `cached:
+    /// false` means the handler ran and (on success) its result was written
+    /// back to the [`crate::cache::TaskCache`].
+    TaskCompleted {
+        /// Node id.
+        node: NodeId,
+        /// Step number.
+        step: usize,
+        /// Whether this task's result came from the cache.
+        cached: bool,
+    },
     /// A node produced a state update applied at the boundary.
     StateUpdated {
         /// Node id.
