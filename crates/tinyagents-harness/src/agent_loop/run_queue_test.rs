@@ -181,7 +181,10 @@ impl Fixture {
 #[tokio::test]
 async fn steer_queued_mid_tool_batch_waits_for_the_batch_to_finish() {
     let mut fx = fixture(
-        vec![tool_turn(&[("call-a", "a"), ("call-b", "b")]), final_turn("done")],
+        vec![
+            tool_turn(&[("call-a", "a"), ("call-b", "b")]),
+            final_turn("done"),
+        ],
         QueueMode::All,
     );
     // Tool `a` pushes the steer while the two-call batch is executing.
@@ -191,7 +194,8 @@ async fn steer_queued_mid_tool_batch_waits_for_the_batch_to_finish() {
         Arc::clone(&fx.queue),
         "steer: be brief",
     ));
-    fx.harness.register_tool(QueueingTool::plain("b", "b-result"));
+    fx.harness
+        .register_tool(QueueingTool::plain("b", "b-result"));
 
     let ctx = fx.ctx("steer-mid-batch");
     let run = fx
@@ -202,7 +206,11 @@ async fn steer_queued_mid_tool_batch_waits_for_the_batch_to_finish() {
 
     let requests = fx.model.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(user_texts(&requests[0]), vec!["go"], "the tool-call turn never sees the steer");
+    assert_eq!(
+        user_texts(&requests[0]),
+        vec!["go"],
+        "the tool-call turn never sees the steer"
+    );
     assert_eq!(
         user_texts(&requests[1]),
         vec!["go", "steer: be brief"],
@@ -252,7 +260,8 @@ async fn one_at_a_time_applies_one_steer_per_boundary_while_all_applies_every_st
             ],
             mode,
         );
-        fx.harness.register_tool(QueueingTool::plain("a", "a-result"));
+        fx.harness
+            .register_tool(QueueingTool::plain("a", "a-result"));
         fx.queue.push(QueueLane::Steer, Message::user("s1")).await;
         fx.queue.push(QueueLane::Steer, Message::user("s2")).await;
 
@@ -293,7 +302,8 @@ async fn followup_runs_one_more_turn_after_the_model_would_have_finished() {
         ],
         QueueMode::All,
     );
-    fx.harness.register_tool(QueueingTool::plain("a", "a-result"));
+    fx.harness
+        .register_tool(QueueingTool::plain("a", "a-result"));
     fx.queue
         .push(QueueLane::Followup, Message::user("and then?"))
         .await;
@@ -305,7 +315,10 @@ async fn followup_runs_one_more_turn_after_the_model_would_have_finished() {
         .await
         .expect("run succeeds");
 
-    assert_eq!(run.model_calls, 3, "one extra turn (plus its tool round trip)");
+    assert_eq!(
+        run.model_calls, 3,
+        "one extra turn (plus its tool round trip)"
+    );
     assert_eq!(run.text().as_deref(), Some("second answer"));
     assert_eq!(
         shape(&run.messages),
@@ -462,7 +475,8 @@ async fn middleware_stop_is_terminal_and_leaves_followups_queued() {
         vec![tool_turn(&[("call-1", "a")]), final_turn("never reached")],
         QueueMode::All,
     );
-    fx.harness.register_tool(QueueingTool::plain("a", "a-result"));
+    fx.harness
+        .register_tool(QueueingTool::plain("a", "a-result"));
     fx.harness.push_middleware(Arc::new(StopAfterTool));
     fx.queue
         .push(QueueLane::Followup, Message::user("later"))

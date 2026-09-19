@@ -980,7 +980,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         ));
                     }
                     run.final_response = Some(response);
-                    if self.continue_from_queue_at_finish(ctx, status, messages).await {
+                    if self
+                        .continue_from_queue_at_finish(ctx, status, messages)
+                        .await
+                    {
                         continue;
                     }
                     return Ok(LoopExit::Finished);
@@ -1029,7 +1032,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         return Ok(exit);
                     }
                     run.final_response = Some(response);
-                    if self.continue_from_queue_at_finish(ctx, status, messages).await {
+                    if self
+                        .continue_from_queue_at_finish(ctx, status, messages)
+                        .await
+                    {
                         continue;
                     }
                     return Ok(LoopExit::Finished);
@@ -1219,7 +1225,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 run.final_response = Some(response);
                 // Natural finish (A4): queued steering or a follow-up turns
                 // "done" into "one more turn" instead of returning.
-                if self.continue_from_queue_at_finish(ctx, status, messages).await {
+                if self
+                    .continue_from_queue_at_finish(ctx, status, messages)
+                    .await
+                {
                     continue;
                 }
                 return Ok(LoopExit::Finished);
