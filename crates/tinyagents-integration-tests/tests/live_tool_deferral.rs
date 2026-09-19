@@ -206,7 +206,10 @@ struct Outcome {
     deferred: usize,
     schema_bytes: usize,
     tools_byte_stable: bool,
-    searched: bool,
+    /// How the model reached `stock_quote`: `search` (via `tool_search`),
+    /// `bridge` (a `tool_call` straight off the manifest), `direct` (by name),
+    /// or `-` when it never did.
+    route: &'static str,
     quoted: bool,
 }
 
@@ -282,9 +285,21 @@ async fn run_once(label: &'static str, api_key: &str, model_name: &str, long_tai
         deferred,
         schema_bytes,
         tools_byte_stable: seen.iter().all(|tools| tools == &seen[0]),
-        searched: events
+        route: if events
             .iter()
-            .any(|event| matches!(event, AgentEvent::ToolSearched { .. })),
+            .any(|event| matches!(event, AgentEvent::ToolSearched { .. }))
+        {
+            "search"
+        } else if events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::DeferredToolCall { .. }))
+        {
+            "bridge"
+        } else if quoted {
+            "direct"
+        } else {
+            "-"
+        },
         quoted,
     }
 }
@@ -308,7 +323,7 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
     eprintln!("\nmodel: {model_name}");
     eprintln!(
         "{:<28} {:>6} {:>10} {:>10} {:>12} {:>9} {:>8} {:>7}",
-        "run", "calls", "1st input", "Σ input", "schema bytes", "on wire", "search", "quoted"
+        "run", "calls", "1st input", "Σ input", "schema bytes", "on wire", "route", "quoted"
     );
     for o in [&before, &after] {
         eprintln!(
@@ -320,7 +335,7 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
             o.schema_bytes,
             o.advertised,
             o.deferred,
-            o.searched,
+            o.route,
             o.quoted
         );
     }
@@ -334,7 +349,10 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
 
     assert!(before.quoted, "the direct run should have called stock_quote");
     assert!(after.quoted, "the deferred run should have discovered and called stock_quote");
-    assert!(after.searched, "the deferred run should have gone through tool_search");
+    // Any discovery route is a pass: some models search, some read the
+    // manifest inside `tool_search`'s description and call the tool straight
+    // away (through `tool_call` or by name). All three are the design working.
+    assert_ne!(after.route, "-", "the deferred run should have discovered stock_quote");
     assert_eq!(after.deferred, LONG_TAIL.len());
     assert!(after.schema_bytes < before.schema_bytes / 3);
     assert!(
