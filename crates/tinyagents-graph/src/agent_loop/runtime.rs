@@ -288,7 +288,7 @@ where
     // regardless of which engine is driving the run.
     if let Err(error) = ctx.record_model_call() {
         let record = ctx.emit(AgentEvent::LimitReached {
-            kind: tinyagents_harness::limits::LimitKind::ModelCalls,
+            kind: tinyagents_harness::events::LimitKind::ModelCalls,
         });
         status.set_last_event(record.id);
         if matches!(
