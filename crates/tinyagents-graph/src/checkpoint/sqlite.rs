@@ -174,6 +174,17 @@ CREATE TABLE IF NOT EXISTS checkpoint_writes (
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoint_writes_thread
     ON checkpoint_writes (thread_id, checkpoint_id);
+
+-- C3/R4: the durable half of the per-thread execution lease. The executor
+-- holds an in-process lock for the run's lifetime (see
+-- `compiled::executor::execute`) AND claims this row, so a lease surviving a
+-- crashed owner past its TTL is reclaimable by a different process instead of
+-- stranding the thread forever.
+CREATE TABLE IF NOT EXISTS thread_leases (
+    thread_id  TEXT    PRIMARY KEY,
+    owner      TEXT    NOT NULL,
+    expires_at INTEGER NOT NULL
+);
 ";
 
 /// The projected listing columns read from one `checkpoints` row.
