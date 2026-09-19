@@ -383,3 +383,97 @@ async fn collect_lane_lands_on_the_run_and_never_reaches_the_model() {
     );
     assert_eq!(fx.queue.status().await.collects, 0);
 }
+
+// ── Boundary semantics ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn steer_arriving_after_the_final_answer_still_gets_one_more_turn() {
+    // A steer that lands once the model has already answered is not lost:
+    // the natural-finish boundary applies it (before any follow-up) and runs
+    // another turn, matching pi's "poll steering after each completed turn".
+    let fx = fixture(
+        vec![final_turn("first answer"), final_turn("steered answer")],
+        QueueMode::All,
+    );
+    fx.queue
+        .push(QueueLane::Steer, Message::user("actually, shorter"))
+        .await;
+    fx.queue
+        .push(QueueLane::Followup, Message::user("unused follow-up"))
+        .await;
+
+    let ctx = fx.ctx("steer-at-finish");
+    let run = fx
+        .harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.model_calls, 2);
+    assert_eq!(run.text().as_deref(), Some("steered answer"));
+    assert_eq!(
+        shape(&run.messages),
+        vec![
+            "user:go",
+            "assistant:first answer",
+            "user:actually, shorter",
+            "assistant:steered answer",
+        ]
+    );
+    assert_eq!(
+        queued_applied(&fx.recorder.events()),
+        vec![(QueueLane::Steer, 1)],
+        "the steer wins the first finish boundary"
+    );
+}
+
+/// Requests `StopWithFinal` after any tool result.
+struct StopAfterTool;
+
+#[async_trait]
+impl crate::middleware::Middleware<(), ()> for StopAfterTool {
+    fn name(&self) -> &str {
+        "stop-after-tool"
+    }
+    async fn after_tool(
+        &self,
+        ctx: &mut RunContext<()>,
+        _state: &(),
+        _invocation: &crate::middleware::ToolInvocationIdentity,
+        _result: &mut ToolResult,
+    ) -> crate::error::Result<()> {
+        ctx.request_control(crate::context::MiddlewareControl::StopWithFinal(
+            "stopped by middleware".to_string(),
+        ));
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn middleware_stop_is_terminal_and_leaves_followups_queued() {
+    let mut fx = fixture(
+        vec![tool_turn(&[("call-1", "a")]), final_turn("never reached")],
+        QueueMode::All,
+    );
+    fx.harness.register_tool(QueueingTool::plain("a", "a-result"));
+    fx.harness.push_middleware(Arc::new(StopAfterTool));
+    fx.queue
+        .push(QueueLane::Followup, Message::user("later"))
+        .await;
+
+    let ctx = fx.ctx("middleware-stop");
+    let run = fx
+        .harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    assert_eq!(run.model_calls, 1);
+    assert_eq!(run.text().as_deref(), Some("stopped by middleware"));
+    assert_eq!(
+        fx.queue.status().await.followups,
+        1,
+        "a forced stop does not consume the follow-up; the host decides"
+    );
+    assert!(queued_applied(&fx.recorder.events()).is_empty());
+}
