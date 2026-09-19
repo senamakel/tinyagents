@@ -357,6 +357,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if let Some(model_pin) = host_run.model_pin.clone() {
                     resolve_request = resolve_request.with_model_pin(model_pin);
                 }
+                if let Some(capabilities) = request.required_capabilities.clone() {
+                    resolve_request = resolve_request.with_required_capabilities(capabilities);
+                }
                 let model = host_run.host.models.resolve(&resolve_request).await.map_err(|error| {
                     tinyagents_tracing::warn!(%error, agent_id = %host_run.agent_id, "[host] model resolution failed");
                     TinyAgentsError::Model("host model resolution failed".to_string())

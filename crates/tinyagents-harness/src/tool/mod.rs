@@ -35,6 +35,15 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     /// Canonical declaration exposed to the model and policy layer.
     fn tool(&self) -> Arc<dyn tinytools::Tool>;
 
+    /// Classifies output for the host security boundary.
+    ///
+    /// Normal tools produce tool-origin output. Typed recursive dispatchers
+    /// override this so delegated-agent output can receive the host's stricter
+    /// agent-output screening policy.
+    fn output_origin(&self) -> crate::host::ContentOrigin {
+        crate::host::ContentOrigin::Tool
+    }
+
     /// Supplies authoritative values for `ToolInjectedArgumentSource::Host`.
     ///
     /// This is deliberately an explicit registration-time dispatch concern;

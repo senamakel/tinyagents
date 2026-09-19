@@ -518,6 +518,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     if matches!(error, TinyAgentsError::Timeout(_)) {
                         return Err(error);
                     }
+                    // A hosted resolver owns routing authority. Its first
+                    // decision must not fall through to harness-local
+                    // fallback names the host did not approve.
+                    if self.host_run_binding(ctx.instance_id())?.is_some() {
+                        return Err(error);
+                    }
                     // Retries exhausted (or non-retryable): walk the fallback
                     // chain for the next model, skipping any name already
                     // visited in this chain (so a chain with a repeated name

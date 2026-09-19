@@ -630,6 +630,10 @@ where
         })
     }
 
+    fn output_origin(&self) -> crate::host::ContentOrigin {
+        crate::host::ContentOrigin::Agent
+    }
+
     async fn execute(
         &self,
         state: &State,

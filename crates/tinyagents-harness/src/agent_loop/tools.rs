@@ -142,6 +142,7 @@ struct PreparedToolCall {
     captured_input: Option<Value>,
     started_at_ms: u64,
     executed: bool,
+    output_origin: crate::host::ContentOrigin,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -501,6 +502,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         call: &ToolCall,
         options: ToolCallOptions,
         executed: bool,
+        output_origin: crate::host::ContentOrigin,
     ) -> PreparedToolCall {
         let call_id = CallId::new(call.id.clone());
         let tool_name = call.name.clone();
@@ -531,6 +533,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             captured_input,
             started_at_ms,
             executed,
+            output_origin,
         }
     }
 
@@ -619,7 +622,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             match binding
                 .host
                 .security
-                .screen_input(&rendered, crate::host::ContentOrigin::Tool)
+                .screen_input(&rendered, prepared.output_origin)
                 .await
             {
                 Ok(crate::host::ScreenOutcome::Pass) => {}
@@ -748,7 +751,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
 
             let options = dispatch.call_options(&call.arguments);
-            let prepared = self.start_tool_call(ctx, status, &call, options, true);
+            let prepared =
+                self.start_tool_call(ctx, status, &call, options, true, dispatch.output_origin());
 
             // The real tool call is the innermost base of the tool-wrap
             // onion (same before -> wrap -> after ordering as the model
@@ -826,7 +830,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             call.id,
             call.name
         );
-        let prepared = self.start_tool_call(ctx, status, call, ToolCallOptions::default(), false);
+        let prepared = self.start_tool_call(
+            ctx,
+            status,
+            call,
+            ToolCallOptions::default(),
+            false,
+            crate::host::ContentOrigin::Tool,
+        );
         let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
@@ -888,7 +899,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             };
 
             let options = dispatch.call_options(&call.arguments);
-            prepared.push(self.start_tool_call(ctx, status, &call, options, true));
+            prepared.push(self.start_tool_call(
+                ctx,
+                status,
+                &call,
+                options,
+                true,
+                dispatch.output_origin(),
+            ));
             slots.push(ToolSlot::Execute);
 
             // Each call is bounded by its recoverable tool policy inside the

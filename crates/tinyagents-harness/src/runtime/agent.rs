@@ -290,7 +290,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .resolve(&request.agent_id)
             .await
             .map_err(|error| {
-                TinyAgentsError::Validation(format!("definition registry failed: {error}"))
+                tinyagents_tracing::warn!(%error, agent_id = %request.agent_id, "[host] definition lookup failed");
+                TinyAgentsError::Validation("agent definition lookup failed".to_string())
             })?
             .ok_or_else(|| {
                 TinyAgentsError::Validation(format!(
@@ -408,7 +409,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     {
         let runs = std::sync::Arc::clone(&self.host_runs);
         let observer = std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(
-            move |run, succeeded, error| {
+            move |run, succeeded, error: Option<String>| {
                 if let Ok(mut runs) = runs.lock() {
                     runs.remove(&context_id);
                 } else {
@@ -416,7 +417,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         "[host] host run binding lock poisoned during terminal cleanup"
                     );
                 }
-                spawn_host_finalizer(prepared, run, succeeded, error);
+                spawn_host_finalizer(
+                    prepared,
+                    run,
+                    succeeded,
+                    error.map(|error| {
+                        tinyagents_tracing::warn!(%error, "[host] agent run failed");
+                        "agent run failed".to_string()
+                    }),
+                );
             },
         )
             as crate::context::TerminalObserver)));
@@ -529,7 +538,10 @@ fn start_progress_dispatcher(
     let handle = tokio::runtime::Handle::try_current().ok()?;
     // Progress is observational. Bound it so a slow sink cannot retain every
     // streamed token; producers use `try_send` and drop overflowed updates.
-    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+    // One slot is reserved for the single terminal outcome. Producers use
+    // `try_send` for ordinary progress, so at most 128 nonterminal events can
+    // fill before finalization claims the remaining slot.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(129);
     handle.spawn(async move {
         while let Some(event) = rx.recv().await {
             sink.emit(event).await;

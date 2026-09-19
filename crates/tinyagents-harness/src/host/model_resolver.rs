@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use tinyinference_llm::model::ChatModel;
+use tinyinference_llm::model::{CapabilitySet, ChatModel};
 
 // ── ModelResolveRequest ───────────────────────────────────────────────────────
 
@@ -109,6 +109,10 @@ pub struct ModelResolveRequest {
     /// cannot actually call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_pin: Option<String>,
+
+    /// Capabilities required by middleware for this provider call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_capabilities: Option<CapabilitySet>,
 }
 
 impl ModelResolveRequest {
@@ -119,6 +123,7 @@ impl ModelResolveRequest {
             role: None,
             is_team_lead: false,
             model_pin: None,
+            required_capabilities: None,
         }
     }
 
@@ -134,6 +139,12 @@ impl ModelResolveRequest {
     /// Sets the exact model id the agent's definition pinned.
     pub fn with_model_pin(mut self, model: impl Into<String>) -> Self {
         self.model_pin = Some(model.into());
+        self
+    }
+
+    /// Carries requirements added by request middleware to the host router.
+    pub fn with_required_capabilities(mut self, capabilities: CapabilitySet) -> Self {
+        self.required_capabilities = Some(capabilities);
         self
     }
 
