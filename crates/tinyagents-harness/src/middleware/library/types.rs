@@ -394,6 +394,17 @@ pub type ContextualToolPredicate =
 /// or from explicit allow/deny lists with
 /// [`from_lists`](Self::from_lists) (deny wins; when an allow-list is present a
 /// tool must appear in it — fail-closed for unknown tools).
+///
+/// # Relationship to `crate::tool::toolset`
+///
+/// [`DynamicToolSelectionMiddleware`] and
+/// [`crate::tool::toolset::PreparedToolSet`] both operate on a bare
+/// [`ToolSchema`] predicate; this middleware additionally reads
+/// [`ToolSelectionContext`] (depth, tags, the requested model), which a
+/// `ToolSet::tools`'s own `ctx: &RunContext<Ctx>` argument can already carry
+/// through `Ctx` — kept as its own predicate type rather than folded into
+/// [`crate::tool::toolset::PreparedToolSet::filtering`] to avoid coupling
+/// every `Ctx` to this specific context shape.
 pub struct ContextualToolSelectionMiddleware {
     pub(crate) label: &'static str,
     pub(crate) predicate: ContextualToolPredicate,
