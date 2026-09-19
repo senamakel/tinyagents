@@ -81,6 +81,7 @@ impl ComponentKind {
             ComponentKind::Checkpointer => "checkpointer",
             ComponentKind::TaskStore => "task_store",
             ComponentKind::Listener => "listener",
+            ComponentKind::Capability => "capability",
         }
     }
 }
