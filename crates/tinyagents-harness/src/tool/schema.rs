@@ -451,6 +451,9 @@ impl SchemaCleanr {
         }
     }
 
+    /// Cleans each variant of an `anyOf`/`oneOf`/`allOf` array in place
+    /// (called only when [`try_simplify_union`][Self::try_simplify_union]
+    /// could not collapse the union to a single schema).
     fn clean_union(
         value: Value,
         defs: &HashMap<String, Value>,
