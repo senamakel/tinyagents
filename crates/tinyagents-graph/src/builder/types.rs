@@ -172,6 +172,8 @@ impl std::fmt::Debug for NodeContext {
             .field("has_agent_binding", &self.agent_binding.is_some())
             .field("task_id", &self.task_id)
             .field("siblings", &self.siblings)
+            .field("channel_versions", &self.channel_versions)
+            .field("versions_seen", &self.versions_seen)
             .finish()
     }
 }
