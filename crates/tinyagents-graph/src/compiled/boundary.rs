@@ -602,9 +602,13 @@ where
         // that implement it can answer "did this task run?" without loading
         // the whole state payload.
         checkpointer.put_writes(&config, &writes).await?;
-        self.emit(GraphEvent::CheckpointSaved {
-            checkpoint_id: id.clone(),
-        });
+        self.emit(
+            &ctx.run_id,
+            GraphEvent::CheckpointSaved {
+                checkpoint_id: id.clone(),
+                step: Some(step),
+            },
+        );
         Ok(Some(id))
     }
 
