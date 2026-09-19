@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::events::{AgentEvent, EventSink, RecordingListener};
-use crate::tool::ToolCall;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ModelStreamItem};
 
 // ---------------------------------------------------------------------------
@@ -122,7 +121,7 @@ pub(crate) enum FakeToolBehavior {
 /// - [`FakeTool::returning`] — returns a fixed text content.
 /// - [`FakeTool::failing`] — returns a [`crate::error::TinyAgentsError::Tool`] error.
 ///
-/// Every received [`ToolCall`] is recorded and available via
+/// Every received argument object is recorded and available via
 /// [`FakeTool::calls`].
 ///
 /// # Example
@@ -133,15 +132,15 @@ pub(crate) enum FakeToolBehavior {
 /// // Use as Tool<()> in tests.
 /// ```
 pub struct FakeTool {
-    /// Canonical name returned by [`crate::tool::Tool::name`].
+    /// Canonical name returned by [`tinytools::Tool::name`].
     pub(crate) tool_name: String,
     /// Human-readable description returned by
-    /// [`crate::tool::Tool::description`].
+    /// [`tinytools::Tool::description`].
     pub(crate) tool_description: String,
     /// What to do when invoked.
     pub(crate) behavior: FakeToolBehavior,
     /// Recorded calls for post-invocation assertions.
-    pub(crate) received: Mutex<Vec<ToolCall>>,
+    pub(crate) received: Mutex<Vec<serde_json::Value>>,
 }
 
 // ---------------------------------------------------------------------------

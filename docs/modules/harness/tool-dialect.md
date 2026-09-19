@@ -2,8 +2,6 @@
 
 Canonical API: `tinytools_agent::dialect` from the vendored TinyTools workspace.
 
-`tinyagents_harness::tool_calling::dialect` remains a compatibility re-export.
-
 ## What a dialect is
 
 A **dialect** is one complete way of speaking tools to a model: the catalogue it
@@ -26,21 +24,11 @@ Three ship:
 
 ## Which surface to use
 
-There are two tool-calling surfaces in the protocol crate and they are not
-interchangeable:
-
-- **`tinyagents_harness::tool::prompt`** — for hosts driving the harness's
-  `agent_loop`. It speaks `harness::message::Message` and the loop owns the
-  iteration.
-- **`tinytools_agent::dialect`** — for hosts driving their own loop over
-  their own durable transcript. It speaks `TranscriptEntry`, a deliberately thin
-  record shape, and makes no assumption about when the model is called.
-
-The second is not a lesser case. A host with years of persisted transcripts,
-its own per-turn security policy, and provider quirks encoded in its storage
-cannot adopt a foreign message model just to stop maintaining a tool-call
-parser — and the parser is the part that is genuinely universal. This module is
-the seam that lets it hand over the universal part alone.
+Use `tinytools_agent::dialect` directly for dialect selection, formatting, and
+replay. It speaks `TranscriptEntry`, a deliberately thin record shape, and
+makes no assumption about when a host calls a model. The harness agent loop
+uses the same canonical protocol internally; it does not provide a second
+tool-calling facade.
 
 ## The transcript vocabulary
 

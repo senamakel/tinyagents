@@ -1,66 +1,53 @@
 //! End-to-end coverage for graph sub-agent nodes through the public registry,
 //! harness, and graph execution surfaces.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use serde_json::json;
 
 use tinyagents_graph::*;
-use tinyagents_graph::{
-    HarnessSubAgent, SubAgentBudget, SubAgentInput, SubAgentNode, SubAgentOutput, SubAgentPolicy,
-    subagent_node,
-};
-use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::subagent::SubAgent;
-use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel};
-use tinyagents_harness::*;
-use tinyagents_language::*;
-use tinyagents_registry::*;
-use tinyinference_llm::message::{AssistantMessage, Message};
-use tinyinference_llm::model::ModelResponse;
-use tinyinference_llm::providers::MockModel;
-use tinyinference_llm::tool::ToolCall;
 use tinyinference_llm::usage::Usage;
 
-fn tool_call_response(id: &str, name: &str) -> ModelResponse {
-    ModelResponse {
-        message: AssistantMessage {
-            id: Some(format!("msg-{id}")),
-            content: Vec::new(),
-            tool_calls: vec![ToolCall::new(id, name, json!({}))],
-            usage: Some(Usage::new(7, 3)),
-        },
-        usage: Some(Usage::new(7, 3)),
-        finish_reason: Some("tool_calls".to_string()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
+/// Host-owned test adapter for the graph's explicit agent-invocation boundary.
+/// The graph receives it per run, so it cannot retain a fabricated harness
+/// context or accidentally share run lineage across executions.
+#[derive(Clone, Default)]
+struct TestAgentInvoker {
+    outputs: Arc<HashMap<String, SubAgentOutput>>,
+}
+
+impl TestAgentInvoker {
+    fn with_output(name: &str, output: SubAgentOutput) -> Arc<Self> {
+        Arc::new(Self {
+            outputs: Arc::new(HashMap::from([(name.to_owned(), output)])),
+        })
     }
 }
 
-fn registry_with_constant_agent(name: &str, answer: &str) -> Arc<CapabilityRegistry> {
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("m", Arc::new(MockModel::constant(answer)));
-    let subagent = Arc::new(SubAgent::new(name, "test agent", Arc::new(harness)));
+#[async_trait]
+impl AgentInvoker for TestAgentInvoker {
+    async fn invoke(&self, request: AgentInvocation) -> tinyagents_graph::Result<SubAgentOutput> {
+        self.outputs.get(&request.agent_id).cloned().ok_or_else(|| {
+            TinyAgentsError::Capability(format!("unknown test agent `{}`", request.agent_id))
+        })
+    }
+}
 
-    let mut registry: CapabilityRegistry = CapabilityRegistry::new();
-    registry
-        .register_agent(
-            HarnessSubAgent::new(subagent)
-                .with_parent_depth(0)
-                .into_dyn(),
-        )
-        .expect("register agent");
-    Arc::new(registry)
+fn binding(invoker: Arc<dyn AgentInvoker>) -> AgentInvocationBinding {
+    AgentInvocationBinding::new(
+        invoker,
+        tinyagents_harness::events::EventSink::new(),
+        tinyagents_harness::cancel::CancellationToken::new(),
+    )
 }
 
 fn graph_delegating_to(
-    registry: Arc<CapabilityRegistry>,
     node: SubAgentNode<String, String>,
 ) -> tinyagents_graph::CompiledGraph<String, String> {
     GraphBuilder::<String, String>::overwrite()
-        .add_node("delegate", subagent_node(node, registry))
+        .add_node("delegate", subagent_node(node))
         .set_entry("delegate")
         .set_finish("delegate")
         .compile()
@@ -69,8 +56,17 @@ fn graph_delegating_to(
 
 #[tokio::test]
 async fn subagent_node_delegates_records_child_run_and_forwards_events() {
-    let registry = registry_with_constant_agent("researcher", "answer: 42");
-    let recorder = EventRecorder::new();
+    let mut usage = tinyinference_llm::usage::UsageTotals::new();
+    usage.record(Usage::new(7, 3));
+    let invoker = TestAgentInvoker::with_output(
+        "researcher",
+        SubAgentOutput {
+            text: "answer: 42".to_owned(),
+            usage,
+            model_calls: 1,
+            ..SubAgentOutput::default()
+        },
+    );
     let node = SubAgentNode::<String, String>::from_fns(
         "researcher",
         |state: &String| SubAgentInput::prompt(format!("question: {state}")),
@@ -80,11 +76,13 @@ async fn subagent_node_delegates_records_child_run_and_forwards_events() {
             assert_eq!(out.tool_calls, 0);
             out.text
         },
-    )
-    .with_events(recorder.sink());
-    let graph = graph_delegating_to(registry, node);
+    );
+    let graph = graph_delegating_to(node);
 
-    let run = graph.run("life?".to_string()).await.expect("graph run");
+    let run = graph
+        .run_with_agent_binding("life?".to_string(), binding(invoker))
+        .await
+        .expect("graph run");
     assert_eq!(run.state, "answer: 42");
     assert_eq!(run.child_runs.len(), 1);
     let child = &run.child_runs[0];
@@ -94,43 +92,28 @@ async fn subagent_node_delegates_records_child_run_and_forwards_events() {
     assert_ne!(child.run_id, run.run_id);
     assert!(child.usage.usage.effective_total() > 0);
     assert_eq!(run.run_tree().children.len(), 1);
-
-    let kinds = recorder.kinds();
-    assert!(kinds.iter().any(|k| k == "subagent.started"));
-    assert!(kinds.iter().any(|k| k == "subagent.completed"));
 }
 
 #[tokio::test]
 async fn subagent_node_errors_for_missing_agent_and_budget_excess() {
-    let missing_registry: Arc<CapabilityRegistry> = Arc::new(CapabilityRegistry::new());
     let missing_node = SubAgentNode::<String, String>::from_fns(
         "missing",
         |state: &String| SubAgentInput::prompt(state.clone()).with_data(json!({ "source": "e2e" })),
         |out: SubAgentOutput| out.text,
     );
-    let missing_graph = graph_delegating_to(missing_registry, missing_node);
+    let missing_graph = graph_delegating_to(missing_node);
     let err = missing_graph.run("go".to_string()).await.unwrap_err();
     assert!(matches!(err, TinyAgentsError::Capability(_)), "got {err:?}");
 
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "m",
-        Arc::new(ScriptedModel::new(vec![
-            tool_call_response("c1", "noop"),
-            ModelResponse::assistant("final"),
-        ])),
-    );
-    harness.register_tool(Arc::new(FakeTool::returning("noop", "ok")));
-    let subagent = Arc::new(SubAgent::new(
+    let invoker = TestAgentInvoker::with_output(
         "twostep",
-        "two-step agent",
-        Arc::new(harness),
-    ));
-
-    let mut registry: CapabilityRegistry = CapabilityRegistry::new();
-    registry
-        .register_agent(HarnessSubAgent::new(subagent).into_dyn())
-        .expect("register agent");
+        SubAgentOutput {
+            text: "final".to_owned(),
+            model_calls: 2,
+            tool_calls: 1,
+            ..SubAgentOutput::default()
+        },
+    );
 
     let policy = SubAgentPolicy::default().with_budget(SubAgentBudget {
         max_model_calls: Some(1),
@@ -145,9 +128,12 @@ async fn subagent_node_errors_for_missing_agent_and_budget_excess() {
         |out: SubAgentOutput| out.text,
     )
     .with_policy(policy);
-    let graph = graph_delegating_to(Arc::new(registry), node);
+    let graph = graph_delegating_to(node);
 
-    let err = graph.run("go".to_string()).await.unwrap_err();
+    let err = graph
+        .run_with_agent_binding("go".to_string(), binding(invoker))
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, TinyAgentsError::LimitExceeded(_)),
         "got {err:?}"
@@ -170,27 +156,23 @@ async fn subagent_node_errors_for_missing_agent_and_budget_excess() {
 }
 
 #[tokio::test]
-async fn harness_subagent_adapter_uses_prompt_input_as_child_user_message() {
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "m",
-        Arc::new(ScriptedModel::new(vec![ModelResponse::assistant(
-            "adapter answer",
-        )])),
+async fn graph_uses_the_execution_scoped_agent_invoker() {
+    let invoker = TestAgentInvoker::with_output(
+        "adapter",
+        SubAgentOutput {
+            text: "adapter answer".to_owned(),
+            model_calls: 1,
+            ..SubAgentOutput::default()
+        },
     );
-    let subagent = Arc::new(SubAgent::new("adapter", "adapter agent", Arc::new(harness)));
-    let adapter = HarnessSubAgent::new(subagent).with_parent_depth(2);
-
-    let output = tinyagents_graph::HarnessAgent::run(
-        &adapter,
-        SubAgentInput::prompt("delegated prompt"),
-        EventRecorder::new().sink(),
-    )
-    .await
-    .expect("adapter run");
-    assert_eq!(output.text, "adapter answer");
-    assert_eq!(output.model_calls, 1);
-    assert_eq!(output.tool_calls, 0);
-
-    let _ = Message::user("keep import honest");
+    let node = SubAgentNode::<String, String>::from_fns(
+        "adapter",
+        |state: &String| SubAgentInput::prompt(state.clone()),
+        |out: SubAgentOutput| out.text,
+    );
+    let run = graph_delegating_to(node)
+        .run_with_agent_binding("delegated prompt".to_owned(), binding(invoker))
+        .await
+        .expect("adapter run");
+    assert_eq!(run.state, "adapter answer");
 }

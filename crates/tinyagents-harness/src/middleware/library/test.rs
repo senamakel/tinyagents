@@ -10,11 +10,12 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
-use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall};
+use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
 use crate::retry::{RateLimiter, RetryPolicy};
-use crate::tool::{ToolCall, ToolResult, ToolSchema};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
+use tinytools::{SandboxMode, ToolAccess, ToolPolicy, ToolResult, ToolRuntime, ToolSideEffects};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -438,7 +439,7 @@ fn schema_named(name: &str) -> ToolSchema {
         name: name.to_string(),
         description: String::new(),
         parameters: json!({}),
-        format: crate::tool::ToolFormat::Json,
+        format: ToolFormat::Json,
     }
 }
 
@@ -977,7 +978,7 @@ async fn dynamic_tool_selection_filters_request_tools() {
         name: name.to_string(),
         description: String::new(),
         parameters: json!({}),
-        format: crate::tool::ToolFormat::Json,
+        format: ToolFormat::Json,
     };
     let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
         schema("keep"),
@@ -997,7 +998,6 @@ async fn dynamic_tool_selection_filters_request_tools() {
 
 #[tokio::test]
 async fn tool_policy_strict_hides_and_rejects_unclassified() {
-    use crate::tool::ToolPolicy;
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert("safe".to_string(), ToolPolicy::read_only());
@@ -1012,7 +1012,7 @@ async fn tool_policy_strict_hides_and_rejects_unclassified() {
         name: name.to_string(),
         description: String::new(),
         parameters: json!({}),
-        format: crate::tool::ToolFormat::Json,
+        format: ToolFormat::Json,
     };
     let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
         schema("safe"),
@@ -1043,7 +1043,6 @@ async fn tool_policy_strict_hides_and_rejects_unclassified() {
 
 #[tokio::test]
 async fn tool_policy_denies_declared_side_effect() {
-    use crate::tool::{ToolPolicy, ToolSideEffects};
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(
@@ -1070,7 +1069,6 @@ async fn tool_policy_denies_declared_side_effect() {
 
 #[tokio::test]
 async fn tool_policy_blocks_unapproved_approval_required_tool() {
-    use crate::tool::{ToolAccess, ToolPolicy};
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(
@@ -1096,8 +1094,7 @@ async fn tool_policy_blocks_unapproved_approval_required_tool() {
 #[tokio::test]
 async fn tool_policy_requires_sandbox_for_sandboxed_tool() {
     use crate::context::{RunConfig, RunContext};
-    use crate::tool::{SandboxMode, ToolPolicy, ToolRuntime};
-    use crate::workspace::WorkspaceDescriptor;
+    use tinytools::WorkspaceDescriptor;
 
     let mut policies = std::collections::HashMap::new();
     policies.insert(
@@ -1132,14 +1129,13 @@ async fn tool_policy_requires_sandbox_for_sandboxed_tool() {
 }
 
 #[tokio::test]
-async fn tool_policy_truncates_oversized_results() {
-    use crate::tool::{ToolPolicy, ToolResult, ToolRuntime};
+async fn tool_policy_truncates_oversized_results_without_losing_result_flags() {
     let (mut ctx, _recorder) = ctx_with_recorder();
     let mut policies = std::collections::HashMap::new();
     policies.insert(
         "reader".to_string(),
         ToolPolicy::classified().with_runtime(ToolRuntime {
-            max_result_bytes: Some(4),
+            max_result_bytes: Some(12),
             ..ToolRuntime::default()
         }),
     );
@@ -1147,20 +1143,51 @@ async fn tool_policy_truncates_oversized_results() {
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw);
 
-    let mut result = ToolResult {
-        call_id: "c1".into(),
-        name: "reader".into(),
-        content: "abcdefgh".into(),
-        raw: None,
-        error: None,
-        elapsed_ms: 0,
-    };
+    let mut result = ToolResult::error("abcdefghijklmnop").with_markdown("abcdefghijklmnop");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("reader-call", "reader"),
+            &mut result,
+        )
         .await
         .expect("after_tool runs");
-    assert_eq!(result.content, "abcd");
-    assert!(result.error.unwrap().contains("max_result_bytes"));
+    assert_eq!(result.output(), "a[truncated]");
+    assert_eq!(result.markdown_formatted.as_deref(), Some("a[truncated]"));
+    assert!(result.is_error);
+}
+
+#[tokio::test]
+async fn tool_policy_truncation_marker_stays_within_tiny_utf8_caps() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mut policies = std::collections::HashMap::new();
+    policies.insert(
+        "reader".to_string(),
+        ToolPolicy::classified().with_runtime(ToolRuntime {
+            max_result_bytes: Some(2),
+            ..ToolRuntime::default()
+        }),
+    );
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(
+        ToolPolicyMiddleware::new(policies).enforce_result_bytes(true),
+    ));
+    let mut result = ToolResult::success("éééé").with_markdown("éééé");
+
+    stack
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("reader-call", "reader"),
+            &mut result,
+        )
+        .await
+        .expect("after_tool runs");
+
+    assert_eq!(result.output(), "[t");
+    assert_eq!(result.markdown_formatted.as_deref(), Some("[t"));
+    assert!(result.output().is_char_boundary(result.output().len()));
 }
 
 // ── HumanApprovalMiddleware ─────────────────────────────────────────────────
@@ -1294,19 +1321,17 @@ async fn redaction_masks_response_and_tool_text() {
         .expect("redaction runs");
     assert_eq!(response.text(), "key is [REDACTED] and pw [REDACTED]");
 
-    let mut result = ToolResult {
-        call_id: "c".to_string(),
-        name: "t".to_string(),
-        content: "token sk-secret".to_string(),
-        raw: None,
-        error: None,
-        elapsed_ms: 0,
-    };
+    let mut result = ToolResult::success("token sk-secret");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("redact-call", "t"),
+            &mut result,
+        )
         .await
         .expect("redaction runs on tool");
-    assert_eq!(result.content, "token [REDACTED]");
+    assert_eq!(result.output(), "token [REDACTED]");
     assert_eq!(redaction.redactions(), 3);
 }
 
@@ -1342,7 +1367,7 @@ async fn redaction_is_idempotent_and_never_matches_inside_mask() {
 }
 
 /// Tool-call arguments (before the tool runs and in the model response) and
-/// raw payloads must be scrubbed, not just plain text content.
+/// structured tool-result blocks must be scrubbed, not just plain text content.
 #[tokio::test]
 async fn redaction_scrubs_tool_call_arguments_and_raw_payloads() {
     let (mut ctx, _recorder) = ctx_with_recorder();
@@ -1385,21 +1410,26 @@ async fn redaction_scrubs_tool_call_arguments_and_raw_payloads() {
         .expect("redaction runs before tool");
     assert_eq!(call.arguments, json!({"key": "[REDACTED]"}));
 
-    // Tool result raw payload and error message via after_tool.
-    let mut result = ToolResult {
-        call_id: "c2".to_string(),
-        name: "http".to_string(),
-        content: "done".to_string(),
-        raw: Some(json!({"echo": "sk-secret"})),
-        error: Some("auth failed for sk-secret".to_string()),
-        elapsed_ms: 0,
-    };
+    // Tool result structured payload and markdown rendering via after_tool.
+    let mut result =
+        ToolResult::json(json!({"echo": "sk-secret"})).with_markdown("auth failed for sk-secret");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("http-call", "http"),
+            &mut result,
+        )
         .await
         .expect("redaction runs after tool");
-    assert_eq!(result.raw, Some(json!({"echo": "[REDACTED]"})));
-    assert_eq!(result.error.as_deref(), Some("auth failed for [REDACTED]"));
+    assert!(matches!(
+        result.content.first(),
+        Some(tinytools::ToolContent::Json { data }) if data == &json!({"echo": "[REDACTED]"})
+    ));
+    assert_eq!(
+        result.markdown_formatted.as_deref(),
+        Some("auth failed for [REDACTED]")
+    );
 }
 
 // ── TracingMiddleware ───────────────────────────────────────────────────────
@@ -1427,16 +1457,14 @@ async fn tracing_records_phase_boundaries_and_counts() {
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
         .unwrap();
-    let mut result = ToolResult {
-        call_id: "c".to_string(),
-        name: "t".to_string(),
-        content: String::new(),
-        raw: None,
-        error: None,
-        elapsed_ms: 0,
-    };
+    let mut result = ToolResult::success("");
     stack
-        .run_after_tool(&mut ctx, &(), &mut result)
+        .run_after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("trace-call", "t"),
+            &mut result,
+        )
         .await
         .unwrap();
     let mut run = crate::middleware::AgentRun::new();

@@ -29,14 +29,18 @@
 //! cargo run --example orchestrator_subagents
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::future::join_all;
 use serde_json::{Value, json};
 
 use tinyagents_graph::*;
+use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::subagent::ChildDataPolicy;
+use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
@@ -83,7 +87,10 @@ fn build_specialist(spec: &AgentSpec, model: Arc<dyn ChatModel<()>>) -> SubAgent
         .set_default_model("model");
     let subagent = SubAgent::new(spec.name, spec.description, Arc::new(harness))
         .with_system_prompt(spec.system_prompt);
-    SubAgentTool::new(Arc::new(subagent))
+    SubAgentTool::new(
+        Arc::new(subagent),
+        ChildDataPolicy::new(|parent: &()| *parent),
+    )
 }
 
 /// Reads the `{ "agents": [..] }` selection out of an [`AgentRun`], preferring
@@ -114,8 +121,11 @@ async fn main() -> Result<()> {
 
     // 1. Register every specialist sub-agent by name in the capability registry.
     let mut registry: CapabilityRegistry<()> = CapabilityRegistry::new();
+    let mut dispatches: HashMap<String, Arc<SubAgentTool<()>>> = HashMap::new();
     for spec in SPECIALISTS {
-        registry.register_tool(Arc::new(build_specialist(spec, model.clone())))?;
+        let dispatch = Arc::new(build_specialist(spec, model.clone()));
+        registry.register_tool(dispatch.tool())?;
+        dispatches.insert(spec.name.to_owned(), dispatch);
     }
 
     // 2. Discover the available capabilities straight out of the registry.
@@ -195,16 +205,22 @@ async fn main() -> Result<()> {
     // 4. Bind at runtime: resolve each chosen name from the registry and run the
     //    resolved sub-agents in parallel.
     let runs = chosen.iter().enumerate().map(|(i, name)| {
-        let tool = registry
-            .tool(name)
+        let dispatch = dispatches
+            .get(name)
+            .cloned()
             .expect("chosen name resolves in the registry");
-        let call = ToolCall::new(format!("c{i}"), name.clone(), json!({ "input": task }));
+        let name = name.clone();
         async move {
-            let result = tool.call(&(), call).await?;
-            Ok::<(String, String), tinyagents_harness::TinyAgentsError>((
-                tool.name().to_owned(),
-                result.content,
-            ))
+            let parent = RunContext::new(RunConfig::new(format!("orchestrator-{i}")), ());
+            let result = dispatch
+                .invoke_in_parent_context(
+                    &(),
+                    json!({ "input": task }),
+                    tinytools::ToolCallOptions::default(),
+                    &parent,
+                )
+                .await?;
+            Ok::<(String, String), tinyagents_harness::TinyAgentsError>((name, result.output()))
         }
     });
     let outputs: Vec<(String, String)> = join_all(runs).await.into_iter().collect::<Result<_>>()?;

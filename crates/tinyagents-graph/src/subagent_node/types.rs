@@ -1,10 +1,9 @@
 //! Type definitions for [`SubAgentNode`](super::SubAgentNode) — the graph node
-//! that delegates to a harness agent resolved by name from a
-//! [`CapabilityRegistry`](crate::registry::CapabilityRegistry).
+//! that delegates through a host-bound [`AgentInvoker`].
 //!
 //! See the module [`mod`](super) docs for how these are wired into a node
-//! handler. This file holds the plain data: the agent trait the registry
-//! resolves to ([`HarnessAgent`]), the structured input/output carriers
+//! handler. This file holds the host invocation trait ([`AgentInvoker`]), the
+//! structured input/output carriers
 //! ([`SubAgentInput`]/[`SubAgentOutput`]), the per-call policy
 //! ([`SubAgentPolicy`]/[`SubAgentBudget`]), the parent↔child mapping aliases
 //! ([`InputMapper`]/[`OutputMapper`]), and the [`SubAgentNode`] descriptor.
@@ -16,35 +15,81 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::Result;
+use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::events::EventSink;
+use tinyagents_harness::ids::{GraphId, NodeId, RunId};
 use tinyagents_harness::retry::RetryPolicy;
 use tinyinference_llm::usage::UsageTotals;
 
-/// A harness agent invocable by name from a graph node.
+/// An explicit request for a host-owned recursive agent invocation.
 ///
-/// This is the object-safe surface a [`CapabilityRegistry`](crate::registry::CapabilityRegistry)
-/// resolves a registered agent to. It is intentionally decoupled from the
-/// parent graph's `State`: a [`SubAgentNode`] projects parent state into a
-/// [`SubAgentInput`] (typically a prompt) before calling, and folds the
-/// [`SubAgentOutput`] back into a parent update afterwards, so the agent itself
-/// never sees the graph state shape.
-///
-/// The canonical implementor is [`HarnessSubAgent`](super::HarnessSubAgent),
-/// which adapts a harness [`SubAgent`](tinyagents_harness::subagent::SubAgent).
-#[async_trait]
-pub trait HarnessAgent: Send + Sync {
-    /// The stable registered name of the agent.
-    fn name(&self) -> &str;
-
-    /// Runs the agent as a child run over `input`, fanning the child run's
-    /// harness events onto `events` so the parent observer sees the nested run.
-    async fn run(&self, input: SubAgentInput, events: EventSink) -> Result<SubAgentOutput>;
+/// A graph never synthesizes a harness context. The host binds an invoker to a
+/// graph entry point and uses the request's parent graph identity to invoke its
+/// actual parent [`RunContext`](tinyagents_harness::context::RunContext), which
+/// in turn creates the child through `RunContext::child`.
+#[derive(Clone)]
+pub struct AgentInvocation {
+    /// Registered agent definition id.
+    pub agent_id: String,
+    /// Mapped child input.
+    pub input: SubAgentInput,
+    /// Graph containing the delegating node.
+    pub graph_id: GraphId,
+    /// Node issuing the delegation.
+    pub node_id: NodeId,
+    /// Immediate parent graph run.
+    pub parent_run_id: RunId,
+    /// Root graph run shared by all descendants.
+    pub root_run_id: RunId,
+    /// Parent's event sink, forwarded by the host into the child context.
+    pub events: EventSink,
+    /// Parent cancellation signal, forwarded by the host into the child context.
+    pub cancellation: Option<CancellationToken>,
 }
 
-/// Read-only agent lookup used by graph sub-agent nodes.
-pub trait AgentRegistry: Send + Sync {
-    /// Resolves a registered agent name to its executable handle.
-    fn agent(&self, name: &str) -> Option<Arc<dyn HarnessAgent>>;
+/// Atomic, execution-scoped host capability for recursive agent invocation.
+///
+/// This value is supplied to one graph run; it is never stored on a reusable
+/// [`CompiledGraph`](crate::CompiledGraph). Cloning it is only for descendants
+/// of that same execution tree, which preserves one parent invocation context
+/// while preventing separate top-level executions from bleeding signals.
+#[derive(Clone)]
+pub struct AgentInvocationBinding {
+    /// Host entry point bound to the parent invocation context.
+    pub invoker: Arc<dyn AgentInvoker>,
+    /// Parent event sink forwarded to every descendant request.
+    pub events: EventSink,
+    /// Parent cancellation signal forwarded to every descendant request.
+    pub cancellation: CancellationToken,
+}
+
+impl AgentInvocationBinding {
+    /// Creates the complete binding required for graph-to-agent recursion.
+    #[must_use]
+    pub fn new(
+        invoker: Arc<dyn AgentInvoker>,
+        events: EventSink,
+        cancellation: CancellationToken,
+    ) -> Self {
+        Self {
+            invoker,
+            events,
+            cancellation,
+        }
+    }
+}
+
+/// Object-safe host boundary for graph-to-agent recursion.
+///
+/// Implementations must be explicitly bound by the host to an owned or
+/// `Arc`-backed parent invocation context. They must dispatch through the same
+/// host entry point used for a top-level harness run and create the child with
+/// `RunContext::child`. This avoids globals, task locals, downcasts, and
+/// fabricated `Default` state. A graph without an invoker fails closed.
+#[async_trait]
+pub trait AgentInvoker: Send + Sync {
+    /// Invokes a requested agent using the host-bound parent context.
+    async fn invoke(&self, request: AgentInvocation) -> Result<SubAgentOutput>;
 }
 
 /// The structured input a [`SubAgentNode`] hands to a delegated agent.
@@ -209,8 +254,6 @@ pub struct SubAgentNode<State, Update> {
     pub output_mapper: OutputMapper<Update>,
     /// Timeout/retry/budget policy applied around the invocation.
     pub policy: SubAgentPolicy,
-    /// Optional sink the child run's harness events are forwarded onto.
-    pub(crate) events: Option<EventSink>,
 }
 
 impl<State, Update> Clone for SubAgentNode<State, Update> {
@@ -220,7 +263,6 @@ impl<State, Update> Clone for SubAgentNode<State, Update> {
             input_mapper: self.input_mapper.clone(),
             output_mapper: self.output_mapper.clone(),
             policy: self.policy.clone(),
-            events: self.events.clone(),
         }
     }
 }

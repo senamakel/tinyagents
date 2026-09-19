@@ -12,10 +12,10 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use tinyagents_harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
-use tinyagents_harness::tool::{Tool, ToolResult};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::{Tool, ToolResult};
 
 /// The defaults are the whole point of this file, so pin them directly too.
 #[test]
@@ -75,7 +75,7 @@ impl ChatModel<()> for TwoTurnModel {
 struct WeatherTool;
 
 #[async_trait]
-impl Tool<()> for WeatherTool {
+impl Tool for WeatherTool {
     fn name(&self) -> &str {
         "weather"
     }
@@ -84,20 +84,16 @@ impl Tool<()> for WeatherTool {
         "Looks up the weather for a city."
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "weather".to_string(),
-            "Looks up the weather for a city.".to_string(),
-            json!({
-                "type": "object",
-                "properties": { "city": { "type": "string" } },
-                "required": ["city"],
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": { "city": { "type": "string" } },
+            "required": ["city"],
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> tinyagents_harness::Result<ToolResult> {
-        Ok(ToolResult::text(call.id, call.name, "sunny"))
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("sunny"))
     }
 }
 

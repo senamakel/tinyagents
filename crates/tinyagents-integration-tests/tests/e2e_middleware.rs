@@ -35,11 +35,11 @@ use tinyagents_harness::middleware::{
 use tinyagents_harness::retry::RetryPolicy;
 use tinyagents_harness::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy};
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, Trajectory};
-use tinyagents_harness::tool::{Tool, ToolResult};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
 use tinyinference_llm::usage::Usage;
+use tinytools::{Tool, ToolResult};
 
 // ── Test doubles ──────────────────────────────────────────────────────────────
 
@@ -62,7 +62,7 @@ struct StrictLookupTool {
 }
 
 #[async_trait]
-impl Tool<()> for StrictLookupTool {
+impl Tool for StrictLookupTool {
     fn name(&self) -> &str {
         "strict_lookup"
     }
@@ -71,11 +71,8 @@ impl Tool<()> for StrictLookupTool {
         "strict lookup"
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            "strict_lookup",
-            "strict lookup",
-            json!({
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
                 "type": "object",
                 "required": ["query"],
                 "additionalProperties": false,
@@ -89,13 +86,12 @@ impl Tool<()> for StrictLookupTool {
                         }
                     }
                 }
-            }),
-        )
+        })
     }
 
-    async fn call(&self, _state: &(), call: ToolCall) -> tinyagents_harness::Result<ToolResult> {
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
         *self.calls.lock().expect("strict tool calls lock poisoned") += 1;
-        Ok(ToolResult::text(call.id, self.name(), "strict-output"))
+        Ok(ToolResult::success("strict-output"))
     }
 }
 
@@ -149,6 +145,8 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -167,6 +165,8 @@ fn text_response(text: &str) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 

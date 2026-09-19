@@ -1,7 +1,6 @@
 //! Optional builtin harness tools.
 //!
-//! These tools are generic implementations that depend only on TinyAgents'
-//! [`Tool`][crate::tool::Tool] interface. They are behind the `tools`
+//! These tools implement the canonical [`tinytools::Tool`] interface. They are behind the `tools`
 //! Cargo feature so applications that provide their own tool surface do not pull
 //! in extra dependencies by default.
 

@@ -96,6 +96,67 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
 }
 
 #[test]
+fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let mut scrubber = ToolCallStreamScrubber::new();
+    let fragments = [
+        "before ",
+        "<tool_",
+        "call>{\"name\":\"lookup\",\"arguments\":{\"query\":\"needle\"}}",
+        "</tool_call>",
+        " after",
+    ];
+
+    for fragment in fragments {
+        forward_delta(
+            &sender,
+            ProviderDelta::TextDelta {
+                delta: fragment.into(),
+            },
+            Some(&mut scrubber),
+        );
+    }
+    forward_delta(
+        &sender,
+        ProviderDelta::ThinkingDelta {
+            delta: "reasoning remains separate".into(),
+        },
+        Some(&mut scrubber),
+    );
+    flush_tool_call_scrubber(&sender, Some(&mut scrubber));
+
+    let mut visible = String::new();
+    let mut reasoning = String::new();
+    while let Ok(ModelStreamItem::MessageDelta(delta)) = receiver.try_recv() {
+        visible.push_str(&delta.text);
+        reasoning.push_str(&delta.reasoning);
+        assert!(
+            !delta.text.contains("<tool")
+                && !delta.text.contains("lookup")
+                && !delta.text.contains("needle"),
+            "prompt protocol markup and JSON must not reach stream consumers: {delta:?}"
+        );
+    }
+    assert_eq!(visible, "before  after");
+    assert_eq!(reasoning, "reasoning remains separate");
+
+    let response = model_response_with_tools(
+        ChatResponse {
+            text: Some(fragments.concat()),
+            usage: None,
+        },
+        true,
+    );
+    assert_eq!(response.text(), "before  after");
+    assert_eq!(response.message.tool_calls.len(), 1);
+    assert_eq!(response.message.tool_calls[0].name, "lookup");
+    assert_eq!(
+        response.message.tool_calls[0].arguments,
+        serde_json::json!({"query": "needle"})
+    );
+}
+
+#[test]
 fn request_messages_include_tool_and_schema_instructions() {
     let request = ModelRequest {
         messages: vec![Message::user("lookup")],

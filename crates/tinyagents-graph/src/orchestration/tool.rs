@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 use crate::{Result, TinyAgentsError};
 use tinyagents_harness::ids::{GraphId, TaskId, new_call_id, next_seq};
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
-use tinyagents_harness::tool::{Tool, ToolRegistry, ToolResult};
+use tinyagents_harness::tool::ToolRegistry;
 use tinyinference_llm::message::Message;
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyinference_llm::tool::ToolSchema;
+use tinytools::{Tool, ToolResult};
 
 use super::store::{TaskStore, orchestration_not_found};
 use super::types::*;
@@ -97,10 +98,10 @@ pub fn orchestration_tools(store: Arc<dyn TaskStore>) -> Vec<Arc<OrchestrationTo
 }
 
 /// Registers every built-in orchestration control in a normal tool registry.
-pub fn register_orchestration_tools<State: Send + Sync>(
-    registry: &mut ToolRegistry<State>,
+pub fn register_orchestration_tools<State: Send + Sync, Ctx: Send + Sync>(
+    registry: &mut ToolRegistry<State, Ctx>,
     store: Arc<dyn TaskStore>,
-) -> &mut ToolRegistry<State> {
+) -> &mut ToolRegistry<State, Ctx> {
     for tool in orchestration_tools(store) {
         registry.register(tool);
     }
@@ -108,7 +109,7 @@ pub fn register_orchestration_tools<State: Send + Sync>(
 }
 
 #[async_trait]
-impl<State: Send + Sync> Tool<State> for OrchestrationTool {
+impl Tool for OrchestrationTool {
     fn name(&self) -> &str {
         self.kind.name()
     }
@@ -117,47 +118,38 @@ impl<State: Send + Sync> Tool<State> for OrchestrationTool {
         self.kind.description()
     }
 
-    fn schema(&self) -> ToolSchema {
-        orchestration_tool_schema(self.kind)
+    fn parameters_schema(&self) -> Value {
+        orchestration_tool_schema(self.kind).parameters
     }
 
-    async fn call(&self, _state: &State, call: ToolCall) -> Result<ToolResult> {
-        orchestration_tool_schema(self.kind).validate_call(&call)?;
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         let raw = match self.kind {
-            OrchestrationToolKind::Spawn => self.call_spawn(&call.arguments)?,
-            OrchestrationToolKind::Await => self.call_await(&call.arguments)?,
+            OrchestrationToolKind::Spawn => self.call_spawn(&args)?,
+            OrchestrationToolKind::Await => self.call_await(&args)?,
             OrchestrationToolKind::Cancel => {
-                let outcome = self.store.request_cancel(&task_id_arg(&call.arguments)?)?;
+                let outcome = self.store.request_cancel(&task_id_arg(&args)?)?;
                 serde_json::to_value(outcome)?
             }
             OrchestrationToolKind::Kill => {
-                let outcome = self.store.kill(&task_id_arg(&call.arguments)?)?;
+                let outcome = self.store.kill(&task_id_arg(&args)?)?;
                 serde_json::to_value(outcome)?
             }
             OrchestrationToolKind::Status => {
-                let task_id = task_id_arg(&call.arguments)?;
+                let task_id = task_id_arg(&args)?;
                 let record = self
                     .store
                     .get(&task_id)
                     .ok_or_else(|| orchestration_not_found(&task_id))?;
                 serde_json::to_value(record)?
             }
-            OrchestrationToolKind::List => self.call_list(&call.arguments)?,
-            OrchestrationToolKind::Timeout => self.call_timeout(&call.arguments)?,
-            OrchestrationToolKind::Race => self.call_race(&call.arguments)?,
-            OrchestrationToolKind::YieldInterrupt => self.call_yield(&call.arguments)?,
-            OrchestrationToolKind::Steer => self.call_steer(&call.arguments)?,
+            OrchestrationToolKind::List => self.call_list(&args)?,
+            OrchestrationToolKind::Timeout => self.call_timeout(&args)?,
+            OrchestrationToolKind::Race => self.call_race(&args)?,
+            OrchestrationToolKind::YieldInterrupt => self.call_yield(&args)?,
+            OrchestrationToolKind::Steer => self.call_steer(&args)?,
         };
 
-        let content = serde_json::to_string(&raw)?;
-        Ok(ToolResult {
-            call_id: call.id,
-            name: self.kind.name().to_string(),
-            content,
-            raw: Some(raw),
-            error: None,
-            elapsed_ms: 0,
-        })
+        Ok(ToolResult::json(raw))
     }
 }
 

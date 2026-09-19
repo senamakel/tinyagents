@@ -150,7 +150,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // The tool set is fixed for the duration of a run, so build the sorted
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
-        let tool_schemas = self.tools.schemas();
+        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+            .map(|binding| binding.allowed_tools);
+        let tool_schemas = self
+            .tools
+            .schemas()
+            .into_iter()
+            .filter(|schema| {
+                allowed_tools
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&schema.name))
+            })
+            .collect::<Vec<_>>();
 
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool. Under the tool-call strategy the schema is sent as an
@@ -329,17 +340,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .await?;
 
             // Resolve the model for the event/log name before invoking.
-            let binding = self
-                .models
-                .resolve_request(&request, None, None)
-                .ok_or_else(|| {
-                    TinyAgentsError::ModelNotFound(
-                        request
-                            .model
-                            .clone()
-                            .unwrap_or_else(|| "<default>".to_string()),
-                    )
-                })?;
+            // Hosted turns install their routing decision against this live
+            // `RunContext`; explicit-model SDK calls continue to resolve only
+            // through the local registry. Context-instance identity keeps two
+            // same-id concurrent runs from borrowing each other's model.
+            let binding = if let Some(binding) = self.resolve_host_model(ctx, &request).await? {
+                binding
+            } else {
+                self.models
+                    .resolve_request(&request, None, None)
+                    .ok_or_else(|| {
+                        TinyAgentsError::ModelNotFound(
+                            request
+                                .model
+                                .clone()
+                                .unwrap_or_else(|| "<default>".to_string()),
+                        )
+                    })?
+            };
             let model_name = binding.resolved.name.clone();
 
             // An explicit request override that resolution skipped (unknown
@@ -377,7 +395,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     name: name.clone(),
                                     description: format!("Return the result as `{name}`."),
                                     parameters: schema.clone(),
-                                    format: crate::tool::ToolFormat::Json,
+                                    format: tinyinference_llm::tool::ToolFormat::Json,
                                 });
                                 // Force the schema tool **only** when it is the
                                 // sole tool available. Forcing it inside a
@@ -411,6 +429,77 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            // A host budget is acquired only for an explicit host-driven run.
+            // Do it after structured-output planning: a synthetic schema tool
+            // is part of the provider request and must be included in its
+            // estimate. The permit remains alive through response accounting,
+            // so cancellation or a provider error still releases it through
+            // Drop.
+            let host_budget = if let Some(host_run) =
+                crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+            {
+                if let Some(budget) = host_run.host.budget.clone() {
+                    let context_state = crate::host::ContextState {
+                        message_count: request.messages.len(),
+                        prompt_tokens: crate::token_estimation::estimate_slice_tokens(
+                            &request.messages,
+                        ),
+                        context_window_tokens: binding
+                            .model
+                            .profile()
+                            .and_then(|profile| profile.max_input_tokens),
+                        iterations: run.steps,
+                    };
+                    let hint = budget.compression_hint(&context_state);
+                    if hint.is_advised() {
+                        tinyagents_tracing::debug!(
+                            ?hint,
+                            "[host] budget gate advised context compression"
+                        );
+                        apply_host_budget_compression(ctx, &mut request.messages, hint)?;
+                    }
+                    let estimate = crate::host::CallEstimate::new(
+                        &model_name,
+                        crate::token_estimation::estimate_slice_tokens(&request.messages),
+                        request.max_tokens.unwrap_or_default() as u64,
+                    )
+                    .with_agent(host_run.agent_id)
+                    .with_thread(
+                        ctx.thread_id()
+                            .cloned()
+                            .unwrap_or_else(|| ctx.run_id().as_str().into()),
+                    )
+                    .with_tool_count(request.tools.len());
+                    let permit = match self.call_budget(ctx) {
+                        Some(remaining) => tokio::select! {
+                            biased;
+                            _ = ctx.cancellation.cancelled() => {
+                                return Err(TinyAgentsError::Cancelled);
+                            }
+                            acquired = tokio::time::timeout(remaining, budget.acquire(&estimate)) => {
+                                acquired.map_err(|_| TinyAgentsError::Timeout(format!(
+                                    "budget admission for run `{}` exceeded its remaining wall-clock deadline",
+                                    ctx.run_id()
+                                )))??
+                            }
+                        },
+                        None => tokio::select! {
+                            biased;
+                            _ = ctx.cancellation.cancelled() => {
+                                return Err(TinyAgentsError::Cancelled);
+                            }
+                            acquired = budget.acquire(&estimate) => acquired?,
+                        },
+                    };
+                    Some((budget.clone(), permit))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let request_has_tools = !request.tools.is_empty();
+
             let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
             status.mark_running(HarnessPhase::Model);
             status.active_model_call = Some(call_id.clone());
@@ -419,7 +508,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let model_started_at_ms = crate::ids::now_ms();
             let record = ctx.emit(AgentEvent::ModelStarted {
                 call_id: call_id.clone(),
-                model: model_name,
+                model: model_name.clone(),
             });
             status.set_last_event(record.id);
 
@@ -433,6 +522,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 call_id: call_id.clone(),
                 resolved: binding.resolved,
                 model: binding.model,
+                required_capabilities: request.required_capabilities.clone(),
                 streaming,
             };
             // Snapshot the request messages for observability before `request`
@@ -453,12 +543,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .await?
                 .into_response();
 
-            status.mark_running(HarnessPhase::Middleware);
-            self.middleware
-                .run_after_model(ctx, state, &mut response)
-                .await?;
+            // Providers occasionally put a text-dialect call in visible
+            // content even when a native tool channel was offered. Use the
+            // canonical TinyTools-Agent parser rather than the retired
+            // harness prompt parser, and only recover when the provider did
+            // not already supply structured calls.
+            recover_text_dialect_calls(&mut response, &call_id, request_has_tools);
 
-            // Accounting.
+            // Account for the completed provider response before fallible
+            // response middleware. A middleware rejection must not erase
+            // usage already incurred, and the host admission permit covers
+            // provider work rather than post-processing.
             run.model_calls += 1;
             run.steps += 1;
             status.model_calls = run.model_calls;
@@ -483,7 +578,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let record = ctx.emit(AgentEvent::UsageRecorded { usage });
                     status.set_last_event(record.id);
                 }
+                if !response.served_from_cache
+                    && let Some((budget, _permit)) = &host_budget
+                    && let Err(error) = self.record_host_usage(ctx, budget, &usage).await
+                {
+                    let record = ctx.emit(AgentEvent::ModelFailed {
+                        call_id: call_id.clone(),
+                        model: model_name.clone(),
+                        started_at_ms: Some(model_started_at_ms),
+                        attempts: None,
+                        error: error.to_string(),
+                    });
+                    status.set_last_event(record.id);
+                    return Err(error);
+                }
             }
+            // The permit guards a provider call, not the tools it may request.
+            // Keeping a parent permit while awaiting a sub-agent tool can
+            // deadlock a one-slot gate: the child needs that same slot for its
+            // model call while the parent waits for the child tool to return.
+            drop(host_budget);
+            status.mark_running(HarnessPhase::Middleware);
+            self.middleware
+                .run_after_model(ctx, state, &mut response)
+                .await?;
             let captured_output = self
                 .policy
                 .capture
@@ -777,6 +895,155 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         Some((Arc::clone(cache), cache_key(request)))
     }
+
+    /// Records realised provider usage without allowing host accounting I/O to
+    /// outlive a cancelled or deadline-expired run. The local run totals are
+    /// updated before this call, so a host-recording failure never erases spend
+    /// that the provider has already incurred.
+    async fn record_host_usage(
+        &self,
+        ctx: &RunContext<Ctx>,
+        budget: &Arc<dyn crate::host::BudgetGate>,
+        usage: &tinyinference_llm::usage::Usage,
+    ) -> Result<()> {
+        let cancellation = ctx.cancellation.clone();
+        let recording = budget.record(usage);
+        match self.call_budget(ctx) {
+            Some(remaining) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
+                result = tokio::time::timeout(remaining, recording) => result.map_err(|_| TinyAgentsError::Timeout(format!(
+                    "budget usage recording for run `{}` exceeded its remaining wall-clock deadline",
+                    ctx.run_id()
+                )))?,
+            },
+            None => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
+                result = recording => result,
+            },
+        }
+    }
+}
+
+/// Applies a host budget hint before the provider sees the request.
+///
+/// This deliberately uses the harness's pairing-safe generic context reducer
+/// instead of a host-specific transcript rewrite. `Soft` preserves the most
+/// recent half of a multi-turn conversation (and all system messages) when it
+/// can make progress. `Hard` uses a token budget and refuses a request that
+/// cannot be reduced without discarding its whole conversational payload.
+/// Both outcomes are observable through the canonical `context.compressed`
+/// event so hosts can correlate a budget decision with the actual request.
+fn apply_host_budget_compression<Ctx>(
+    ctx: &mut RunContext<Ctx>,
+    messages: &mut Vec<Message>,
+    hint: crate::host::CompressionHint,
+) -> Result<()> {
+    use crate::host::CompressionHint;
+    use crate::summarization::{TrimStrategy, trim_messages};
+
+    let from_tokens = crate::token_estimation::estimate_slice_tokens(messages);
+    let non_system = messages
+        .iter()
+        .filter(|message| !matches!(message, Message::System(_)))
+        .count();
+    let reduced = match hint {
+        CompressionHint::None => return Ok(()),
+        // Preserve a recent working window without perturbing a short prompt.
+        CompressionHint::Soft if non_system < 3 => return Ok(()),
+        CompressionHint::Soft => {
+            trim_messages(messages, &TrimStrategy::KeepLast((non_system / 2).max(1)))
+        }
+        // A hard hint must create real headroom without ever treating system
+        // instructions as expendable. The token trimmer removes oldest
+        // conversational messages, preserves every system message verbatim,
+        // and clears an orphaned tool-result prefix after its owning assistant
+        // call was evicted.
+        CompressionHint::Hard => crate::summarization::trim_messages_to_token_budget_with(
+            messages,
+            crate::summarization::TokenTrimPolicy::strict((from_tokens / 2).max(1))
+                .preserve_system()
+                .drop_leading_orphan_tools(),
+            crate::token_estimation::estimate_message_tokens,
+        ),
+    };
+    let to_tokens = crate::token_estimation::estimate_slice_tokens(&reduced);
+    let has_conversation = reduced
+        .iter()
+        .any(|message| !matches!(message, Message::System(_)));
+    if to_tokens >= from_tokens || reduced.is_empty() || (hint.is_required() && !has_conversation) {
+        if hint.is_required() {
+            return Err(TinyAgentsError::Validation(
+                "host budget requires reducible conversational context before provider call".into(),
+            ));
+        }
+        return Ok(());
+    }
+    *messages = reduced;
+    ctx.emit(AgentEvent::Compressed {
+        from_tokens,
+        to_tokens,
+    });
+    Ok(())
+}
+
+/// Recovers XML/text-dialect calls through `tinytools-agent` while preserving
+/// every non-text provider content block (notably reasoning blocks).
+fn recover_text_dialect_calls(
+    response: &mut tinyinference_llm::model::ModelResponse,
+    model_call_id: &CallId,
+    has_tools: bool,
+) {
+    if !has_tools || !response.message.tool_calls.is_empty() {
+        return;
+    }
+
+    use tinytools_agent::dialect::{DialectResponse, ToolDialect, XmlDialect};
+
+    let dialect_response = DialectResponse {
+        text: Some(response.text()),
+        tool_calls: Vec::new(),
+    };
+    let (cleaned, parsed) = XmlDialect.parse_response(&dialect_response);
+    if parsed.is_empty() {
+        return;
+    }
+
+    response.message.tool_calls = parsed
+        .into_iter()
+        .enumerate()
+        .map(|(position, call)| {
+            ToolCall::new(
+                call.id
+                    .unwrap_or_else(|| format!("{model_call_id}-tool-{}", position + 1)),
+                call.name,
+                call.arguments,
+            )
+        })
+        .collect();
+
+    let mut inserted = false;
+    response.message.content = response
+        .message
+        .content
+        .drain(..)
+        .filter_map(|block| match block {
+            tinyinference_llm::message::ContentBlock::Text(_) if !inserted => {
+                inserted = true;
+                (!cleaned.is_empty())
+                    .then(|| tinyinference_llm::message::ContentBlock::Text(cleaned.clone()))
+            }
+            tinyinference_llm::message::ContentBlock::Text(_) => None,
+            other => Some(other),
+        })
+        .collect();
+    if !inserted && !cleaned.is_empty() {
+        response
+            .message
+            .content
+            .push(tinyinference_llm::message::ContentBlock::Text(cleaned));
+    }
 }
 
 /// Resolves one run-scoped call cap from the per-run [`RunConfig`] value and
@@ -806,4 +1073,23 @@ fn reset_truncated_empty_recovery(
     *retries_used = 0;
     *boosted_max_tokens = None;
     *truncation_base = None;
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::recover_text_dialect_calls;
+    use crate::ids::CallId;
+    use tinyinference_llm::model::ModelResponse;
+
+    #[test]
+    fn text_dialect_markup_is_not_recovered_when_the_request_offered_no_tools() {
+        let mut response = ModelResponse::assistant(
+            "<tool_call><name>shell</name><arguments>{\"command\":\"id\"}</arguments></tool_call>",
+        );
+
+        recover_text_dialect_calls(&mut response, &CallId::new("model-1"), false);
+
+        assert!(response.message.tool_calls.is_empty());
+        assert!(response.text().contains("<tool_call>"));
+    }
 }

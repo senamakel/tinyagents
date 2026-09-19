@@ -43,37 +43,24 @@ TinyAgents should make that distinction explicit in Rust types.
 ## Core Types
 
 ```rust
+use tinytools::{Tool, ToolPolicy, ToolResult};
+
 #[async_trait]
-pub trait Tool<State, Ctx = ()>: Send + Sync {
-    fn spec(&self) -> ToolSpec;
-
-    async fn call(
-        &self,
-        state: &State,
-        runtime: ToolRuntime<'_, Ctx>,
-        call: ToolCall,
-    ) -> Result<ToolResult>;
-}
-
-pub struct ToolSpec {
-    pub name: ToolName,
-    pub description: String,
-    pub input_schema: JsonSchema,
-    pub output_schema: Option<JsonSchema>,
-    pub injected: Vec<InjectedArgSpec>,
-    pub safety: ToolSafety,
-    pub timeout: Option<Duration>,
-    pub retry: Option<RetryPolicy>,
-    pub idempotency: Idempotency,
-}
-
-pub struct ToolRuntime<'a, Ctx = ()> {
-    pub ctx: &'a mut RunContext<Ctx>,
-    pub stores: &'a StoreRegistry,
-    pub events: &'a EventSink,
-    pub cancellation: CancellationToken,
+impl Tool for Weather {
+    fn name(&self) -> &str { "weather" }
+    fn description(&self) -> &str { "Look up weather for a city." }
+    fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({}) }
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("sunny"))
+    }
+    fn policy(&self) -> ToolPolicy { ToolPolicy::classified() }
 }
 ```
+
+`tinytools` owns the tool trait, result blocks, declarative policy, and tool
+specification. `tinyinference_llm::tool` owns model-facing `ToolCall`,
+`ToolSchema`, and `ToolFormat`. The harness owns only registration, dispatch,
+and host policy enforcement.
 
 ## Tool Names
 
@@ -146,7 +133,7 @@ Example:
 
 ```rust
 use serde_json::json;
-use tinyagents_harness::tool::{ToolFormat, ToolSchema};
+use tinyinference_llm::tool::{ToolFormat, ToolSchema};
 
 let json_tool = ToolSchema::new(
     "weather",

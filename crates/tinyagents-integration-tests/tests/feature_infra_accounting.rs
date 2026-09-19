@@ -8,8 +8,8 @@
 //!
 //! Deterministic and fully offline — no provider calls.
 
+use tinyagents_harness::cost::ModelPricing;
 use tinyagents_harness::cost::{CostTotals, estimate_cost};
-use tinyagents_registry::catalog::ModelPricing;
 use tinyinference_llm::usage::{Usage, UsageTotals};
 
 // ── Usage accumulation ─────────────────────────────────────────────────────
@@ -45,6 +45,7 @@ fn usage_add_sums_every_component_and_preserves_effective_total() {
         cache_read_tokens: 30,
         cache_creation_tokens: 5,
         reasoning_tokens: 8,
+        ..Usage::default()
     };
     let b = Usage::new(50, 10); // total_tokens = 60
 
@@ -113,6 +114,7 @@ fn estimate_cost_prices_only_non_cached_non_reasoning_remainder() {
         cache_read_tokens: 20,
         cache_creation_tokens: 4,
         reasoning_tokens: 10,
+        ..Usage::default()
     };
     let totals = estimate_cost(&pricing(), &usage);
 

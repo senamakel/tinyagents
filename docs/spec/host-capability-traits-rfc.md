@@ -137,6 +137,8 @@ pub trait ContextComposer: Send + Sync {
 
 Resolves an agent id to its definition. Replaces direct reads of `profiles` and
 `agent_registry::agents::{load_builtins, BUILTINS, validate_tier_hierarchy}`.
+The portable contract lives in `tinyagents_definition`; harnesses and
+registries import it directly rather than providing a facade re-export.
 
 ```rust
 #[async_trait]

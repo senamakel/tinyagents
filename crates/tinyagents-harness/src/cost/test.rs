@@ -29,6 +29,8 @@ fn estimates_each_component() {
         cache_read_tokens: 100,
         cache_creation_tokens: 200,
         reasoning_tokens: 10,
+        charged_amount: None,
+        context_window_tokens: None,
     };
     let cost = estimate_cost(&pricing(), &usage);
     // cache_read_tokens (100) and reasoning_tokens (10) are subsets of
@@ -56,6 +58,8 @@ fn cache_and_reasoning_tokens_are_not_double_counted() {
         cache_read_tokens: 90_000,
         cache_creation_tokens: 0,
         reasoning_tokens: 0,
+        charged_amount: None,
+        context_window_tokens: None,
     };
     let cost = estimate_cost(&pricing(), &usage);
     assert_eq!(cost.input_cost, 0.0);

@@ -25,10 +25,11 @@ use std::sync::Arc;
 use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::model_registry::ModelRegistry;
-use tinyagents_harness::tool::{Tool, ToolRegistry};
+use tinyagents_harness::tool::ToolRegistry;
 use tinyagents_language::Blueprint;
 use tinyagents_language::capability_resolver::CapabilityResolver;
 use tinyinference_llm::model::ChatModel;
+use tinytools::Tool;
 
 pub use types::*;
 
@@ -114,7 +115,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Returns [`TinyAgentsError::DuplicateComponent`] if a tool with the same
     /// name is already registered. Use [`replace_tool`](Self::replace_tool) to
     /// overwrite intentionally.
-    pub fn register_tool(&mut self, tool: Arc<dyn Tool<State>>) -> Result<&mut Self> {
+    pub fn register_tool(&mut self, tool: Arc<dyn Tool>) -> Result<&mut Self> {
         let name = tool.name().to_owned();
         self.ensure_absent(ComponentKind::Tool, &name)?;
         self.record_meta(ComponentKind::Tool, &name);
@@ -124,7 +125,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
 
     /// Registers or overwrites a tool under its [`Tool::name`], preserving any
     /// existing metadata.
-    pub fn replace_tool(&mut self, tool: Arc<dyn Tool<State>>) -> &mut Self {
+    pub fn replace_tool(&mut self, tool: Arc<dyn Tool>) -> &mut Self {
         let name = tool.name().to_owned();
         self.record_meta(ComponentKind::Tool, &name);
         self.tools.insert(name, tool);
@@ -171,12 +172,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     // Registration: executable agents
     // -----------------------------------------------------------------------
 
-    /// Registers an executable harness `agent` under its
-    /// [`HarnessAgent::name`](tinyagents_graph::subagent_node::HarnessAgent::name).
-    ///
-    /// Resolved by a
-    /// [`SubAgentNode`](tinyagents_graph::subagent_node::SubAgentNode) to delegate a
-    /// graph step to the agent.
+    /// Registers a declarative agent definition under its stable id.
     ///
     /// # Errors
     ///
@@ -185,35 +181,28 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// overwrite intentionally.
     pub fn register_agent(
         &mut self,
-        agent: Arc<dyn tinyagents_graph::subagent_node::HarnessAgent>,
+        agent: tinyagents_definition::AgentDefinition,
     ) -> Result<&mut Self> {
-        let name = agent.name().to_owned();
+        let name = agent.id.clone();
         self.ensure_absent(ComponentKind::Agent, &name)?;
         self.record_meta(ComponentKind::Agent, &name);
         self.agents.insert(name, agent);
         Ok(self)
     }
 
-    /// Registers or overwrites an executable agent under its
-    /// [`HarnessAgent::name`](tinyagents_graph::subagent_node::HarnessAgent::name),
-    /// preserving any existing metadata.
-    pub fn replace_agent(
-        &mut self,
-        agent: Arc<dyn tinyagents_graph::subagent_node::HarnessAgent>,
-    ) -> &mut Self {
-        let name = agent.name().to_owned();
+    /// Registers or overwrites a declarative agent definition, preserving any
+    /// existing metadata.
+    pub fn replace_agent(&mut self, agent: tinyagents_definition::AgentDefinition) -> &mut Self {
+        let name = agent.id.clone();
         self.record_meta(ComponentKind::Agent, &name);
         self.agents.insert(name, agent);
         self
     }
 
-    /// Looks up a registered executable agent by name or alias.
-    pub fn agent(
-        &self,
-        name: &str,
-    ) -> Option<Arc<dyn tinyagents_graph::subagent_node::HarnessAgent>> {
+    /// Looks up a registered declarative agent definition by name or alias.
+    pub fn agent(&self, name: &str) -> Option<&tinyagents_definition::AgentDefinition> {
         let canonical = self.resolve_name(ComponentKind::Agent, name)?;
-        self.agents.get(&canonical).cloned()
+        self.agents.get(&canonical)
     }
 
     // -----------------------------------------------------------------------
@@ -344,7 +333,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     }
 
     /// Looks up a registered tool by name or alias.
-    pub fn tool(&self, name: &str) -> Option<Arc<dyn Tool<State>>> {
+    pub fn tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
         let canonical = self.resolve_name(ComponentKind::Tool, name)?;
         self.tools.get(&canonical).cloned()
     }
@@ -428,7 +417,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// The harness [`ToolRegistry`] keys tools by their own [`Tool::name`], so
     /// registry-level tool aliases are intentionally not propagated here: a tool
     /// is always invoked at runtime under its canonical schema name.
-    pub fn to_tool_registry(&self) -> ToolRegistry<State> {
+    pub fn to_tool_registry<Ctx: Send + Sync>(&self) -> ToolRegistry<State, Ctx> {
         let mut registry = ToolRegistry::new();
         for tool in self.tools.values() {
             registry.register(tool.clone());

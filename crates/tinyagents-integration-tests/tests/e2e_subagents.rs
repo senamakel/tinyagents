@@ -24,8 +24,8 @@ use tinyagents_harness::events::AgentEvent;
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::middleware::{Middleware, PromptCacheGuardMiddleware};
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, Trajectory};
-use tinyagents_harness::tool::Tool;
 use tinyagents_harness::*;
 use tinyagents_language::*;
 use tinyagents_registry::*;
@@ -52,6 +52,8 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -70,6 +72,8 @@ fn text_response(text: &str) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 
@@ -180,12 +184,15 @@ async fn parent_drives_subagent_and_composes_answer() {
         "answers research questions",
         Arc::new(child_harness("RUST_IS_A_SYSTEMS_LANGUAGE")),
     ));
-    let tool = Arc::new(SubAgentTool::new(child));
+    let tool = Arc::new(SubAgentTool::new(
+        child,
+        ChildDataPolicy::new(|parent: &()| *parent),
+    ));
 
     // Parent: first turn delegates to the sub-agent tool, second turn composes
     // the final answer.
     let mut parent: AgentHarness<()> = AgentHarness::new();
-    parent.register_tool(tool);
+    parent.register_tool_dispatch(tool);
     parent.register_model(
         "parent-model",
         Arc::new(MockModel::with_responses(vec![
@@ -307,7 +314,10 @@ async fn nested_subagent_turns_preserve_kv_layout_thread_lineage_and_output_cap(
     let worker_probe = Arc::new(RequestProbe::default());
     let mut worker_harness: AgentHarness<()> = AgentHarness::new();
     worker_harness
-        .register_tool(Arc::new(SubAgentTool::new(researcher)))
+        .register_tool_dispatch(Arc::new(SubAgentTool::new(
+            researcher,
+            ChildDataPolicy::new(|parent: &()| *parent),
+        )))
         .register_model(
             "worker-model",
             Arc::new(MockModel::with_responses(vec![
@@ -328,7 +338,10 @@ async fn nested_subagent_turns_preserve_kv_layout_thread_lineage_and_output_cap(
     let orchestrator_probe = Arc::new(RequestProbe::default());
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
     orchestrator
-        .register_tool(Arc::new(SubAgentTool::new(worker)))
+        .register_tool_dispatch(Arc::new(SubAgentTool::new(
+            worker,
+            ChildDataPolicy::new(|parent: &()| *parent),
+        )))
         .register_model(
             "orchestrator-model",
             Arc::new(MockModel::with_responses(vec![
@@ -439,14 +452,25 @@ async fn nesting_past_max_depth_is_a_deterministic_error() {
         "expected SubAgentDepth(1), got {err:?}"
     );
 
-    // Tool path past the cap: constructing the tool at parent_depth 1 makes the
-    // child run at depth 2, which also exceeds the cap deterministically.
-    let tool = SubAgentTool::new(subagent).with_parent_depth(1);
+    // Tool path past the cap: the typed parent context carries depth 1, so the
+    // child run would exceed its maximum depth of 1.
+    let tool = SubAgentTool::new(subagent, ChildDataPolicy::new(|parent: &()| *parent));
+    let parent = RunContext::new(
+        RunConfig::new("deep-parent")
+            .with_depth(1)
+            .with_max_depth(1),
+        (),
+    );
     let tool_result = tool
-        .call(&(), ToolCall::new("c1", "deep", json!({ "input": "x" })))
+        .invoke_in_parent_context(
+            &(),
+            json!({ "input": "x" }),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
         .await
         .expect("the tool returns a failed tool result");
-    let tool_error = tool_result.error.expect("tool result carries an error");
+    let tool_error = tool_result.output();
     assert!(
         tool_error.contains("recursion depth limit") && tool_error.contains("maximum depth of 1"),
         "expected SubAgentDepth(1) from the tool path, got {tool_error:?}"

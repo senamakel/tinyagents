@@ -282,6 +282,7 @@ impl From<tinyinference_embeddings::Error> for TinyAgentsError {
             tinyinference_embeddings::Error::Validation(message) => Self::Validation(message),
             tinyinference_embeddings::Error::Serialization(error) => Self::Serialization(error),
             tinyinference_embeddings::Error::Embedding(message) => Self::Embedding(message),
+            tinyinference_embeddings::Error::Cancelled => Self::Cancelled,
         }
     }
 }

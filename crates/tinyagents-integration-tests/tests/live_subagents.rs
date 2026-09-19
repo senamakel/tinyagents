@@ -19,6 +19,7 @@ async fn live_openai_parent_composes_child_subagent() {
     use tinyagents_graph::*;
     use tinyagents_harness::context::{RunConfig, RunContext};
     use tinyagents_harness::runtime::AgentHarness;
+    use tinyagents_harness::subagent::ChildDataPolicy;
     use tinyagents_harness::testkit::{EventRecorder, Trajectory};
     use tinyagents_harness::*;
     use tinyagents_language::*;
@@ -52,11 +53,14 @@ async fn live_openai_parent_composes_child_subagent() {
             "You are a meticulous arithmetic engine. Reply with only the numeric answer.",
         ),
     );
-    let tool = Arc::new(SubAgentTool::new(subagent));
+    let tool = Arc::new(SubAgentTool::new(
+        subagent,
+        ChildDataPolicy::new(|parent: &()| *parent),
+    ));
 
     // Parent agent: also a real model, equipped with the sub-agent as a tool.
     let mut parent: AgentHarness<()> = AgentHarness::new();
-    parent.register_tool(tool);
+    parent.register_tool_dispatch(tool);
     parent
         .register_model(
             "openai",

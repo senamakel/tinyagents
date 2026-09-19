@@ -258,42 +258,32 @@ mod tool_tests {
     use serde_json::json;
 
     use super::super::tool::{GoalTool, GoalToolKind, goal_tools};
-    use tinyagents_harness::events::EventSink;
-    use tinyagents_harness::ids::{RunId, ThreadId};
     use tinyagents_harness::store::{InMemoryStore, Store};
-    use tinyagents_harness::tool::{Tool, ToolExecutionContext};
-    use tinyinference_llm::tool::ToolCall;
+    use tinytools::{Tool, ToolResult, ToolRunContext};
 
     fn store() -> Arc<dyn Store> {
         Arc::new(InMemoryStore::default())
     }
 
-    fn ctx(thread_id: Option<&str>) -> ToolExecutionContext {
-        ToolExecutionContext {
-            run_id: RunId::new("run-1"),
-            thread_id: thread_id.map(ThreadId::new),
-            depth: 0,
-            max_turn_output_tokens: None,
-            events: EventSink::new(),
-            cancellation: tinyagents_harness::cancel::CancellationToken::new(),
-            streaming: false,
-            workspace: None,
+    struct ThreadContext(Option<String>);
+
+    impl ToolRunContext for ThreadContext {
+        fn thread_id(&self) -> Option<&str> {
+            self.0.as_deref()
         }
     }
 
-    fn call(id: &str, name: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall {
-            id: id.to_string(),
-            name: name.to_string(),
-            arguments: args,
-            invalid: None,
-        }
+    async fn run(tool: &GoalTool, thread: Option<&str>, args: serde_json::Value) -> ToolResult {
+        let context = ThreadContext(thread.map(str::to_owned));
+        tool.execute_with_context(args, Default::default(), Some(&context))
+            .await
+            .unwrap()
     }
 
     #[test]
     fn goal_tools_builds_the_model_facing_set() {
         let tools = goal_tools(store());
-        let names: Vec<&str> = tools.iter().map(|t| Tool::<()>::name(t.as_ref())).collect();
+        let names: Vec<&str> = tools.iter().map(|t| Tool::name(t.as_ref())).collect();
         assert_eq!(names, vec!["goal_get", "goal_set", "goal_complete"]);
     }
 
@@ -301,42 +291,31 @@ mod tool_tests {
     async fn set_get_complete_via_tools_in_thread_scope() {
         let s = store();
         let set = GoalTool::new(GoalToolKind::Set, s.clone());
-        let res = Tool::<()>::call_with_context(
+        let res = run(
             &set,
-            &(),
-            call(
-                "c1",
-                "goal_set",
-                json!({ "objective": "land the PR", "token_budget": 5000 }),
-            ),
-            ctx(Some("thread-tools")),
+            Some("thread-tools"),
+            json!({ "objective": "land the PR", "token_budget": 5000 }),
         )
-        .await
-        .unwrap();
-        assert!(res.error.is_none(), "{res:?}");
-        assert!(res.content.contains("land the PR"));
+        .await;
+        assert!(!res.is_error, "{res:?}");
+        assert!(
+            res.output_for_llm(set.supports_markdown())
+                .contains("land the PR")
+        );
 
         let get = GoalTool::new(GoalToolKind::Get, s.clone());
-        let res = Tool::<()>::call_with_context(
-            &get,
-            &(),
-            call("c2", "goal_get", json!({})),
-            ctx(Some("thread-tools")),
-        )
-        .await
-        .unwrap();
-        assert!(res.content.contains("status: active"));
+        let res = run(&get, Some("thread-tools"), json!({})).await;
+        assert!(
+            res.output_for_llm(get.supports_markdown())
+                .contains("status: active")
+        );
 
         let done = GoalTool::new(GoalToolKind::Complete, s.clone());
-        let res = Tool::<()>::call_with_context(
-            &done,
-            &(),
-            call("c3", "goal_complete", json!({})),
-            ctx(Some("thread-tools")),
-        )
-        .await
-        .unwrap();
-        assert!(res.content.contains("status: complete"));
+        let res = run(&done, Some("thread-tools"), json!({})).await;
+        assert!(
+            res.output_for_llm(done.supports_markdown())
+                .contains("status: complete")
+        );
     }
 
     #[tokio::test]
@@ -344,54 +323,27 @@ mod tool_tests {
         let s = store();
         let set = GoalTool::new(GoalToolKind::Set, s);
         // Bare call (no context) errors.
-        let res = Tool::<()>::call(
-            &set,
-            &(),
-            call("c1", "goal_set", json!({ "objective": "x" })),
-        )
-        .await
-        .unwrap();
-        assert!(res.error.is_some());
-        assert!(res.error.unwrap().contains("active thread"));
+        let res = set.execute(json!({ "objective": "x" })).await.unwrap();
+        assert!(res.is_error);
+        assert!(res.output().contains("active thread"));
         // Context with no thread id also errors.
         let set = GoalTool::new(GoalToolKind::Set, store());
-        let res = Tool::<()>::call_with_context(
-            &set,
-            &(),
-            call("c2", "goal_set", json!({ "objective": "x" })),
-            ctx(None),
-        )
-        .await
-        .unwrap();
-        assert!(res.error.is_some());
+        let res = run(&set, None, json!({ "objective": "x" })).await;
+        assert!(res.is_error);
     }
 
     #[tokio::test]
     async fn get_reports_absent_goal() {
         let get = GoalTool::new(GoalToolKind::Get, store());
-        let res = Tool::<()>::call_with_context(
-            &get,
-            &(),
-            call("c1", "goal_get", json!({})),
-            ctx(Some("empty-thread")),
-        )
-        .await
-        .unwrap();
-        assert!(res.content.contains("no goal set"));
+        let res = run(&get, Some("empty-thread"), json!({})).await;
+        assert!(res.output().contains("no goal set"));
     }
 
     #[tokio::test]
     async fn set_missing_objective_is_a_soft_error() {
         let set = GoalTool::new(GoalToolKind::Set, store());
-        let res = Tool::<()>::call_with_context(
-            &set,
-            &(),
-            call("c1", "goal_set", json!({})),
-            ctx(Some("t")),
-        )
-        .await
-        .unwrap();
-        assert!(res.content.contains("missing 'objective'"));
+        let res = run(&set, Some("t"), json!({})).await;
+        assert!(res.output().contains("missing 'objective'"));
     }
 }
 

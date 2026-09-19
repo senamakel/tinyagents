@@ -88,7 +88,7 @@ struct AddTool {
 }
 
 #[async_trait::async_trait]
-impl tinyagents_harness::tool::Tool<()> for AddTool {
+impl tinytools::Tool for AddTool {
     fn name(&self) -> &str {
         "add"
     }
@@ -97,38 +97,22 @@ impl tinyagents_harness::tool::Tool<()> for AddTool {
         "Adds one to the provided number x and returns the result."
     }
 
-    fn schema(&self) -> tinyinference_llm::tool::ToolSchema {
-        tinyinference_llm::tool::ToolSchema::new(
-            "add",
-            "Adds one to the provided number x and returns the result.",
-            serde_json::json!({
-                "type": "object",
-                "properties": { "x": { "type": "number" } },
-                "required": ["x"]
-            }),
-        )
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": { "x": { "type": "number" } },
+            "required": ["x"]
+        })
     }
 
-    fn policy(&self) -> tinyagents_harness::tool::ToolPolicy {
-        tinyagents_harness::tool::ToolPolicy::read_only()
+    fn policy(&self) -> tinytools::ToolPolicy {
+        tinytools::ToolPolicy::read_only()
     }
 
-    async fn call(
-        &self,
-        _state: &(),
-        call: tinyinference_llm::tool::ToolCall,
-    ) -> tinyagents_harness::Result<tinyagents_harness::tool::ToolResult> {
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let x = call
-            .arguments
-            .get("x")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        Ok(tinyagents_harness::tool::ToolResult::text(
-            call.id,
-            "add",
-            format!("{}", x + 1.0),
-        ))
+        let x = arguments.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        Ok(tinytools::ToolResult::success(format!("{}", x + 1.0)))
     }
 }
 

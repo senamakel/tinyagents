@@ -14,9 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::component::{ComponentKind, ComponentMetadata};
-use tinyagents_harness::tool::Tool;
+use tinyagents_definition::AgentDefinition;
 use tinyagents_language::Blueprint;
 use tinyinference_llm::model::ChatModel;
+use tinytools::Tool;
 
 /// A name-addressable catalog of registered capabilities.
 ///
@@ -41,14 +42,11 @@ where
     State: Send + Sync,
 {
     pub(crate) models: HashMap<String, Arc<dyn ChatModel<State>>>,
-    pub(crate) tools: HashMap<String, Arc<dyn Tool<State>>>,
+    pub(crate) tools: HashMap<String, Arc<dyn Tool>>,
     pub(crate) graphs: HashMap<String, Blueprint>,
-    /// Executable harness agents, keyed by registered name. Resolved by a
-    /// [`tinyagents_graph::subagent_node::SubAgentNode`] to delegate a graph step to
-    /// a model-driven agent loop. Agents are state-decoupled (they receive a
-    /// mapped prompt, not the registry's `State`), so this map is independent of
-    /// the `State` generic.
-    pub(crate) agents: HashMap<String, Arc<dyn tinyagents_graph::subagent_node::HarnessAgent>>,
+    /// Declarative agent definitions keyed by their stable id. Execution is
+    /// host-owned through graph's explicit `AgentInvoker` boundary.
+    pub(crate) agents: HashMap<String, AgentDefinition>,
     /// Presence + discovery metadata, keyed by `(kind, canonical name)`.
     pub(crate) meta: HashMap<(ComponentKind, String), ComponentMetadata>,
     /// Alias map, keyed by `(kind, alias)` -> canonical name.

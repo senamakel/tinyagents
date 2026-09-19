@@ -1,12 +1,13 @@
 //! Harness runtime facade.
 //!
-//! [`AgentHarness`] is the single composed runtime that every level of the
-//! recursion runs *inside*: a sub-agent, a subgraph node, a REPL session, or a
-//! model-authored blueprint all execute on the same harness — the same model
-//! and tool registries, middleware stack, and [`RunPolicy`]. That shared,
-//! re-entrant runtime is what makes "agents calling agents" and self-authored
-//! workflows recurse on one consistent set of capabilities rather than spinning
-//! up disjoint engines.
+//! [`AgentHarness`] is the durable runtime facade. Hosted roots may provide an
+//! invocation-local [`InvocationRuntime`] for models, tools, and middleware;
+//! authorized children inherit that exact overlay and never substitute their
+//! own durable registries.
+//! Hosted roots may attach an [`InvocationRuntime`] for their model, tool, and
+//! middleware surface. It is invocation-local and every hosted child must
+//! inherit it; a missing overlay is rejected rather than falling back to a
+//! child's durable harness.
 //!
 //! Per-tool deadlines are enabled separately from [`RunPolicy`] through
 //! [`AgentHarness::with_tool_timeout_settings`]. Expiry becomes a recoverable
@@ -25,8 +26,11 @@
 //! - This file holds the builder, registration, and accessor methods.
 //! - `test.rs` holds focused tests for construction and registration.
 
+mod agent;
 mod types;
 
+pub use agent::{AgentInvocation, AgentStream, AgentTurnRequest};
+pub(crate) use agent::{HostInvocationAuthority, emit_host_progress, host_invocation_binding};
 pub use types::*;
 
 use std::sync::Arc;
@@ -34,8 +38,9 @@ use std::sync::Arc;
 use crate::cache::ResponseCache;
 use crate::middleware::{Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware};
 use crate::model_registry::ModelRegistry;
-use crate::tool::{Tool, ToolRegistry, ToolTimeoutSettings};
+use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::model::ChatModel;
+use tinytools::Tool;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
@@ -71,8 +76,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Registers a tool, keyed by its [`Tool::name`]. Returns `&mut Self` for
     /// chaining.
-    pub fn register_tool(&mut self, tool: Arc<dyn Tool<State>>) -> &mut Self {
+    pub fn register_tool(&mut self, tool: Arc<dyn Tool>) -> &mut Self {
         self.tools.register(tool);
+        self
+    }
+
+    /// Registers a tool whose execution needs the typed parent run.
+    pub fn register_tool_dispatch(
+        &mut self,
+        dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
+    ) -> &mut Self {
+        self.tools.register_dispatch(dispatch);
         self
     }
 
@@ -159,7 +173,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     }
 
     /// Returns a reference to the tool registry.
-    pub fn tools(&self) -> &ToolRegistry<State> {
+    pub fn tools(&self) -> &ToolRegistry<State, Ctx> {
         &self.tools
     }
 

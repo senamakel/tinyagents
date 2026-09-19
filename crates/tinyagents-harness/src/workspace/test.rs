@@ -1,8 +1,8 @@
 //! Tests for workspace isolation hooks.
 
 use super::*;
-use crate::tool::SandboxMode;
 use std::path::Path;
+use tinytools::SandboxMode;
 
 #[test]
 fn descriptor_allows_paths_under_root_and_trusted_roots() {

@@ -1,7 +1,7 @@
 //! Workspace isolation and sandbox hooks for tools that run over real files or
 //! command executors.
 //!
-//! See [`types`] for the [`WorkspaceDescriptor`] (the allowed-root policy a tool
+//! See [`tinytools::WorkspaceDescriptor`] for the allowed-root policy a tool
 //! reads from its execution context) and the [`WorkspaceIsolation`] provider
 //! trait (per-agent environment preparation/cleanup). This module ships one
 //! trivial provider, [`SharedRootWorkspace`], which scopes every agent to a
@@ -23,7 +23,7 @@ use async_trait::async_trait;
 
 use crate::Result;
 use crate::events::{AgentEvent, EventSink};
-use crate::tool::SandboxMode;
+use tinytools::{SandboxMode, WorkspaceDescriptor};
 
 /// Prepares a per-agent environment through `isolation` and emits an
 /// [`AgentEvent::WorkspacePrepared`] on the run's event sink so late observers

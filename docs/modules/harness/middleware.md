@@ -57,7 +57,7 @@ pub trait Middleware<State, Ctx = ()>: Send + Sync {
 
     async fn before_tool(&self, state: &State, ctx: &mut RunContext<Ctx>, call: &mut ToolCall) -> Result<()>;
     async fn on_tool_delta(&self, state: &State, ctx: &mut RunContext<Ctx>, delta: &mut ToolDelta) -> Result<()>;
-    async fn after_tool(&self, state: &State, ctx: &mut RunContext<Ctx>, result: &mut ToolResult) -> Result<()>;
+    async fn after_tool(&self, state: &State, ctx: &mut RunContext<Ctx>, invocation: &ToolInvocationIdentity, result: &mut ToolResult) -> Result<()>;
 
     async fn on_error(&self, state: &State, ctx: &mut RunContext<Ctx>, error: &TinyAgentsError) -> Result<()>;
 }
@@ -226,9 +226,8 @@ enforcement builders:
 ```rust
 use std::sync::Arc;
 use tinyagents_harness::middleware::{MiddlewareStack, ToolPolicyMiddleware};
-use tinyagents_harness::tool::{SandboxMode, ToolPolicy, ToolRuntime};
 use tinyagents_harness::context::{RunConfig, RunContext};
-use tinyagents_harness::workspace::WorkspaceDescriptor;
+use tinytools::{SandboxMode, ToolPolicy, ToolRuntime, WorkspaceDescriptor};
 
 let mut policies = std::collections::HashMap::new();
 policies.insert(
@@ -238,7 +237,7 @@ policies.insert(
         ..ToolRuntime::default()
     }),
 );
-use tinyagents_harness::tool::ToolCall;
+use tinyinference_llm::tool::ToolCall;
 let call = || ToolCall::new("c1", "shell", serde_json::json!({}));
 
 let mut stack: MiddlewareStack<()> = MiddlewareStack::new();

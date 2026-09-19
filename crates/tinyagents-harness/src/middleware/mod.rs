@@ -39,8 +39,9 @@ use std::sync::Arc;
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
-use crate::tool::{ToolCall, ToolDelta, ToolResult};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
+use tinyinference_llm::tool::{ToolCall, ToolDelta};
+use tinytools::ToolResult;
 
 /// Runs one per-middleware lifecycle hook across the whole stack, bracketing
 /// each call with `MiddlewareStarted`/`MiddlewareCompleted` events and fanning
@@ -257,10 +258,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         &self,
         ctx: &mut RunContext<Ctx>,
         state: &State,
+        invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_tool(ctx, state, result))
+            .after_tool(ctx, state, invocation, result))
     }
 
     /// Runs every middleware's [`Middleware::on_error`] in registration order,

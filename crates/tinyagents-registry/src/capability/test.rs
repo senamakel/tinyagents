@@ -9,12 +9,11 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use super::*;
-use crate::Result;
 use crate::component::ComponentKind;
-use tinyagents_harness::tool::{Tool, ToolResult};
+use tinyagents_definition::AgentDefinition;
 use tinyagents_language::Blueprint;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinytools::{Tool, ToolResult};
 
 struct FakeModel(&'static str);
 
@@ -32,18 +31,18 @@ impl ChatModel<()> for FakeModel {
 struct FakeTool(&'static str);
 
 #[async_trait]
-impl Tool<()> for FakeTool {
+impl Tool for FakeTool {
     fn name(&self) -> &str {
         self.0
     }
     fn description(&self) -> &str {
         "fake tool"
     }
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(self.0, "fake tool", json!({"type": "object"}))
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object"})
     }
-    async fn call(&self, _state: &(), call: ToolCall) -> Result<ToolResult> {
-        Ok(ToolResult::text(call.id, call.name, "ok"))
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
     }
 }
 
@@ -83,6 +82,26 @@ fn registers_and_looks_up_models_tools_graphs() {
 
     assert!(!reg.has(ComponentKind::Model, "missing"));
     assert!(reg.model("missing").is_none());
+}
+
+#[test]
+fn registers_declarative_agents_without_an_executable_graph_adapter() {
+    let mut registry = CapabilityRegistry::<()>::new();
+    registry
+        .register_agent(
+            AgentDefinition::new("planner", "Planner", "Plans work")
+                .with_tools(["todo"])
+                .with_subagents(["researcher"]),
+        )
+        .unwrap();
+    registry
+        .alias(ComponentKind::Agent, "default", "planner")
+        .unwrap();
+
+    let definition = registry.agent("default").unwrap();
+    assert_eq!(definition.id, "planner");
+    assert_eq!(definition.subagents, vec!["researcher"]);
+    assert_eq!(registry.names(ComponentKind::Agent), vec!["planner"]);
 }
 
 #[test]
@@ -222,7 +241,7 @@ async fn builds_harness_registries_with_model_aliases() {
     assert!(models.get("gpt-4o").is_some());
     assert!(models.get("default").is_some());
 
-    let tools = reg.to_tool_registry();
+    let tools = reg.to_tool_registry::<()>();
     assert_eq!(tools.names(), vec!["lookup_user"]);
 }
 

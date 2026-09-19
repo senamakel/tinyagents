@@ -6,8 +6,9 @@ sandbox policy; it owns the interface, so parallel agents (and their sub-agents)
 can be isolated consistently and a tool can discover its allowed filesystem root
 from run context instead of an application global.
 
-Source: `crates/tinyagents-harness/src/workspace/{mod.rs,types.rs}`; tests:
-`crates/tinyagents-harness/src/workspace/test.rs`.
+The descriptor and sandbox vocabulary come directly from `tinytools`; the
+provider lifecycle lives in `crates/tinyagents-harness/src/workspace/`. Tests
+live in `crates/tinyagents-harness/src/workspace/test.rs`.
 
 ## Core Types
 
@@ -36,8 +37,7 @@ the built-in provider: it scopes every agent to one shared root without copying
 Build a descriptor fluently:
 
 ```rust
-use tinyagents_harness::tool::SandboxMode;
-use tinyagents_harness::workspace::WorkspaceDescriptor;
+use tinytools::{SandboxMode, WorkspaceDescriptor};
 
 let ws = WorkspaceDescriptor::new("/work/agent-a")
     .with_trusted_root("/shared/cache")
@@ -64,7 +64,7 @@ allowed root from `context.workspace` rather than an application global:
 ```rust
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::tool::ToolExecutionContext;
-use tinyagents_harness::workspace::WorkspaceDescriptor;
+use tinytools::WorkspaceDescriptor;
 
 let ws = WorkspaceDescriptor::new("/work/agent-a").with_policy_id("run-9");
 let ctx: RunContext =
@@ -122,7 +122,8 @@ moved there with it — so the event-emitting half of the old `enforce()` method
 is a free function here instead of an inherent method on a foreign type.
 
 ```rust
-use tinyagents_harness::workspace::{WorkspaceDescriptor, enforce_workspace_path};
+use tinyagents_harness::workspace::enforce_workspace_path;
+use tinytools::WorkspaceDescriptor;
 
 let ws = WorkspaceDescriptor::new("/work/agent-a");
 enforce_workspace_path(&ws, std::path::Path::new("/work/agent-a/out.txt"), &events)?; // allowed, no event

@@ -6,6 +6,7 @@
 //! full built-in middleware library overview.
 
 use super::*;
+use tinytools::{SandboxMode, ToolContent, ToolPolicy, ToolResult, ToolSideEffects};
 
 // ── ToolAllowlistMiddleware ───────────────────────────────────────────────────
 
@@ -54,13 +55,13 @@ impl ToolPolicyMiddleware {
     ///
     /// Defaults are permissive: nothing is required or denied until configured.
     /// Use [`strict`](Self::strict) for a fail-closed baseline.
-    pub fn new(policies: std::collections::HashMap<String, crate::tool::ToolPolicy>) -> Self {
+    pub fn new(policies: std::collections::HashMap<String, ToolPolicy>) -> Self {
         Self {
             label: "tool_policy",
             policies,
             require_classification: false,
             require_background_safe: false,
-            deny: crate::tool::ToolSideEffects::default(),
+            deny: ToolSideEffects::default(),
             require_sandbox: false,
             require_approval: false,
             approved: std::collections::HashSet::new(),
@@ -70,16 +71,16 @@ impl ToolPolicyMiddleware {
 
     /// Creates a fail-closed policy middleware: unclassified tools are rejected,
     /// and tools declaring `destructive` or `payment` side effects are denied.
-    pub fn strict(policies: std::collections::HashMap<String, crate::tool::ToolPolicy>) -> Self {
+    pub fn strict(policies: std::collections::HashMap<String, ToolPolicy>) -> Self {
         Self {
             label: "tool_policy",
             policies,
             require_classification: true,
             require_background_safe: false,
-            deny: crate::tool::ToolSideEffects {
+            deny: ToolSideEffects {
                 destructive: true,
                 payment: true,
-                ..crate::tool::ToolSideEffects::default()
+                ..ToolSideEffects::default()
             },
             require_sandbox: false,
             require_approval: false,
@@ -102,7 +103,7 @@ impl ToolPolicyMiddleware {
     }
 
     /// Denies tools declaring any side effect present in `mask`.
-    pub fn deny_side_effects(mut self, mask: crate::tool::ToolSideEffects) -> Self {
+    pub fn deny_side_effects(mut self, mask: ToolSideEffects) -> Self {
         self.deny = mask;
         self
     }
@@ -183,13 +184,13 @@ impl ToolPolicyMiddleware {
         let Some(policy) = self.policies.get(name) else {
             return Ok(());
         };
-        if policy.runtime.sandbox != crate::tool::SandboxMode::Required {
+        if policy.runtime.sandbox != SandboxMode::Required {
             return Ok(());
         }
         let sandboxed = ctx
             .workspace
             .as_ref()
-            .is_some_and(|ws| ws.sandbox == crate::tool::SandboxMode::Required);
+            .is_some_and(|ws| ws.sandbox == SandboxMode::Required);
         if sandboxed {
             Ok(())
         } else {
@@ -233,30 +234,64 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolPolicy
         &self,
         _ctx: &mut RunContext<Ctx>,
         _state: &State,
+        invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()> {
         if !self.enforce_result_bytes {
             return Ok(());
         }
-        if let Some(policy) = self.policies.get(&result.name)
-            && let Some(limit) = policy.runtime.max_result_bytes
-            && result.content.len() > limit
-        {
-            // Truncate on a char boundary at or below the byte limit so the
-            // enforced payload is still valid UTF-8.
-            let mut end = limit;
-            while end > 0 && !result.content.is_char_boundary(end) {
-                end -= 1;
-            }
-            result.content.truncate(end);
-            let note = format!("tool result exceeded max_result_bytes ({limit}); truncated");
-            result.error = Some(match result.error.take() {
-                Some(existing) => format!("{existing}; {note}"),
-                None => note,
-            });
-        }
+        let Some(max_result_bytes) = self
+            .policies
+            .get(invocation.tool_name())
+            .and_then(|policy| policy.runtime.max_result_bytes)
+        else {
+            return Ok(());
+        };
+        truncate_result(result, max_result_bytes);
         Ok(())
     }
+}
+
+/// Truncates each model-facing canonical representation without changing the
+/// tool's reported-error or trusted-verbatim declarations. JSON content is
+/// rendered to text when it exceeds the cap because a partial JSON block would
+/// no longer be a valid structured value.
+fn truncate_result(result: &mut ToolResult, max_result_bytes: usize) {
+    let output = result.output();
+    if output.len() > max_result_bytes {
+        result.content = vec![ToolContent::Text {
+            text: truncate_with_marker(&output, max_result_bytes),
+        }];
+    }
+    if let Some(markdown) = &mut result.markdown_formatted
+        && markdown.len() > max_result_bytes
+    {
+        *markdown = truncate_with_marker(markdown, max_result_bytes);
+    }
+}
+
+fn truncate_with_marker(value: &str, max_bytes: usize) -> String {
+    const MARKER: &str = "[truncated]";
+    if max_bytes <= MARKER.len() {
+        return truncate_utf8(MARKER, max_bytes);
+    }
+    format!(
+        "{}{}",
+        truncate_utf8(value, max_bytes - MARKER.len()),
+        MARKER
+    )
+}
+
+/// Returns the longest valid UTF-8 prefix fitting within `max_bytes`.
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
 }
 
 // ── DynamicToolSelectionMiddleware ────────────────────────────────────────────
@@ -390,7 +425,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
     ) -> Result<()> {
         let selection = ToolSelectionContext {
             run_id: ctx.config.run_id.as_str().to_string(),
-            depth: ctx.config.depth,
+            depth: ctx.config.depth(),
             tags: ctx.config.tags.clone(),
             requested_model: request.model.clone(),
         };

@@ -17,10 +17,8 @@ use super::store;
 use super::types::{CardPatch, TaskApprovalMode, TaskBoardCard, parse_status};
 use tinyagents_harness::error::Result;
 use tinyagents_harness::store::Store;
-use tinyagents_harness::tool::{
-    Tool, ToolExecutionContext, ToolPolicy, ToolRegistry, ToolResult, ToolSideEffects,
-};
-use tinyinference_llm::tool::{ToolCall, ToolSchema};
+use tinyagents_harness::tool::ToolRegistry;
+use tinytools::{Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
 
 const TODO_TOOL_NAME: &str = "todo";
 
@@ -256,15 +254,8 @@ fn parameters_schema() -> Value {
     })
 }
 
-fn error_result(call_id: String, message: impl Into<String>) -> ToolResult {
-    ToolResult {
-        call_id,
-        name: TODO_TOOL_NAME.to_string(),
-        content: String::new(),
-        raw: None,
-        error: Some(message.into()),
-        elapsed_ms: 0,
-    }
+fn error_result(message: impl Into<String>) -> ToolResult {
+    ToolResult::error(message)
 }
 
 /// Builds the `todo` tool backed by `store`.
@@ -273,16 +264,16 @@ pub fn todo_tools(store: Arc<dyn Store>) -> Vec<Arc<TodoTool>> {
 }
 
 /// Registers the `todo` tool into a tool registry.
-pub fn register_todo_tools<State: Send + Sync>(
-    registry: &mut ToolRegistry<State>,
+pub fn register_todo_tools<State: Send + Sync, Ctx: Send + Sync>(
+    registry: &mut ToolRegistry<State, Ctx>,
     store: Arc<dyn Store>,
-) -> &mut ToolRegistry<State> {
+) -> &mut ToolRegistry<State, Ctx> {
     registry.register(Arc::new(TodoTool::new(store)));
     registry
 }
 
 #[async_trait]
-impl<State: Send + Sync> Tool<State> for TodoTool {
+impl Tool for TodoTool {
     fn name(&self) -> &str {
         TODO_TOOL_NAME
     }
@@ -291,13 +282,8 @@ impl<State: Send + Sync> Tool<State> for TodoTool {
         TODO_DESCRIPTION
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: TODO_TOOL_NAME.to_string(),
-            description: TODO_DESCRIPTION.to_string(),
-            parameters: parameters_schema(),
-            format: Default::default(),
-        }
+    fn parameters_schema(&self) -> Value {
+        parameters_schema()
     }
 
     fn policy(&self) -> ToolPolicy {
@@ -311,35 +297,26 @@ impl<State: Send + Sync> Tool<State> for TodoTool {
         }
     }
 
-    async fn call(&self, _state: &State, call: ToolCall) -> Result<ToolResult> {
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         Ok(error_result(
-            call.id,
             "todo tool requires an active thread (no thread_id in tool context)",
         ))
     }
 
-    async fn call_with_context(
+    async fn execute_with_context(
         &self,
-        _state: &State,
-        call: ToolCall,
-        context: ToolExecutionContext,
-    ) -> Result<ToolResult> {
-        let Some(thread_id) = context.thread_id.as_ref() else {
+        args: Value,
+        _options: tinytools::ToolCallOptions,
+        context: Option<&dyn ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        let Some(thread_id) = context.and_then(ToolRunContext::thread_id) else {
             return Ok(error_result(
-                call.id,
                 "todo tool requires an active thread (no thread_id in tool context)",
             ));
         };
-        match self.dispatch(thread_id.as_str(), &call.arguments).await? {
-            TodoOutcome::Ok(payload) => Ok(ToolResult {
-                call_id: call.id,
-                name: TODO_TOOL_NAME.to_string(),
-                content: payload.to_string(),
-                raw: Some(payload),
-                error: None,
-                elapsed_ms: 0,
-            }),
-            TodoOutcome::Error(message) => Ok(error_result(call.id, message)),
+        match self.dispatch(thread_id, &args).await? {
+            TodoOutcome::Ok(payload) => Ok(ToolResult::json(payload)),
+            TodoOutcome::Error(message) => Ok(error_result(message)),
         }
     }
 }

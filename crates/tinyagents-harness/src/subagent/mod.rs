@@ -11,8 +11,9 @@
 //!
 //! - [`SubAgent`] wraps an [`AgentHarness`] and runs it as a *child run* one
 //!   level deeper in the recursion tree than its caller.
-//! - [`SubAgentTool`] adapts a [`SubAgent`] into a [`Tool`] so a parent agent
-//!   can invoke another agent exactly like any other tool.
+//! - [`SubAgentTool`] adapts a [`SubAgent`] into a typed
+//!   [`ToolDispatch`] so a parent agent can invoke another agent with its live
+//!   run context.
 //! - [`SubAgentSession`] keeps a single [`SubAgent`] alive across multiple
 //!   turns, *reusing* the same harness while accumulating the conversation
 //!   transcript — the post-completion, human-in-the-loop reuse primitive.
@@ -66,7 +67,7 @@
 //!
 //! - [`types`] holds the public type definitions.
 //! - This file holds the impls (constructors, the invoke methods, and the
-//!   [`Tool`] adapter).
+//!   typed-parent dispatcher).
 //! - `test.rs` holds focused tests.
 
 mod types;
@@ -84,10 +85,10 @@ use crate::events::{AgentEvent, EventSink};
 use crate::ids::{ThreadId, next_seq};
 use crate::middleware::AgentRun;
 use crate::runtime::AgentHarness;
-use crate::tool::{Tool, ToolCall, ToolExecutionContext, ToolResult, ToolSchema};
+use crate::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
-impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
+impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// Creates a sub-agent wrapping `harness` with a stable `name` and
     /// `description`.
     pub fn new(
@@ -221,16 +222,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
         parent: &RunContext<Ctx>,
         input: impl Into<String>,
     ) -> Result<AgentRun> {
+        // This is the generic explicit-model entry point, intentionally kept
+        // available to borrowed `State` callers. A hosted parent must enter
+        // through `invoke_hosted_in_parent` below, where the `State: 'static`
+        // bound makes the invocation authority type-safe. Falling through to
+        // the explicit loop here would discard the parent's definition and
+        // approval authority, so reject it before constructing a child.
+        if parent.host_authority.is_some() {
+            return Err(TinyAgentsError::Validation(
+                "hosted parent delegation requires invoke_hosted_in_parent".into(),
+            ));
+        }
+        // The child harness may tighten the tree cap, but it may never widen
+        // the explicit parent lineage cap. `RunContext::child` is the one
+        // place that copies the live recursive capabilities and creates the
+        // isolated counters/control slot for this invocation.
         let config = self.child_config(
             parent.depth(),
             parent.thread_id(),
             parent.config.max_turn_output_tokens,
         )?;
-        // Share the parent's cancellation token so one `cancel()` unwinds the
-        // whole nested-run tree instead of stopping at this boundary.
-        let ctx = RunContext::new(config, ctx_data)
-            .with_events(parent.events.clone())
-            .with_cancellation(parent.cancellation.clone());
+        let ctx = parent.child(config, ctx_data)?;
         self.run_child(state, ctx, input.into(), parent.streaming)
             .await
     }
@@ -251,7 +263,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
         streaming: bool,
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
-        let messages = self.seed_messages(input);
+        let messages = self.seed_messages(input.clone());
         // Clone the sink (it shares listeners and the offset counter with the
         // context) so the completion event can be emitted after `ctx` is moved
         // into the child agent loop.
@@ -275,6 +287,109 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgent<State, Ctx> {
             depth,
         });
 
+        Ok(run)
+    }
+}
+
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
+    /// Runs this child under the exact host authority installed on `parent`.
+    ///
+    /// Unlike [`Self::invoke_in_parent`], this path resolves the parent's
+    /// delegate allowlist and re-enters the child through the parent's shared
+    /// invocation bundle. A context that is not hosted fails closed rather
+    /// than silently acquiring an unrelated harness configuration.
+    pub async fn invoke_hosted_in_parent(
+        &self,
+        state: &State,
+        ctx_data: Ctx,
+        parent: &RunContext<Ctx>,
+        input: impl Into<String>,
+    ) -> Result<AgentRun> {
+        if parent.host_authority.is_none() {
+            return Err(TinyAgentsError::Validation(
+                "hosted subagent invocation requires parent host authority".into(),
+            ));
+        }
+        let config = self.child_config(
+            parent.depth(),
+            parent.thread_id(),
+            parent.config.max_turn_output_tokens,
+        )?;
+        let child = parent.child(config, ctx_data)?;
+        self.run_hosted_child(state, child, input.into(), parent.streaming)
+            .await
+    }
+
+    /// Hosted recursive driver. Kept separate from the generic explicit-model
+    /// path so a borrowed `State` never has to interact with live host
+    /// authority stored on a `RunContext`.
+    async fn run_hosted_child(
+        &self,
+        state: &State,
+        ctx: RunContext<Ctx>,
+        input: String,
+        streaming: bool,
+    ) -> Result<AgentRun> {
+        let depth = ctx.depth();
+        let messages = self.seed_messages(input.clone());
+        let binding = crate::runtime::host_invocation_binding::<State, Ctx>(&ctx)?;
+        let Some(binding) = binding else {
+            return self.run_child(state, ctx, input, streaming).await;
+        };
+        let parent_agent = ctx.host_agent_id.as_deref().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "hosted parent delegation is missing its parent agent identity".into(),
+            )
+        })?;
+        let delegates = binding
+            .host
+            .definitions
+            .delegates_for(parent_agent)
+            .await
+            .map_err(|error| {
+                TinyAgentsError::Validation(format!(
+                    "delegate authorization lookup failed: {error}"
+                ))
+            })?;
+        if !delegates.iter().any(|delegate| delegate == &self.name) {
+            return Err(TinyAgentsError::Validation(format!(
+                "agent `{parent_agent}` is not authorized to delegate to `{}`",
+                self.name
+            )));
+        }
+        let runtime = binding.runtime.clone().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "hosted subagent invocation is missing its parent runtime overlay".into(),
+            )
+        })?;
+
+        let events = ctx.events.clone();
+        events.emit(AgentEvent::SubAgentStarted {
+            name: self.name.clone(),
+            depth,
+        });
+        let invocation = crate::runtime::AgentInvocation::from_shared_host(
+            binding.host.clone(),
+            crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
+            ctx,
+            Some(runtime),
+        );
+        // A hosted parent always re-enters through this exact capability
+        // bundle. The child harness supplies durable mechanics only; it cannot
+        // select an alternate host authority.
+        let run = if streaming {
+            self.harness
+                .invoke_agent_streaming_with_capabilities(invocation, state)
+                .await?
+        } else {
+            self.harness
+                .invoke_agent_with_capabilities(invocation, state)
+                .await?
+        };
+        events.emit(AgentEvent::SubAgentCompleted {
+            name: self.name.clone(),
+            depth,
+        });
         Ok(run)
     }
 }
@@ -398,7 +513,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         self.transcript.extend(input);
 
         let config = self.child_config()?;
-        let depth = config.depth;
+        let depth = config.depth();
         let ctx = RunContext::new(config, ctx_data).with_events(self.events.clone());
 
         // Clone the sink so we can emit the completion event after `ctx` is
@@ -439,7 +554,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
     }
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<State, Ctx> {
     /// Default JSON Schema for a sub-agent tool: an object with one required
     /// string field named [`SUBAGENT_INPUT_FIELD`].
     fn default_parameters() -> Value {
@@ -455,14 +570,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
         })
     }
 
-    /// Wraps `subagent` as a tool invoked at `parent_depth = 0` (child runs at
-    /// depth `1`). The tool name defaults to the sub-agent name.
-    pub fn new(subagent: Arc<SubAgent<State, Ctx>>) -> Self {
+    /// Wraps `subagent` as a typed-parent tool.
+    ///
+    /// `child_data` is required: it makes application-data inheritance explicit
+    /// for every recursive invocation.
+    pub fn new(subagent: Arc<SubAgent<State, Ctx>>, child_data: ChildDataPolicy<Ctx>) -> Self {
         let tool_name = subagent.name().to_owned();
         Self {
             subagent,
             tool_name,
-            parent_depth: 0,
+            child_data,
             parameters: Self::default_parameters(),
         }
     }
@@ -470,14 +587,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
-        self
-    }
-
-    /// Sets the caller depth this tool invokes the child at; the child runs at
-    /// `parent_depth + 1`. Use this to express deeper nesting through the tool
-    /// path (where the live parent depth is not available).
-    pub fn with_parent_depth(mut self, parent_depth: usize) -> Self {
-        self.parent_depth = parent_depth;
         self
     }
 
@@ -503,126 +612,139 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentTool<State, Ctx> {
         }
     }
 
-    fn limit_result_for_parent(
-        call_id: String,
-        tool_name: &str,
-        error: &TinyAgentsError,
-    ) -> Option<ToolResult> {
-        let limit_kind = match error {
-            TinyAgentsError::LimitExceeded(_) => "configured run limit",
-            TinyAgentsError::Timeout(_) => "wall-clock deadline",
-            TinyAgentsError::SubAgentDepth(_) => "recursion depth limit",
-            _ => return None,
+    /// Invokes this sub-agent from the actual parent [`RunContext`].
+    ///
+    /// This is the agent-native recursive-tool boundary.  It is intentionally
+    /// separate from `tinytools::Tool`: TinyTools only receives the narrow
+    /// workspace/thread/output vocabulary it needs for ordinary tools, while
+    /// a child agent must inherit the parent run's live lineage, cancellation,
+    /// stores, events, workspace, steering, and streaming state.  The harness
+    /// tool dispatcher registers this typed entry point explicitly; it does
+    /// not downcast a generic tool or recover a parent from a global map.
+    pub async fn invoke_in_parent_context(
+        &self,
+        state: &State,
+        args: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &RunContext<Ctx>,
+    ) -> Result<tinytools::ToolResult> {
+        let input = Self::extract_input(&args);
+        let config = match self.subagent.child_config(
+            parent.depth(),
+            parent.thread_id(),
+            parent.config.max_turn_output_tokens,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                return Ok(tinytools::ToolResult::error(format!(
+                    "Sub-agent `{}` stopped before completing because it hit its recursion depth limit: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
+                    self.tool_name
+                )));
+            }
         };
-
-        Some(ToolResult::error(
-            call_id,
-            tool_name,
-            format!(
-                "Sub-agent `{tool_name}` stopped before completing because it hit its {limit_kind}: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer."
-            ),
-        ))
+        let child_data = self.child_data.child_data(&parent.data);
+        let child = match parent.child(config, child_data) {
+            Ok(child) => child,
+            Err(TinyAgentsError::SubAgentDepth(_)) => {
+                return Ok(tinytools::ToolResult::error(format!(
+                    "Sub-agent `{}` stopped before completing because it hit its recursion depth limit. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
+                    self.tool_name
+                )));
+            }
+            Err(error) => return Err(error),
+        };
+        let run = match self
+            .subagent
+            .run_hosted_child(state, child, input, parent.streaming)
+            .await
+        {
+            Ok(run) => run,
+            Err(error) => {
+                if matches!(
+                    error,
+                    TinyAgentsError::LimitExceeded(_)
+                        | TinyAgentsError::Timeout(_)
+                        | TinyAgentsError::SubAgentDepth(_)
+                ) {
+                    return Ok(tinytools::ToolResult::error(format!(
+                        "Sub-agent `{}` stopped before completing because it hit a configured run limit: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
+                        self.tool_name
+                    )));
+                }
+                return Err(error);
+            }
+        };
+        let text = run.text().unwrap_or_default();
+        let result = tinytools::ToolResult::success(text);
+        Ok(if options.prefer_markdown {
+            result.with_markdown(run.text().unwrap_or_default())
+        } else {
+            result
+        })
     }
 }
 
 #[async_trait]
-impl<State, Ctx> Tool<State> for SubAgentTool<State, Ctx>
+impl<State, Ctx> ToolDispatch<State, Ctx> for SubAgentTool<State, Ctx>
 where
-    State: Send + Sync,
-    Ctx: Send + Sync + Default,
+    State: Send + Sync + 'static,
+    Ctx: Send + Sync + 'static,
 {
+    fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        Arc::new(SubAgentToolDeclaration {
+            name: self.tool_name.clone(),
+            description: self.subagent.description().to_owned(),
+            parameters: self.parameters.clone(),
+        })
+    }
+
+    fn output_origin(&self) -> crate::host::ContentOrigin {
+        crate::host::ContentOrigin::Agent
+    }
+
+    async fn execute(
+        &self,
+        state: &State,
+        arguments: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &RunContext<Ctx>,
+    ) -> anyhow::Result<tinytools::ToolResult> {
+        self.invoke_in_parent_context(state, arguments, options, parent)
+            .await
+            .map_err(anyhow::Error::from)
+    }
+}
+
+/// Pure canonical declaration for a typed-parent sub-agent dispatcher.
+///
+/// Calling it through `tinytools::Tool` directly is refused because that trait
+/// intentionally lacks the parent `RunContext`; register the enclosing
+/// [`SubAgentTool`] with [`crate::tool::ToolRegistry::register_dispatch`].
+struct SubAgentToolDeclaration {
+    name: String,
+    description: String,
+    parameters: Value,
+}
+
+#[async_trait]
+impl tinytools::Tool for SubAgentToolDeclaration {
     fn name(&self) -> &str {
-        &self.tool_name
+        &self.name
     }
 
     fn description(&self) -> &str {
-        self.subagent.description()
+        &self.description
     }
 
-    fn schema(&self) -> ToolSchema {
-        ToolSchema::new(
-            self.tool_name.clone(),
-            self.subagent.description().to_owned(),
-            self.parameters.clone(),
+    fn parameters_schema(&self) -> Value {
+        self.parameters.clone()
+    }
+
+    async fn execute(&self, _args: Value) -> anyhow::Result<tinytools::ToolResult> {
+        anyhow::bail!(
+            "sub-agent `{}` requires typed-parent dispatch; register SubAgentTool with ToolRegistry::register_dispatch",
+            self.name
         )
-    }
-
-    async fn call(&self, state: &State, call: ToolCall) -> Result<ToolResult> {
-        let input = Self::extract_input(&call.arguments);
-        let call_id = call.id;
-        let run = match self
-            .subagent
-            .invoke(state, Ctx::default(), self.parent_depth, input)
-            .await
-        {
-            Ok(run) => run,
-            Err(error) => {
-                if let Some(result) =
-                    Self::limit_result_for_parent(call_id, &self.tool_name, &error)
-                {
-                    return Ok(result);
-                }
-                return Err(error);
-            }
-        };
-        let text = run.text().unwrap_or_default();
-        Ok(ToolResult::text(call_id, &self.tool_name, text))
-    }
-
-    async fn call_with_context(
-        &self,
-        state: &State,
-        call: ToolCall,
-        context: ToolExecutionContext,
-    ) -> Result<ToolResult> {
-        let input = Self::extract_input(&call.arguments);
-        let call_id = call.id;
-        // Route a depth-limit rejection through the same limit-to-tool-error
-        // conversion as a failure from `run_child` below, rather than letting
-        // it propagate raw and abort the whole parent run: a sub-agent that
-        // is simply too deep is a delegated-agent limit signal the parent
-        // orchestrator should see as a tool result, not a fatal error.
-        let config = match self.subagent.child_config(
-            context.depth,
-            context.thread_id.as_ref(),
-            context.max_turn_output_tokens,
-        ) {
-            Ok(config) => config,
-            Err(error) => {
-                if let Some(result) =
-                    Self::limit_result_for_parent(call_id, &self.tool_name, &error)
-                {
-                    return Ok(result);
-                }
-                return Err(error);
-            }
-        };
-        // Inherit the caller's cancellation token: a cancel requested on the
-        // parent run must also stop the child loop this tool drives, otherwise
-        // it runs to completion while the parent waits on this `await`.
-        let ctx = RunContext::new(config, Ctx::default())
-            .with_events(context.events)
-            .with_cancellation(context.cancellation);
-        // Match the parent's drive mode: when the parent run streams, the child
-        // streams too, so its deltas flow onto the shared sink and reach the
-        // parent's `invoke_stream` consumer with the child's own lineage.
-        let run = match self
-            .subagent
-            .run_child(state, ctx, input, context.streaming)
-            .await
-        {
-            Ok(run) => run,
-            Err(error) => {
-                if let Some(result) =
-                    Self::limit_result_for_parent(call_id, &self.tool_name, &error)
-                {
-                    return Ok(result);
-                }
-                return Err(error);
-            }
-        };
-        let text = run.text().unwrap_or_default();
-        Ok(ToolResult::text(call_id, &self.tool_name, text))
     }
 }
 
