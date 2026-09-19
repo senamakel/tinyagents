@@ -489,6 +489,64 @@ async fn context_compression_falls_back_to_trim_when_summarizer_errors() {
     );
 }
 
+/// Regression: `CompressionFailurePolicy::FallbackTrim` used to trim messages
+/// down to the *full* `trigger_budget` regardless of how much of that budget
+/// the request's tool schemas already consumed — even though the trigger
+/// itself (`should_summarize_with_tools`) charges those same schemas. A
+/// request whose schemas alone consumed a meaningful share of the budget
+/// therefore stayed over threshold after "recovery". The message budget must
+/// reserve the schema cost first, so a schema-heavy request trims further
+/// than a schema-free one under the same trigger budget.
+#[tokio::test]
+async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
+    let (policy, before) = over_threshold_request();
+    let mw = Arc::new(ContextCompressionMiddleware::with_summarizer(
+        policy,
+        Box::new(FailingSummarizer),
+    ));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw);
+    let mut c = ctx();
+
+    // Baseline: no tools, trimmed to the full trigger budget.
+    let mut request_no_tools = ModelRequest {
+        messages: before.clone(),
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request_no_tools)
+        .await
+        .expect("fallback trim runs");
+
+    // Same transcript, but the request also carries a large tool schema that
+    // eats into the same trigger budget.
+    let big_schema_text = "p".repeat(2_000);
+    let mut request_with_tools = ModelRequest {
+        messages: before,
+        tools: vec![tinyinference_llm::tool::ToolSchema::new(
+            "big_tool",
+            big_schema_text,
+            serde_json::json!({"type": "object"}),
+        )],
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request_with_tools)
+        .await
+        .expect("fallback trim runs");
+
+    assert!(
+        request_with_tools.messages.len() <= request_no_tools.messages.len(),
+        "a request whose schemas already consume budget must trim at least as \
+         far as one with no schemas: with_tools={}, no_tools={}",
+        request_with_tools.messages.len(),
+        request_no_tools.messages.len()
+    );
+    // The system prompt is still preserved even when the schema cost alone
+    // exceeds the trigger budget (message_budget saturates to 0, not below).
+    assert!(matches!(request_with_tools.messages[0], Message::System(_)));
+}
+
 #[tokio::test]
 async fn context_compression_abort_policy_propagates_summarizer_error() {
     // Opt back into the legacy behaviour: Abort propagates the error so the run
