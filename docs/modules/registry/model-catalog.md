@@ -61,15 +61,22 @@ Useful source URLs:
 
 ## Snapshot File
 
-Seed snapshot:
+Seed snapshot (the single copy; there is no duplicate under `docs/`):
 
-```text
-docs/modules/registry/model-catalog.snapshot.json
-```
+[`crates/tinyagents-registry/model-catalog.snapshot.json`](../../../crates/tinyagents-registry/model-catalog.snapshot.json)
 
-This file is a small checked-in seed for schema design, examples, and tests. It
-should not try to mirror every model from every provider. A future implementation
-can add a generated snapshot under a crate data path such as:
+`crates/tinyagents-registry/src/catalog.rs` embeds this exact file at compile
+time (`include_str!("../model-catalog.snapshot.json")`) and loads it through
+[`ModelCatalog::seed`], which validates it via
+[`ModelCatalogSnapshot::validate`] — the same validation
+[`ModelCatalog::from_json`] runs on any snapshot a caller supplies (see
+"Refresh Workflow" below for the checks).
+
+It should not try to mirror every model from every provider by hand; the
+generator (`cargo run -p tinyagents-registry --bin catalog_gen`) is the
+supported way to refresh it from `https://models.dev/api.json`. A future
+implementation can add a larger generated snapshot under a crate data path
+such as:
 
 ```text
 data/model-catalog/model-catalog.snapshot.json
