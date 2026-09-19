@@ -162,7 +162,7 @@ fn restart_resets_the_wall_clock_start_without_touching_counters() {
     // its deadline before the first model call. `restart` must reset the
     // clock while leaving the call counters alone.
     let mut tracker =
-        LimitTracker::new(RunLimits::default().with_max_wall_clock_ms(1_000_000));
+        LimitTracker::new(RunLimits::default().with_max_wall_clock_ms(Some(1_000_000)));
     tracker.record_model_call().unwrap();
     tracker.record_tool_call().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
