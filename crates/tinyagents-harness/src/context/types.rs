@@ -23,11 +23,46 @@ use crate::limits::LimitTracker;
 use crate::steering::SteeringHandle;
 use crate::store::StoreRegistry;
 
-/// One-shot observer invoked with the exact accumulated run when a driver
-/// completes or is dropped. Kept crate-private: it is runtime lifecycle glue,
-/// not a host policy extension point.
+/// One-shot observer invoked with a cheap summary of the accumulated run when
+/// a driver completes or is dropped. Kept crate-private: it is runtime
+/// lifecycle glue, not a host policy extension point.
+///
+/// Takes [`TerminalRunSummary`], not the full [`crate::middleware::AgentRun`]
+/// (M-6): every installed observer only ever reads the final text, usage, and
+/// executed-tool names, never the full transcript, and the observer needs an
+/// *owned* value (the hosted path moves it into a spawned task that can
+/// outlive the caller's stack frame) — so `&AgentRun` will not do either. The
+/// summary is `Clone` and carries none of `AgentRun::messages`, which can be
+/// the largest field by far on a long-running conversation.
 pub(crate) type TerminalObserver =
-    Box<dyn FnOnce(crate::middleware::AgentRun, bool, Option<String>) + Send + Sync + 'static>;
+    Box<dyn FnOnce(TerminalRunSummary, bool, Option<String>) + Send + Sync + 'static>;
+
+/// Cheap, owned summary of an [`crate::middleware::AgentRun`] for
+/// [`TerminalObserver`] — see that type's docs for why this exists instead of
+/// the full run.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TerminalRunSummary {
+    /// The final response text, if the run produced one. Mirrors
+    /// [`crate::middleware::AgentRun::text`].
+    pub(crate) text: Option<String>,
+    /// Cumulative token usage across the run. `Copy`, so cloning this summary
+    /// is not where any cost lives.
+    pub(crate) usage: tinyinference_llm::usage::UsageTotals,
+    /// Names of calls that reached a tool executor, in execution order.
+    /// Mirrors [`crate::middleware::AgentRun::executed_tools`].
+    pub(crate) executed_tools: Vec<String>,
+}
+
+impl TerminalRunSummary {
+    /// Builds a summary from a live run without cloning its transcript.
+    pub(crate) fn from_run(run: &crate::middleware::AgentRun) -> Self {
+        Self {
+            text: run.text(),
+            usage: run.usage,
+            executed_tools: run.executed_tools.clone(),
+        }
+    }
+}
 
 /// The immutable ancestry of a run in a recursive harness invocation tree.
 ///
