@@ -148,17 +148,15 @@ pub(crate) struct NodeMeta {
     pub(crate) metadata: BTreeMap<String, String>,
 }
 
-/// A compiled-in node: id plus its handler.
+/// A compiled-in node: its handler. The node's id lives as the key of the
+/// `nodes` map it is stored in ([`crate::compiled::CompiledGraph::nodes`]).
 pub(crate) struct BuilderNode<State, Update> {
-    #[allow(dead_code)]
-    pub(crate) id: NodeId,
     pub(crate) handler: Arc<NodeHandler<State, Update>>,
 }
 
 impl<State, Update> Clone for BuilderNode<State, Update> {
     fn clone(&self) -> Self {
         Self {
-            id: self.id.clone(),
             handler: self.handler.clone(),
         }
     }

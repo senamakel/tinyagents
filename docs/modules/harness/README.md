@@ -309,8 +309,13 @@ Feature details:
 - [Store feature](store.md)
 - [Observability and events](observability.md)
 - [Testkit feature](testkit.md)
+- [Design notes: LangChain parity map and core-type sketch](design-notes.md)
 
-## LangChain Feature Parity Map
+## LangChain Feature Parity Map (moved)
+
+See [`design-notes.md`](design-notes.md) for the LangChain feature-parity
+checklist and the harness core-type sketch — moved out of this file to keep
+it under the repo's 500-line Markdown limit.
 
 This map is not a mandate to clone LangChain. It is a checklist of proven
 surface area that TinyAgents should intentionally support, adapt, or reject.
