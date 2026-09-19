@@ -1838,6 +1838,51 @@ async fn malformed_tool_arguments_recover_as_error_tool_result() {
         injected,
         "an error tool result should be injected into the transcript"
     );
+}
+
+/// I-13 regression: provider-invalid arguments that `relaxed_json` can
+/// actually repair (unquoted object keys, here) must be recovered and the
+/// call executed — not turned into a "fix your JSON" round trip the model
+/// often cannot act on. Before the fix, admission short-circuited straight
+/// to the tool-error path without ever trying `recover_relaxed_object`,
+/// even though that module exists specifically for this input shape.
+#[tokio::test]
+async fn provider_invalid_arguments_recoverable_by_relaxed_json_are_repaired_and_executed() {
+    use crate::testkit::EventRecorder;
+
+    let tool = Arc::new(crate::testkit::FakeTool::returning("lookup", "found it"));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            // Unquoted object key: `relaxed_json::recover_relaxed_object`
+            // repairs this to `{"query":"weather"}`.
+            invalid_tool_call_response("call-x", "lookup", "{query:\"weather\"}"),
+        ])),
+    );
+    harness.register_tool(tool.clone());
+
+    let recorder = EventRecorder::new();
+    let ctx = RunContext::new(RunConfig::new("relaxed-json-repair"), ())
+        .with_events(recorder.sink());
+    let run = harness
+        .invoke_in_context(&(), ctx, vec![Message::user("lookup the weather")])
+        .await
+        .expect("repaired arguments let the call execute");
+
+    assert_eq!(run.text().as_deref(), Some("found it"));
+    assert_eq!(
+        tool.calls(),
+        vec![json!({"query": "weather"})],
+        "the tool must receive the repaired, strict-JSON arguments"
+    );
+    assert!(
+        recorder.events().iter().any(|event| matches!(
+            event,
+            AgentEvent::InvalidToolArgs { recovery, .. } if recovery == "repaired"
+        )),
+        "the repair must be observable as InvalidToolArgs{{ recovery: \"repaired\" }}"
+    );
     // The recovery is surfaced as an `InvalidToolArgs` event.
     assert!(
         recorder
