@@ -219,7 +219,7 @@ pub struct ListNamespacesQuery {
     pub offset: usize,
 }
 
-/// One operation in a [`NamespacedStore::batch`] request.
+/// One operation in a [`NamespacedStore::batch`](super::NamespacedStore::batch) request.
 #[derive(Clone, Debug)]
 pub enum StoreOp {
     /// Read one item.
