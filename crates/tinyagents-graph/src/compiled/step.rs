@@ -119,7 +119,7 @@ where
     State: Clone + Send + Sync + 'static,
     Update: Send + 'static,
 {
-    /// Wraps a node future in panic safety and the configured per-node
+    /// Wraps a node future in panic safety and the node's effective flat
     /// timeout (if any), mapping an elapsed deadline onto
     /// [`TinyAgentsError::Timeout`].
     ///
@@ -133,6 +133,7 @@ where
         &self,
         node_id: &NodeId,
         fut: NodeFuture<Update>,
+        policy: &NodePolicy<State, Update>,
     ) -> Result<NodeResult<Update>> {
         let node_id_owned = node_id.clone();
         let guarded = async move {
@@ -141,7 +142,7 @@ where
                 Err(payload) => Err(Self::panic_error(&node_id_owned, payload)),
             }
         };
-        match self.graph.node_timeout {
+        match policy.timeout {
             Some(timeout) => match tokio::time::timeout(timeout, guarded).await {
                 Ok(result) => result,
                 Err(_) => Err(TinyAgentsError::Timeout(format!(
@@ -167,7 +168,7 @@ where
         TinyAgentsError::Graph(format!("node `{node_id}` panicked: {message}"))
     }
 
-    /// Runs one node handler under the graph's node-retry policy.
+    /// Runs one node handler under the node's effective retry policy.
     ///
     /// Builds a fresh handler future (and re-clones the context) for each
     /// attempt, so a retried node re-runs from its start — matching the
@@ -186,16 +187,16 @@ where
         state: &State,
         ctx: NodeContext,
         step: usize,
+        policy: &NodePolicy<State, Update>,
     ) -> Result<NodeResult<Update>> {
         let mut attempt = 0usize;
         loop {
             let fut = handler(state.clone(), ctx.clone());
-            match self.run_node_future(node_id, fut).await {
+            match self.run_node_future(node_id, fut, policy).await {
                 Ok(result) => return Ok(result),
                 Err(error) => {
-                    let retry = self
-                        .graph
-                        .node_retry
+                    let retry = policy
+                        .retry
                         .as_ref()
                         .filter(|policy| policy.should_retry(attempt) && is_retryable(&error));
                     let Some(policy) = retry else {
@@ -271,8 +272,9 @@ where
                 siblings.get(node_id).copied().unwrap_or(1),
                 state,
             );
+            let policy = self.graph.effective_policy(node_id);
             let result = self
-                .run_node_with_retry(node_id, &node.handler, state, node_ctx, step)
+                .run_node_with_retry(node_id, &node.handler, state, node_ctx, step, &policy)
                 .await;
             let stop = matches!(result, Err(_) | Ok(NodeResult::Interrupt(_)));
             results.push((activation.clone(), result));
@@ -342,6 +344,7 @@ where
             );
             let handler = node.handler.clone();
             let owned_node = node_id.clone();
+            let policy = self.graph.effective_policy(node_id);
             // Box each branch future behind a concrete `Send` bound. This
             // keeps the `select_all` rolling window below (used for a
             // `max_concurrency` bound) from requiring a higher-ranked `Send`
@@ -350,7 +353,7 @@ where
             let fut: std::pin::Pin<
                 Box<dyn std::future::Future<Output = Result<NodeResult<Update>>> + Send + '_>,
             > = Box::pin(async move {
-                self.run_node_with_retry(&owned_node, &handler, state, node_ctx, step)
+                self.run_node_with_retry(&owned_node, &handler, state, node_ctx, step, &policy)
                     .await
             });
             futures.push(fut);
