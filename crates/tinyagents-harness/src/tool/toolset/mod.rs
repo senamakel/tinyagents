@@ -157,6 +157,47 @@ where
     }
 }
 
+/// Bridges a [`ToolSet`] into the [`crate::tool::ToolDispatch`] the agent
+/// loop's admission path already speaks, so a name only the toolset chain
+/// exposes (not [`crate::tool::ToolRegistry::model_dispatch`]) can be
+/// admitted and executed through the exact same call path as a directly
+/// registered tool. Built by the loop when [`crate::runtime::AgentHarness`]
+/// has a toolset installed (see
+/// [`crate::runtime::AgentHarness::with_toolset`]) and the requested name is
+/// not in the registry.
+pub(crate) struct ToolSetDispatchBridge<State: Send + Sync, Ctx: Send + Sync> {
+    toolset: Arc<dyn ToolSet<State, Ctx>>,
+    tool: Arc<dyn Tool>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> ToolSetDispatchBridge<State, Ctx> {
+    pub(crate) fn new(toolset: Arc<dyn ToolSet<State, Ctx>>, tool: Arc<dyn Tool>) -> Self {
+        Self { toolset, tool }
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync, Ctx: Send + Sync> crate::tool::ToolDispatch<State, Ctx>
+    for ToolSetDispatchBridge<State, Ctx>
+{
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.tool.clone()
+    }
+
+    async fn execute(
+        &self,
+        _state: &State,
+        arguments: Value,
+        _options: ToolCallOptions,
+        parent: &RunContext<Ctx>,
+    ) -> anyhow::Result<ToolResult> {
+        self.toolset
+            .call(self.tool.name(), arguments, parent)
+            .await
+            .map_err(|err| anyhow::anyhow!(err.to_string()))
+    }
+}
+
 /// Internal helper shared by every renaming/prefixing/prepared/approval
 /// adaptor: a [`Tool`] that forwards everything to `inner` except the fields
 /// explicitly overridden here.
