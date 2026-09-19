@@ -79,13 +79,8 @@ where
         binding: crate::subagent_node::AgentInvocationBinding,
     ) -> Result<GraphExecution<State>> {
         self.execute(
-            state,
-            vec![Activation::node(self.entry.clone())],
-            None,
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            Some(binding),
+            RunSeed::fresh(state, vec![Activation::node(self.entry.clone())], None)
+                .with_binding(binding),
         )
         .await
     }
