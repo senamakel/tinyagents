@@ -363,14 +363,205 @@ pub struct BarrierArrivals {
 }
 
 impl<State> Checkpoint<State> {
+    /// Builds a fresh checkpoint format v2 record.
+    ///
+    /// Sensible defaults for everything except `state` and `tasks`: a
+    /// freshly-minted [`checkpoint_id`](Self::checkpoint_id) (collision-free
+    /// across process restarts, matching what every executor-driven write
+    /// already used — see
+    /// [`tinyagents_harness::ids::new_checkpoint_id`]), the current
+    /// [`created_at`](Self::created_at), [`version`](Self::version) ==
+    /// [`CHECKPOINT_FORMAT_VERSION`], and empty `thread_id`/`completed`/
+    /// `pending_writes`/`interrupts`/`barrier_arrivals`/`namespace`, with
+    /// `metadata` left `null`. Chain the `with_*` setters below to fill in
+    /// the rest; every field is also directly `pub` for call sites that
+    /// prefer plain field assignment.
+    pub fn new(state: State, tasks: Vec<PendingActivation>) -> Self {
+        Self {
+            version: CHECKPOINT_FORMAT_VERSION,
+            created_at: tinyagents_harness::ids::now_ms(),
+            thread_id: String::new(),
+            checkpoint_id: tinyagents_harness::ids::new_checkpoint_id()
+                .as_str()
+                .to_string(),
+            run_id: None,
+            parent_checkpoint_id: None,
+            namespace: Vec::new(),
+            state,
+            tasks,
+            completed: Vec::new(),
+            pending_writes: Vec::new(),
+            interrupts: Vec::new(),
+            barrier_arrivals: Vec::new(),
+            metadata: serde_json::Value::Null,
+            next_nodes: Vec::new(),
+            completed_tasks: Vec::new(),
+            completed_routes: Vec::new(),
+            pending_activations: None,
+        }
+    }
+
+    /// Alias for [`Checkpoint::new`] with no pending tasks yet — the start of
+    /// a fluent build, e.g. `Checkpoint::builder(state).with_tasks(pending)`.
+    pub fn builder(state: State) -> Self {
+        Self::new(state, Vec::new())
+    }
+
+    /// Sets [`Checkpoint::thread_id`].
+    pub fn with_thread_id(mut self, thread_id: impl Into<String>) -> Self {
+        self.thread_id = thread_id.into();
+        self
+    }
+
+    /// Sets [`Checkpoint::checkpoint_id`], overriding the freshly-minted
+    /// default from [`Checkpoint::new`].
+    pub fn with_checkpoint_id(mut self, checkpoint_id: impl Into<String>) -> Self {
+        self.checkpoint_id = checkpoint_id.into();
+        self
+    }
+
+    /// Sets [`Checkpoint::run_id`].
+    pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.run_id = Some(run_id.into());
+        self
+    }
+
+    /// Sets [`Checkpoint::parent_checkpoint_id`].
+    pub fn with_parent_checkpoint_id(mut self, parent: Option<String>) -> Self {
+        self.parent_checkpoint_id = parent;
+        self
+    }
+
+    /// Sets [`Checkpoint::namespace`].
+    pub fn with_namespace(mut self, namespace: Vec<String>) -> Self {
+        self.namespace = namespace;
+        self
+    }
+
+    /// Sets [`Checkpoint::tasks`].
+    pub fn with_tasks(mut self, tasks: Vec<PendingActivation>) -> Self {
+        self.tasks = tasks;
+        self
+    }
+
+    /// Sets [`Checkpoint::completed`].
+    pub fn with_completed(mut self, completed: Vec<CompletedTask>) -> Self {
+        self.completed = completed;
+        self
+    }
+
+    /// Sets [`Checkpoint::pending_writes`].
+    pub fn with_pending_writes(mut self, writes: Vec<PendingWrite>) -> Self {
+        self.pending_writes = writes;
+        self
+    }
+
+    /// Sets [`Checkpoint::interrupts`].
+    pub fn with_interrupts(mut self, interrupts: Vec<Interrupt>) -> Self {
+        self.interrupts = interrupts;
+        self
+    }
+
+    /// Sets [`Checkpoint::barrier_arrivals`].
+    pub fn with_barrier_arrivals(mut self, barrier_arrivals: Vec<BarrierArrivals>) -> Self {
+        self.barrier_arrivals = barrier_arrivals;
+        self
+    }
+
+    /// Sets [`Checkpoint::metadata`].
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// The effective pending-task set: [`Checkpoint::tasks`] directly on a
+    /// v2 record (`version >= 2`), or derived from the v1 fields
+    /// (preferring `pending_activations`, falling back to `next_nodes`) on a
+    /// v1 record. Non-mutating — shared by [`Checkpoint::normalize`] (which
+    /// writes the result back) and [`Checkpoint::to_metadata`] (which only
+    /// needs to read it).
+    fn effective_tasks(&self) -> Vec<PendingActivation> {
+        if self.version >= CHECKPOINT_FORMAT_VERSION {
+            return self.tasks.clone();
+        }
+        match &self.pending_activations {
+            Some(pending) if !pending.is_empty() => pending.clone(),
+            _ => self
+                .next_nodes
+                .iter()
+                .cloned()
+                .map(|node| PendingActivation {
+                    node,
+                    send_arg: None,
+                    task_id: empty_task_id(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The effective completed-task set: [`Checkpoint::completed`] directly
+    /// on a v2 record, or zipped from the v1 `completed_tasks`/
+    /// `completed_routes` pair (padding a shorter/missing `completed_routes`
+    /// with empty routing — the pre-`completed_routes` behavior) on a v1
+    /// record. Non-mutating, mirroring [`Checkpoint::effective_tasks`].
+    fn effective_completed(&self) -> Vec<CompletedTask> {
+        if self.version >= CHECKPOINT_FORMAT_VERSION {
+            return self.completed.clone();
+        }
+        self.completed_tasks
+            .iter()
+            .cloned()
+            .zip(
+                self.completed_routes
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::repeat(Vec::new())),
+            )
+            .map(|(node, routes)| CompletedTask {
+                task_id: empty_task_id(),
+                node,
+                routes,
+            })
+            .collect()
+    }
+
+    /// Folds a checkpoint format v1 record into the current (v2) shape,
+    /// in place: populates [`Checkpoint::tasks`]/[`Checkpoint::completed`]
+    /// from whichever legacy fields the record carries (see
+    /// [`Checkpoint::effective_tasks`]/[`Checkpoint::effective_completed`]),
+    /// clears the legacy fields (so a subsequent `put` of the same value
+    /// re-serializes as clean v2), and stamps [`Checkpoint::version`] to
+    /// [`CHECKPOINT_FORMAT_VERSION`].
+    ///
+    /// A no-op on an already-v2 record. Every bundled [`Checkpointer`]
+    /// backend calls this on every decode path (`get`/`get_scoped`/`list`/
+    /// `state_history`/`get_thread`), so callers outside this module never
+    /// observe a v1 record — see `docs/modules/graph/checkpointing.md`.
+    pub fn normalize(&mut self) {
+        if self.version >= CHECKPOINT_FORMAT_VERSION {
+            return;
+        }
+        self.tasks = self.effective_tasks();
+        self.completed = self.effective_completed();
+        self.next_nodes = Vec::new();
+        self.completed_tasks = Vec::new();
+        self.completed_routes = Vec::new();
+        self.pending_activations = None;
+        self.version = CHECKPOINT_FORMAT_VERSION;
+    }
+
     /// Builds the lightweight [`CheckpointMetadata`] summary for this checkpoint.
     ///
     /// The single source of truth for projecting a stored checkpoint onto its
     /// listing record: it parses the `source`/`step` out of the free-form
-    /// `metadata` (falling back to [`CheckpointSource::Loop`]/`0`) and copies the
-    /// lineage fields. Both `Checkpointer::list` and the state-inspection API
+    /// `metadata` (falling back to [`CheckpointSource::Loop`]/`0`), projects
+    /// [`Checkpoint::effective_tasks`] onto its node ids for
+    /// [`CheckpointMetadata::next_nodes`], and copies the lineage fields. Both
+    /// `Checkpointer::list` and the state-inspection API
     /// (`get_state`/`get_state_history`) use it so a snapshot's metadata always
-    /// matches what listing reports.
+    /// matches what listing reports. Correct on an un-normalized v1 record too
+    /// (it never mutates `self`), which is what lets a header-only listing
+    /// path (no full-record decode) project it without first normalizing.
     pub fn to_metadata(&self) -> CheckpointMetadata {
         let source = self
             .metadata
@@ -383,13 +574,18 @@ impl<State> Checkpoint<State> {
             .get("step")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
+        let next_nodes = self
+            .effective_tasks()
+            .into_iter()
+            .map(|t| t.node)
+            .collect();
         CheckpointMetadata {
             thread_id: self.thread_id.clone(),
             checkpoint_id: self.checkpoint_id.clone(),
             run_id: self.run_id.clone(),
             parent_checkpoint_id: self.parent_checkpoint_id.clone(),
             namespace: self.namespace.clone(),
-            next_nodes: self.next_nodes.clone(),
+            next_nodes,
             has_interrupts: !self.interrupts.is_empty(),
             source,
             step,
