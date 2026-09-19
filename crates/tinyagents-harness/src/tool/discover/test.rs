@@ -66,6 +66,13 @@ fn search_matches_on_property_names_and_split_identifiers() {
     assert_eq!(hits[0].name, "stock_quote");
     let hits = catalog.search("pdf", 5);
     assert_eq!(hits[0].name, "pdf_read");
+    // "path" occurs only as `pdf_read`'s property name, not in any tool's
+    // description ("Read the text of a PDF file on disk."), so this actually
+    // exercises property-name indexing — a query term also present in the
+    // description ("ticker"/"symbol" above) would pass even if `DeferredTool`
+    // stopped indexing property names.
+    let hits = catalog.search("path", 5);
+    assert_eq!(hits[0].name, "pdf_read");
 }
 
 #[test]
