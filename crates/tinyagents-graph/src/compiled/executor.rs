@@ -632,6 +632,38 @@ where
         Ok(self.finish_run(&mut ctx, state).await)
     }
 
+    /// Runs one superstep, racing it against this run's cooperative
+    /// cancellation token (I4 part 2) so a long-running node's handlers
+    /// cannot indefinitely block a cancellation request once requested.
+    ///
+    /// Returns `Ok(Some(step_run))` when the step completed first,
+    /// `Ok(None)` when the token was already cancelled or was cancelled
+    /// while the step's handlers were still in flight (the step's own future
+    /// is then dropped, abandoning it — see [`super::run_ctx::RunDropGuard`]'s
+    /// doc for what that does and does not guarantee for any checkpoint
+    /// write the abandoned step's handlers had already triggered), and
+    /// `Err` for an ordinary step failure.
+    async fn run_step_with_cancel(
+        &self,
+        runner: &StepRunner<'_, State, Update>,
+        ctx: &mut RunCtx<'_, State, Update>,
+        active: &[Activation],
+        state: &State,
+        step: usize,
+    ) -> Result<Option<crate::compiled::step::StepRun<Update>>> {
+        let Some(token) = ctx.cancellation.clone() else {
+            return runner.run_step(ctx, active, state, step).await.map(Some);
+        };
+        if token.is_cancelled() {
+            return Ok(None);
+        }
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => Ok(None),
+            result = runner.run_step(ctx, active, state, step) => result.map(Some),
+        }
+    }
+
     /// Checks the recursion-limit, wall-clock-deadline, and per-node
     /// visit-count guards for the next superstep, then advances `ctx.steps`,
     /// assigns any missing task ids in `active` (a failure checkpoint
