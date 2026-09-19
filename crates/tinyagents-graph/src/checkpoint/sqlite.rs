@@ -74,7 +74,10 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// commit, not a process crash) instead of the slower `FULL` default, and an
 /// explicit `busy_timeout` so a writer contending with another connection
 /// waits rather than failing immediately with `SQLITE_BUSY`.
-fn prepare_connection(conn: &Connection) -> Result<()> {
+///
+/// Shared with [`crate::cache::SqliteTaskCache`], which opens its own
+/// connection with the same pragmas.
+pub(crate) fn prepare_connection(conn: &Connection) -> Result<()> {
     conn.busy_timeout(BUSY_TIMEOUT)
         .map_err(|e| sqlite_err("set busy_timeout", e))?;
     conn.execute_batch(

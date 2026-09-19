@@ -53,7 +53,9 @@ pub use builder::{
     END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext,
     NodeFuture, NodeHandler, NodePolicy, Route, RouterFn, START,
 };
-pub use cache::{TaskCache, TaskCacheKey};
+#[cfg(feature = "sqlite")]
+pub use cache::SqliteTaskCache;
+pub use cache::{InMemoryTaskCache, TaskCache, TaskCacheKey};
 pub use channel::{
     Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
     Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
