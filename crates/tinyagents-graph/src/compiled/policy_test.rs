@@ -362,14 +362,15 @@ async fn cache_key_receives_send_arg_per_fanout_activation() {
         .add_node("work", {
             let calls = calls.clone();
             move |_s, ctx: NodeContext| {
-            let calls = calls.clone();
-            async move {
-                calls.fetch_add(1, AtomicOrdering::SeqCst);
-                let arg = ctx.send_arg.and_then(|v| v.as_str().map(String::from));
-                Ok(NodeResult::Update(vec![format!(
-                    "work:{}",
-                    arg.unwrap_or_default()
-                )]))
+                let calls = calls.clone();
+                async move {
+                    calls.fetch_add(1, AtomicOrdering::SeqCst);
+                    let arg = ctx.send_arg.and_then(|v| v.as_str().map(String::from));
+                    Ok(NodeResult::Update(vec![format!(
+                        "work:{}",
+                        arg.unwrap_or_default()
+                    )]))
+                }
             }
         })
         .mark_command_routing("fan")
