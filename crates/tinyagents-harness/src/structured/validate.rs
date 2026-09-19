@@ -159,6 +159,9 @@ fn matches_type(value: &Value, kind: &str) -> bool {
     }
 }
 
+/// Names a JSON value's kind for error messages, distinguishing `integer`
+/// from `number` (a schema `type` vocabulary distinction JSON itself does not
+/// make).
 fn kind_of(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
