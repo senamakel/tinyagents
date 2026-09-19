@@ -138,3 +138,93 @@ async fn node_defaults_timeout_beats_legacy_graph_wide_timeout() {
     let run = graph.run(0).await.unwrap();
     assert_eq!(run.state, 1, "the 5s default timeout let the 60ms node finish");
 }
+
+// ── A.1: idle timeout + heartbeat ────────────────────────────────────────────
+
+/// A handler that heartbeats more often than its `idle_timeout` survives
+/// well past what a flat timeout of that same duration would have allowed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_keeps_idle_timeout_from_firing() {
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("worker", |s: i32, ctx: NodeContext| async move {
+            // Runs for 200ms total, heartbeating every 20ms — far inside the
+            // 60ms idle window, but 3x longer than a flat 60ms timeout.
+            for _ in 0..10 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                ctx.heartbeat();
+            }
+            Ok(NodeResult::Update(s + 1))
+        })
+        .with_node_policy(
+            "worker",
+            NodePolicy::default().with_idle_timeout(Duration::from_millis(60)),
+        )
+        .set_entry("worker")
+        .set_finish("worker")
+        .compile()
+        .unwrap();
+
+    let run = graph.run(0).await.unwrap();
+    assert_eq!(run.state, 1);
+}
+
+/// With only `idle_timeout` set and no heartbeat ever sent, the node times
+/// out at (approximately) exactly the idle duration after it starts — the
+/// idle timeout degrades to a flat timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_timeout_without_heartbeats_is_a_flat_timeout() {
+    let idle = Duration::from_millis(80);
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("silent", |s: i32, _c: NodeContext| async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(NodeResult::Update(s))
+        })
+        .with_node_policy("silent", NodePolicy::default().with_idle_timeout(idle))
+        .set_entry("silent")
+        .set_finish("silent")
+        .compile()
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let err = graph.run(0).await.unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(matches!(err, TinyAgentsError::Timeout(_)), "got {err:?}");
+    assert!(
+        elapsed >= idle && elapsed < idle + Duration::from_millis(150),
+        "expected the idle timeout to fire in [{idle:?}, {idle:?} + slop), got {elapsed:?}"
+    );
+}
+
+/// A flat `timeout` and an `idle_timeout` on the same node are independent
+/// ceilings: a handler that heartbeats forever is still cut off by the
+/// flat timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn flat_timeout_still_bounds_a_heartbeating_handler() {
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("chatty", |s: i32, ctx: NodeContext| async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                ctx.heartbeat();
+                if false {
+                    break;
+                }
+            }
+            #[allow(unreachable_code)]
+            Ok(NodeResult::Update(s))
+        })
+        .with_node_policy(
+            "chatty",
+            NodePolicy::default()
+                .with_idle_timeout(Duration::from_millis(100))
+                .with_timeout(Duration::from_millis(60)),
+        )
+        .set_entry("chatty")
+        .set_finish("chatty")
+        .compile()
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let err = graph.run(0).await.unwrap_err();
+    assert!(matches!(err, TinyAgentsError::Timeout(_)), "got {err:?}");
+    assert!(started.elapsed() < Duration::from_millis(300));
+}
