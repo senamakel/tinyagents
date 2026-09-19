@@ -644,14 +644,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_provider() {
+    fn default_validate_does_not_restrict_provider_ids() {
+        // `validate()` (used by `from_json`/`try_from_snapshot`) must accept
+        // a synthetic or fictional provider id, so a hand-written test or
+        // example snapshot never has to name a real vendor.
+        let mut entry = base_entry();
+        entry.provider = "totally-fictional-vendor".to_string();
+        base_snapshot(vec![entry]).validate().unwrap();
+    }
+
+    #[test]
+    fn validate_with_providers_rejects_ids_outside_the_allowlist() {
         let mut entry = base_entry();
         entry.provider = "totally-unknown-vendor".to_string();
         let error = base_snapshot(vec![entry])
-            .validate()
+            .validate_with_providers(Some(KNOWN_PROVIDERS))
             .unwrap_err()
             .to_string();
         assert!(error.contains("unrecognized provider"), "got: {error}");
+    }
+
+    #[test]
+    fn validate_with_providers_accepts_a_listed_id() {
+        base_snapshot(vec![base_entry()])
+            .validate_with_providers(Some(&["openai"]))
+            .unwrap();
     }
 
     #[test]
