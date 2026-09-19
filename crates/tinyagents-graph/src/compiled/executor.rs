@@ -355,7 +355,7 @@ where
         target: ResumeTarget,
         command: Command<Update>,
     ) -> Result<GraphExecution<State>> {
-        self.resume_from_inner(thread_id.into(), target, command, None)
+        self.resume_from_inner(thread_id.into(), target, command, None, RunOptions::default())
             .await
     }
 
@@ -373,8 +373,14 @@ where
         command: Command<Update>,
         binding: crate::subagent_node::AgentInvocationBinding,
     ) -> Result<GraphExecution<State>> {
-        self.resume_from_inner(thread_id.into(), target, command, Some(binding))
-            .await
+        self.resume_from_inner(
+            thread_id.into(),
+            target,
+            command,
+            Some(binding),
+            RunOptions::default(),
+        )
+        .await
     }
 
     fn initial_inputs(
