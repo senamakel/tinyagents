@@ -24,6 +24,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> PreparedToolSet<State, Ctx> {
         Self { inner, transform }
     }
 
+    /// Convenience constructor: keeps only the schemas a per-schema
+    /// predicate accepts, ignoring `ctx`. Built on
+    /// [`retain_matching_schemas`], the same retain logic
+    /// [`crate::middleware::library::DynamicToolSelectionMiddleware`] uses.
+    pub fn filtering(
+        inner: Arc<dyn ToolSet<State, Ctx>>,
+        predicate: Arc<dyn Fn(&tinyinference_llm::tool::ToolSchema) -> bool + Send + Sync>,
+    ) -> Self {
+        Self::new(
+            inner,
+            Arc::new(move |_ctx, mut schemas| {
+                retain_matching_schemas(&mut schemas, predicate.as_ref());
+                schemas
+            }),
+        )
+    }
+
     /// Computes the effective (post-transform) tool list for `ctx`, paired
     /// with the original inner tool each still-present entry came from.
     async fn effective(
