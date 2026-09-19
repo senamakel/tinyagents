@@ -317,7 +317,11 @@ pub trait Summarizer: Send + Sync {
         let mut original_token_estimate = 0u64;
         let mut summary_token_estimate = 0u64;
         for (i, record) in summaries.iter().enumerate() {
-            parts.push(format!("[part {}] {}", i + 1, record.summary.text_or_default()));
+            parts.push(format!(
+                "[part {}] {}",
+                i + 1,
+                record.summary.text_or_default()
+            ));
             source_ids.extend(record.provenance.source_ids.iter().cloned());
             original_token_estimate += record.provenance.original_token_estimate;
             summary_token_estimate += record.provenance.summary_token_estimate;

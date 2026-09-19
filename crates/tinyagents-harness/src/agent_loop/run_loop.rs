@@ -489,8 +489,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // case) allocates nothing — see `handoff_transform`.
             if let Some(profile) = binding.model.profile() {
                 let target_origin = handoff_transform::target_origin_for(profile);
-                let outcome =
-                    handoff_transform::prepare_for_model(&request.messages, profile, &target_origin);
+                let outcome = handoff_transform::prepare_for_model(
+                    &request.messages,
+                    profile,
+                    &target_origin,
+                );
                 let changes = outcome.changes;
                 if changes > 0 {
                     request.messages = outcome.messages.into_owned();

@@ -221,7 +221,13 @@ fn is_foreign(
         None => {
             assistant.content.iter().any(|block| {
                 matches!(block, ContentBlock::RedactedThinking { .. })
-                    || matches!(block, ContentBlock::Thinking { signature: Some(_), .. })
+                    || matches!(
+                        block,
+                        ContentBlock::Thinking {
+                            signature: Some(_),
+                            ..
+                        }
+                    )
                     || (matches!(block, ContentBlock::Image(_)) && !target.modalities.image_in)
             }) || assistant
                 .tool_calls
@@ -353,9 +359,7 @@ fn mint_tool_call_id(id: &str, target: &ModelProfile, used: &mut HashSet<String>
     let mut suffix = 1u32;
     while used.contains(&candidate) {
         let suffix_str = format!("-{suffix}");
-        let keep = max_len
-            .saturating_sub(suffix_str.chars().count())
-            .max(1);
+        let keep = max_len.saturating_sub(suffix_str.chars().count()).max(1);
         let base: String = truncated.chars().take(keep).collect();
         candidate = format!("{base}{suffix_str}");
         suffix += 1;

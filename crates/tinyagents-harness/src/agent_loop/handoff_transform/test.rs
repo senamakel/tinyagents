@@ -117,12 +117,16 @@ fn foreign_redacted_thinking_is_dropped_and_signed_thinking_becomes_text() {
             .any(|block| matches!(block, ContentBlock::RedactedThinking { .. }))
     );
     // The signed thinking became plain visible text (no signature to replay).
-    assert!(rewritten.content.contains(&ContentBlock::Text(
-        "signed reasoning".to_string()
-    )));
-    assert!(rewritten.content.contains(&ContentBlock::Text(
-        "visible answer".to_string()
-    )));
+    assert!(
+        rewritten
+            .content
+            .contains(&ContentBlock::Text("signed reasoning".to_string()))
+    );
+    assert!(
+        rewritten
+            .content
+            .contains(&ContentBlock::Text("visible answer".to_string()))
+    );
     // The rewritten message no longer claims the origin provider verbatim.
     assert!(rewritten.origin.is_none());
 }
@@ -138,7 +142,11 @@ fn foreign_unsigned_thinking_is_left_alone() {
             },
             ContentBlock::Text("answer".into()),
         ],
-        vec![ToolCall::new("call-needs-fix!", "search", serde_json::json!({}))],
+        vec![ToolCall::new(
+            "call-needs-fix!",
+            "search",
+            serde_json::json!({}),
+        )],
     );
     foreign.origin = Some(openai_origin());
     let messages = vec![Message::Assistant(foreign)];
@@ -150,7 +158,10 @@ fn foreign_unsigned_thinking_is_left_alone() {
     };
     assert!(rewritten.content.iter().any(|block| matches!(
         block,
-        ContentBlock::Thinking { signature: None, .. }
+        ContentBlock::Thinking {
+            signature: None,
+            ..
+        }
     )));
 }
 
@@ -188,7 +199,11 @@ fn foreign_tool_call_ids_are_normalized_and_tool_results_follow() {
     let long_id = "resp_call_".to_string() + &"x".repeat(80);
     let mut foreign = assistant(
         vec![ContentBlock::Text("checking".into())],
-        vec![ToolCall::new(long_id.clone(), "search", serde_json::json!({"q":"x"}))],
+        vec![ToolCall::new(
+            long_id.clone(),
+            "search",
+            serde_json::json!({"q":"x"}),
+        )],
     );
     foreign.origin = Some(openai_origin());
     let messages = vec![
