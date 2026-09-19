@@ -171,6 +171,46 @@ fn answer_tool_search_clamps_limit_and_handles_misses() {
     assert!(result.is_error);
 }
 
+/// Regression: `max_limit: 0` used to reach `usize::clamp(1, 0)`, which
+/// panics because its minimum exceeds its maximum — a model-supplied numeric
+/// `limit` could crash the process. It must instead clamp against a
+/// normalized effective maximum of at least 1.
+#[test]
+fn answer_tool_search_does_not_panic_on_a_zero_max_limit() {
+    let policy = ToolDiscoveryPolicy {
+        max_limit: 0,
+        default_limit: 5,
+        ..ToolDiscoveryPolicy::default()
+    };
+    let (result, matched) = answer_tool_search(
+        &catalog(),
+        &policy,
+        &json!({"query": "pdf invite quote symbol attendees", "limit": 50}),
+    );
+    assert!(!result.is_error);
+    assert!(matched <= 1, "effective max_limit must clamp to at least 1");
+}
+
+/// Regression: the `tool_search` schema advertised `"minimum": 1, "maximum":
+/// policy.max_limit` verbatim, so `max_limit: 0` produced an inconsistent
+/// (and provider-invalid) `minimum > maximum` pair, and a `default_limit`
+/// above `max_limit` advertised a default outside the advertised bounds. Both
+/// must be normalized before they reach the wire.
+#[test]
+fn tool_search_schema_normalizes_inconsistent_limits() {
+    let policy = ToolDiscoveryPolicy {
+        max_limit: 0,
+        default_limit: 5,
+        ..ToolDiscoveryPolicy::default()
+    };
+    let schemas = bridge_schemas(&catalog(), &policy);
+    let limit = &schemas[0].parameters["properties"]["limit"];
+    let minimum = limit["minimum"].as_u64().unwrap();
+    let maximum = limit["maximum"].as_u64().unwrap();
+    assert!(minimum <= maximum, "minimum must not exceed maximum");
+    assert!(maximum >= 1);
+}
+
 #[test]
 fn unwrap_tool_call_accepts_object_string_and_missing_arguments() {
     let (name, args) =
