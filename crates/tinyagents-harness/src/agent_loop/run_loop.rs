@@ -512,7 +512,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `Xml`/`Pformat` stay forced as explicit opt-ins.
             let effective_dispatcher = match self.policy.tool_dialect {
                 crate::config::ToolDispatcher::Auto => {
-                    if binding.model.profile().is_some_and(|profile| profile.tool_calling) {
+                    // A model with *no declared profile at all* is unknown,
+                    // not incapable — treated as capable (the historical
+                    // behavior, and correct for hosts/tests that never
+                    // bother declaring a profile). Only an explicit
+                    // `tool_calling: false` triggers the documented Xml
+                    // fallback.
+                    if binding.model.profile().is_none_or(|profile| profile.tool_calling) {
                         crate::config::ToolDispatcher::Native
                     } else {
                         crate::config::ToolDispatcher::Xml
