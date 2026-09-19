@@ -499,6 +499,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             }) => template.clone(),
                             _ => unreachable!("guarded by the match arm above"),
                         };
+                        let schema = crate::tool::apply_profile_schema_transform(
+                            &schema,
+                            binding.model.profile(),
+                        );
                         request.response_format = Some(ResponseFormat::Text);
                         let instructions = template.clone().unwrap_or_else(|| {
                             crate::structured::default_prompted_template().to_string()
