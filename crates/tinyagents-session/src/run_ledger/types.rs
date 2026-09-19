@@ -115,6 +115,13 @@ impl WorkflowRunStatus {
             _ => Self::Pending,
         }
     }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -155,6 +162,21 @@ pub struct WorkflowRun {
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// Monotonically increasing durable revision used for compare-and-swap
+    /// workflow state transitions.
+    pub revision: u64,
+    /// The live workflow driver, when a driver currently owns this run.
+    pub lease_owner: Option<String>,
+    /// When the current driver lease may be taken over after a crash.
+    pub lease_expires_at: Option<DateTime<Utc>>,
+}
+
+/// Result of atomically acquiring a workflow driver's lease.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkflowLeaseClaim {
+    Acquired(WorkflowRun),
+    Busy(WorkflowRun),
+    Missing,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

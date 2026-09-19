@@ -73,6 +73,7 @@ pub mod ops;
 pub mod retention;
 pub mod run_ledger;
 mod store;
+pub mod transcript;
 pub mod types;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
