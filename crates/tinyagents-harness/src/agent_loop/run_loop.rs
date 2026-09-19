@@ -5,6 +5,7 @@
 //! Split out of `agent_loop/mod.rs`; see that module's doc comment for
 //! the full loop lifecycle, limits, and backoff design.
 
+use super::handoff_transform;
 use super::model_call::ModelCallBase;
 use super::*;
 
