@@ -117,7 +117,9 @@ pub fn answer_tool_search(
         .get("limit")
         .and_then(Value::as_u64)
         .map_or(policy.default_limit, |n| {
-            usize::try_from(n).unwrap_or(usize::MAX).clamp(1, policy.max_limit)
+            usize::try_from(n)
+                .unwrap_or(usize::MAX)
+                .clamp(1, policy.max_limit)
         });
 
     let matches = catalog.search(query, limit);
@@ -179,7 +181,9 @@ pub fn unwrap_tool_call(arguments: &Value) -> Result<(String, Value), String> {
                 )
             })?,
         Some(_) => {
-            return Err(format!("`{TOOL_CALL_NAME}.arguments` must be a JSON object."));
+            return Err(format!(
+                "`{TOOL_CALL_NAME}.arguments` must be a JSON object."
+            ));
         }
     };
     Ok((name.to_string(), inner))

@@ -27,7 +27,11 @@ fn catalog() -> DeferredCatalog {
             "Send a calendar invite to one or more attendees.",
             &["attendees", "start", "end"],
         ),
-        schema("pdf_read", "Read the text of a PDF file on disk.", &["path"]),
+        schema(
+            "pdf_read",
+            "Read the text of a PDF file on disk.",
+            &["path"],
+        ),
     ])
 }
 
@@ -90,8 +94,14 @@ fn manifest_degrades_full_to_names_to_count() {
 
 #[test]
 fn first_sentence_clips_and_ignores_inline_dots() {
-    assert_eq!(first_sentence("Read v1.2 files. Then more.", 60), "Read v1.2 files");
-    assert_eq!(first_sentence("No terminator here", 60), "No terminator here");
+    assert_eq!(
+        first_sentence("Read v1.2 files. Then more.", 60),
+        "Read v1.2 files"
+    );
+    assert_eq!(
+        first_sentence("No terminator here", 60),
+        "No terminator here"
+    );
     assert_eq!(first_sentence("abcdefghij", 4), "abcd…");
     assert_eq!(first_sentence("  spaced\n\nout  ", 60), "spaced out");
 }
@@ -102,10 +112,17 @@ fn bridge_schemas_are_search_then_call_and_embed_manifest() {
     let [search, call] = bridge_schemas(&catalog(), &policy);
     assert_eq!(search.name, TOOL_SEARCH_NAME);
     assert_eq!(call.name, TOOL_CALL_NAME);
-    assert!(search.description.contains("- pdf_read: Read the text of a PDF file on disk"));
+    assert!(
+        search
+            .description
+            .contains("- pdf_read: Read the text of a PDF file on disk")
+    );
     assert_eq!(search.parameters["required"], json!(["query"]));
     assert_eq!(call.parameters["required"], json!(["name", "arguments"]));
-    assert_eq!(search.parameters["properties"]["limit"]["maximum"], json!(20));
+    assert_eq!(
+        search.parameters["properties"]["limit"]["maximum"],
+        json!(20)
+    );
 }
 
 #[test]
@@ -119,8 +136,11 @@ fn bridge_schemas_are_byte_stable_across_builds() {
 #[test]
 fn answer_tool_search_returns_full_schemas_for_hits() {
     let policy = ToolDiscoveryPolicy::default();
-    let (result, matched) =
-        answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf", "limit": 1}));
+    let (result, matched) = answer_tool_search(
+        &catalog(),
+        &policy,
+        &json!({"query": "read a pdf", "limit": 1}),
+    );
     assert!(!result.is_error);
     assert_eq!(matched, 1);
     let text = result.text();
@@ -142,8 +162,7 @@ fn answer_tool_search_clamps_limit_and_handles_misses() {
     );
     assert!(matched <= 2);
 
-    let (result, matched) =
-        answer_tool_search(&catalog(), &policy, &json!({"query": "zzzz qqqq"}));
+    let (result, matched) = answer_tool_search(&catalog(), &policy, &json!({"query": "zzzz qqqq"}));
     assert!(!result.is_error);
     assert_eq!(matched, 0);
     assert!(result.text().starts_with("No deferred tool matches"));

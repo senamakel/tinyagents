@@ -177,9 +177,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
             // intrinsic bridge only fills a name nobody registered.
-            let bridge = crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery);
+            let bridge =
+                crate::tool::discover::bridge_schemas(&deferred_catalog, &self.policy.discovery);
             for schema in bridge {
-                if !tool_schemas.iter().any(|existing| existing.name == schema.name) {
+                if !tool_schemas
+                    .iter()
+                    .any(|existing| existing.name == schema.name)
+                {
                     tool_schemas.push(schema);
                 }
             }

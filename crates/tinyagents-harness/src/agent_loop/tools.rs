@@ -349,10 +349,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // directly. `tool_search` is answered from the run's catalogue without
         // running a tool. A host-registered tool under either name wins, and
         // a call the provider could not parse is left for the recovery below.
-        if call.invalid.is_none() && self.tools.dispatch(&call.name).is_none() {
-            if let Some(answered) = self.answer_discovery_bridge(ctx, status, call)? {
-                return Ok(answered);
-            }
+        if call.invalid.is_none()
+            && self.tools.dispatch(&call.name).is_none()
+            && let Some(answered) = self.answer_discovery_bridge(ctx, status, call)?
+        {
+            return Ok(answered);
         }
 
         // The slot is *reserved* above (cap-first, so a middleware hook never
@@ -394,7 +395,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(detail)));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                detail,
+            )));
         }
 
         // Hosted turns carry an explicit definition allowlist. Do not merely
@@ -478,7 +481,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         recovery: "tool_error".to_string(),
                     });
                     status.set_last_event(record.id);
-                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(message)));
+                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                        message,
+                    )));
                 }
             }
         };
@@ -527,10 +532,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if matches!(self.policy.invalid_args, InvalidArgsPolicy::Fail) {
                     return Err(TinyAgentsError::Validation(error.to_string()));
                 }
-                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(format!(
-                    "invalid injected arguments for tool `{}`: {error}",
-                    call.name
-                ))));
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                    format!(
+                        "invalid injected arguments for tool `{}`: {error}",
+                        call.name
+                    ),
+                )));
             }
         };
         call.arguments = prepared_arguments;
@@ -569,7 +576,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(message)));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                message,
+            )));
         }
         // Host authorization is deliberately last in admission: the gate sees
         // the raw provider arguments (including any forged hidden fields),
@@ -610,7 +619,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // approval denials cannot exhaust the tool budget and block a
                 // later authorized call in the same turn.
                 ctx.limits.rollback_tool_calls(1);
-                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(reason)));
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                    reason,
+                )));
             }
         }
         Ok(ResolvedToolCall::Tool { dispatch, tool })

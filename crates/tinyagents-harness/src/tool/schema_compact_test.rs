@@ -55,8 +55,15 @@ fn strip_descriptions_respects_keep_depth() {
     });
     let below_top = strip_descriptions(schema.clone(), 1);
     assert_eq!(below_top["description"], "root");
-    assert_eq!(below_top["properties"]["top"]["description"], "top-level property");
-    assert!(below_top["properties"]["top"]["properties"]["inner"].get("description").is_none());
+    assert_eq!(
+        below_top["properties"]["top"]["description"],
+        "top-level property"
+    );
+    assert!(
+        below_top["properties"]["top"]["properties"]["inner"]
+            .get("description")
+            .is_none()
+    );
 
     let all = strip_descriptions(schema, 0);
     assert_eq!(all["description"], "root");

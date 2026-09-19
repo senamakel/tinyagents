@@ -159,7 +159,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
     /// Returns how a registered tool enters the model-visible catalogue.
     #[must_use]
     pub fn exposure(&self, name: &str) -> Option<tinytools::ToolExposure> {
-        self.dispatch(name).map(|dispatch| dispatch.tool().exposure())
+        self.dispatch(name)
+            .map(|dispatch| dispatch.tool().exposure())
     }
 
     /// Looks up a canonical tool declaration.
@@ -181,9 +182,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         let mut names: Vec<_> = self
             .tools
             .iter()
-            .filter(|(_, dispatch)| {
-                dispatch.tool().exposure() != tinytools::ToolExposure::Hidden
-            })
+            .filter(|(_, dispatch)| dispatch.tool().exposure() != tinytools::ToolExposure::Hidden)
             .map(|(name, _)| name.clone())
             .collect();
         names.sort();
