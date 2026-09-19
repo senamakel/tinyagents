@@ -386,7 +386,7 @@ where
     }
 
     if let Some(control) = ctx.take_control() {
-        return apply_control(ctx, &mut loop_state, control, node::TOOLS);
+        return apply_control(ctx, &mut loop_state, control, node::TOOLS, node::PLAN);
     }
 
     Ok(goto(loop_state, node::PLAN))
