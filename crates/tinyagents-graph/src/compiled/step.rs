@@ -449,14 +449,17 @@ where
     /// though it is not an `Err`.
     fn fold_result(
         &self,
-        run_id: &RunId,
-        index: usize,
-        node_id: &NodeId,
-        step: usize,
+        branch: FoldBranch<'_>,
         result: NodeResult<Update>,
         accum: &mut FoldAccum<Update>,
         visited: &mut Vec<NodeId>,
     ) -> Option<(usize, Interrupt)> {
+        let FoldBranch {
+            run_id,
+            index,
+            node_id,
+            step,
+        } = branch;
         visited.push(node_id.clone());
         match result {
             NodeResult::Update(update) => {
