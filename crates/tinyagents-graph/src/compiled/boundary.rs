@@ -95,20 +95,34 @@ where
         let carried = ctx.carried_completed.take();
         let completed_tasks: Vec<Activation>;
         let next = match &carried {
-            Some(carried_nodes) => {
+            Some(carried_completions) => {
                 // Reserve an index range that cannot collide with `sb`'s own
                 // (0-based) active-set indices, so `goto_map.get(&index)`
                 // correctly misses for every carried entry instead of
                 // aliasing onto this step's own routing.
                 let offset = sb.active.len().max(sb.completed.len()) + 1;
-                let mut pairs: Vec<(usize, Activation)> = carried_nodes
+                let mut pairs: Vec<(usize, Activation)> = carried_completions
                     .iter()
                     .enumerate()
-                    .map(|(i, node)| (offset + i, Activation::node(node.clone())))
+                    .map(|(i, (node, _))| (offset + i, Activation::node(node.clone())))
                     .collect();
                 pairs.extend(sb.completed.iter().cloned());
-                let next =
-                    self.route_completed(&pairs, sb.goto_map, state, &mut ctx.barrier_arrivals)?;
+                // Merge in each carried completion's persisted `goto` (R1):
+                // without this, a completed sibling's explicit
+                // `Command::goto` is lost across the boundary and it
+                // re-resolves via static/conditional edges only.
+                let mut merged_goto_map = sb.goto_map.clone();
+                for (i, (_, goto)) in carried_completions.iter().enumerate() {
+                    if !goto.is_empty() {
+                        merged_goto_map.insert(offset + i, goto.clone());
+                    }
+                }
+                let next = self.route_completed(
+                    &pairs,
+                    &merged_goto_map,
+                    state,
+                    &mut ctx.barrier_arrivals,
+                )?;
                 completed_tasks = pairs.into_iter().map(|(_, a)| a).collect();
                 next
             }
