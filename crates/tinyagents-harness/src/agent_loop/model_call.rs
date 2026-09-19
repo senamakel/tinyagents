@@ -1252,12 +1252,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
                 settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
             });
             let timeout_result = super::tools::timeout_result(&call, timeout);
-            let future = async {
-                self.dispatch
-                    .execute(state, call.arguments, self.options, ctx)
-                    .await
-                    .map_err(super::tools::map_tool_dispatch_error)
-            };
+            let future = super::tools::execute_tool_recovering_model_retry(
+                self.dispatch.execute(state, call.arguments, self.options, ctx),
+            );
             match timeout.and_then(|resolved| resolved.deadline) {
                 Some(deadline) => match tokio::time::timeout(deadline, future).await {
                     Ok(result) => result,
