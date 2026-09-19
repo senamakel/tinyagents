@@ -276,6 +276,93 @@ pub trait Summarizer: Send + Sync {
     /// is rejected).  The caller is responsible for deciding how to handle the
     /// error — fall back to trimming, propagate, or surface a context error.
     async fn summarize(&self, messages: &[Message]) -> Result<SummaryRecord>;
+
+    /// [`Self::summarize`], but iterative: `request` also carries the
+    /// previous compaction's summary text (when this is not the first
+    /// compaction of a run), so an LLM-backed implementation can *refine* the
+    /// running summary instead of re-deriving it from scratch every time.
+    ///
+    /// The default implementation ignores
+    /// [`SummaryRequest::previous_summary`] and delegates to [`Self::summarize`],
+    /// so every existing implementor (in particular [`ConcatSummarizer`))
+    /// keeps compiling and behaving exactly as before. Override this method
+    /// directly (instead of, not in addition to, `summarize`) to thread the
+    /// previous summary into a real prompt.
+    async fn summarize_request(&self, request: &SummaryRequest) -> Result<SummaryRecord> {
+        self.summarize(&request.messages).await
+    }
+
+    /// Merges two or more per-half [`SummaryRecord`]s produced by
+    /// [`Self::summarize_request`] into one, for the "split turn" case where a
+    /// single turn's messages exceeded the per-call summarization budget and
+    /// were summarized in separate halves (see
+    /// [`crate::summarization::compaction::summarize_with_split`]).
+    ///
+    /// The default merges deterministically by concatenating each summary's
+    /// text under a numbered header, union-ing their provenance
+    /// [`CompressionProvenance::source_ids`] and token estimates — no LLM call
+    /// is made. An LLM-backed [`Summarizer`] may override this to ask the
+    /// model to fuse the two summaries into fluent prose instead.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; an empty `summaries` slice returns an empty summary with
+    /// no provenance rather than panicking, since a caller invoking this with
+    /// nothing to merge is a caller bug, not a data condition worth
+    /// crashing over.
+    async fn merge(&self, summaries: &[SummaryRecord]) -> Result<SummaryRecord> {
+        let mut parts: Vec<String> = Vec::with_capacity(summaries.len() + 1);
+        parts.push("=== Merged Summary ===".to_string());
+        let mut source_ids = Vec::new();
+        let mut original_token_estimate = 0u64;
+        let mut summary_token_estimate = 0u64;
+        for (i, record) in summaries.iter().enumerate() {
+            parts.push(format!("[part {}] {}", i + 1, record.summary.text_or_default()));
+            source_ids.extend(record.provenance.source_ids.iter().cloned());
+            original_token_estimate += record.provenance.original_token_estimate;
+            summary_token_estimate += record.provenance.summary_token_estimate;
+        }
+        let summary_text = parts.join("\n");
+        Ok(SummaryRecord {
+            summary: Message::system(summary_text),
+            provenance: CompressionProvenance {
+                source_ids,
+                original_token_estimate,
+                summary_token_estimate,
+                reason: "merged split-turn summaries (default concatenation)".to_string(),
+            },
+        })
+    }
+}
+
+/// Input to [`Summarizer::summarize_request`]: the messages to condense, plus
+/// (when this compaction is not the first in a run) the previous compaction's
+/// summary text so an iterative summarizer can refine rather than restart.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SummaryRequest {
+    /// The messages to condense into a new summary.
+    pub messages: Vec<Message>,
+    /// The summary text produced by the previous [`CompactionRecord`] on this
+    /// run's transcript, when one exists. `None` for the first compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_summary: Option<String>,
+}
+
+impl SummaryRequest {
+    /// Builds a request with no previous summary (the common, first-compaction
+    /// case).
+    pub fn new(messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            previous_summary: None,
+        }
+    }
+
+    /// Sets the previous summary text for iterative refinement.
+    pub fn with_previous_summary(mut self, previous_summary: impl Into<String>) -> Self {
+        self.previous_summary = Some(previous_summary.into());
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
