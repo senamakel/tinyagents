@@ -137,7 +137,7 @@ fn mixed_turn_then_final(second_answer: &str) -> Vec<ModelResponse> {
 
 #[tokio::test]
 async fn graceful_runs_the_tool_then_finishes_with_the_first_answer() {
-    let model = Arc::new(MockModel::with_responses(mixed_turn_then_final("second")));
+    let model = Arc::new(RecordingModel::new(mixed_turn_then_final("second")));
     let search = Arc::new(FakeTool::returning("search", "hits"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -168,7 +168,7 @@ async fn graceful_runs_the_tool_then_finishes_with_the_first_answer() {
 
 #[tokio::test]
 async fn early_finishes_immediately_and_never_runs_the_accompanying_tool() {
-    let model = Arc::new(MockModel::with_responses(mixed_turn_then_final("second")));
+    let model = Arc::new(RecordingModel::new(mixed_turn_then_final("second")));
     let search = Arc::new(FakeTool::returning("search", "hits"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -199,7 +199,7 @@ async fn early_finishes_immediately_and_never_runs_the_accompanying_tool() {
 
 #[tokio::test]
 async fn exhaustive_ignores_the_first_output_tool_and_waits_for_a_clean_turn() {
-    let model = Arc::new(MockModel::with_responses(mixed_turn_then_final("second")));
+    let model = Arc::new(RecordingModel::new(mixed_turn_then_final("second")));
     let search = Arc::new(FakeTool::returning("search", "hits"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -236,7 +236,7 @@ async fn exhaustive_ignores_the_first_output_tool_and_waits_for_a_clean_turn() {
 
 #[tokio::test]
 async fn prompted_mode_injects_the_schema_into_the_system_prompt_and_extracts_from_text() {
-    let model = Arc::new(RecordingModel::new(vec![ModelResponse::assistant(
+    let model = Arc::new(RecordingModel::with_default_profile(vec![ModelResponse::assistant(
         r#"{"answer":"prompted"}"#,
     )]));
 
