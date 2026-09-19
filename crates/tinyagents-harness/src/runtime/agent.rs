@@ -200,6 +200,9 @@ pub struct AgentTurnRequest {
     pub agent_id: String,
     /// Initial transcript supplied by the host.
     pub messages: Vec<tinyinference_llm::message::Message>,
+    /// Resolutions for the deferred tool calls left pending on `messages`
+    /// by a previous hosted turn (A2). See [`Self::with_deferred_results`].
+    pub deferred_results: Option<crate::tool::DeferredToolResults>,
 }
 
 impl AgentTurnRequest {
@@ -211,7 +214,18 @@ impl AgentTurnRequest {
         Self {
             agent_id: agent_id.into(),
             messages,
+            deferred_results: None,
         }
+    }
+
+    /// Resumes a hosted turn that stopped with `AgentRun::deferred` set
+    /// (A2): `messages` should be that run's transcript and `results` must
+    /// resolve every pending call. The hosted counterpart of
+    /// [`AgentHarness::resume_deferred`][crate::runtime::AgentHarness::resume_deferred].
+    #[must_use]
+    pub fn with_deferred_results(mut self, results: crate::tool::DeferredToolResults) -> Self {
+        self.deferred_results = Some(results);
+        self
     }
 }
 
@@ -600,6 +614,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
             .as_deref()
             .map(InvocationRuntime::harness)
             .unwrap_or(self);
+        if let Some(results) = request.deferred_results.clone() {
+            context = context.with_deferred_results(results);
+        }
         let mut prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
@@ -664,6 +681,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         // their own, kind-scoped sanitization), this public-stream setup
         // returns a plain `TinyAgentsError` directly to the caller — so it
         // still needs `sanitize_hosted_preparation_error` applied here.
+        if let Some(results) = request.deferred_results.clone() {
+            context = context.with_deferred_results(results);
+        }
         let mut prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
             .await

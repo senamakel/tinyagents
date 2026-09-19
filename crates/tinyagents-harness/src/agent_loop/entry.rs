@@ -149,6 +149,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.drive(state, ctx, input, false).await
     }
 
+    /// Resumes a run that stopped with [`AgentRun::deferred`] set (A2).
+    ///
+    /// `messages` is the deferred run's transcript (`run.messages`, which
+    /// still ends with the assistant tool-call row whose deferred calls are
+    /// unanswered) and `results` resolves every pending call: an
+    /// [`crate::tool::ApprovalDecision`] runs or denies an approval-gated
+    /// call, a [`crate::tool::DeferredCallResult`] injects the host's outcome
+    /// for an external one. The loop answers each call — executing approved
+    /// ones for real, with the model's or the approver's edited arguments —
+    /// and then continues with the next model call exactly as if the batch
+    /// had never paused.
+    ///
+    /// The only state needed to resume is the transcript plus `results`, so
+    /// this works across a process restart: persist `run.messages` and
+    /// `run.deferred` (both serializable), and call this from any process.
+    /// Check [`crate::tool::DeferredToolRequests::remaining`] first —
+    /// an incomplete `results` fails with [`TinyAgentsError::Validation`]
+    /// naming the unresolved ids before anything runs.
+    ///
+    /// Equivalent to `invoke_in_context(state, ctx.with_deferred_results(results), messages)`.
+    pub async fn resume_deferred(
+        &self,
+        state: &State,
+        ctx: RunContext<Ctx>,
+        messages: Vec<Message>,
+        results: crate::tool::DeferredToolResults,
+    ) -> Result<AgentRun> {
+        self.invoke_in_context(state, ctx.with_deferred_results(results), messages)
+            .await
+    }
+
     /// Streaming counterpart of [`AgentHarness::invoke`].
     ///
     /// Behaves exactly like [`AgentHarness::invoke`] except each model call is
