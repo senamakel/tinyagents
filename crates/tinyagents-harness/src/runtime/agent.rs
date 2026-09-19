@@ -786,6 +786,13 @@ fn sanitize_hosted_preparation_error(error: TinyAgentsError) -> TinyAgentsError 
     }
 }
 
+/// Runs [`finish_host_turn`] on a Tokio task, tolerating the case where the
+/// terminal observer fires from a context with no ambient runtime (for
+/// example, a `Drop` impl running during unwind).
+///
+/// Falls back to a dedicated current-thread runtime rather than dropping the
+/// finalization work, since memory/learning/experience recording must still
+/// happen even when the turn ends off the normal async call path.
 fn spawn_host_finalizer<State: Send + Sync + 'static, Ctx: Send + Sync + 'static>(
     prepared: PreparedAgentTurn<State, Ctx>,
     run: AgentRun,
