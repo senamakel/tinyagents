@@ -271,6 +271,58 @@ where
     /// [`GraphEvent::TaskCompleted`] (`cached: false`). A no-op for a node
     /// with no cache policy, an error result, an interrupt, or a `Command`
     /// with no update to store.
+    /// Synchronously encodes a cache-miss result for storage, without ever
+    /// awaiting — so nothing derived from `Update` (which is not necessarily
+    /// `Sync`) is ever live across a suspension point. Returns `None` for a
+    /// node with no cache policy, an error result, an interrupt, or a
+    /// `Command` with no update to store.
+    fn prepare_cache_put(
+        &self,
+        node_id: &NodeId,
+        state: &State,
+        send_arg: Option<&serde_json::Value>,
+        result: &Result<NodeResult<Update>>,
+    ) -> Option<(TaskCacheKey, serde_json::Value, Option<Duration>)> {
+        let cached = self.graph.cached_nodes.get(node_id)?;
+        let result = result.as_ref().ok()?;
+        let update = match result {
+            NodeResult::Update(update) => Some(update),
+            NodeResult::Command(command) => command.update.as_ref(),
+            NodeResult::Interrupt(_) => None,
+        }?;
+        let value = (cached.encode)(update).ok()?;
+        let hash = (cached.key)(state, send_arg);
+        let key = TaskCacheKey::new(self.graph.graph_id.clone(), node_id.clone(), hash);
+        Some((key, value, cached.ttl))
+    }
+
+    /// Writes a prepared cache-miss entry (see [`Self::prepare_cache_put`])
+    /// and emits its [`GraphEvent::TaskCompleted`] (`cached: false`). Takes
+    /// only owned, unconditionally `Send + Sync` values, so this is safe to
+    /// await from a context that must itself stay `Send` regardless of
+    /// `Update`'s auto-trait bounds.
+    async fn store_cache_entry(
+        &self,
+        key: TaskCacheKey,
+        value: serde_json::Value,
+        ttl: Option<Duration>,
+        node_id: &NodeId,
+        step: usize,
+    ) {
+        let Some(cache) = self.graph.task_cache.as_ref() else {
+            return;
+        };
+        let _ = cache.put(&key, value, ttl).await;
+        self.graph.emit(GraphEvent::TaskCompleted {
+            node: node_id.clone(),
+            step,
+            cached: false,
+        });
+    }
+
+    /// Prepares and (if applicable) stores a cache-miss result in one call —
+    /// the common case for [`Self::run_sequential`]/[`Self::run_parallel`],
+    /// which never need the two steps split apart.
     async fn try_cache_put(
         &self,
         node_id: &NodeId,
@@ -279,36 +331,10 @@ where
         result: &Result<NodeResult<Update>>,
         step: usize,
     ) {
-        // Compute everything that needs to look at `result` (and therefore
-        // `Update`, which is not necessarily `Sync`) up front, so nothing
-        // borrowed from it is held across the `.await` below — only the
-        // owned, always-`Send + Sync` `TaskCacheKey`/`Value`/`Duration`
-        // survive into the awaited call.
-        let prepared = (|| {
-            let cached = self.graph.cached_nodes.get(node_id)?;
-            let result = result.as_ref().ok()?;
-            let update = match result {
-                NodeResult::Update(update) => Some(update),
-                NodeResult::Command(command) => command.update.as_ref(),
-                NodeResult::Interrupt(_) => None,
-            }?;
-            let value = (cached.encode)(update).ok()?;
-            let hash = (cached.key)(state, send_arg);
-            Some((value, hash, cached.ttl))
-        })();
-        let Some((value, hash, ttl)) = prepared else {
-            return;
-        };
-        let Some(cache) = self.graph.task_cache.as_ref() else {
-            return;
-        };
-        let key = TaskCacheKey::new(self.graph.graph_id.clone(), node_id.clone(), hash);
-        let _ = cache.put(&key, value, ttl).await;
-        self.graph.emit(GraphEvent::TaskCompleted {
-            node: node_id.clone(),
-            step,
-            cached: false,
-        });
+        if let Some((key, value, ttl)) = self.prepare_cache_put(node_id, state, send_arg, result)
+        {
+            self.store_cache_entry(key, value, ttl, node_id, step).await;
+        }
     }
 
     /// Runs one superstep's active node set — concurrently when the graph
