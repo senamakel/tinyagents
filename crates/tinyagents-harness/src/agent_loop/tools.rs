@@ -298,6 +298,33 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Err(err);
         }
 
+        // Before giving up on provider-unparseable arguments (below), try the
+        // conservative, meaning-preserving repairs in `relaxed_json` (unquoted
+        // keys, redundant wrapping braces, leaked chat-template quote tokens —
+        // see that module's doc comment for the exact defects it targets).
+        // This is the one place I-13 asked for it applied: admission was
+        // short-circuiting straight to a tool error without ever trying the
+        // repair the module exists for. On success the call proceeds through
+        // normal (schema) validation below as if the provider had sent it
+        // clean, rather than round-tripping a "fix your JSON" error the model
+        // often cannot actually act on.
+        if call.invalid.is_some()
+            && let Some(raw) = call.arguments.as_str()
+            && let Some(repaired) = crate::relaxed_json::recover_relaxed_object(raw)
+        {
+            let call_id = CallId::new(call.id.clone());
+            let record = ctx.emit(AgentEvent::InvalidToolArgs {
+                call_id,
+                tool_name: call.name.clone(),
+                arguments: call.arguments.clone(),
+                error: call.invalid.clone().unwrap_or_default(),
+                recovery: "repaired".to_string(),
+            });
+            status.set_last_event(record.id);
+            call.arguments = repaired;
+            call.invalid = None;
+        }
+
         // The provider marked this call's arguments unparseable (a small local
         // model emitted malformed JSON). Rather than fail the run, inject a
         // tool-error result carrying the parse detail and the raw arguments so
