@@ -150,8 +150,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // The tool set is fixed for the duration of a run, so build the sorted
         // schema vec once here instead of re-collecting, re-calling every tool's
         // `schema()`, and re-sorting on every turn (per model call).
-        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
-            .map(|binding| binding.allowed_tools.clone());
+        let allowed_tools = self.resolve_tool_allowlist(ctx)?;
         let tool_schemas = self
             .tools
             .schemas()
@@ -159,7 +158,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .filter(|schema| {
                 allowed_tools
                     .as_ref()
-                    .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&schema.name))
+                    .is_none_or(|allowed| allowed.contains(&schema.name))
             })
             .collect::<Vec<_>>();
 
