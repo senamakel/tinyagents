@@ -605,11 +605,11 @@ fn lifetimes_and_labels_do_not_hide_code_but_literals_and_comments_do() {
 fn generic_chat_message_debt_is_exact_not_a_path_exclusion() {
     assert!(is_known_generic_claude_code_chat_message_debt(
         "crates/tinyagents-harness/src/providers/claude_code/bridge.rs",
-        4,
+        10,
     ));
     assert!(!is_known_generic_claude_code_chat_message_debt(
         "crates/tinyagents-harness/src/providers/claude_code/bridge.rs",
-        5,
+        11,
     ));
     assert_eq!(
         domain_reference_lines("fn unexpected(message: ChatMessage) {}"),
@@ -620,7 +620,7 @@ fn generic_chat_message_debt_is_exact_not_a_path_exclusion() {
     let mut neighboring_new_line = expected.clone();
     neighboring_new_line.insert((
         "crates/tinyagents-harness/src/providers/claude_code/bridge.rs".to_owned(),
-        5,
+        11,
     ));
     assert!(
         check_generic_claude_code_chat_message_debt(&neighboring_new_line)
@@ -630,7 +630,7 @@ fn generic_chat_message_debt_is_exact_not_a_path_exclusion() {
     let mut stale_entry = expected;
     stale_entry.remove(&(
         "crates/tinyagents-harness/src/providers/claude_code/bridge.rs".to_owned(),
-        4,
+        10,
     ));
     assert!(
         check_generic_claude_code_chat_message_debt(&stale_entry)
