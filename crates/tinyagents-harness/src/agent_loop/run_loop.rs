@@ -216,6 +216,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
+        // B6 (`docs/runtime-comparison/plan.md`): the registry+toolset
+        // combined, provider-projected, name-sorted set computed above is
+        // this run's *initial* declaration. `declared_tool_schemas` tracks
+        // what the transcript has actually been told about so far (folded or
+        // patched in, turn by turn, below) so a later turn's live toolset
+        // resolution can be diffed against it instead of against the wire
+        // list — the wire list also carries the bridge schemas captured into
+        // `bridge_schemas` next, which never change within a run and so are
+        // deliberately excluded from the diff.
+        let mut declared_tool_schemas = tool_schemas.clone();
+        let mut bridge_schemas: Vec<ToolSchema> = Vec::new();
         let deferred_catalog = self.deferred_catalog(&host_allows);
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
