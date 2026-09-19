@@ -306,6 +306,7 @@ impl<Ctx> RunContext<Ctx> {
             host_agent_id: None,
             host_authority: None,
             terminal_observer: None,
+            active_model_call: None,
         }
     }
 
