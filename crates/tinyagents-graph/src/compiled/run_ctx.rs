@@ -291,6 +291,7 @@ where
         let ResumeSeed {
             initial_steps,
             initial_node_visits,
+            initial_versions_seen,
             carried_completed,
         } = resume_seed;
         let started_at = SystemTime::now();
