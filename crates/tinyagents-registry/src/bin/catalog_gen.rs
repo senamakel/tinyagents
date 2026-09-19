@@ -266,14 +266,3 @@ fn to_entry(catalog_provider: &str, model_id: &str, model: &Value) -> Option<Mod
         raw: model.clone(),
     })
 }
-
-/// Kept for symmetry with a future de-duplication pass; unused for now since
-/// the curated provider list already keys entries uniquely.
-#[allow(dead_code)]
-fn dedupe_by_id(entries: Vec<ModelCatalogEntry>) -> Vec<ModelCatalogEntry> {
-    let mut seen = BTreeMap::new();
-    for entry in entries {
-        seen.insert((entry.provider.clone(), entry.model_id.clone()), entry);
-    }
-    seen.into_values().collect()
-}
