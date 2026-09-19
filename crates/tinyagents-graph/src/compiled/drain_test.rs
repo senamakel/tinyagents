@@ -214,23 +214,54 @@ async fn undrained_runs_report_drained_false_on_every_outcome() {
 }
 
 #[tokio::test]
-async fn probe_sequential_stall_keeps_unstarted_siblings_pending() {
-    use crate::command::Interrupt;
+async fn drain_straight_after_resume_keeps_a_deferred_interrupt_after_result() {
+    // interrupt_after pause -> resume with drain already raised: the drain
+    // boundary must re-persist `b`'s deferred result (and its ack), so the
+    // eventual retry replays it instead of running `b` a second time.
+    let b_runs = Arc::new(AtomicUsize::new(0));
+    let runs = b_runs.clone();
     let graph = GraphBuilder::<i32, i32>::overwrite()
-        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s)) })
-        .add_node("b", |_s, _c: NodeContext| async move {
-            Ok(NodeResult::Interrupt(Interrupt::new("b", serde_json::json!({}))))
+        .add_node("a", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s + 1))
         })
-        .add_node("c", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+        .add_node("b", move |s, _c: NodeContext| {
+            let runs = runs.clone();
+            async move {
+                runs.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(s + 10))
+            }
+        })
+        .add_sequence(["a", "b"])
         .set_entry("a")
-        .add_edge("a", "b")
-        .add_edge("a", "c")
         .set_finish("b")
-        .set_finish("c")
+        .interrupt_after(["b"])
         .compile()
         .unwrap()
         .with_checkpointer(Arc::new(InMemoryCheckpointer::<i32>::new()));
-    let paused = graph.run_with_thread("probe", 0).await.unwrap();
-    let snapshot = graph.get_state("probe", None).await.unwrap().unwrap();
-    panic!("pending after sequential stall: {:?} (visited {:?})", snapshot.next_nodes, paused.visited);
+
+    let paused = graph.run_with_thread("drain-after", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+    assert_eq!(b_runs.load(AtomicOrdering::SeqCst), 1);
+
+    let (handle, signal) = DrainSignal::new();
+    handle.drain();
+    let drained = graph
+        .resume_with_options(
+            "drain-after",
+            crate::command::Command::new(),
+            RunOptions::with_drain(signal),
+        )
+        .await
+        .unwrap();
+    assert!(drained.drained);
+    assert_eq!(drained.state, 1);
+
+    let done = graph.retry("drain-after").await.unwrap();
+    assert_eq!(done.status.status, ExecutionStatus::Completed);
+    assert_eq!(done.state, 11);
+    assert_eq!(
+        b_runs.load(AtomicOrdering::SeqCst),
+        1,
+        "replayed, not re-run"
+    );
 }

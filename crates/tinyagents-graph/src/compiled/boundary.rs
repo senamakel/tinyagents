@@ -560,6 +560,27 @@ where
         };
         let (channel_versions, channel_deltas, versions_seen) =
             self.channel_checkpoint_fields(ctx, state);
+        // Nothing in `pending` ran this boundary, so the only replay memos
+        // (and interrupt acks) it can own are the ones this run was seeded
+        // with on resume; re-persist them so a stop straight after a resume
+        // does not strip a task of its `durable_task` memos or deferred
+        // `interrupt_after` result.
+        let pending_writes: Vec<crate::checkpoint::PendingWrite> = pending
+            .iter()
+            .filter_map(|a| ctx.task_writes.get(a.task_id.as_str()))
+            .flat_map(|writes| writes.iter().cloned())
+            .collect();
+        let metadata = Self::with_carried_acks(
+            serde_json::json!({
+                "source": "loop",
+                "step": ctx.steps,
+                "recursion": ctx.recursion_meta,
+                marker: true,
+                "node_visits": node_visits_to_json(&ctx.node_visits),
+            }),
+            ctx,
+            pending,
+        );
         let checkpoint = Checkpoint::new(
             state.clone(),
             pending.iter().map(PendingActivation::from).collect(),
@@ -569,18 +590,22 @@ where
         .with_run_id(ctx.run_id.to_string())
         .with_parent_checkpoint_id(ctx.parent_checkpoint.clone())
         .with_namespace(self.namespace.clone())
+        .with_pending_writes(pending_writes)
         .with_barrier_arrivals(barriers_to_persisted(&ctx.barrier_arrivals))
         .with_channel_versions(channel_versions)
         .with_channel_deltas(channel_deltas)
         .with_versions_seen(versions_seen)
-        .with_metadata(serde_json::json!({
-            "source": "loop",
-            "step": ctx.steps,
-            "recursion": ctx.recursion_meta,
-            marker: true,
-            "node_visits": node_visits_to_json(&ctx.node_visits),
-        }));
+        .with_metadata(metadata);
+        let writes = checkpoint.pending_writes.clone();
+        let config = CheckpointConfig {
+            thread_id: checkpoint.thread_id.clone(),
+            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+            namespace: checkpoint.namespace.clone(),
+        };
         let id = checkpointer.put(checkpoint).await?;
+        if !writes.is_empty() {
+            checkpointer.put_writes(&config, &writes).await?;
+        }
         self.emit(GraphEvent::CheckpointSaved {
             checkpoint_id: id.clone(),
         });
