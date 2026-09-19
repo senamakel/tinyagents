@@ -25,4 +25,8 @@ pub enum RuntimeError {
     /// The builder did not receive a required dependency.
     #[error("session builder requires {0}")]
     MissingDependency(&'static str),
+    /// A host attempted a state transition which would invalidate a committed
+    /// session invariant.
+    #[error("invalid session state: {0}")]
+    InvalidSessionState(String),
 }

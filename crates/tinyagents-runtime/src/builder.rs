@@ -11,7 +11,7 @@ use crate::{
 pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
-    hooks: Arc<dyn SessionHooks>,
+    hooks: Arc<dyn SessionHooks<C>>,
     prefix: PrefixSnapshot,
     tools: ToolSnapshot,
     transcript: Option<TranscriptConfig>,
@@ -43,7 +43,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
     }
 
     /// Installs optional host preparation/observation hooks.
-    pub fn hooks(mut self, hooks: Arc<dyn SessionHooks>) -> Self {
+    pub fn hooks(mut self, hooks: Arc<dyn SessionHooks<C>>) -> Self {
         self.hooks = hooks;
         self
     }
@@ -79,21 +79,12 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
     /// Builds a session. A codec is required only when transcript persistence
     /// or transcript resume is configured.
     pub fn build(self) -> Result<Session<C>, RuntimeError> {
-        let (locator, stem, meta, history_handle) = if let Some(config) = self.transcript {
-            let handle = config
-                .locator
-                .open_stem(&config.stem, config.meta.clone())
-                .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
-            (
-                Some(config.locator),
-                Some(config.stem),
-                Some(config.meta),
-                Some(handle),
-            )
-        } else {
-            (None, None, None, None)
-        };
-        if history_handle.is_some() && self.codec.is_none() {
+        let target = self.transcript.map(|config| crate::TranscriptTarget {
+            locator: config.locator,
+            stem: config.stem,
+            meta: config.meta,
+        });
+        if target.is_some() && self.codec.is_none() {
             return Err(RuntimeError::MissingDependency("TranscriptCodec"));
         }
         Ok(Session::<C>::new(
@@ -102,10 +93,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             self.hooks,
             self.prefix,
             self.tools,
-            locator,
-            stem,
-            meta,
-            history_handle,
+            target,
         ))
     }
 }

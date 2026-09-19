@@ -2,29 +2,29 @@ use std::{future::Future, sync::Arc};
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::transcript::{
-    TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptPartial, TranscriptTurn,
+    TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn,
 };
 use tinyinference_llm::message::Message;
 
 use crate::{
-    DriverRequest, PrefixSnapshot, ResumeMode, RuntimeError, SessionDriver, SessionHooks,
-    SessionResume, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot,
-    TranscriptCodec, TurnOptions,
+    CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, RuntimeError, SessionDriver,
+    SessionHooks, SessionResume, SessionStateView, SessionTerminal, SessionTurnOutcome,
+    SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt, TranscriptDelta,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 /// Host-neutral mutable state for one conversation session.
 pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
-    hooks: Arc<dyn SessionHooks>,
+    hooks: Arc<dyn SessionHooks<C>>,
     prefix: PrefixSnapshot,
-    tools: ToolSnapshot,
+    default_tools: ToolSnapshot,
     history: Vec<Message>,
-    persisted: Vec<tinyagents_session::transcript::TranscriptMessage>,
-    locator: Option<Arc<dyn TranscriptLocator>>,
-    stem: Option<String>,
-    meta: Option<TranscriptMeta>,
+    persisted: Vec<TranscriptMessage>,
+    target: Option<TranscriptTarget>,
     transcript: Option<Arc<dyn TranscriptHistory>>,
+    committed_turns: usize,
 }
 
 impl<C: Clone + Send + Sync + 'static> Session<C> {
@@ -32,13 +32,10 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
     pub(crate) fn new(
         driver: Arc<dyn SessionDriver<C>>,
         codec: Option<Arc<dyn TranscriptCodec<C>>>,
-        hooks: Arc<dyn SessionHooks>,
+        hooks: Arc<dyn SessionHooks<C>>,
         prefix: PrefixSnapshot,
-        tools: ToolSnapshot,
-        locator: Option<Arc<dyn TranscriptLocator>>,
-        stem: Option<String>,
-        meta: Option<TranscriptMeta>,
-        transcript: Option<Arc<dyn TranscriptHistory>>,
+        default_tools: ToolSnapshot,
+        target: Option<TranscriptTarget>,
     ) -> Self {
         Self {
             driver,
@@ -46,12 +43,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             hooks,
             history: prefix.messages().to_vec(),
             prefix,
-            tools,
+            default_tools,
             persisted: Vec::new(),
-            locator,
-            stem,
-            meta,
-            transcript,
+            target,
+            transcript: None,
+            committed_turns: 0,
         }
     }
 
@@ -60,14 +56,35 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         &self.history
     }
 
-    /// Returns the unchanging history prefix captured by the builder.
+    /// Returns the stable prefix currently applied to this session.
     pub fn prefix_snapshot(&self) -> &PrefixSnapshot {
         &self.prefix
     }
 
-    /// Returns the immutable model-visible tool declaration set.
+    /// Returns the builder compatibility default used only when a preparation
+    /// supplies no per-turn tool snapshot.
     pub fn tool_snapshot(&self) -> &ToolSnapshot {
-        &self.tools
+        &self.default_tools
+    }
+
+    /// Seeds an uncommitted session from an explicit, lossless host snapshot.
+    ///
+    /// This replaces neither the host's raw rows nor their metadata. It is the
+    /// supported alternative to a host keeping a shadow history beside the
+    /// runtime. Seeding after any durable transition is rejected.
+    pub fn seed_history(
+        &mut self,
+        history: Vec<Message>,
+        raw: Vec<TranscriptMessage>,
+    ) -> Result<(), RuntimeError> {
+        if self.committed_turns != 0 {
+            return Err(RuntimeError::InvalidSessionState(
+                "cannot seed history after a committed turn".into(),
+            ));
+        }
+        self.history = self.with_prefix(history);
+        self.persisted = raw;
+        Ok(())
     }
 
     /// Loads the selected durable transcript, retaining its lossless raw rows
@@ -79,7 +96,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         if options.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
-        let Some(locator) = self.locator.as_ref() else {
+        let Some(target) = self.target.as_ref() else {
             return Ok(SessionResume {
                 loaded: false,
                 history: self.history.clone(),
@@ -87,14 +104,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         let read = match options.resume {
             ResumeMode::Never => None,
-            ResumeMode::LatestForAgent => self
-                .stem
-                .as_deref()
-                .and_then(|stem| locator.latest_for_agent(stem)),
+            ResumeMode::LatestForAgent => target.locator.latest_for_agent(&target.stem),
             ResumeMode::Thread => options
                 .thread_id
                 .as_deref()
-                .and_then(|thread| locator.root_for_thread(thread)),
+                .and_then(|thread| target.locator.root_for_thread(thread)),
         };
         let Some(read) = read else {
             return Ok(SessionResume {
@@ -118,21 +132,37 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let history = self.with_prefix(codec.decode_history(&transcript)?);
         self.history = history.clone();
         self.persisted = transcript.messages;
+        // The discovered metadata, not the builder seed, is authoritative for
+        // the subsequent append. This keeps resume-only host fields intact.
+        if let Some(target) = self.target.as_mut() {
+            target.meta = transcript.meta;
+        }
+        // A successful explicit resume also fixes the target's history handle
+        // for later appends. Builder construction itself remains I/O-free.
+        if self.transcript.is_none() {
+            let target = self.target.as_ref().expect("target checked above");
+            self.transcript = Some(
+                target
+                    .locator
+                    .open_stem(&target.stem, target.meta.clone())
+                    .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+            );
+        }
         Ok(SessionResume {
             loaded: true,
             history,
         })
     }
 
-    /// Executes and durably commits one state transition.
+    /// Executes and commits one state transition.
     pub async fn turn(
         &mut self,
         mut request: SessionTurnRequest,
-        options: TurnOptions<C>,
+        mut options: TurnOptions<C>,
     ) -> Result<SessionTurnOutcome, RuntimeError> {
         let mut terminal_guard = TerminalGuard::new(self.hooks.clone());
         let result = self
-            .turn_inner(&mut request, options, &mut terminal_guard)
+            .turn_inner(&mut request, &mut options, &mut terminal_guard)
             .await;
         if !terminal_guard.is_committed() {
             let terminal = match &result {
@@ -142,9 +172,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             };
             terminal_guard.set(terminal);
         }
-        // Terminal observation cannot revoke a successful durable commit.
-        // `finish` still schedules it exactly once; hook failures are
-        // deliberately observational rather than a second terminal result.
+        // Terminal observation cannot revoke a durable successful commit.
         let _ = terminal_guard.finish().await;
         result
     }
@@ -152,38 +180,55 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
     async fn turn_inner(
         &mut self,
         request: &mut SessionTurnRequest,
-        options: TurnOptions<C>,
-        terminal_guard: &mut TerminalGuard,
+        options: &mut TurnOptions<C>,
+        terminal_guard: &mut TerminalGuard<C>,
     ) -> Result<SessionTurnOutcome, RuntimeError> {
+        let state = SessionStateView {
+            history: &self.history,
+            raw_history: &self.persisted,
+            prefix: &self.prefix,
+            transcript_target: self.target.as_ref(),
+            committed_turns: self.committed_turns,
+        };
+        let cancellation = options.cancellation.clone();
+        let preparation = cancelable(
+            &cancellation,
+            self.hooks.before_turn(request, options, state),
+        )
+        .await?;
+        let (tools, prepared_prefix) = self.apply_preparation(preparation)?;
+        // Preparation owns the current turn's target and explicit resume mode,
+        // so resolve only after it has made its changes visible. This is also
+        // why a selected target is checked for a codec before driver handoff.
         if options.resume != ResumeMode::Never {
-            self.resume(&options).await?;
+            self.resume(options).await?;
         }
-        cancelable(&options.cancellation, self.hooks.before_turn(request)).await?;
+        if let Some(prefix) = prepared_prefix {
+            self.apply_prefix(prefix)?;
+        }
+
         let mut input = self.history.clone();
         if input.last() != Some(&request.input) {
             input.push(request.input.clone());
         }
-        // `RunContext` is intentionally consumed exactly once.  There is no
-        // task-local fallback: the host context selected for this turn is what
-        // reaches model, middleware, and tool execution.
         let codec_options = options.transcript_options();
-        let TurnOptions {
-            request_id,
-            thread_id,
-            stream,
-            cancellation,
-            run_context,
-            ..
-        } = options;
-        let run_context = run_context.with_cancellation(cancellation.clone());
+        let request_id = options.request_id.clone();
+        let thread_id = options.thread_id.clone();
+        let stream = options.stream;
+        let cancellation = options.cancellation.clone();
+        // `RunContext` is consumed exactly once. The host context captured in
+        // `codec_options` is the one after preparation and before handoff.
+        let run_context = std::mem::replace(
+            &mut options.run_context,
+            tinyagents_harness::context::RunContext::new(
+                tinyagents_harness::context::RunConfig::new("consumed-session-context"),
+                codec_options.context.clone(),
+            ),
+        )
+        .with_cancellation(cancellation.clone());
         let driver_result = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
-            result = self.driver.execute(DriverRequest {
-                history: input,
-                tools: self.tools.clone(),
-                run_context,
-                stream,
-            }) => result,
+            result = self.driver.execute(DriverRequest { history: input, tools, run_context, stream }) => result,
         };
         let outcome = match driver_result {
             Ok(outcome) => outcome,
@@ -191,10 +236,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 if let Some(partial) = failure.partial {
                     let partial_history = self.with_prefix(partial.history);
                     let raw = self.encode(&self.history, &partial_history, &codec_options)?;
-                    // `append_turn` is the only durable mutation.  Do not
-                    // append display partials first: a later append failure
-                    // would leave an unreportable half-commit on disk.
-                    self.persist(
+                    let receipt = self.persist(
                         &raw,
                         request_id.as_deref(),
                         thread_id.as_deref(),
@@ -202,46 +244,101 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     )?;
                     self.history = partial_history;
                     self.persisted = raw;
+                    if receipt.is_some() {
+                        self.committed_turns += 1;
+                    }
                 }
                 return Err(failure.error);
             }
         };
         let candidate = self.with_prefix(outcome.history);
-        // `after_turn` is a pre-commit hook.  It can reject or be cancelled
-        // without any durable mutation; after `persist` returns success this
-        // turn is committed and cancellation can no longer change its result.
         let committed = SessionTurnOutcome {
             history: candidate.clone(),
             output: outcome.output,
             interrupted: outcome.interrupted,
         };
-        cancelable(&cancellation, self.hooks.after_turn(&committed)).await?;
+        cancelable(
+            &cancellation,
+            self.hooks.before_commit(&committed, &codec_options),
+        )
+        .await?;
         if cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
         let raw = self.encode(&self.history, &candidate, &codec_options)?;
-        self.persist(&raw, request_id.as_deref(), thread_id.as_deref(), None)?;
+        let transcript = self.persist(&raw, request_id.as_deref(), thread_id.as_deref(), None)?;
         self.history = committed.history.clone();
         self.persisted = raw;
-        // Set the truthful durable terminal before invoking an observational
-        // finalizer. If the caller drops this future while it is running, the
-        // guard's Drop implementation still reports the completed commit.
-        terminal_guard.mark_committed(committed.clone());
-        // This runs after `append_turn_with_partial` has made the logical
-        // transition durable. Failure or cooperative cancellation in a host
-        // finalizer is observational: it cannot relabel that committed turn.
-        let hooks = self.hooks.clone();
-        let finalization = committed.clone();
-        let _ = tokio::spawn(async move { hooks.after_commit(&finalization).await }).await;
+        self.committed_turns += 1;
+        // The receipt is constructed only after append and state replacement.
+        // Its hook and the completed terminal are owned by one task: errors or
+        // cancellation cannot relabel the successful durable transition, and
+        // dropping the caller future cannot drop finalization mid-flight.
+        let receipt = CommitReceipt {
+            outcome: committed.clone(),
+            options: codec_options,
+            transcript,
+        };
+        let finalization = terminal_guard.finalize_commit(receipt);
+        // This await deliberately does not observe cancellation. If this turn
+        // future is dropped, dropping `JoinHandle` detaches rather than aborts
+        // the owned finalization task.
+        let _ = finalization.await;
         Ok(committed)
+    }
+
+    fn apply_preparation(
+        &mut self,
+        preparation: TurnPreparation,
+    ) -> Result<(ToolSnapshot, Option<PrefixSnapshot>), RuntimeError> {
+        if let Some(target) = preparation.transcript {
+            if self.transcript.is_some() {
+                if !self
+                    .target
+                    .as_ref()
+                    .is_some_and(|bound| bound.same_binding(&target))
+                {
+                    return Err(RuntimeError::InvalidSessionState(
+                        "cannot change a transcript target after it is bound".into(),
+                    ));
+                }
+            } else {
+                self.target = Some(target);
+            }
+        }
+        if self.target.is_some() && self.codec.is_none() {
+            return Err(RuntimeError::MissingDependency("TranscriptCodec"));
+        }
+        // A returned snapshot never updates `default_tools`: it applies only
+        // to the `DriverRequest` being built by this call.
+        Ok((
+            preparation
+                .tools
+                .unwrap_or_else(|| self.default_tools.clone()),
+            preparation.prefix,
+        ))
+    }
+
+    fn apply_prefix(&mut self, prefix: PrefixSnapshot) -> Result<(), RuntimeError> {
+        if self.committed_turns != 0
+            || !self.persisted.is_empty()
+            || self.history != self.prefix.messages()
+        {
+            return Err(RuntimeError::InvalidSessionState(
+                "cannot change a session prefix after history is present or committed".into(),
+            ));
+        }
+        self.history = prefix.messages().to_vec();
+        self.prefix = prefix;
+        Ok(())
     }
 
     fn encode(
         &self,
         previous: &[Message],
         next: &[Message],
-        options: &crate::TranscriptTurnOptions<C>,
-    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError> {
+        options: &TranscriptTurnOptions<C>,
+    ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
         match &self.codec {
             Some(codec) => codec.reconcile(&self.persisted, previous, next, options),
             None => Ok(Vec::new()),
@@ -250,15 +347,24 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
 
     fn persist(
         &mut self,
-        raw: &[tinyagents_session::transcript::TranscriptMessage],
+        raw: &[TranscriptMessage],
         request_id: Option<&str>,
         thread_id: Option<&str>,
         partial: Option<&TranscriptPartial>,
-    ) -> Result<(), RuntimeError> {
-        let (Some(transcript), Some(meta)) = (&self.transcript, &self.meta) else {
-            return Ok(());
+    ) -> Result<Option<TranscriptCommitReceipt>, RuntimeError> {
+        let Some(target) = self.target.as_mut() else {
+            return Ok(None);
         };
-        let mut meta = meta.clone();
+        if self.transcript.is_none() {
+            self.transcript = Some(
+                target
+                    .locator
+                    .open_stem(&target.stem, target.meta.clone())
+                    .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+            );
+        }
+        let transcript = self.transcript.as_ref().expect("bound above");
+        let mut meta = target.meta.clone();
         meta.turn_count += 1;
         meta.updated = chrono::Utc::now().to_rfc3339();
         meta.thread_id = thread_id.map(str::to_owned).or(meta.thread_id);
@@ -274,8 +380,26 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 partial,
             )
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
-        self.meta = Some(meta);
-        Ok(())
+        target.meta = meta;
+        let previous_len = self.persisted.len();
+        let next_len = raw.len();
+        let common_len = previous_len.min(next_len);
+        let delta = if next_len >= previous_len && raw[..common_len] == self.persisted[..common_len]
+        {
+            TranscriptDelta::Append {
+                previous_len,
+                appended: previous_len..next_len,
+            }
+        } else {
+            TranscriptDelta::Replace {
+                previous_len,
+                next_len,
+            }
+        };
+        Ok(Some(TranscriptCommitReceipt {
+            path: transcript.path().to_path_buf(),
+            delta,
+        }))
     }
 
     fn with_prefix(&self, history: Vec<Message>) -> Vec<Message> {
@@ -292,14 +416,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
 
 /// Ensures a terminal hook is scheduled once even if a caller drops a turn
 /// future while it is awaiting preparation, driving, persistence, or hooks.
-struct TerminalGuard {
-    hooks: Arc<dyn SessionHooks>,
+struct TerminalGuard<C: Clone + Send + Sync + 'static> {
+    hooks: Arc<dyn SessionHooks<C>>,
     terminal: Option<SessionTerminal>,
     committed: bool,
 }
 
-impl TerminalGuard {
-    fn new(hooks: Arc<dyn SessionHooks>) -> Self {
+impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
+    fn new(hooks: Arc<dyn SessionHooks<C>>) -> Self {
         Self {
             hooks,
             terminal: Some(SessionTerminal::Failed("session turn dropped".into())),
@@ -311,9 +435,17 @@ impl TerminalGuard {
         self.terminal = Some(terminal);
     }
 
-    fn mark_committed(&mut self, outcome: SessionTurnOutcome) {
-        self.terminal = Some(SessionTerminal::Completed(outcome));
+    fn finalize_commit(&mut self, receipt: CommitReceipt<C>) -> tokio::task::JoinHandle<()> {
+        let terminal = SessionTerminal::Completed(receipt.outcome.clone());
+        // Removing the guard's terminal transfers exactly-once ownership to
+        // the finalizer. `finish` and `Drop` then become no-ops for this turn.
+        self.terminal = None;
         self.committed = true;
+        let hooks = self.hooks.clone();
+        tokio::spawn(async move {
+            let _ = hooks.after_commit(receipt).await;
+            let _ = hooks.on_terminal(terminal).await;
+        })
     }
 
     fn is_committed(&self) -> bool {
@@ -321,17 +453,14 @@ impl TerminalGuard {
     }
 
     async fn finish(mut self) -> Result<(), RuntimeError> {
-        let terminal = self.terminal.take().ok_or(RuntimeError::Hook(
-            "terminal guard already completed".into(),
-        ))?;
-        let hooks = self.hooks.clone();
-        tokio::spawn(async move { hooks.on_terminal(&terminal).await })
-            .await
-            .map_err(|error| RuntimeError::Hook(format!("terminal hook task failed: {error}")))?
+        let Some(terminal) = self.terminal.take() else {
+            return Ok(());
+        };
+        self.hooks.on_terminal(terminal).await
     }
 }
 
-impl Drop for TerminalGuard {
+impl<C: Clone + Send + Sync + 'static> Drop for TerminalGuard<C> {
     fn drop(&mut self) {
         let Some(terminal) = self.terminal.take() else {
             return;
@@ -339,7 +468,7 @@ impl Drop for TerminalGuard {
         let hooks = self.hooks.clone();
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
-                let _ = hooks.on_terminal(&terminal).await;
+                let _ = hooks.on_terminal(terminal).await;
             });
         }
     }

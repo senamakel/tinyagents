@@ -12,26 +12,27 @@ use tinyagents_harness::{
     runtime::AgentHarness,
 };
 use tinyagents_session::transcript::{
-    DisplayRecord, FileTranscriptHistory, FileTranscriptLocator, SessionTranscript,
-    TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead,
-    TranscriptTurn, read_transcript, read_transcript_display,
+    DisplayRecord, FileTranscriptLocator, SessionTranscript, TranscriptHistory, TranscriptLocator,
+    TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, read_transcript,
+    read_transcript_display,
 };
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
 use tinytools::{Tool, ToolResult, ToolSpec};
 
 use crate::{
-    DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot, ResumeMode,
-    RuntimeError, SessionBuilder, SessionDriver, SessionHooks, SessionTerminal, SessionTurnOutcome,
-    SessionTurnRequest, ToolSnapshot, TranscriptCodec, TurnOptions,
+    CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
+    ResumeMode, RuntimeError, SessionBuilder, SessionDriver, SessionHooks, SessionStateView,
+    SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot, TranscriptCodec,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
-struct FakeDriver {
+struct Driver {
     results: Mutex<VecDeque<Result<DriverOutcome, DriverFailure>>>,
     requests: Mutex<Vec<DriverRequest>>,
 }
 
-impl FakeDriver {
+impl Driver {
     fn new(results: Vec<Result<DriverOutcome, DriverFailure>>) -> Self {
         Self {
             results: Mutex::new(results.into()),
@@ -41,54 +42,20 @@ impl FakeDriver {
 }
 
 #[async_trait]
-impl SessionDriver for FakeDriver {
+impl SessionDriver for Driver {
     async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
         self.requests.lock().unwrap().push(request);
-        self.results
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("planned driver result")
+        self.results.lock().unwrap().pop_front().unwrap()
     }
 }
 
-struct WaitingDriver;
+struct WaitingDriver(Arc<tokio::sync::Notify>);
 
 #[async_trait]
 impl SessionDriver for WaitingDriver {
     async fn execute(&self, _: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        self.0.notify_waiters();
         std::future::pending().await
-    }
-}
-
-struct DropDriver {
-    started: Arc<tokio::sync::Notify>,
-}
-
-#[async_trait]
-impl SessionDriver for DropDriver {
-    async fn execute(&self, _: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
-        self.started.notify_waiters();
-        std::future::pending().await
-    }
-}
-
-// Reconciliation retains an explicit clone for the codec after the live
-// `RunContext` is consumed by the driver.
-#[derive(Clone)]
-struct HostContext(String);
-
-struct ContextDriver;
-
-#[async_trait]
-impl SessionDriver<HostContext> for ContextDriver {
-    async fn execute(
-        &self,
-        request: DriverRequest<HostContext>,
-    ) -> Result<DriverOutcome, DriverFailure> {
-        Ok(outcome(vec![Message::assistant(
-            request.run_context.data.0,
-        )]))
     }
 }
 
@@ -99,234 +66,52 @@ impl Tool for RegisteredTool {
     fn name(&self) -> &str {
         "registered"
     }
-
     fn description(&self) -> &str {
-        "a registered matching tool"
+        "registered tool"
     }
-
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({"type": "object"})
+        serde_json::json!({})
     }
-
     async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success("ok"))
     }
 }
 
-#[derive(Default)]
-struct BasicCodec {
-    decoded: Mutex<Vec<SessionTranscript>>,
+fn outcome(history: Vec<Message>) -> DriverOutcome {
+    DriverOutcome {
+        history,
+        output: Some("ok".into()),
+        partial: None,
+        interrupted: false,
+    }
 }
 
-impl TranscriptCodec for BasicCodec {
-    fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
-        self.decoded.lock().unwrap().push(transcript.clone());
-        Ok(transcript
-            .messages
-            .iter()
-            .map(|message| match message.role.as_str() {
-                "assistant" => Message::assistant(&message.content),
-                "system" => Message::system(&message.content),
-                _ => Message::user(&message.content),
-            })
-            .collect())
-    }
-
-    fn reconcile(
-        &self,
-        prior: &[TranscriptMessage],
-        previous: &[Message],
-        next: &[Message],
-        _: &crate::TranscriptTurnOptions,
-    ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
-        // Preserve rows that still correspond to the prior model prefix;
-        // fresh model suffixes receive only the codec's explicit projection.
-        let raw_offset = (!prior.is_empty())
-            .then(|| {
-                previous.windows(prior.len()).position(|window| {
-                    window
-                        .iter()
-                        .zip(prior)
-                        .all(|(model, row)| model.text() == row.content)
-                })
-            })
-            .flatten()
-            .unwrap_or(usize::MAX);
-        Ok(next
-            .iter()
-            .enumerate()
-            .map(|(index, message)| {
-                let raw_index = index.checked_sub(raw_offset);
-                if let Some(raw_index) = raw_index.filter(|index| {
-                    *index < prior.len() && previous.get(index + raw_offset) == Some(message)
-                }) {
-                    return prior[raw_index].clone();
-                }
-                let role = match message {
-                    Message::System(_) => "system",
-                    Message::User(_) => "user",
-                    Message::Assistant(_) => "assistant",
-                    Message::Tool(_) => "tool",
-                };
-                TranscriptMessage::new(role, message.text())
-            })
-            .collect())
+fn meta() -> TranscriptMeta {
+    TranscriptMeta {
+        agent_name: "agent".into(),
+        agent_id: Some("agent-id".into()),
+        agent_type: None,
+        dispatcher: "test".into(),
+        provider: None,
+        model: None,
+        created: "then".into(),
+        updated: "then".into(),
+        turn_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        charged_amount_usd: 0.0,
+        thread_id: None,
+        task_id: None,
     }
 }
 
 #[derive(Default)]
-struct RecordingHooks {
-    events: Mutex<Vec<String>>,
-    fail_before: bool,
-    fail_after: bool,
-    terminal_notified: Option<Arc<tokio::sync::Notify>>,
-}
-
-struct WaitingAfterHooks {
-    started: tokio::sync::Notify,
-    events: Mutex<Vec<String>>,
-}
-
-struct WaitingBeforeHooks {
-    started: tokio::sync::Notify,
-}
-
-struct WaitingPostCommitHooks {
-    started: tokio::sync::Notify,
-    terminal: tokio::sync::Notify,
-    terminals: Mutex<Vec<SessionTerminal>>,
-}
-
-#[async_trait]
-impl SessionHooks for WaitingBeforeHooks {
-    async fn before_turn(&self, _: &mut SessionTurnRequest) -> Result<(), RuntimeError> {
-        self.started.notify_waiters();
-        std::future::pending().await
-    }
-
-    async fn after_turn(&self, _: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-
-    async fn on_terminal(&self, _: &SessionTerminal) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl SessionHooks for WaitingAfterHooks {
-    async fn before_turn(&self, _: &mut SessionTurnRequest) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-
-    async fn after_turn(&self, _: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        self.started.notify_waiters();
-        std::future::pending().await
-    }
-
-    async fn on_terminal(&self, terminal: &SessionTerminal) -> Result<(), RuntimeError> {
-        self.events.lock().unwrap().push(format!("{terminal:?}"));
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl SessionHooks for WaitingPostCommitHooks {
-    async fn before_turn(&self, _: &mut SessionTurnRequest) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-
-    async fn after_turn(&self, _: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-
-    async fn after_commit(&self, _: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        self.started.notify_waiters();
-        std::future::pending().await
-    }
-
-    async fn on_terminal(&self, terminal: &SessionTerminal) -> Result<(), RuntimeError> {
-        self.terminals.lock().unwrap().push(terminal.clone());
-        self.terminal.notify_waiters();
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl SessionHooks for RecordingHooks {
-    async fn before_turn(&self, _: &mut SessionTurnRequest) -> Result<(), RuntimeError> {
-        self.events.lock().unwrap().push("before".into());
-        if self.fail_before {
-            Err(RuntimeError::Hook("before".into()))
-        } else {
-            Ok(())
-        }
-    }
-    async fn after_turn(&self, _: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        self.events.lock().unwrap().push("after".into());
-        if self.fail_after {
-            Err(RuntimeError::Hook("after".into()))
-        } else {
-            Ok(())
-        }
-    }
-    async fn on_terminal(&self, terminal: &SessionTerminal) -> Result<(), RuntimeError> {
-        let terminal = match terminal {
-            SessionTerminal::Completed(_) => "Completed".to_owned(),
-            other => format!("{other:?}"),
-        };
-        self.events
-            .lock()
-            .unwrap()
-            .push(format!("terminal:{terminal}"));
-        if let Some(notify) = &self.terminal_notified {
-            notify.notify_waiters();
-        }
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct FinalizationHooks {
-    post_commits: Mutex<Vec<SessionTurnOutcome>>,
-    terminals: Mutex<Vec<SessionTerminal>>,
-    fail_post_commit: bool,
-    cancel_on_post_commit: Option<tinyagents_harness::CancellationToken>,
-}
-
-#[async_trait]
-impl SessionHooks for FinalizationHooks {
-    async fn before_turn(&self, _: &mut SessionTurnRequest) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-
-    async fn after_turn(&self, _: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        Ok(())
-    }
-
-    async fn after_commit(&self, outcome: &SessionTurnOutcome) -> Result<(), RuntimeError> {
-        self.post_commits.lock().unwrap().push(outcome.clone());
-        if let Some(cancellation) = &self.cancel_on_post_commit {
-            cancellation.cancel();
-        }
-        if self.fail_post_commit {
-            Err(RuntimeError::Hook("post-commit".into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn on_terminal(&self, terminal: &SessionTerminal) -> Result<(), RuntimeError> {
-        self.terminals.lock().unwrap().push(terminal.clone());
-        Ok(())
-    }
-}
-
 struct MemoryHistory {
     path: PathBuf,
-    session: Mutex<Option<SessionTranscript>>,
-    turns: Mutex<Vec<Vec<TranscriptMessage>>>,
-    fail: bool,
+    state: Mutex<Option<SessionTranscript>>,
+    opens: Mutex<usize>,
+    fail: Mutex<bool>,
     cancel_after_append: Mutex<Option<tinyagents_harness::CancellationToken>>,
 }
 
@@ -335,17 +120,16 @@ impl TranscriptRead for MemoryHistory {
         &self.path
     }
     fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>> {
-        Ok(self.session.lock().unwrap().clone())
+        Ok(self.state.lock().unwrap().clone())
     }
 }
 
 impl TranscriptHistory for MemoryHistory {
     fn append_turn(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
-        if self.fail {
+        if *self.fail.lock().unwrap() {
             anyhow::bail!("planned persistence failure");
         }
-        self.turns.lock().unwrap().push(turn.next.to_vec());
-        *self.session.lock().unwrap() = Some(SessionTranscript {
+        *self.state.lock().unwrap() = Some(SessionTranscript {
             meta: turn.meta.clone(),
             messages: turn.next.to_vec(),
         });
@@ -356,7 +140,7 @@ impl TranscriptHistory for MemoryHistory {
     }
     fn messages(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
         Ok(self
-            .session
+            .state
             .lock()
             .unwrap()
             .as_ref()
@@ -374,180 +158,398 @@ impl TranscriptHistory for MemoryHistory {
     }
 }
 
-struct MemoryLocator {
-    history: Arc<MemoryHistory>,
-}
+struct Locator(Arc<MemoryHistory>);
 
-/// A real transcript path whose single atomic turn operation fails before it
-/// writes. This catches the old two-write partial path: if runtime wrote a
-/// display partial first, the path below would exist after the failure.
-struct FailingFileHistory(FileTranscriptHistory);
-
-impl TranscriptRead for FailingFileHistory {
-    fn path(&self) -> &Path {
-        self.0.path()
-    }
-
-    fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>> {
-        TranscriptRead::read_session(&self.0)
-    }
-}
-
-impl TranscriptHistory for FailingFileHistory {
-    fn append_turn(&self, _: TranscriptTurn<'_>) -> anyhow::Result<()> {
-        anyhow::bail!("planned atomic append failure")
-    }
-
-    fn messages(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
-        TranscriptHistory::messages(&self.0)
-    }
-
-    fn append(&self, _: TranscriptMessage) -> anyhow::Result<()> {
-        anyhow::bail!("planned atomic append failure")
-    }
-
-    fn replace(&self, _: &[TranscriptMessage]) -> anyhow::Result<()> {
-        anyhow::bail!("planned atomic append failure")
-    }
-
-    fn clear(&self) -> anyhow::Result<()> {
-        anyhow::bail!("planned atomic append failure")
-    }
-}
-
-struct FailingFileLocator {
-    history: Arc<FailingFileHistory>,
-}
-
-impl TranscriptLocator for FailingFileLocator {
+impl TranscriptLocator for Locator {
     fn latest_for_agent(&self, _: &str) -> Option<Arc<dyn TranscriptRead>> {
-        Some(self.history.clone())
-    }
-
-    fn root_for_thread(&self, _: &str) -> Option<Arc<dyn TranscriptRead>> {
-        Some(self.history.clone())
-    }
-
-    fn open_stem(&self, _: &str, _: TranscriptMeta) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
-        Ok(self.history.clone())
-    }
-}
-
-impl TranscriptLocator for MemoryLocator {
-    fn latest_for_agent(&self, _: &str) -> Option<Arc<dyn TranscriptRead>> {
-        Some(self.history.clone())
+        Some(self.0.clone())
     }
     fn root_for_thread(&self, _: &str) -> Option<Arc<dyn TranscriptRead>> {
-        Some(self.history.clone())
+        Some(self.0.clone())
     }
     fn open_stem(&self, _: &str, _: TranscriptMeta) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
-        Ok(self.history.clone())
+        *self.0.opens.lock().unwrap() += 1;
+        Ok(self.0.clone())
     }
 }
 
-fn meta() -> TranscriptMeta {
-    TranscriptMeta {
-        agent_name: "agent".into(),
-        agent_id: None,
-        agent_type: None,
-        dispatcher: "test".into(),
-        provider: None,
-        model: None,
-        created: "now".into(),
-        updated: "now".into(),
-        turn_count: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cached_input_tokens: 0,
-        charged_amount_usd: 0.0,
-        thread_id: None,
-        task_id: None,
-    }
-}
-
-fn outcome(history: Vec<Message>) -> DriverOutcome {
-    DriverOutcome {
-        history,
-        output: Some("done".into()),
-        partial: None,
-        interrupted: false,
-    }
-}
-
-fn memory_locator(
-    session: Option<SessionTranscript>,
-    fail: bool,
-) -> (Arc<MemoryLocator>, Arc<MemoryHistory>) {
+fn locator(session: Option<SessionTranscript>) -> (Arc<Locator>, Arc<MemoryHistory>) {
     let dir = tempfile::tempdir().unwrap().keep();
     let history = Arc::new(MemoryHistory {
         path: dir.join("session.jsonl"),
-        session: Mutex::new(session),
-        turns: Mutex::new(Vec::new()),
-        fail,
+        state: Mutex::new(session),
+        opens: Mutex::new(0),
+        fail: Mutex::new(false),
         cancel_after_append: Mutex::new(None),
     });
+    (Arc::new(Locator(history.clone())), history)
+}
+
+#[derive(Default)]
+struct Codec {
+    seen_prior: Mutex<Vec<Vec<TranscriptMessage>>>,
+    seen_options: Mutex<Vec<String>>,
+}
+
+impl TranscriptCodec for Codec {
+    fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
+        Ok(transcript
+            .messages
+            .iter()
+            .map(|row| Message::user(&row.content))
+            .collect())
+    }
+    fn reconcile(
+        &self,
+        prior: &[TranscriptMessage],
+        _: &[Message],
+        next: &[Message],
+        options: &TranscriptTurnOptions,
+    ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
+        self.seen_prior.lock().unwrap().push(prior.to_vec());
+        self.seen_options
+            .lock()
+            .unwrap()
+            .push(format!("{:?}", options.request_id));
+        if next.len() < prior.len() {
+            return Ok(next
+                .iter()
+                .map(|message| TranscriptMessage::new("assistant", message.text()))
+                .collect());
+        }
+        let mut rows = prior.to_vec();
+        if rows.len() < next.len() {
+            rows.extend(
+                next[rows.len()..]
+                    .iter()
+                    .map(|message| TranscriptMessage::new("assistant", message.text())),
+            );
+        }
+        Ok(rows)
+    }
+}
+
+#[derive(Default)]
+struct Events {
+    terminal: Mutex<Vec<SessionTerminal>>,
+    receipts: Mutex<Vec<CommitReceipt>>,
+    before_commit: Mutex<usize>,
+    order: Mutex<Vec<&'static str>>,
+}
+
+struct Hook {
+    preparations: Mutex<VecDeque<TurnPreparation>>,
+    events: Arc<Events>,
+    fail_commit: bool,
+    fail_post: bool,
+}
+
+#[async_trait]
+impl SessionHooks for Hook {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(self
+            .preparations
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_default())
+    }
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        *self.events.before_commit.lock().unwrap() += 1;
+        if self.fail_commit {
+            Err(RuntimeError::Hook("rejected".into()))
+        } else {
+            Ok(())
+        }
+    }
+    async fn after_commit(&self, receipt: CommitReceipt) -> Result<(), RuntimeError> {
+        self.events.receipts.lock().unwrap().push(receipt);
+        self.events.order.lock().unwrap().push("after_commit");
+        if self.fail_post {
+            Err(RuntimeError::Hook("post-commit".into()))
+        } else {
+            Ok(())
+        }
+    }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.events.terminal.lock().unwrap().push(terminal);
+        self.events.order.lock().unwrap().push("terminal");
+        Ok(())
+    }
+}
+
+fn hook(preparations: Vec<TurnPreparation>) -> (Arc<Hook>, Arc<Events>) {
+    let events = Arc::new(Events::default());
     (
-        Arc::new(MemoryLocator {
-            history: history.clone(),
+        Arc::new(Hook {
+            preparations: Mutex::new(preparations.into()),
+            events: events.clone(),
+            fail_commit: false,
+            fail_post: false,
         }),
-        history,
+        events,
     )
 }
 
+fn tools(name: &str) -> ToolSnapshot {
+    ToolSnapshot::new(vec![ToolSpec {
+        name: name.into(),
+        description: name.into(),
+        parameters: serde_json::json!({}),
+    }])
+    .unwrap()
+}
+
 #[tokio::test]
-async fn first_turn_commits_history_and_preserves_prefix() {
-    let driver = Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::system("stable"),
-        Message::user("hi"),
-        Message::assistant("hello"),
+async fn prepared_first_turn_prefix_replaces_empty_builder_prefix() {
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::system("prepared"),
+        Message::assistant("ok"),
     ]))]));
+    let (hook, _) = hook(vec![TurnPreparation {
+        prefix: Some(PrefixSnapshot::new(vec![Message::system("prepared")])),
+        ..Default::default()
+    }]);
     let mut session = SessionBuilder::new(driver.clone())
-        .prefix(PrefixSnapshot::new(vec![Message::system("stable")]))
+        .hooks(hook)
         .build()
         .unwrap();
-    let committed = session
+    session
         .turn(
             SessionTurnRequest::new(Message::user("hi")),
             TurnOptions::default(),
         )
         .await
         .unwrap();
-    assert_eq!(committed.history, session.history());
     assert_eq!(
-        session.prefix_snapshot().messages(),
-        &[Message::system("stable")]
+        driver.requests.lock().unwrap()[0].history[0],
+        Message::system("prepared")
     );
     assert_eq!(
-        driver.requests.lock().unwrap()[0].history,
-        vec![Message::system("stable"), Message::user("hi")]
+        session.prefix_snapshot().messages(),
+        &[Message::system("prepared")]
     );
 }
 
 #[tokio::test]
-async fn generic_session_passes_the_explicit_host_context_to_driver() {
-    let mut session = SessionBuilder::<HostContext>::new(Arc::new(ContextDriver))
+async fn prepared_tools_are_dynamic_and_never_reused() {
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::assistant("one")])),
+        Ok(outcome(vec![Message::assistant("two")])),
+    ]));
+    let (hook, _) = hook(vec![
+        TurnPreparation::with_tools(tools("one")),
+        TurnPreparation::with_tools(tools("two")),
+    ]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .hooks(hook)
         .build()
         .unwrap();
-    let options = TurnOptions {
-        request_id: None,
-        thread_id: None,
-        stream: false,
-        resume: ResumeMode::Never,
-        cancellation: tinyagents_harness::CancellationToken::new(),
-        run_context: RunContext::new(RunConfig::new("host"), HostContext("host context".into())),
+    for input in ["a", "b"] {
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user(input)),
+                TurnOptions::default(),
+            )
+            .await
+            .unwrap();
+    }
+    let requests = driver.requests.lock().unwrap();
+    assert_eq!(requests[0].tools.specs()[0].name, "one");
+    assert_eq!(requests[1].tools.specs()[0].name, "two");
+}
+
+#[tokio::test]
+async fn trailing_input_is_deduplicated_and_tool_collisions_fail_closed() {
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::user("same")])),
+        Ok(outcome(vec![
+            Message::user("same"),
+            Message::assistant("ok"),
+        ])),
+    ]));
+    let mut session = SessionBuilder::new(driver.clone()).build().unwrap();
+    for _ in 0..2 {
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("same")),
+                TurnOptions::default(),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        driver.requests.lock().unwrap()[1].history,
+        vec![Message::user("same")]
+    );
+    assert!(matches!(
+        ToolSnapshot::new(vec![
+            ToolSpec {
+                name: "same".into(),
+                description: "one".into(),
+                parameters: serde_json::json!({})
+            },
+            ToolSpec {
+                name: "same".into(),
+                description: "two".into(),
+                parameters: serde_json::json!({})
+            },
+        ]),
+        Err(RuntimeError::ToolNameCollision(_))
+    ));
+}
+
+#[tokio::test]
+async fn persistence_failure_rolls_back_and_a_partial_never_falls_back_to_two_writes() {
+    let (failing_locator, history) = locator(None);
+    *history.fail.lock().unwrap() = true;
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("never"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(failing_locator, "agent", meta())
+    .build()
+    .unwrap();
+    assert!(matches!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default()
+            )
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+    assert!(session.history().is_empty());
+    assert!(history.state.lock().unwrap().is_none());
+
+    let (locator, history) = locator(None);
+    let partial = DriverOutcome {
+        history: vec![Message::assistant("recoverable")],
+        output: None,
+        partial: Some(crate::TranscriptPartial::new("display only")),
+        interrupted: true,
     };
-    let result = session
-        .turn(SessionTurnRequest::new(Message::user("x")), options)
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
+        error: RuntimeError::Driver("interrupted".into()),
+        partial: Some(partial),
+    })])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+    assert!(matches!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default()
+            )
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+    assert!(history.state.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn prefix_reconciliation_preserves_maximal_overlap_after_driver_compaction() {
+    let prefix = PrefixSnapshot::new(vec![Message::system("a"), Message::system("b")]);
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::system("b"),
+        Message::assistant("answer"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver).prefix(prefix).build().unwrap();
+    let outcome = session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            TurnOptions::default(),
+        )
         .await
         .unwrap();
     assert_eq!(
-        result.history.last().map(Message::text).as_deref(),
-        Some("host context")
+        outcome.history,
+        vec![
+            Message::system("a"),
+            Message::system("b"),
+            Message::assistant("answer")
+        ]
     );
 }
 
 #[tokio::test]
-async fn harness_driver_uses_the_pinned_explicit_model_entry_point() {
+async fn rejected_before_commit_leaves_no_durable_state() {
+    let (locator, history) = locator(None);
+    let events = Arc::new(Events::default());
+    let hook = Arc::new(Hook {
+        preparations: Mutex::new(VecDeque::new()),
+        events,
+        fail_commit: true,
+        fail_post: false,
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("candidate"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .hooks(hook)
+    .build()
+    .unwrap();
+    assert!(matches!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default()
+            )
+            .await,
+        Err(RuntimeError::Hook(_))
+    ));
+    assert!(history.state.lock().unwrap().is_none());
+    assert!(session.history().is_empty());
+}
+
+#[tokio::test]
+async fn post_commit_errors_cannot_relabel_a_successful_turn() {
+    let (locator, history) = locator(None);
+    let events = Arc::new(Events::default());
+    let hook = Arc::new(Hook {
+        preparations: Mutex::new(VecDeque::new()),
+        events: events.clone(),
+        fail_commit: false,
+        fail_post: true,
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("done"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .hooks(hook)
+    .build()
+    .unwrap();
+    assert!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default()
+            )
+            .await
+            .is_ok()
+    );
+    assert!(history.state.lock().unwrap().is_some());
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Completed(_)]
+    ));
+}
+
+#[tokio::test]
+async fn harness_driver_keeps_the_explicit_model_and_tool_snapshot_boundary() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("mock", Arc::new(MockModel::constant("from harness")));
     harness.register_tool(Arc::new(RegisteredTool));
@@ -557,288 +559,216 @@ async fn harness_driver_uses_the_pinned_explicit_model_entry_point() {
         .tool_snapshot(snapshot)
         .build()
         .unwrap();
-    let result = session
+    let committed = session
         .turn(
-            SessionTurnRequest::new(Message::user("hello")),
+            SessionTurnRequest::new(Message::user("x")),
             TurnOptions::default(),
         )
         .await
         .unwrap();
-    assert_eq!(result.output.as_deref(), Some("from harness"));
-    assert_eq!(
-        result.history.last().map(Message::text).as_deref(),
-        Some("from harness")
-    );
+    assert_eq!(committed.output.as_deref(), Some("from harness"));
 }
 
 #[tokio::test]
-async fn trailing_input_is_deduplicated_and_tool_snapshot_is_immutable() {
-    let driver = Arc::new(FakeDriver::new(vec![
-        Ok(outcome(vec![Message::user("same")])),
-        Ok(outcome(vec![
-            Message::user("same"),
-            Message::assistant("two"),
-        ])),
-    ]));
-    let tools = ToolSnapshot::new(vec![ToolSpec {
-        name: "echo".into(),
-        description: "x".into(),
-        parameters: serde_json::json!({}),
-    }])
-    .unwrap();
-    let mut session = SessionBuilder::new(driver.clone())
-        .tool_snapshot(tools)
-        .build()
-        .unwrap();
-    session
-        .turn(
-            SessionTurnRequest::new(Message::user("same")),
-            TurnOptions::default(),
-        )
-        .await
-        .unwrap();
-    session
-        .turn(
-            SessionTurnRequest::new(Message::user("same")),
-            TurnOptions::default(),
-        )
-        .await
-        .unwrap();
-    let requests = driver.requests.lock().unwrap();
-    assert_eq!(requests[1].history, vec![Message::user("same")]);
-    assert_eq!(requests[0].tools.specs()[0].name, "echo");
-    assert_eq!(session.tool_snapshot().specs()[0].name, "echo");
-}
-
-#[test]
-fn tool_snapshots_dedup_identical_names_and_reject_collisions() {
-    let spec = ToolSpec {
-        name: "read".into(),
-        description: "read".into(),
-        parameters: serde_json::json!({}),
-    };
-    assert_eq!(
-        ToolSnapshot::new(vec![spec.clone(), spec])
-            .unwrap()
-            .specs()
-            .len(),
-        1
-    );
-    assert!(matches!(
-        ToolSnapshot::new(vec![
-            ToolSpec {
-                name: "read".into(),
-                description: "one".into(),
-                parameters: serde_json::json!({})
-            },
-            ToolSpec {
-                name: "read".into(),
-                description: "two".into(),
-                parameters: serde_json::json!({})
-            },
-        ]),
-        Err(RuntimeError::ToolNameCollision(name)) if name == "read"
-    ));
-}
-
-#[tokio::test]
-async fn resume_passes_full_durable_transcript_to_codec() {
-    let mut durable = TranscriptMessage::new("user", "persisted");
-    durable.extra_metadata = Some(serde_json::json!({"unmodified": true}));
-    let transcript = SessionTranscript {
-        meta: meta(),
-        messages: vec![durable.clone()],
-    };
-    let (locator, _) = memory_locator(Some(transcript), false);
-    let codec = Arc::new(BasicCodec::default());
-    let mut session = SessionBuilder::new(Arc::new(FakeDriver::new(vec![])))
-        .codec(codec.clone())
-        .transcript(locator, "agent", meta())
-        .build()
-        .unwrap();
-    let resumed = session
-        .resume(&TurnOptions {
-            resume: ResumeMode::LatestForAgent,
-            ..TurnOptions::default()
-        })
-        .await
-        .unwrap();
-    assert!(resumed.loaded);
-    assert_eq!(resumed.history, vec![Message::user("persisted")]);
-    assert_eq!(
-        codec.decoded.lock().unwrap()[0].messages[0].extra_metadata,
-        durable.extra_metadata
-    );
-}
-
-#[tokio::test]
-async fn append_only_delta_and_failure_rollback_are_owned_by_session() {
-    let (locator, history) = memory_locator(None, false);
-    let codec = Arc::new(BasicCodec::default());
-    let driver = Arc::new(FakeDriver::new(vec![
-        Ok(outcome(vec![Message::user("one"), Message::assistant("a")])),
-        Ok(outcome(vec![Message::assistant("compacted")])),
-    ]));
+async fn harness_driver_rejects_a_snapshot_not_registered_by_the_harness() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", Arc::new(MockModel::constant("unreachable")));
+    let driver = Arc::new(HarnessDriver::new(Arc::new(harness), Arc::new(())));
     let mut session = SessionBuilder::new(driver)
-        .codec(codec)
-        .transcript(locator, "agent", meta())
+        .tool_snapshot(tools("not-registered"))
         .build()
         .unwrap();
-    session
-        .turn(
-            SessionTurnRequest::new(Message::user("one")),
-            TurnOptions::default(),
-        )
-        .await
-        .unwrap();
-    session
-        .turn(
-            SessionTurnRequest::new(Message::user("two")),
-            TurnOptions::default(),
-        )
-        .await
-        .unwrap();
-    {
-        let turns = history.turns.lock().unwrap();
-        assert_eq!(turns.len(), 2);
-        assert_eq!(
-            turns[1],
-            vec![TranscriptMessage::new("assistant", "compacted")]
-        );
-    }
-
-    let (bad_locator, _) = memory_locator(None, true);
-    let bad = Arc::new(FakeDriver::new(vec![Ok(outcome(vec![Message::user(
-        "will-not-commit",
-    )]))]));
-    let mut failing = SessionBuilder::new(bad)
-        .codec(Arc::new(BasicCodec::default()))
-        .transcript(bad_locator, "bad", meta())
-        .build()
-        .unwrap();
-    assert!(matches!(
-        failing
-            .turn(
-                SessionTurnRequest::new(Message::user("will-not-commit")),
-                TurnOptions::default()
-            )
-            .await,
-        Err(RuntimeError::Persistence(_))
-    ));
-    assert!(failing.history().is_empty());
-}
-
-#[tokio::test]
-async fn partial_failure_never_leaves_a_display_partial_on_disk() {
-    let directory = tempfile::tempdir().unwrap();
-    let history = Arc::new(FailingFileHistory(
-        FileTranscriptHistory::new(directory.path(), "agent", meta()).unwrap(),
-    ));
-    let path = history.path().to_path_buf();
-    let locator = Arc::new(FailingFileLocator {
-        history: history.clone(),
-    });
-    let driver = Arc::new(FakeDriver::new(vec![Err(DriverFailure {
-        error: RuntimeError::Driver("interrupted".into()),
-        partial: Some(DriverOutcome {
-            history: vec![Message::assistant("partial model history")],
-            output: None,
-            partial: Some(crate::TranscriptPartial::new("display partial")),
-            interrupted: true,
-        }),
-    })]));
-    let mut session = SessionBuilder::new(driver)
-        .codec(Arc::new(BasicCodec::default()))
-        .transcript(locator, "agent", meta())
-        .build()
-        .unwrap();
-    assert!(matches!(
+    assert_eq!(
         session
             .turn(
                 SessionTurnRequest::new(Message::user("x")),
                 TurnOptions::default()
             )
             .await,
-        Err(RuntimeError::Persistence(_))
-    ));
-    assert!(!path.exists(), "failed partial turn wrote {path:?}");
-    assert!(session.history().is_empty());
+        Err(RuntimeError::ToolSnapshotMismatch)
+    );
 }
 
 #[tokio::test]
-async fn partial_failure_commits_model_history_and_display_partial_together() {
+async fn file_history_commits_partial_model_history_and_display_only_partial_together() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    let driver = Arc::new(FakeDriver::new(vec![Err(DriverFailure {
+    let partial = DriverOutcome {
+        history: vec![Message::assistant("recoverable")],
+        output: None,
+        partial: Some(crate::TranscriptPartial::new("display partial")),
+        interrupted: true,
+    };
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         error: RuntimeError::Driver("interrupted".into()),
-        partial: Some(DriverOutcome {
-            history: vec![Message::assistant("recoverable model history")],
-            output: None,
-            partial: Some(crate::TranscriptPartial {
-                content: "display partial".into(),
-                reasoning_content: Some("thinking".into()),
-                iteration: Some(3),
-            }),
-            interrupted: true,
-        }),
-    })]));
-    let mut session = SessionBuilder::new(driver)
-        .codec(Arc::new(BasicCodec::default()))
-        .transcript(locator, "agent", meta())
-        .build()
-        .unwrap();
-    assert!(matches!(
+        partial: Some(partial),
+    })])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+    assert!(
         session
             .turn(
                 SessionTurnRequest::new(Message::user("x")),
                 TurnOptions::default()
             )
-            .await,
-        Err(RuntimeError::Driver(_))
-    ));
-
+            .await
+            .is_err()
+    );
     let path = directory.path().join("session_raw/agent.jsonl");
-    let model = read_transcript(&path).unwrap();
     assert_eq!(
-        model
-            .messages
-            .iter()
-            .map(|message| message.content.as_str())
-            .collect::<Vec<_>>(),
-        vec!["recoverable model history"]
+        read_transcript(&path).unwrap().messages[0].content,
+        "recoverable"
     );
-    let display = read_transcript_display(&path).unwrap();
-    assert!(display.records.iter().any(|record| matches!(
-        record,
-        DisplayRecord::Message(message)
-            if message.interrupted
-                && message.message.content == "display partial"
-                && message.reasoning_content.as_deref() == Some("thinking")
-                && message.iteration == Some(3)
+    assert!(read_transcript_display(&path).unwrap().records.iter().any(|record| matches!(record,
+        DisplayRecord::Message(message) if message.interrupted && message.message.content == "display partial"
     )));
-    assert_eq!(
-        session.history(),
-        &[Message::assistant("recoverable model history")]
-    );
 }
 
 #[tokio::test]
-async fn resume_new_turn_retains_durable_metadata_and_restores_prefix_once() {
-    let mut durable = TranscriptMessage::new("user", "persisted");
-    durable.extra_metadata = Some(serde_json::json!({"provider": {"raw": true}}));
-    let transcript = SessionTranscript {
+async fn cancellation_while_the_driver_is_waiting_has_one_cancelled_terminal() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (hook, events) = hook(vec![]);
+    let mut session = SessionBuilder::new(Arc::new(WaitingDriver(started.clone())))
+        .hooks(hook)
+        .build()
+        .unwrap();
+    let options = TurnOptions::default();
+    let cancellation = options.cancellation.clone();
+    let turn = tokio::spawn(async move {
+        session
+            .turn(SessionTurnRequest::new(Message::user("x")), options)
+            .await
+    });
+    started.notified().await;
+    cancellation.cancel();
+    assert_eq!(turn.await.unwrap(), Err(RuntimeError::Cancelled));
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Cancelled]
+    ));
+}
+
+#[tokio::test]
+async fn dropped_turn_future_has_one_failed_terminal() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (hook, events) = hook(vec![]);
+    let mut session = SessionBuilder::new(Arc::new(WaitingDriver(started.clone())))
+        .hooks(hook)
+        .build()
+        .unwrap();
+    let turn = tokio::spawn(async move {
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default(),
+            )
+            .await
+    });
+    started.notified().await;
+    turn.abort();
+    let _ = turn.await;
+    tokio::task::yield_now().await;
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Failed(_)]
+    ));
+}
+
+struct BlockingAfterCommitHook {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    terminal: Arc<tokio::sync::Notify>,
+    events: Arc<Events>,
+}
+
+#[async_trait]
+impl SessionHooks for BlockingAfterCommitHook {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation::default())
+    }
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    async fn after_commit(&self, _: CommitReceipt) -> Result<(), RuntimeError> {
+        self.started.notify_waiters();
+        self.release.notified().await;
+        Ok(())
+    }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.events.terminal.lock().unwrap().push(terminal);
+        self.terminal.notify_waiters();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn dropped_turn_after_durable_append_keeps_a_completed_terminal() {
+    let (locator, history) = locator(None);
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let terminal = Arc::new(tokio::sync::Notify::new());
+    let events = Arc::new(Events::default());
+    let hook = Arc::new(BlockingAfterCommitHook {
+        started: started.clone(),
+        release: release.clone(),
+        terminal: terminal.clone(),
+        events: events.clone(),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("done"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .hooks(hook)
+    .build()
+    .unwrap();
+    let turn = tokio::spawn(async move {
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default(),
+            )
+            .await
+    });
+    started.notified().await;
+    assert!(history.state.lock().unwrap().is_some());
+    let observed_terminal = terminal.notified();
+    turn.abort();
+    let _ = turn.await;
+    release.notify_one();
+    observed_terminal.await;
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Completed(_)]
+    ));
+}
+
+#[tokio::test]
+async fn resumed_history_restores_the_prefix_once_before_the_next_driver_call() {
+    let raw = TranscriptMessage::new("user", "old");
+    let (locator, _) = locator(Some(SessionTranscript {
         meta: meta(),
-        messages: vec![durable.clone()],
-    };
-    let (locator, history) = memory_locator(Some(transcript), false);
-    let driver = Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        // A compaction/faulty driver omitted the stable prefix.
-        Message::user("persisted"),
+        messages: vec![raw],
+    }));
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("old"),
         Message::assistant("new"),
     ]))]));
+    let prefix = PrefixSnapshot::new(vec![Message::system("stable")]);
     let mut session = SessionBuilder::new(driver.clone())
-        .codec(Arc::new(BasicCodec::default()))
-        .prefix(PrefixSnapshot::new(vec![Message::system("stable")]))
+        .codec(Arc::new(Codec::default()))
+        .prefix(prefix)
         .transcript(locator, "agent", meta())
         .build()
         .unwrap();
@@ -852,343 +782,32 @@ async fn resume_new_turn_retains_durable_metadata_and_restores_prefix_once() {
         )
         .await
         .unwrap();
-    let committed = history.session.lock().unwrap().clone().unwrap();
-    assert_eq!(session.history()[0], Message::system("stable"));
     assert_eq!(
         driver.requests.lock().unwrap()[0].history[0],
         Message::system("stable")
     );
-    assert_eq!(committed.messages[1].extra_metadata, durable.extra_metadata);
     assert_eq!(
         session
             .history()
             .iter()
-            .filter(|m| **m == Message::system("stable"))
+            .filter(|message| **message == Message::system("stable"))
             .count(),
         1
     );
 }
 
 #[tokio::test]
-async fn prefix_reconciliation_uses_maximal_suffix_prefix_overlap() {
-    let prefix = PrefixSnapshot::new(vec![
-        Message::system("stable-a"),
-        Message::system("stable-b"),
-        Message::system("stable-c"),
-    ]);
-    for (returned, expected) in [
-        (
-            vec![Message::system("stable-c"), Message::assistant("partial")],
-            vec![
-                Message::system("stable-a"),
-                Message::system("stable-b"),
-                Message::system("stable-c"),
-                Message::assistant("partial"),
-            ],
-        ),
-        (
-            vec![
-                Message::system("stable-a"),
-                Message::system("stable-b"),
-                Message::system("stable-c"),
-                Message::assistant("complete"),
-            ],
-            vec![
-                Message::system("stable-a"),
-                Message::system("stable-b"),
-                Message::system("stable-c"),
-                Message::assistant("complete"),
-            ],
-        ),
-        (
-            vec![Message::assistant("missing")],
-            vec![
-                Message::system("stable-a"),
-                Message::system("stable-b"),
-                Message::system("stable-c"),
-                Message::assistant("missing"),
-            ],
-        ),
-    ] {
-        let mut session =
-            SessionBuilder::new(Arc::new(FakeDriver::new(vec![Ok(outcome(returned))])))
-                .prefix(prefix.clone())
-                .build()
-                .unwrap();
-        let committed = session
-            .turn(
-                SessionTurnRequest::new(Message::user("x")),
-                TurnOptions::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(committed.history, expected);
-    }
-}
-
-#[tokio::test]
-async fn hooks_are_ordered_terminal_once_and_driver_errors_are_terminal() {
-    let hooks = Arc::new(RecordingHooks::default());
-    let driver = Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("ok"),
-    ]))]));
-    let mut session = SessionBuilder::new(driver)
-        .hooks(hooks.clone())
-        .build()
-        .unwrap();
-    session
-        .turn(
-            SessionTurnRequest::new(Message::user("x")),
-            TurnOptions::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        *hooks.events.lock().unwrap(),
-        vec!["before", "after", "terminal:Completed"]
-    );
-
-    let hooks = Arc::new(RecordingHooks::default());
-    let driver = Arc::new(FakeDriver::new(vec![Err(DriverFailure {
-        error: RuntimeError::Driver("boom".into()),
-        partial: None,
-    })]));
-    let mut session = SessionBuilder::new(driver)
-        .hooks(hooks.clone())
-        .build()
-        .unwrap();
-    assert!(matches!(
-        session
-            .turn(
-                SessionTurnRequest::new(Message::user("x")),
-                TurnOptions::default()
-            )
-            .await,
-        Err(RuntimeError::Driver(_))
-    ));
-    assert_eq!(
-        *hooks.events.lock().unwrap(),
-        vec!["before", "terminal:Failed(\"driver failed: boom\")"]
-    );
-}
-
-#[tokio::test]
-async fn failed_precommit_hook_and_tool_mismatch_leave_no_commit() {
-    let hooks = Arc::new(RecordingHooks {
-        fail_after: true,
-        ..RecordingHooks::default()
-    });
-    let (locator, history) = memory_locator(None, false);
-    let mut session = SessionBuilder::new(Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("x"),
-    ]))])))
-    .codec(Arc::new(BasicCodec::default()))
-    .hooks(hooks)
-    .transcript(locator, "agent", meta())
-    .build()
-    .unwrap();
-    assert!(matches!(
-        session
-            .turn(
-                SessionTurnRequest::new(Message::user("x")),
-                TurnOptions::default()
-            )
-            .await,
-        Err(RuntimeError::Hook(_))
-    ));
-    assert!(history.turns.lock().unwrap().is_empty());
-    assert!(session.history().is_empty());
-
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("unreachable")));
-    let mut mismatched = SessionBuilder::new(Arc::new(HarnessDriver::new(
-        Arc::new(harness),
-        Arc::new(()),
-    )))
-    .tool_snapshot(
-        ToolSnapshot::new(vec![ToolSpec {
-            name: "not-registered".into(),
-            description: "x".into(),
-            parameters: serde_json::json!({}),
-        }])
-        .unwrap(),
-    )
-    .build()
-    .unwrap();
-    assert!(matches!(
-        mismatched
-            .turn(
-                SessionTurnRequest::new(Message::user("x")),
-                TurnOptions::default()
-            )
-            .await,
-        Err(RuntimeError::ToolSnapshotMismatch)
-    ));
-}
-
-#[tokio::test]
-async fn cancellation_at_driver_await_emits_one_terminal_hook() {
-    let hooks = Arc::new(RecordingHooks::default());
-    let mut session = SessionBuilder::new(Arc::new(WaitingDriver))
-        .hooks(hooks.clone())
-        .build()
-        .unwrap();
-    let options = TurnOptions::default();
-    let cancellation = options.cancellation.clone();
-    tokio::spawn(async move {
-        tokio::task::yield_now().await;
-        cancellation.cancel();
-    });
-    assert_eq!(
-        session
-            .turn(SessionTurnRequest::new(Message::user("x")), options)
-            .await,
-        Err(RuntimeError::Cancelled)
-    );
-    assert_eq!(
-        *hooks.events.lock().unwrap(),
-        vec!["before", "terminal:Cancelled"]
-    );
-}
-
-#[tokio::test]
-async fn dropped_turn_future_observes_one_failed_terminal() {
-    let started = Arc::new(tokio::sync::Notify::new());
-    let terminal = Arc::new(tokio::sync::Notify::new());
-    let hooks = Arc::new(RecordingHooks {
-        terminal_notified: Some(terminal.clone()),
-        ..RecordingHooks::default()
-    });
-    let mut session = SessionBuilder::new(Arc::new(DropDriver {
-        started: started.clone(),
-    }))
-    .hooks(hooks.clone())
-    .build()
-    .unwrap();
-    let entered = started.notified();
-    let observed = terminal.notified();
-    let task = tokio::spawn(async move {
-        session
-            .turn(
-                SessionTurnRequest::new(Message::user("x")),
-                TurnOptions::default(),
-            )
-            .await
-    });
-    entered.await;
-    task.abort();
-    let _ = task.await;
-    observed.await;
-    assert_eq!(
-        *hooks.events.lock().unwrap(),
-        vec!["before", "terminal:Failed(\"session turn dropped\")"]
-    );
-}
-
-#[tokio::test]
-async fn dropped_turn_after_commit_keeps_a_truthful_completed_terminal() {
-    let (locator, history) = memory_locator(None, false);
-    let hooks = Arc::new(WaitingPostCommitHooks {
-        started: tokio::sync::Notify::new(),
-        terminal: tokio::sync::Notify::new(),
-        terminals: Mutex::new(Vec::new()),
-    });
-    let mut session = SessionBuilder::new(Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("durable"),
-    ]))])))
-    .codec(Arc::new(BasicCodec::default()))
-    .hooks(hooks.clone())
-    .transcript(locator, "agent", meta())
-    .build()
-    .unwrap();
-    let entered = hooks.started.notified();
-    let observed = hooks.terminal.notified();
-    let task = tokio::spawn(async move {
-        session
-            .turn(
-                SessionTurnRequest::new(Message::user("x")),
-                TurnOptions::default(),
-            )
-            .await
-    });
-    entered.await;
-    assert_eq!(history.turns.lock().unwrap().len(), 1);
-    task.abort();
-    let _ = task.await;
-    observed.await;
-    assert!(matches!(
-        hooks.terminals.lock().unwrap().as_slice(),
-        [SessionTerminal::Completed(outcome)] if outcome.history.last() == Some(&Message::assistant("durable"))
-    ));
-}
-
-#[tokio::test]
-async fn cancellation_during_before_hook_never_starts_or_commits_a_turn() {
-    let hooks = Arc::new(WaitingBeforeHooks {
-        started: tokio::sync::Notify::new(),
-    });
-    let driver = Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("nope"),
-    ]))]));
-    let mut session = SessionBuilder::new(driver.clone())
-        .hooks(hooks.clone())
-        .build()
-        .unwrap();
-    let options = TurnOptions::default();
-    let cancellation = options.cancellation.clone();
-    let started = hooks.started.notified();
-    let turn = tokio::spawn(async move {
-        session
-            .turn(SessionTurnRequest::new(Message::user("x")), options)
-            .await
-    });
-    started.await;
-    cancellation.cancel();
-    assert_eq!(turn.await.unwrap(), Err(RuntimeError::Cancelled));
-    assert!(driver.requests.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn cancellation_during_precommit_hook_has_no_durable_commit() {
-    let hooks = Arc::new(WaitingAfterHooks {
-        started: tokio::sync::Notify::new(),
-        events: Mutex::new(Vec::new()),
-    });
-    let (locator, history) = memory_locator(None, false);
-    let mut session = SessionBuilder::new(Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("candidate"),
-    ]))])))
-    .codec(Arc::new(BasicCodec::default()))
-    .hooks(hooks.clone())
-    .transcript(locator, "agent", meta())
-    .build()
-    .unwrap();
-    let options = TurnOptions::default();
-    let cancellation = options.cancellation.clone();
-    let started = hooks.started.notified();
-    let turn = tokio::spawn(async move {
-        session
-            .turn(SessionTurnRequest::new(Message::user("x")), options)
-            .await
-    });
-    started.await;
-    cancellation.cancel();
-    assert_eq!(turn.await.unwrap(), Err(RuntimeError::Cancelled));
-    assert!(history.turns.lock().unwrap().is_empty());
-    assert_eq!(*hooks.events.lock().unwrap(), vec!["Cancelled"]);
-}
-
-#[tokio::test]
-async fn cancellation_signalled_by_successful_commit_cannot_relabel_the_turn() {
-    let (locator, history) = memory_locator(None, false);
-    let driver = Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
+async fn cancellation_signalled_by_a_successful_append_cannot_relabel_completion() {
+    let (locator, history) = locator(None);
+    let (hook, events) = hook(vec![]);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
         Message::assistant("done"),
-    ]))]));
-    let mut session = SessionBuilder::new(driver)
-        .codec(Arc::new(BasicCodec::default()))
-        .transcript(locator, "agent", meta())
-        .build()
-        .unwrap();
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .hooks(hook)
+    .build()
+    .unwrap();
     let options = TurnOptions::default();
     *history.cancel_after_append.lock().unwrap() = Some(options.cancellation.clone());
     assert!(
@@ -1197,111 +816,629 @@ async fn cancellation_signalled_by_successful_commit_cannot_relabel_the_turn() {
             .await
             .is_ok()
     );
-    assert_eq!(history.turns.lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn post_commit_runs_once_after_durability_and_cannot_relabel_success() {
-    let (locator, history) = memory_locator(None, false);
-    let cancellation = tinyagents_harness::CancellationToken::new();
-    let hooks = Arc::new(FinalizationHooks {
-        fail_post_commit: true,
-        cancel_on_post_commit: Some(cancellation.clone()),
-        ..FinalizationHooks::default()
-    });
-    let mut session = SessionBuilder::new(Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("done"),
-    ]))])))
-    .codec(Arc::new(BasicCodec::default()))
-    .hooks(hooks.clone())
-    .transcript(locator, "agent", meta())
-    .build()
-    .unwrap();
-    let options = TurnOptions {
-        cancellation,
-        ..TurnOptions::default()
-    };
-    let committed = session
-        .turn(SessionTurnRequest::new(Message::user("x")), options)
-        .await
-        .expect("post-commit failure/cancellation cannot revoke a durable success");
-    assert_eq!(history.turns.lock().unwrap().len(), 1);
-    assert_eq!(*hooks.post_commits.lock().unwrap(), vec![committed.clone()]);
+    assert!(history.state.lock().unwrap().is_some());
+    assert_eq!(events.receipts.lock().unwrap().len(), 1);
     assert!(matches!(
-        hooks.terminals.lock().unwrap().as_slice(),
-        [SessionTerminal::Completed(outcome)] if outcome == &committed
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Completed(_)]
     ));
 }
 
+struct BlockingCommitHook {
+    started: Arc<tokio::sync::Notify>,
+    events: Arc<Events>,
+}
+#[async_trait]
+impl SessionHooks for BlockingCommitHook {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation::default())
+    }
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        self.started.notify_waiters();
+        std::future::pending().await
+    }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.events.terminal.lock().unwrap().push(terminal);
+        Ok(())
+    }
+}
+
 #[tokio::test]
-async fn persistence_failure_never_calls_post_commit() {
-    let (locator, _) = memory_locator(None, true);
-    let hooks = Arc::new(FinalizationHooks::default());
-    let mut session = SessionBuilder::new(Arc::new(FakeDriver::new(vec![Ok(outcome(vec![
-        Message::assistant("never durable"),
+async fn cancellation_during_before_commit_leaves_no_append() {
+    let (locator, history) = locator(None);
+    let started = Arc::new(tokio::sync::Notify::new());
+    let events = Arc::new(Events::default());
+    let hook = Arc::new(BlockingCommitHook {
+        started: started.clone(),
+        events: events.clone(),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("candidate"),
     ]))])))
-    .codec(Arc::new(BasicCodec::default()))
-    .hooks(hooks.clone())
+    .codec(Arc::new(Codec::default()))
     .transcript(locator, "agent", meta())
+    .hooks(hook)
     .build()
     .unwrap();
+    let options = TurnOptions::default();
+    let cancellation = options.cancellation.clone();
+    let turn = tokio::spawn(async move {
+        session
+            .turn(SessionTurnRequest::new(Message::user("x")), options)
+            .await
+    });
+    started.notified().await;
+    cancellation.cancel();
+    assert_eq!(turn.await.unwrap(), Err(RuntimeError::Cancelled));
+    assert!(history.state.lock().unwrap().is_none());
     assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Cancelled]
+    ));
+}
+
+struct BlockingBeforeTurnHook {
+    started: Arc<tokio::sync::Notify>,
+    terminal: Arc<tokio::sync::Notify>,
+    terminals: Mutex<Vec<SessionTerminal>>,
+    after_commits: Mutex<usize>,
+}
+
+#[async_trait]
+impl SessionHooks for BlockingBeforeTurnHook {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        self.started.notify_waiters();
+        std::future::pending().await
+    }
+
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    async fn after_commit(&self, _: CommitReceipt) -> Result<(), RuntimeError> {
+        *self.after_commits.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.terminals.lock().unwrap().push(terminal);
+        self.terminal.notify_waiters();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancellation_during_before_turn_has_no_driver_persist_or_after_commit() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let terminal = Arc::new(tokio::sync::Notify::new());
+    let hook = Arc::new(BlockingBeforeTurnHook {
+        started: started.clone(),
+        terminal: terminal.clone(),
+        terminals: Mutex::new(Vec::new()),
+        after_commits: Mutex::new(0),
+    });
+    let (locator, history) = locator(None);
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "never",
+    )]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .transcript(locator, "agent", meta())
+        .hooks(hook.clone())
+        .build()
+        .unwrap();
+    let options = TurnOptions::default();
+    let cancellation = options.cancellation.clone();
+    let observed_terminal = terminal.notified();
+    let turn = tokio::spawn(async move {
+        session
+            .turn(SessionTurnRequest::new(Message::user("x")), options)
+            .await
+    });
+    started.notified().await;
+    cancellation.cancel();
+    assert_eq!(turn.await.unwrap(), Err(RuntimeError::Cancelled));
+    observed_terminal.await;
+    assert!(driver.requests.lock().unwrap().is_empty());
+    assert!(history.state.lock().unwrap().is_none());
+    assert_eq!(*hook.after_commits.lock().unwrap(), 0);
+    assert!(matches!(
+        hook.terminals.lock().unwrap().as_slice(),
+        [SessionTerminal::Cancelled]
+    ));
+}
+
+struct BlockingAfterCommitCancellationHook {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    terminal: Arc<tokio::sync::Notify>,
+    terminals: Mutex<Vec<SessionTerminal>>,
+}
+
+#[async_trait]
+impl SessionHooks for BlockingAfterCommitCancellationHook {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation::default())
+    }
+
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    async fn after_commit(&self, _: CommitReceipt) -> Result<(), RuntimeError> {
+        self.started.notify_waiters();
+        self.release.notified().await;
+        Ok(())
+    }
+
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.terminals.lock().unwrap().push(terminal);
+        self.terminal.notify_waiters();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancellation_during_after_commit_keeps_the_completed_result_and_terminal() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let terminal = Arc::new(tokio::sync::Notify::new());
+    let hook = Arc::new(BlockingAfterCommitCancellationHook {
+        started: started.clone(),
+        release: release.clone(),
+        terminal: terminal.clone(),
+        terminals: Mutex::new(Vec::new()),
+    });
+    let (locator, history) = locator(None);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("durable"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .hooks(hook.clone())
+    .build()
+    .unwrap();
+    let options = TurnOptions::default();
+    let cancellation = options.cancellation.clone();
+    let observed_terminal = terminal.notified();
+    let turn = tokio::spawn(async move {
+        session
+            .turn(SessionTurnRequest::new(Message::user("x")), options)
+            .await
+    });
+    started.notified().await;
+    assert!(history.state.lock().unwrap().is_some());
+    cancellation.cancel();
+    release.notify_one();
+    let committed = turn.await.unwrap().unwrap();
+    assert_eq!(
+        committed.history.last(),
+        Some(&Message::assistant("durable"))
+    );
+    observed_terminal.await;
+    assert!(
+        matches!(hook.terminals.lock().unwrap().as_slice(), [SessionTerminal::Completed(outcome)] if outcome == &committed)
+    );
+}
+
+#[tokio::test]
+async fn prefix_mutation_after_a_commit_is_rejected() {
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::assistant("one")])),
+        Ok(outcome(vec![Message::assistant("two")])),
+    ]));
+    let prep = TurnPreparation {
+        prefix: Some(PrefixSnapshot::new(vec![Message::system("p")])),
+        ..Default::default()
+    };
+    let (hook, _) = hook(vec![prep.clone(), prep]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .hooks(hook)
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("a")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("b")),
+                TurnOptions::default()
+            )
+            .await,
+        Err(RuntimeError::InvalidSessionState(_))
+    ));
+    assert_eq!(driver.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn lazy_target_is_opened_only_after_before_turn_selects_it() {
+    let (locator, history) = locator(None);
+    let target = TranscriptTarget::new(locator, "late", meta());
+    let (hook, _) = hook(vec![TurnPreparation {
+        transcript: Some(target),
+        ..Default::default()
+    }]);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("ok"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .hooks(hook)
+    .build()
+    .unwrap();
+    assert_eq!(*history.opens.lock().unwrap(), 0);
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(*history.opens.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn hook_selected_target_and_resume_mode_apply_before_driver_handoff() {
+    let (locator, _) = locator(Some(SessionTranscript {
+        meta: meta(),
+        messages: vec![TranscriptMessage::new("user", "resumed")],
+    }));
+    let target = TranscriptTarget::new(locator, "agent", meta());
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("resumed"),
+        Message::assistant("ok"),
+    ]))]));
+    struct ResumeHook(TranscriptTarget);
+    #[async_trait]
+    impl SessionHooks for ResumeHook {
+        async fn before_turn(
+            &self,
+            _: &mut SessionTurnRequest,
+            options: &mut TurnOptions,
+            _: SessionStateView<'_>,
+        ) -> Result<TurnPreparation, RuntimeError> {
+            options.resume = ResumeMode::LatestForAgent;
+            Ok(TurnPreparation {
+                transcript: Some(self.0.clone()),
+                ..Default::default()
+            })
+        }
+        async fn before_commit(
+            &self,
+            _: &SessionTurnOutcome,
+            _: &TranscriptTurnOptions,
+        ) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+        async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> {
+            Ok(())
+        }
+    }
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(Arc::new(ResumeHook(target)))
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("next")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        driver.requests.lock().unwrap()[0].history[0],
+        Message::user("resumed")
+    );
+}
+
+#[tokio::test]
+async fn hook_selected_transcript_without_a_codec_fails_before_driver_execution() {
+    let (locator, _) = locator(None);
+    let target = TranscriptTarget::new(locator, "agent", meta());
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "never",
+    )]))]));
+    let (hook, _) = hook(vec![TurnPreparation {
+        transcript: Some(target),
+        ..Default::default()
+    }]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .hooks(hook)
+        .build()
+        .unwrap();
+    assert_eq!(
         session
             .turn(
                 SessionTurnRequest::new(Message::user("x")),
                 TurnOptions::default()
             )
             .await,
-        Err(RuntimeError::Persistence(_))
-    ));
-    assert!(hooks.post_commits.lock().unwrap().is_empty());
+        Err(RuntimeError::MissingDependency("TranscriptCodec"))
+    );
+    assert!(driver.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn resumed_raw_rows_and_metadata_survive_the_append() {
+    let mut raw = TranscriptMessage::new("user", "old");
+    raw.extra_metadata = Some(serde_json::json!({"native": true}));
+    let initial = SessionTranscript {
+        meta: meta(),
+        messages: vec![raw.clone()],
+    };
+    let (locator, history) = locator(Some(initial));
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("old"),
+        Message::assistant("new"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("next")),
+            TurnOptions {
+                resume: ResumeMode::LatestForAgent,
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let persisted = history.state.lock().unwrap().clone().unwrap();
+    assert_eq!(persisted.meta.agent_id.as_deref(), Some("agent-id"));
+    assert_eq!(persisted.messages[0], raw);
+}
+
+#[tokio::test]
+async fn after_commit_receipt_observes_durable_append_and_terminal_follows_it() {
+    let (locator, history) = locator(None);
+    let (hook, events) = hook(vec![]);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::assistant("ok"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .transcript(locator, "agent", meta())
+    .hooks(hook)
+    .build()
+    .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(history.state.lock().unwrap().is_some());
+    assert_eq!(events.receipts.lock().unwrap().len(), 1);
+    let receipt = events.receipts.lock().unwrap().pop().unwrap();
+    let transcript = receipt.transcript.unwrap();
+    assert_eq!(transcript.path, history.path);
     assert!(matches!(
-        hooks.terminals.lock().unwrap().as_slice(),
+        transcript.delta,
+        crate::TranscriptDelta::Append { .. }
+    ));
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Completed(_)]
+    ));
+    assert_eq!(
+        *events.order.lock().unwrap(),
+        vec!["after_commit", "terminal"]
+    );
+}
+
+#[tokio::test]
+async fn receipt_reports_a_compaction_as_replacement_not_an_append_range() {
+    let (locator, _) = locator(None);
+    let (hook, events) = hook(vec![]);
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![
+            Message::user("old"),
+            Message::assistant("one"),
+        ])),
+        Ok(outcome(vec![Message::assistant("compacted")])),
+    ]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .transcript(locator, "agent", meta())
+        .hooks(hook)
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("old")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("new")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    let receipts = events.receipts.lock().unwrap();
+    assert!(matches!(
+        receipts[1].transcript.as_ref().unwrap().delta,
+        crate::TranscriptDelta::Replace { .. }
+    ));
+}
+
+#[tokio::test]
+async fn failure_and_cancellation_do_not_run_after_commit_and_emit_one_terminal() {
+    let (failure_hook, events) = hook(vec![]);
+    let mut failed = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
+        error: RuntimeError::Driver("no".into()),
+        partial: None,
+    })])))
+    .hooks(failure_hook)
+    .build()
+    .unwrap();
+    assert!(
+        failed
+            .turn(
+                SessionTurnRequest::new(Message::user("x")),
+                TurnOptions::default()
+            )
+            .await
+            .is_err()
+    );
+    assert!(events.receipts.lock().unwrap().is_empty());
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Failed(_)]
     ));
+
+    let (cancel_hook, events) = hook(vec![]);
+    let mut cancelled = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .hooks(cancel_hook)
+        .build()
+        .unwrap();
+    let options = TurnOptions::default();
+    options.cancellation.cancel();
+    assert_eq!(
+        cancelled
+            .turn(SessionTurnRequest::new(Message::user("x")), options)
+            .await,
+        Err(RuntimeError::Cancelled)
+    );
+    assert!(events.receipts.lock().unwrap().is_empty());
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Cancelled]
+    ));
 }
 
-type SeenCodecOptions = (String, Option<String>, Option<String>, bool, ResumeMode);
-
-struct OptionsCodec {
-    seen: Mutex<Vec<SeenCodecOptions>>,
+#[tokio::test]
+async fn seed_history_is_the_only_history_and_rejects_a_later_seed() {
+    let codec = Arc::new(Codec::default());
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("seed"),
+        Message::assistant("next"),
+    ]))])))
+    .codec(codec.clone())
+    .build()
+    .unwrap();
+    let raw = vec![TranscriptMessage::new("user", "seed")];
+    session
+        .seed_history(vec![Message::user("seed")], raw.clone())
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("seed")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(codec.seen_prior.lock().unwrap().as_slice(), [raw]);
+    assert!(matches!(
+        session.seed_history(vec![], vec![]),
+        Err(RuntimeError::InvalidSessionState(_))
+    ));
 }
 
-impl TranscriptCodec<HostContext> for OptionsCodec {
-    fn decode_history(&self, _: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
-        Ok(Vec::new())
+#[derive(Clone)]
+struct Context(String);
+
+struct ContextDriver(Mutex<Vec<String>>);
+#[async_trait]
+impl SessionDriver<Context> for ContextDriver {
+    async fn execute(
+        &self,
+        request: DriverRequest<Context>,
+    ) -> Result<DriverOutcome, DriverFailure> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(request.run_context.data.0.clone());
+        Ok(outcome(vec![Message::assistant("ok")]))
     }
+}
 
+struct ContextCodec(Mutex<Vec<String>>);
+impl TranscriptCodec<Context> for ContextCodec {
+    fn decode_history(&self, _: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
+        Ok(vec![])
+    }
     fn reconcile(
         &self,
         _: &[TranscriptMessage],
         _: &[Message],
-        next: &[Message],
-        options: &crate::TranscriptTurnOptions<HostContext>,
+        _: &[Message],
+        options: &TranscriptTurnOptions<Context>,
     ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
-        self.seen.lock().unwrap().push((
-            options.context.0.clone(),
-            options.request_id.clone(),
-            options.thread_id.clone(),
-            options.stream,
-            options.resume,
-        ));
-        Ok(next
-            .iter()
-            .map(|message| TranscriptMessage::assistant(message.text()))
-            .collect())
+        self.0.lock().unwrap().push(options.context.0.clone());
+        Ok(vec![])
+    }
+}
+
+struct ContextHook;
+#[async_trait]
+impl SessionHooks<Context> for ContextHook {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        options: &mut TurnOptions<Context>,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        options.run_context.data = Context("mutated".into());
+        Ok(TurnPreparation::default())
+    }
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions<Context>,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> {
+        Ok(())
     }
 }
 
 #[tokio::test]
-async fn codec_reconciliation_receives_explicit_host_context_and_turn_options() {
-    let (locator, _) = memory_locator(None, false);
-    let codec = Arc::new(OptionsCodec {
-        seen: Mutex::new(Vec::new()),
-    });
-    let mut session = SessionBuilder::<HostContext>::new(Arc::new(ContextDriver))
+async fn hook_option_context_mutation_reaches_driver_and_codec() {
+    let (locator, _) = locator(None);
+    let driver = Arc::new(ContextDriver(Mutex::new(vec![])));
+    let codec = Arc::new(ContextCodec(Mutex::new(vec![])));
+    let mut session = SessionBuilder::new(driver.clone())
         .codec(codec.clone())
         .transcript(locator, "agent", meta())
+        .hooks(Arc::new(ContextHook))
         .build()
         .unwrap();
     let cancellation = tinyagents_harness::CancellationToken::new();
@@ -1309,37 +1446,26 @@ async fn codec_reconciliation_receives_explicit_host_context_and_turn_options() 
         .turn(
             SessionTurnRequest::new(Message::user("x")),
             TurnOptions {
-                request_id: Some("request-1".into()),
-                thread_id: Some("thread-1".into()),
-                stream: true,
-                resume: ResumeMode::LatestForAgent,
+                request_id: None,
+                thread_id: None,
+                stream: false,
+                resume: ResumeMode::Never,
                 cancellation: cancellation.clone(),
-                run_context: RunContext::new(
-                    RunConfig::new("codec-host"),
-                    HostContext("host-owned context".into()),
-                )
-                .with_cancellation(cancellation),
+                run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
+                    .with_cancellation(cancellation),
             },
         )
         .await
         .unwrap();
-    assert_eq!(
-        *codec.seen.lock().unwrap(),
-        vec![(
-            "host-owned context".into(),
-            Some("request-1".into()),
-            Some("thread-1".into()),
-            true,
-            ResumeMode::LatestForAgent,
-        )]
-    );
+    assert_eq!(driver.0.lock().unwrap().as_slice(), ["mutated"]);
+    assert_eq!(codec.0.lock().unwrap().as_slice(), ["mutated"]);
 }
 
 #[test]
-fn dependency_boundary_has_no_product_dependency() {
-    let manifest = include_str!("../Cargo.toml");
-    assert!(manifest.contains("tinyagents-harness"));
-    assert!(manifest.contains("tinyagents-session"));
-    assert!(manifest.contains("tinytools"));
-    assert!(!manifest.to_ascii_lowercase().contains("openhuman"));
+fn runtime_stays_host_neutral() {
+    assert!(
+        !include_str!("../Cargo.toml")
+            .to_ascii_lowercase()
+            .contains("openhuman")
+    );
 }

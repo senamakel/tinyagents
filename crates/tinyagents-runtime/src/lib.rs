@@ -23,8 +23,9 @@ pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
 pub use tools::ToolSnapshot;
 pub use types::{
-    ResumeMode, SessionResume, SessionTerminal, SessionTurnOutcome, SessionTurnRequest,
-    TranscriptTurnOptions, TurnOptions,
+    CommitReceipt, ResumeMode, SessionResume, SessionStateView, SessionTerminal,
+    SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 /// Converts between a host's lossless durable transcript dialect and the
@@ -41,10 +42,13 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
     ) -> Result<Vec<tinyinference_llm::message::Message>, RuntimeError>;
 
     /// Reconciles a model-history transition with the prior lossless durable
-    /// rows.  `prior` must be treated as authoritative for fields absent from
-    /// inference messages (provider metadata, raw arguments, reasoning, ids,
-    /// and host extensions).  The returned rows are the complete next logical
-    /// durable set; the history layer writes its delta atomically.
+    /// rows. `prior` is authoritative for fields absent from inference
+    /// messages (provider metadata, raw arguments, reasoning, ids, and host
+    /// extensions): unchanged model positions must retain their corresponding
+    /// raw row, including when `next` is a compaction replacement. The returned
+    /// rows are the complete next logical durable set; the history layer writes
+    /// its delta atomically. `options` is captured after `before_turn` mutates
+    /// the explicit turn options and before the driver consumes `RunContext`.
     fn reconcile(
         &self,
         prior: &[tinyagents_session::transcript::TranscriptMessage],
