@@ -94,6 +94,24 @@ against the registered scripts.
   `reference.md`, `subagent` section.
 - Duration literals like `60s` (write timeouts as a number or quoted string).
 - Formatter and round-trip golden tests (milestone L8).
-- Agent-authored review gates and blueprint provenance (milestone L7).
-- An agent-name allowlist on `CapabilityResolver` (sub-agent names are carried
-  in the blueprint but not yet registry-validated).
+- Agent-authored review gates (milestone L7). Blueprint provenance itself is
+  implemented: `compile_with_provenance` (`compiler.rs:442`) exists alongside
+  `compile`.
+
+Note: an earlier draft of this list also said the `CapabilityResolver`
+agent-name allowlist was unimplemented and sub-agent names were not
+registry-validated. That is stale — `CapabilityResolver::agent_allowed`
+(`capability_resolver.rs:101-102`) and the `subagent` binding path
+(`capability_resolver.rs:282-284`) do validate `subagent` node agent
+references against the registered agents, matching the "Validation" section
+above.
+
+`build_graph` (`crates/tinyagents-graph/src/language.rs`) currently lowers
+only `blueprint.start`, node names, and each node's `Routing`
+(`Next`/`Conditional`/`Terminal`) into the executable graph. Every other
+populated blueprint field — channels, checkpoint/interrupt policy, joins,
+sends, input/output shape, node metadata/timeout/retry — is parsed and
+validated by the compiler but inert once `build_graph` runs: it neither
+applies nor rejects them. (Phase 1c of `docs/runtime-comparison/plan.md`
+plans to make `build_graph` fail closed — `Compile` error — on any populated
+field it still ignores.)
