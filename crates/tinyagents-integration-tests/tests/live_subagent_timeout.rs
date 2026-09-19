@@ -7,10 +7,14 @@
 //!
 //! # Skips gracefully
 //!
-//! Returns early (after an `eprintln!`) when `OPENAI_API_KEY` is unset, so the
-//! default `cargo test` passes with no key configured.
+//! This test is `#[ignore]`d and only runs opted in via
+//! `tests/common/live.rs::require_live`, so the default `cargo test` passes
+//! with no key configured and never dials a real provider by accident.
+
+mod common;
 
 #[tokio::test]
+#[ignore = "network: set TINYAGENTS_LIVE=1 and run with --ignored"]
 async fn live_openai_subagent_times_out_on_tiny_budget() {
     use std::sync::Arc;
 

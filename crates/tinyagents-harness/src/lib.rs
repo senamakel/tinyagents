@@ -11,11 +11,6 @@
 //! substantial part of model/tool orchestration so the implementation can grow
 //! without creating one large runtime file.
 
-#![cfg_attr(
-    not(feature = "tracing"),
-    allow(dead_code, unused_imports, unused_variables)
-)]
-
 pub mod agent_loop;
 pub mod artifacts;
 pub mod cache;
