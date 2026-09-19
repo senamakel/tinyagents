@@ -87,8 +87,7 @@ async fn validator_rejects_once_then_accepts() {
         });
 
     let config = tinyagents_harness::context::RunConfig::new("validator-retry");
-    let mut ctx: RunContext<()> = RunContext::new(config, ());
-    ctx.events.subscribe(recorder.clone());
+    let ctx: RunContext<()> = RunContext::new(config, ()).with_events(recorder.sink());
     let run = harness
         .invoke_in_context(&(), ctx, vec![Message::user("answer me")])
         .await
@@ -101,7 +100,7 @@ async fn validator_rejects_once_then_accepts() {
     let retries = recorder
         .events()
         .into_iter()
-        .filter(|record| matches!(record.event, AgentEvent::OutputRetry { .. }))
+        .filter(|event| matches!(event, AgentEvent::OutputRetry { .. }))
         .count();
     assert_eq!(retries, 1, "exactly one OutputRetry event for the rejected attempt");
 }
