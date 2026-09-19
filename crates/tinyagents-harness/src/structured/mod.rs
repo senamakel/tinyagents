@@ -260,10 +260,7 @@ impl StructuredExtractor {
     ///
     /// `schema_name` is used only to label errors when *no* variant matched;
     /// it need not be one of the variant names.
-    pub fn new_union(
-        schema_name: impl Into<String>,
-        variants: Vec<(String, Value)>,
-    ) -> Self {
+    pub fn new_union(schema_name: impl Into<String>, variants: Vec<(String, Value)>) -> Self {
         Self {
             strategy: StructuredStrategy::ToolCallUnion,
             schema_name: schema_name.into(),

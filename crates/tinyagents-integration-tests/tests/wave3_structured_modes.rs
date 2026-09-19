@@ -14,10 +14,14 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::json;
 
-use tinyagents_harness::runtime::{AgentHarness, EndStrategy, RunPolicy, StructuredStrategyOverride};
+use tinyagents_harness::runtime::{
+    AgentHarness, EndStrategy, RunPolicy, StructuredStrategyOverride,
+};
 use tinyagents_harness::testkit::FakeTool;
 use tinyinference_llm::message::Message;
-use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse, ResponseFormat};
+use tinyinference_llm::model::{
+    ChatModel, ModelProfile, ModelRequest, ModelResponse, ResponseFormat,
+};
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
 
@@ -155,7 +159,11 @@ async fn graceful_runs_the_tool_then_finishes_with_the_first_answer() {
         .await
         .expect("run succeeds");
 
-    assert_eq!(search.calls().len(), 1, "the accompanying tool call still runs");
+    assert_eq!(
+        search.calls().len(),
+        1,
+        "the accompanying tool call still runs"
+    );
     assert_eq!(run.structured, Some(json!({"answer": "first"})));
     assert_eq!(
         model.call_count(),
@@ -236,16 +244,20 @@ async fn exhaustive_ignores_the_first_output_tool_and_waits_for_a_clean_turn() {
 
 #[tokio::test]
 async fn prompted_mode_injects_the_schema_into_the_system_prompt_and_extracts_from_text() {
-    let model = Arc::new(RecordingModel::with_default_profile(vec![ModelResponse::assistant(
-        r#"{"answer":"prompted"}"#,
-    )]));
+    let model = Arc::new(RecordingModel::with_default_profile(vec![
+        ModelResponse::assistant(r#"{"answer":"prompted"}"#),
+    ]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone()).with_policy(RunPolicy {
-        default_response_format: Some(ResponseFormat::auto("result", schema())),
-        structured_strategy_override: Some(StructuredStrategyOverride::Prompted { template: None }),
-        ..RunPolicy::default()
-    });
+    harness
+        .register_model("mock", model.clone())
+        .with_policy(RunPolicy {
+            default_response_format: Some(ResponseFormat::auto("result", schema())),
+            structured_strategy_override: Some(StructuredStrategyOverride::Prompted {
+                template: None,
+            }),
+            ..RunPolicy::default()
+        });
 
     let run = harness
         .invoke_default(&(), vec![Message::user("go")])
@@ -278,33 +290,35 @@ async fn tool_call_union_records_which_variant_matched() {
     ));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone()).with_policy(RunPolicy {
-        default_response_format: Some(ResponseFormat::auto(
-            "result",
-            json!({ "type": "object" }),
-        )),
-        structured_strategy_override: Some(StructuredStrategyOverride::ToolCallUnion {
-            variants: vec![
-                (
-                    "success".to_string(),
-                    json!({
-                        "type": "object",
-                        "properties": { "value": { "type": "string" } },
-                        "required": ["value"]
-                    }),
-                ),
-                (
-                    "failure".to_string(),
-                    json!({
-                        "type": "object",
-                        "properties": { "reason": { "type": "string" } },
-                        "required": ["reason"]
-                    }),
-                ),
-            ],
-        }),
-        ..RunPolicy::default()
-    });
+    harness
+        .register_model("mock", model.clone())
+        .with_policy(RunPolicy {
+            default_response_format: Some(ResponseFormat::auto(
+                "result",
+                json!({ "type": "object" }),
+            )),
+            structured_strategy_override: Some(StructuredStrategyOverride::ToolCallUnion {
+                variants: vec![
+                    (
+                        "success".to_string(),
+                        json!({
+                            "type": "object",
+                            "properties": { "value": { "type": "string" } },
+                            "required": ["value"]
+                        }),
+                    ),
+                    (
+                        "failure".to_string(),
+                        json!({
+                            "type": "object",
+                            "properties": { "reason": { "type": "string" } },
+                            "required": ["reason"]
+                        }),
+                    ),
+                ],
+            }),
+            ..RunPolicy::default()
+        });
 
     let run = harness
         .invoke_default(&(), vec![Message::user("go")])

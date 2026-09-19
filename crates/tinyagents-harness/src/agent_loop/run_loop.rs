@@ -915,7 +915,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         }
                     }
                     for call in &structured_hits {
-                        messages.push(Message::tool(call.id.clone(), "Structured output recorded."));
+                        messages.push(Message::tool(
+                            call.id.clone(),
+                            "Structured output recorded.",
+                        ));
                     }
                     for call in &real_tool_calls {
                         messages.push(Message::tool(
@@ -950,7 +953,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         }
                     }
                     for call in &structured_hits {
-                        messages.push(Message::tool(call.id.clone(), "Structured output recorded."));
+                        messages.push(Message::tool(
+                            call.id.clone(),
+                            "Structured output recorded.",
+                        ));
                     }
                     status.mark_running(HarnessPhase::Tools);
                     self.execute_tools(state, ctx, run, status, messages, real_tool_calls)
