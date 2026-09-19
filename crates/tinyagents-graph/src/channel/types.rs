@@ -56,6 +56,18 @@ pub trait Channel: Send + Sync {
     /// O(existing) allocation per write.
     fn merge(&self, current: Option<Value>, incoming: Value) -> Result<Value>;
 
+    /// The channel's construction config, serialized so [`ChannelSet`] can
+    /// round-trip `{ kind, config, value }` through a durable checkpointer
+    /// without knowing the concrete channel type. Paired with
+    /// [`channel_from_config`] on decode. Channels with no configuration
+    /// (the default) serialize `Value::Null`; [`Barrier`]/[`NamedBarrier`]
+    /// carry their `expected` set, and [`BinaryAggregate`] carries the
+    /// registered reducer name (see [`BinaryAggregate::named`] and
+    /// [`crate::channel::ReducerRegistry`]).
+    fn config(&self) -> Value {
+        Value::Null
+    }
+
     /// Whether more than one concurrent branch may write this channel within a
     /// single superstep. Aggregates (append/fold/accumulate/barrier) return
     /// `true`; overwrite-style channels return `false` and trigger
