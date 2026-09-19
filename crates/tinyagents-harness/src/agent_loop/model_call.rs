@@ -21,6 +21,22 @@ use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache
 use tinyinference_llm::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Resolves the model binding through the host's routing authority when
+    /// this run is a hosted invocation; returns `None` for a plain SDK run so
+    /// the caller falls through to local [`crate::model_registry::ModelRegistry`]
+    /// resolution instead.
+    ///
+    /// The first call for a run (`ctx.depth() == 0`) is flagged
+    /// [`as_team_lead`][crate::host::ModelResolveRequest::as_team_lead] so the
+    /// host can apply lead-specific routing. An explicit `request.model` (or,
+    /// failing that, the host binding's own pin) is forwarded as the model
+    /// pin, and the request's required capabilities are forwarded so the host
+    /// cannot resolve a model that cannot serve this call. Resolution is
+    /// bounded by [`Self::model_call_budget`] and races cooperative
+    /// cancellation; a `Cancelled`/`Timeout` failure is returned verbatim,
+    /// any other host failure is logged and collapsed to a generic
+    /// [`TinyAgentsError::Model`] so host-internal detail never leaks into the
+    /// run's error surface.
     pub(super) async fn resolve_host_model(
         &self,
         ctx: &RunContext<Ctx>,

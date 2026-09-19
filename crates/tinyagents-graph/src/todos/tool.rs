@@ -45,6 +45,12 @@ impl TodoTool {
         Self { store }
     }
 
+    /// Parses `op` and its op-specific fields out of `args` and calls the
+    /// matching `store::*` function against `thread_id`. Argument-shape
+    /// errors and domain errors (unknown id, invariant violation) both become
+    /// [`TodoOutcome::Error`] rather than an `Err`, so a malformed or
+    /// rejected call is surfaced to the model as a tool error instead of
+    /// failing the run.
     async fn dispatch(&self, thread_id: &str, args: &Value) -> Result<TodoOutcome> {
         let Some(op) = args.get("op").and_then(Value::as_str).map(str::trim) else {
             return Ok(TodoOutcome::Error(

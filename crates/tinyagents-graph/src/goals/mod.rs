@@ -2,11 +2,11 @@
 //! supersteps, interrupts, and resumes.
 //!
 //! A thread goal is a single "completion contract" — a durable objective a
-//! graph keeps pursuing until the model marks it [`Complete`], a token budget
+//! graph keeps pursuing until the model marks it [`Complete`](ThreadGoalStatus::Complete), a token budget
 //! is exhausted, or a host pauses it. This module owns the data model
-//! ([`types`]), harness-[`Store`](tinyagents_harness::store::Store)-backed
+//! (`types`), harness-[`Store`](tinyagents_harness::store::Store)-backed
 //! persistence ([`store`]), the model-facing controls exposed as harness tools
-//! ([`tool`]), the graph-native continuation surface ([`continuation`]), and
+//! (`tool`), the graph-native continuation surface (`continuation`), and
 //! budget enforcement ([`budget`]) — charging a finished turn against the goal
 //! and stopping an in-flight one that would overrun its ceiling.
 //!

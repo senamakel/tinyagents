@@ -6,7 +6,7 @@
 //! gets the same [`Blueprint`] every run. They sit one level below
 //! [`crate::compiler::compile_source`] — they do *not* bind against a
 //! registry — so a test can assert on lowered topology without standing up a
-//! [`CapabilityRegistry`](crate::registry::CapabilityRegistry).
+//! `CapabilityRegistry` (from `tinyagents-registry`).
 //!
 //! Two flavours are provided:
 //!

@@ -1,8 +1,8 @@
-//! Tests added in a later pass.
-//!
-//! This file contains a minimal smoke test to verify that the events module
-//! compiles and that the core fan-out and recording primitives work together.
-//! Comprehensive property tests and replay tests are tracked for a later pass.
+//! Unit tests for the events module: `EventSink`/`EventJournal` fan-out and
+//! replay (including offset ordering under concurrent emits and a
+//! panicking listener not wedging the sink), poisoned-lock recovery,
+//! `HarnessRunStatus` lifecycle transitions, `AgentEvent` serde round-trips,
+//! and the started/completed/failed variant-pairing invariant.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};

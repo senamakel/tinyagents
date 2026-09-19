@@ -113,7 +113,7 @@ pub(crate) enum FakeToolBehavior {
     Fail(String),
 }
 
-/// A configurable [`crate::tool::Tool`] for testing.
+/// A configurable [`Tool`](tinytools::Tool) for testing.
 ///
 /// Created with one of three factory methods:
 ///

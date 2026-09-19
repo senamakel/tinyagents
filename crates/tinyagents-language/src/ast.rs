@@ -170,7 +170,7 @@ pub struct NodeDecl {
 /// `docs/modules/expressive-language/reference.md`, but lowering it into a
 /// runtime `harness::steering` policy is not yet implemented: that policy is a
 /// single flat allowlist of
-/// [`SteeringCommandKind`](crate::harness::steering::SteeringCommandKind)s with
+/// [`SteeringCommandKind`](tinyagents_harness::steering::SteeringCommandKind)s with
 /// no `parent`/`human` actor separation, no delivery policy, and no
 /// `add_instruction` / `request_status` commands.
 ///

@@ -47,7 +47,7 @@ pub struct NodeId(pub(crate) String);
 ///
 /// A `TaskId` distinguishes the individual recursive tasks a graph schedules —
 /// for example each child task produced by a `Send` fanout — so a
-/// [`crate::graph::recursion::RecursionFrame`] can name the exact task a nested
+/// `RecursionFrame` (in `tinyagents-graph`) can name the exact task a nested
 /// call descends from, independent of the [`NodeId`] it ran.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub(crate) String);

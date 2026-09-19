@@ -1,3 +1,5 @@
+//! Tests for member prompt composition and message delivery.
+
 use tempfile::TempDir;
 
 use super::*;

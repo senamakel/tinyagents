@@ -156,6 +156,8 @@ pub fn normalize_parameters(parameters: &Value) -> Value {
     Value::Object(normalized)
 }
 
+/// Names a JSON value's kind for the diagnostic logged when a tool's
+/// declared parameters are not an object.
 fn parameters_kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",

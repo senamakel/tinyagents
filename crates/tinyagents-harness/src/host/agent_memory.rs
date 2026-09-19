@@ -217,7 +217,7 @@ pub struct NewMemory {
     /// deduplicate, rewrite, split, or reject it outright.
     pub text: String,
     /// Id of the agent that produced the memory, if the turn has one. A plain
-    /// `String` for the same reason as [`RecallRequest::agent`].
+    /// `String` for the same reason as [`RecallRequest::agent_id`].
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Thread the memory came from, when it is thread-scoped.

@@ -103,8 +103,9 @@ pub const END: &str = "END";
 /// A `Blueprint` is the inspectable output of the compiler: it is fully
 /// serializable so it can be stored, diffed, reviewed, and reloaded
 /// independently of the source text. Runnable node *behaviour* is not part of
-/// the blueprint — it is supplied later by a Rust-side
-/// [`crate::compiler::NodeFactory`].
+/// the blueprint — it is supplied later, downstream of this crate, by a
+/// Rust-side `NodeFactory` (see `tinyagents-graph`'s `language` module) that
+/// materialises a `Blueprint` into a runnable graph.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Blueprint {
     /// The graph identifier.

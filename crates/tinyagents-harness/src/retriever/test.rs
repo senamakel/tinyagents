@@ -1,3 +1,7 @@
+//! Tests for the retrieval contract: a fake [`Retriever`] verifying
+//! cancellation propagation, request/limit/metadata round-tripping, and
+//! [`compose_retrieval_context`] rendering documents in retriever order.
+
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;

@@ -156,6 +156,7 @@ fn meta_payload_from(meta: &TranscriptMeta) -> MetaPayload {
     }
 }
 
+/// Serialises `meta` as the JSON `_meta` header line (no trailing newline).
 pub(super) fn meta_line_json(meta: &TranscriptMeta) -> Result<String> {
     let meta_line = MetaLine {
         meta: meta_payload_from(meta),

@@ -148,6 +148,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .map(|settings| settings.resolve(tool.timeout_policy(&call.arguments)))
     }
 
+    /// Races `fut` against `timeout`'s deadline (if any), returning
+    /// `timeout_value` instead of an error when the deadline elapses first.
+    ///
+    /// This is the crate-owned tool-timeout policy: unlike
+    /// [`Self::with_call_budget`], which surfaces a run-level
+    /// [`TinyAgentsError::Timeout`] and aborts the run, an elapsed per-tool
+    /// deadline here becomes a *recoverable* `Ok(timeout_value)` (a
+    /// `ToolResult::error`) so the run continues and the model can react.
     async fn with_tool_policy_timeout<T, F>(
         timeout: Option<crate::tool::ResolvedToolTimeout>,
         timeout_value: T,

@@ -109,7 +109,7 @@ impl ToolPolicyMiddleware {
     }
 
     /// Enforces that a tool declaring
-    /// [`SandboxMode::Required`][crate::tool::SandboxMode::Required]
+    /// [`SandboxMode::Required`](tinytools::SandboxMode::Required)
     /// only runs when the run carries a sandboxed workspace (fail closed
     /// otherwise). See [`RunContext::with_workspace`][crate::context::RunContext::with_workspace].
     pub fn require_sandbox(mut self, require: bool) -> Self {
