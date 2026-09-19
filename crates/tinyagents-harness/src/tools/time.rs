@@ -204,6 +204,10 @@ impl Tool for ResolveTimeTool {
     }
 }
 
+/// Builds the JSON payload for [`ResolveTimeTool`]: the resolved instant
+/// rendered in every supported representation (`unix_s`/`unix_ms`/
+/// `slack_ts`/`rfc3339`), with `args.format` (default `unix_s`) selecting
+/// which one is duplicated into the top-level `value` field.
 fn resolve_time_payload(
     expr: &str,
     args: &serde_json::Value,
@@ -237,6 +241,11 @@ fn resolve_time_payload(
     })
 }
 
+/// Parses a relative-time expression (`"24h ago"`, `"in 10 minutes"`,
+/// `"next 2 weeks"`, `"-30m"`, ...) into a signed [`Duration`] to add to now.
+/// Returns `None` when `raw` is not a recognised relative form (e.g. `"now"`,
+/// an absolute date, or garbage), leaving [`resolve_expr`] to try the other
+/// parse strategies.
 pub(crate) fn parse_relative_duration(raw: &str) -> Option<Duration> {
     let mut text = raw.trim().to_ascii_lowercase();
     let mut future = false;

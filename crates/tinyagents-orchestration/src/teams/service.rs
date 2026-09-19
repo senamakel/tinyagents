@@ -1,3 +1,11 @@
+//! Team service and durable ledger: the public API for team management.
+//!
+//! [`TeamService`] validates team structure, manages member and task
+//! persistence (via [`TeamLedger`]), and enforces coordination invariants.
+//! [`SessionTeamLedger`] provides a built-in `tinyagents-session` backend;
+//! hosts can supply their own ledger implementation for testing or custom
+//! storage.
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
