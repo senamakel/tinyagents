@@ -176,6 +176,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         self.insert_dispatch(name, Arc::new(CanonicalDispatch { tool }))
     }
 
+    /// Registers a schema-only **external** tool (A2).
+    ///
+    /// The model sees `schema` like any other tool, but the harness never
+    /// executes it: every call is deferred under
+    /// [`DeferredToolRequests::calls`] for the host to run out of band, and
+    /// the host injects the outcome on resume as a [`DeferredCallResult`]
+    /// (or through a [`DeferredToolHandler`] inline). This is how a
+    /// client-side tool — a browser action, a device capability, a call the
+    /// host must broker — joins a run without a `Tool` implementation.
+    /// Mirrors Pydantic AI's `ExternalToolset`.
+    pub fn register_external(&mut self, schema: tinyinference_llm::tool::ToolSchema) -> &mut Self {
+        self.register(Arc::new(ExternalTool::new(schema)))
+    }
+
     /// Registers an explicit typed-parent dispatcher for a canonical tool.
     ///
     /// See [`Self::register`] for the duplicate-name policy; use

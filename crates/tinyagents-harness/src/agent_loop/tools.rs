@@ -1213,7 +1213,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let (result, wrap_control) = match outcome {
             Ok(pair) => pair,
             Err(err) => {
-                if let Some(request) = execution_deferral(&prepared.call, err.clone_deferral()) {
+                if let Some(request) = execution_deferral(&prepared.call, &err) {
                     self.defer_started_tool_call(ctx, status, &prepared, request, deferred);
                     return Ok(());
                 }
@@ -1469,7 +1469,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         Ok(result) => result,
                         Err(err) => {
                             if let Some(request) =
-                                execution_deferral(&prepared.call, err.clone_deferral())
+                                execution_deferral(&prepared.call, &err)
                             {
                                 self.defer_started_tool_call(
                                     ctx,
@@ -1527,17 +1527,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 /// tool through `Err`, and passed through [`execute_tool_recovering_model_retry`]
 /// untouched) into the request the loop hands back, or `None` for any other
 /// error.
-fn execution_deferral(call: &ToolCall, deferral: Option<TinyAgentsError>) -> Option<DeferredRequest> {
-    match deferral? {
+fn execution_deferral(call: &ToolCall, error: &TinyAgentsError) -> Option<DeferredRequest> {
+    match error {
         TinyAgentsError::ApprovalRequired { metadata } => Some(DeferredRequest::approval(
             call.clone(),
             "approval_required",
-            Some(metadata),
+            Some(metadata.clone()),
         )),
         TinyAgentsError::CallDeferred { metadata } => Some(DeferredRequest::external(
             call.clone(),
             "call_deferred",
-            Some(metadata),
+            Some(metadata.clone()),
         )),
         _ => None,
     }

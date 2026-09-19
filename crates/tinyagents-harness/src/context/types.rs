@@ -443,6 +443,12 @@ pub struct RunContext<Ctx = ()> {
     /// [`crate::runtime::AgentHarness::resume_deferred`]. Never inherited by
     /// a child context.
     pub(crate) deferred_results: Option<crate::tool::DeferredToolResults>,
+    /// Tool-call ids a human approved on resume (A2). Admission skips the
+    /// deferral checks for these, and a `before_tool` hook's
+    /// `ApprovalRequired` is ignored for them, so an approved call cannot be
+    /// deferred a second time by the same gate. Read with
+    /// [`RunContext::is_call_approved`].
+    pub(crate) approved_calls: std::collections::HashSet<String>,
     /// Monotonic, per-context (not process-global) counter handed out by
     /// [`RunContext::next_child_ordinal`], used to derive deterministic child
     /// run ids (e.g. [`crate::subagent::SubAgent`]'s `{name}-d{depth}-{parent

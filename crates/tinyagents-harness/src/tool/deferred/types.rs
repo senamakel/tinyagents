@@ -107,3 +107,59 @@ pub trait DeferredToolHandler: Send + Sync {
     /// Resolves every call in `requests`.
     async fn handle(&self, requests: &DeferredToolRequests) -> Result<DeferredToolResults>;
 }
+
+/// A schema-only tool the host executes out of band; see
+/// [`ToolRegistry::register_external`].
+///
+/// Admission recognises it through [`is_external_tool`] and defers the call
+/// before anything runs. `execute` still exists (a host calling the
+/// declaration directly gets the same `CallDeferred` signal) but the loop
+/// never reaches it.
+pub struct ExternalTool {
+    schema: tinyinference_llm::tool::ToolSchema,
+}
+
+impl ExternalTool {
+    /// Wraps a provider schema as an external tool.
+    pub fn new(schema: tinyinference_llm::tool::ToolSchema) -> Self {
+        Self { schema }
+    }
+}
+
+/// Type-level marker returned from [`tinytools::Tool::host_extension`] by
+/// [`ExternalTool`], which is what [`is_external_tool`] looks for.
+pub struct ExternalToolMarker;
+
+/// `true` when `tool` is an [`ExternalTool`] (or any declaration that
+/// exposes [`ExternalToolMarker`] as its host extension).
+pub fn is_external_tool(tool: &dyn tinytools::Tool) -> bool {
+    tool.host_extension()
+        .is_some_and(|extension| extension.is::<ExternalToolMarker>())
+}
+
+#[async_trait]
+impl tinytools::Tool for ExternalTool {
+    fn name(&self) -> &str {
+        &self.schema.name
+    }
+
+    fn description(&self) -> &str {
+        &self.schema.description
+    }
+
+    fn parameters_schema(&self) -> Value {
+        self.schema.parameters.clone()
+    }
+
+    async fn execute(&self, _arguments: Value) -> anyhow::Result<ToolResult> {
+        Err(crate::error::TinyAgentsError::CallDeferred {
+            metadata: Value::Null,
+        }
+        .into())
+    }
+
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        static MARKER: ExternalToolMarker = ExternalToolMarker;
+        Some(&MARKER)
+    }
+}

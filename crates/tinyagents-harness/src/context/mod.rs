@@ -310,6 +310,7 @@ impl<Ctx> RunContext<Ctx> {
             terminal_observer: None,
             active_model_call: None,
             deferred_results: None,
+            approved_calls: std::collections::HashSet::new(),
             child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -328,6 +329,21 @@ impl<Ctx> RunContext<Ctx> {
     /// Takes the pending deferred-call resolutions, if any (A2).
     pub(crate) fn take_deferred_results(&mut self) -> Option<crate::tool::DeferredToolResults> {
         self.deferred_results.take()
+    }
+
+    /// Whether a human approved the tool call `call_id` on resume (A2).
+    ///
+    /// The agent loop consults this to skip its own deferral checks for an
+    /// approved call; an approval gate implemented as a `before_tool`
+    /// middleware should consult it too so it does not re-defer a call the
+    /// human already decided on.
+    pub fn is_call_approved(&self, call_id: &str) -> bool {
+        self.approved_calls.contains(call_id)
+    }
+
+    /// Marks `call_id` as approved for this run (A2).
+    pub(crate) fn mark_call_approved(&mut self, call_id: impl Into<String>) {
+        self.approved_calls.insert(call_id.into());
     }
 
     /// Returns the next value from this context's own child-ordinal counter
