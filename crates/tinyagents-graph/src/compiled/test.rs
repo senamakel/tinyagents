@@ -3937,8 +3937,11 @@ async fn concurrent_run_with_thread_calls_on_one_thread_serialize() {
     // interleaved/partial record from one run's boundary landing inside the
     // other's.
     let listed = cp.list("t-concurrent-serialize").await.unwrap();
-    assert_eq!(listed.len(), 2, "each serialized run wrote its own checkpoint");
-    let run_ids: std::collections::HashSet<_> =
-        listed.iter().map(|m| m.run_id.clone()).collect();
+    assert_eq!(
+        listed.len(),
+        2,
+        "each serialized run wrote its own checkpoint"
+    );
+    let run_ids: std::collections::HashSet<_> = listed.iter().map(|m| m.run_id.clone()).collect();
     assert_eq!(run_ids.len(), 2, "the two runs must not share a run id");
 }

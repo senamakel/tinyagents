@@ -224,7 +224,12 @@ where
     /// different owner holds a still-live lease.
     ///
     /// The default body always returns `Ok(true)`.
-    async fn try_claim(&self, _thread: &str, _owner: &str, _ttl: std::time::Duration) -> Result<bool> {
+    async fn try_claim(
+        &self,
+        _thread: &str,
+        _owner: &str,
+        _ttl: std::time::Duration,
+    ) -> Result<bool> {
         Ok(true)
     }
 

@@ -359,27 +359,26 @@ where
         } else {
             None
         };
-        let lease_owner = if let (Some(checkpointer), Some(thread)) =
-            (&self.checkpointer, &seed.thread_id)
-        {
-            match checkpointer
-                .try_claim(thread.as_str(), run_id.as_str(), THREAD_LEASE_TTL)
-                .await
-            {
-                Ok(true) => Some((checkpointer.clone(), thread.clone())),
-                Ok(false) => {
-                    return Err(TinyAgentsError::Validation(format!(
-                        "thread `{thread}` is leased by another run"
-                    )));
+        let lease_owner =
+            if let (Some(checkpointer), Some(thread)) = (&self.checkpointer, &seed.thread_id) {
+                match checkpointer
+                    .try_claim(thread.as_str(), run_id.as_str(), THREAD_LEASE_TTL)
+                    .await
+                {
+                    Ok(true) => Some((checkpointer.clone(), thread.clone())),
+                    Ok(false) => {
+                        return Err(TinyAgentsError::Validation(format!(
+                            "thread `{thread}` is leased by another run"
+                        )));
+                    }
+                    // A lease-claim I/O error must not silently degrade to
+                    // running unprotected: propagate it rather than proceeding
+                    // as if the claim had succeeded.
+                    Err(err) => return Err(err),
                 }
-                // A lease-claim I/O error must not silently degrade to
-                // running unprotected: propagate it rather than proceeding
-                // as if the claim had succeeded.
-                Err(err) => return Err(err),
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // When a durable journal is configured, run against a clone whose event
         // sink wraps every emitted event into a `GraphObservation` and appends
