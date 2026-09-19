@@ -50,6 +50,14 @@ Extended (H2):
 - `agent "name"` — sub-agent reference for a `subagent` node (`NodeSpec::agent`).
 - `graph "name"` — subgraph reference for a `subgraph` node
   (`NodeSpec::subgraph`; binding prefers it over the legacy `model` field).
+- `router "name"` — router-function reference for a `router` node, parallel
+  to `agent`/`graph`/`script` (added in Phase 1c). `model` is still accepted
+  as a deprecated fallback when `router` is absent — `router` nodes
+  previously had no dedicated item and overloaded `model` for their
+  route-function name. The dedicated `router` value is folded into
+  `NodeSpec::model` at compile time, so the compiled `Blueprint` shape is
+  unchanged; the AST-level `Resolver` and `CapabilityResolver::bind_blueprint`
+  both validate whichever value was used.
 - `script "name"` — host script capability for a `repl_agent` node
   (`NodeSpec::script`). Declaration only — never inline code.
 - `input "mapping"` — input mapping for sub-agent / subgraph nodes.
