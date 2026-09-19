@@ -69,6 +69,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> std::ops::Deref for StreamRunner<'_, 
 /// [`AgentStreamItem::Completed`] carrying the final [`AgentRun`], or
 /// [`AgentStreamItem::Failed`] carrying the error string. No items are produced
 /// after the terminal item.
+// `Event` is by far the most common item — a run yields many events and
+// exactly one terminal — so boxing `EventRecord` to shrink the rare `Failed`
+// variant would add an allocation per streamed event for nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub enum AgentStreamItem {
     /// A live event emitted during the run. Carries the full
