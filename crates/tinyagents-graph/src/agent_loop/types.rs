@@ -70,6 +70,20 @@ pub struct LoopState {
     pub(crate) output_retry_attempts: u8,
 }
 
+impl LoopState {
+    /// Seeds a fresh [`LoopState`] with `messages` as the starting
+    /// transcript, everything else at its `Default`. The public constructor
+    /// for callers outside this crate (this type's remaining fields are
+    /// crate-private, so a struct-literal `LoopState { messages, ..Default::default() }`
+    /// is not otherwise expressible from `tinyagents-integration-tests`).
+    pub fn seed(messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            ..Self::default()
+        }
+    }
+}
+
 /// The resolved structured-output plan for the in-flight turn. Kept
 /// crate-private and distinct from [`tinyagents_harness::agent_loop::phases::StructuredPlan`]
 /// only in that it carries the real [`StructuredStrategy`] (needed to build a
