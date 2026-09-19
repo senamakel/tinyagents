@@ -514,10 +514,14 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         Ctx: 'static,
         State: 'static,
     {
-        let (runner, context, prepared) = self
+        let (runtime, context, prepared) = self
             .prepare_hosted_turn(invocation)
             .await
             .map_err(|error| hosted_error(&error, AgentRun::new()))?;
+        let runner = runtime
+            .as_deref()
+            .map(InvocationRuntime::harness)
+            .unwrap_or(self);
 
         let outcome = runner
             .invoke_streaming_in_context_collecting_partial(
@@ -534,14 +538,16 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
 
     /// Shared setup for both hosted drivers: resolves and authorizes the
     /// turn, installs the host authority and terminal observer on `context`,
-    /// and emits [`ProgressEvent::Started`]. Returns the harness that should
-    /// actually run the turn (`self` or an invocation-local
-    /// [`InvocationRuntime`]), the prepared `context`, and the prepared turn.
+    /// and emits [`ProgressEvent::Started`]. Returns the invocation-local
+    /// runtime overlay (if any — the caller derives the harness that should
+    /// actually run the turn from it, since a reference borrowed from it here
+    /// cannot outlive this function), the prepared `context`, and the
+    /// prepared turn.
     async fn prepare_hosted_turn(
         &self,
         invocation: AgentInvocation<State, Ctx>,
     ) -> Result<(
-        &AgentHarness<State, Ctx>,
+        Option<std::sync::Arc<InvocationRuntime<State, Ctx>>>,
         RunContext<Ctx>,
         PreparedAgentTurn<State, Ctx>,
     )> {
@@ -573,7 +579,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 agent: agent_id,
             },
         );
-        Ok((runner, context, prepared))
+        Ok((runtime, context, prepared))
     }
 
     /// Starts a hosted streaming turn.
