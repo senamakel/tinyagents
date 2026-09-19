@@ -1,3 +1,19 @@
+//! CRUD, listing, and coordination primitives for the run ledger tables:
+//! agent runs, workflow runs (with a compare-and-swap driver lease), run
+//! events, run telemetry, and agent-team coordination (teams, members,
+//! tasks with claim/completion).
+//!
+//! Every entry point opens its own connection or transaction via
+//! `crate::store::with_connection` / `crate::store::with_transaction`
+//! (aliased here through [`init_run_ledger_schema`], now a no-op kept as the
+//! conventional call site — see `super::store`). Anything that reads state
+//! and then acts on it (an upsert reading its own write back, a claim, a
+//! compare-and-swap) uses `with_transaction`; plain single-statement reads
+//! and writes use `with_connection`. The `*_inner` helpers take an open
+//! [`Connection`] directly so an upsert can read back the row it just wrote
+//! inside the same transaction rather than reopening a connection and
+//! possibly observing a concurrent writer's state instead of its own.
+
 use std::path::Path;
 
 use chrono::{DateTime, Utc};

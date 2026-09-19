@@ -147,6 +147,7 @@ pub enum GitWorktreeError {
     Io(#[from] std::io::Error),
 }
 
+/// Shorthand for a result carrying [`GitWorktreeError`].
 type GitResult<T> = std::result::Result<T, GitWorktreeError>;
 
 /// Creates an isolated worktree for `run_id` and returns its status snapshot.
