@@ -571,8 +571,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // content even when a native tool channel was offered. Use the
             // canonical TinyTools-Agent parser rather than the retired
             // harness prompt parser, and only recover when the provider did
-            // not already supply structured calls.
-            recover_text_dialect_calls(&mut response, &call_id, request_has_tools);
+            // not already supply structured calls. Gated by
+            // `RunPolicy::text_dialect_recovery` (computed above, before the
+            // resolved model moved into the wrap onion).
+            recover_text_dialect_calls(
+                ctx,
+                &mut response,
+                &call_id,
+                request_has_tools,
+                text_dialect_recovery_enabled,
+            );
 
             // Account for the completed provider response before fallible
             // response middleware. A middleware rejection must not erase
