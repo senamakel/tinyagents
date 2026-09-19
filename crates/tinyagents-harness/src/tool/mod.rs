@@ -5,6 +5,7 @@
 //! routing, and the explicit recursive-dispatch handoff.
 
 pub mod discover;
+pub mod effects;
 mod prompt;
 mod schema;
 mod schema_compact;
