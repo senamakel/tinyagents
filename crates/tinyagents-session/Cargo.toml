@@ -27,6 +27,7 @@ tracing = ["tinyagents-harness/tracing"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
