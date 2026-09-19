@@ -186,7 +186,10 @@ async fn after_tool_control_interrupt_surfaces_as_interrupted() {
         .invoke_default(&(), vec![Message::user("go")])
         .await
         .expect_err("the interrupt surfaces");
-    assert!(matches!(err, TinyAgentsError::Interrupted { .. }), "{err:?}");
+    assert!(
+        matches!(err, TinyAgentsError::Interrupted { .. }),
+        "{err:?}"
+    );
     assert_eq!(
         model.call_count(),
         1,
