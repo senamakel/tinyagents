@@ -1965,6 +1965,62 @@ async fn auto_format_uses_tool_call_for_non_native_model() {
 }
 
 #[tokio::test]
+async fn pformat_dialect_recovers_the_structured_output_fallback_tool() {
+    // The run-level P-Format registry is built once from the schemas offered
+    // at the start of the run, before the structured-output fallback tool
+    // (`answer`) is pushed onto the request for a non-native model. The
+    // catalogue advertising it is rendered fresh from the final tool list on
+    // every call, so a model dutifully narrating the call back in P-Format —
+    // `answer[0|<value>|1|<score>]` — has to be decodable too, which needs
+    // the fallback tool's positional layout in the registry used to parse
+    // the answer, not just the one used to render the prompt.
+    let model = Arc::new(PFormatStructuredModel::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Pformat,
+            default_response_format: Some(ResponseFormat::auto(
+                "answer",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string"},
+                        "score": {"type": "integer"},
+                    },
+                    "required": ["value", "score"],
+                }),
+            )),
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("answer")])
+        .await
+        .expect("run succeeds");
+
+    let structured = run.structured.expect("structured output present");
+    assert_eq!(structured["value"], "viatool");
+    assert_eq!(structured["score"], 7);
+
+    // The catalogue sent to the model already advertised the fallback
+    // tool's p-format signature; confirm that, so a failure here could only
+    // be the parsing registry, never a missing catalogue entry.
+    let request = model
+        .received
+        .lock()
+        .expect("PFormatStructuredModel received lock poisoned")[0]
+        .clone();
+    let system = request
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(system.contains("answer[0|<value>|1|<score>]"), "{system}");
+}
+
+#[tokio::test]
 async fn no_model_registered_errors() {
     let harness: AgentHarness<()> = AgentHarness::new();
     let err = harness
