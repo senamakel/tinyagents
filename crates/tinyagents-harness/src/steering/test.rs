@@ -377,7 +377,7 @@ async fn disallowed_command_is_skipped_and_the_run_still_completes() {
         .invoke_in_context(&(), ctx, vec![Message::user("start")])
         .await
         .expect("run should complete despite the rejected steering command");
-    assert_eq!(run.text(), Some("reached"));
+    assert_eq!(run.text(), Some("reached".to_string()));
 
     assert!(recorder.events().iter().any(|e| matches!(
         e,
