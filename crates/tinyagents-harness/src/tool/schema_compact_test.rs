@@ -40,6 +40,31 @@ fn prunes_only_unreachable_definitions() {
     assert!(none.get("$defs").is_none());
 }
 
+/// Regression: `$ref` fragments are RFC 6901 JSON Pointer tokens, so a
+/// definition name containing `/` or `~` is escaped in the reference as `~1`
+/// / `~0`. Reachability used to compare the *encoded* fragment directly
+/// against the *unescaped* `$defs` keys, so a definition named `"a/b"`
+/// referenced via `#/$defs/a~1b` was wrongly treated as unreachable and
+/// pruned, leaving a dangling `$ref`.
+#[test]
+fn prune_unreachable_definitions_decodes_json_pointer_escapes() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {
+            "a/b": {"type": "string"},
+            "a~b": {"type": "integer"},
+        },
+        "properties": {
+            "slash": {"$ref": "#/$defs/a~1b"},
+            "tilde": {"$ref": "#/$defs/a~0b"},
+        },
+    });
+    let pruned = prune_unreachable_definitions(schema);
+    let defs = pruned["$defs"].as_object().unwrap();
+    assert!(defs.contains_key("a/b"), "defs: {defs:?}");
+    assert!(defs.contains_key("a~b"), "defs: {defs:?}");
+}
+
 #[test]
 fn strip_descriptions_respects_keep_depth() {
     let schema = json!({
