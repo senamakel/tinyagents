@@ -418,7 +418,8 @@ fn decoding_binary_aggregate_without_reducer_name_errors() {
         }),
     );
     let json = serde_json::to_value(&set).unwrap();
-    let decoded: Result<ChannelSet> = serde_json::from_value(json);
+    let decoded: std::result::Result<ChannelSet, serde_json::Error> =
+        serde_json::from_value(json);
     assert!(decoded.is_err());
 }
 
