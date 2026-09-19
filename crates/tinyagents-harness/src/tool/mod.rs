@@ -4,6 +4,7 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+pub mod deferred;
 pub mod discover;
 mod prompt;
 mod schema;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use deferred::*;
 pub use prompt::*;
 pub use schema::*;
 pub use schema_compact::*;
