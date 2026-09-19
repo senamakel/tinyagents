@@ -10,7 +10,7 @@
 //! - [`NodeResult::Interrupt`]: an [`Interrupt`] that pauses the run for
 //!   human-in-the-loop input.
 
-use tinyagents_harness::ids::NodeId;
+use tinyagents_harness::ids::{NodeId, TaskId};
 
 /// The outcome of running a durable graph node.
 #[derive(Clone, Debug)]
