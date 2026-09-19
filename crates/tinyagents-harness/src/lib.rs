@@ -78,6 +78,17 @@ pub mod tool;
 pub mod tools;
 pub mod workspace;
 
+/// Re-exported vendor crates. Downstream consumers should reach these
+/// dependencies' types through these re-exports (e.g.
+/// `tinyagents_harness::tinyinference_llm::ChatMessage`) rather than adding
+/// their own `tinyinference-llm` / `tinytools` / `tinytools-agent`
+/// dependency, since the harness pins exact vendor versions and a second,
+/// independent dependency would produce a duplicate, incompatible copy of
+/// the same types.
+pub use tinyinference_llm;
+pub use tinytools;
+pub use tinytools_agent;
+
 pub use cancel::CancellationToken;
 pub use cost::CostTotals;
 pub use error::{Result, TinyAgentsError};
