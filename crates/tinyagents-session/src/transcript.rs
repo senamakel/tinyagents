@@ -119,7 +119,7 @@ mod writer;
 
 pub use history::{
     FileTranscriptHistory, FileTranscriptLocator, TranscriptHistory, TranscriptLocator,
-    TranscriptRead, TranscriptTurn,
+    TranscriptPartial, TranscriptRead, TranscriptTurn,
 };
 pub use legacy_md::read_transcript_legacy_md;
 pub use migration::{TranscriptLayoutMigration, migrate_layout_if_needed};
@@ -134,7 +134,10 @@ pub use types::{
     SessionTranscript, ToolFailure, TranscriptMessage, TranscriptMeta, TranscriptToolCall,
     TurnUsage,
 };
-pub use writer::{append_interrupted_partial, append_transcript_turn, write_transcript};
+pub use writer::{
+    append_interrupted_partial, append_transcript_turn, append_transcript_turn_with_partial,
+    write_transcript,
+};
 
 // Private helpers the colocated tests exercise directly.
 #[cfg(test)]
