@@ -496,11 +496,13 @@ async fn iter_steps_node_by_node_and_honors_override_next() {
     assert_eq!(step.node, node::MODEL);
     assert_eq!(step.next.as_deref(), Some(node::TOOLS));
 
-    // Redirect the very next activation back to `model` instead of `tools` —
-    // exercising `override_next` — then let it run to completion normally.
-    iter.override_next(node::MODEL);
+    // Redirect the very next activation back to `plan` instead of the
+    // naturally-routed `tools` — exercising `override_next` — then let the
+    // (now unoverridden) routing carry the run to completion.
+    iter.override_next(node::PLAN);
     let step = iter.next().await.expect("overridden step").expect("not finished");
-    assert_eq!(step.node, node::MODEL);
+    assert_eq!(step.node, node::PLAN);
+    assert_eq!(step.next.as_deref(), Some(node::MODEL));
 
     let state = iter.run_to_end().await.expect("run finishes");
     assert!(state.finished);
