@@ -506,9 +506,11 @@ fn compaction_sink_persists_a_record_anchored_at_the_tip() {
     assert_ne!(new_tip, tip);
 
     let context = tree.build_context(&new_tip).expect("context");
-    assert_eq!(context.len(), 2);
+    // summary + "two" (kept verbatim, first_kept_index=1 skips only "one") + "three".
+    assert_eq!(context.len(), 3);
     assert_eq!(context[0].text(), "one and two, summarized");
-    assert_eq!(context[1].text(), "three");
+    assert_eq!(context[1].text(), "two");
+    assert_eq!(context[2].text(), "three");
 }
 
 #[test]
