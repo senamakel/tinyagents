@@ -1026,6 +1026,7 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
             id: "int-1".to_string(),
             node: tinyagents_harness::ids::NodeId::from("approval"),
             payload: json!({}),
+            task_id: None,
         }],
         pending_activations: None,
         barrier_arrivals: vec![],
