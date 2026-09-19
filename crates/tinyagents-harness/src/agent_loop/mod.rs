@@ -104,7 +104,7 @@ use crate::events::{AgentEvent, HarnessRunStatus, LimitKind};
 use crate::ids::{CallId, ComponentId, HarnessPhase};
 use crate::middleware::{AgentRun, BoxModelFuture, BoxToolFuture, ModelBaseCall, ToolBaseCall};
 use crate::model_registry::{ResolvedModelBinding, model_eligible};
-use crate::runtime::{AgentHarness, InvalidArgsPolicy, UnknownToolPolicy};
+use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use futures::StreamExt;
 use serde_json::Value;
