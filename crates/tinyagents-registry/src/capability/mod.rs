@@ -368,7 +368,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// This is the set of names declarative `.rag` source may reference
     /// for `kind`: both the canonical registration and any alias resolve to a
     /// real component, so both are valid references. It backs
-    /// [`CapabilityResolver::from_registry`](tinyagents_language::compiler::CapabilityResolver::from_registry).
+    /// [`CapabilityResolver::from_registry`].
     pub fn names_including_aliases(&self, kind: ComponentKind) -> Vec<String> {
         let mut names = self.names(kind);
         for (k, alias) in self.aliases.keys() {
@@ -435,7 +435,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// is equivalent to [`CapabilityResolver::from_registry`] and enables the
     /// strict checks (subgraph/router/reducer references and node kinds) when
     /// used with [`CapabilityResolver::bind_blueprint`] or
-    /// [`bind_capabilities_with_registry`](tinyagents_language::compiler::bind_capabilities_with_registry).
+    /// [`bind_capabilities_with_registry`](tinyagents_language::bind_capabilities_with_registry).
     pub fn capability_resolver(&self) -> CapabilityResolver {
         CapabilityResolver::from_registry(self)
     }
