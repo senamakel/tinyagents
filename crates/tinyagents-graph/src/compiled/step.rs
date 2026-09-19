@@ -262,6 +262,7 @@ where
         // mutable; each branch drives its handler through the node-retry
         // policy (which also applies the per-node timeout), so a transient
         // failure in one branch is retried without disturbing its siblings.
+        let siblings = sibling_counts(active);
         let mut futures = Vec::with_capacity(active.len());
         for (index, activation) in active.iter().enumerate() {
             let node_id = &activation.node;
