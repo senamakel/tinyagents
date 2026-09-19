@@ -2111,6 +2111,71 @@ async fn native_tool_dispatcher_requires_tool_calling_capability() {
 }
 
 #[tokio::test]
+async fn native_tool_dispatcher_gates_on_the_post_middleware_tool_set() {
+    // The capability requirement must be derived from the *effective*
+    // request tools, checked after `before_model` middleware has run — not
+    // from the earlier `tool_schemas` snapshot taken before it. A run that
+    // registers no tools directly but whose `before_model` middleware adds
+    // one must still be gated, or that middleware-added tool would silently
+    // reach a model that cannot make native tool calls, defeating the
+    // `Native` dispatcher's fail-closed promise exactly as if the gate did
+    // not exist at all.
+    struct InjectToolMiddleware;
+
+    #[async_trait]
+    impl Middleware<(), ()> for InjectToolMiddleware {
+        fn name(&self) -> &str {
+            "inject-tool"
+        }
+        async fn before_model(
+            &self,
+            _ctx: &mut RunContext<()>,
+            _state: &(),
+            request: &mut ModelRequest,
+        ) -> Result<()> {
+            request.tools.push(ToolSchema::new(
+                "lookup",
+                "looks something up",
+                json!({"type": "object"}),
+            ));
+            Ok(())
+        }
+    }
+
+    let incapable = Arc::new(ProfiledTextModel {
+        profile: ModelProfile {
+            tool_calling: false,
+            ..ModelProfile::default()
+        },
+        text: "should never be reached",
+        attempts: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", incapable.clone())
+        .set_default_model("mock")
+        .push_middleware(Arc::new(InjectToolMiddleware))
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Native,
+            ..RunPolicy::default()
+        });
+
+    let err = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect_err("no model satisfies the forced-native capability requirement");
+    assert!(
+        matches!(err, TinyAgentsError::ModelNotFound(_)),
+        "got {err:?}"
+    );
+    assert_eq!(
+        *incapable.attempts.lock().unwrap(),
+        0,
+        "the capability-ineligible model must never be invoked"
+    );
+}
+
+#[tokio::test]
 async fn no_model_registered_errors() {
     let harness: AgentHarness<()> = AgentHarness::new();
     let err = harness
