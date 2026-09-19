@@ -692,7 +692,7 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
             multi_tool_call_response(vec![("s1", "answer"), ("t1", "lookup")]), // mixed turn: must reset the nudge budget.
             promised, // dropped call #2: must be nudged again, not treated
             // as already out of budget.
-            ModelResponse::assistant("done"),
+            multi_tool_call_response(vec![("s2", "answer")]), // final: satisfies structured extraction.
         ],
     ));
     let listener = Arc::new(RecordingListener::new());
