@@ -1314,18 +1314,6 @@ fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
             if validates(&call.arguments) {
                 return;
             }
-            // A successfully decoded non-object value (e.g. the stringified
-            // JSON `true`) is not an object, so it never reaches the
-            // `is_object` repair branch below — it would otherwise fall
-            // through to the has-no-required-fields fallback further down
-            // and get silently replaced with `{}`, discarding the decoded
-            // scalar the model actually sent and making an invalid-typed
-            // call quietly "succeed" with fabricated empty arguments instead
-            // of surfacing its real validation error. Only a value that
-            // never decoded at all should reach that fallback.
-            if !call.arguments.is_object() {
-                return;
-            }
         }
     }
 
