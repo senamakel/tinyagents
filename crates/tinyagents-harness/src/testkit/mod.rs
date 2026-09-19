@@ -59,7 +59,20 @@ impl StreamingMock {
         Self {
             items,
             calls: Mutex::new(0),
+            profile: None,
         }
+    }
+
+    /// Attaches a capability profile, returned by
+    /// [`tinyinference_llm::model::ChatModel::profile`] for the rest of this
+    /// mock's lifetime.
+    ///
+    /// Use this to exercise profile-driven streaming normalization (thinking
+    /// tags, leading-whitespace stripping) against a scripted stream.
+    #[must_use]
+    pub fn with_profile(mut self, profile: tinyinference_llm::model::ModelProfile) -> Self {
+        self.profile = Some(profile);
+        self
     }
 
     /// Builds a streaming mock from text chunks.
