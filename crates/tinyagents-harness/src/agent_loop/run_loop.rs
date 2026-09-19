@@ -192,7 +192,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if let Some(toolset) = &self.toolset {
             let existing: std::collections::HashSet<&str> =
                 tool_schemas.iter().map(|schema| schema.name.as_str()).collect();
-            let mut extra: Vec<_> = toolset
+            let extra: Vec<_> = toolset
                 .tools(ctx)
                 .await?
                 .into_iter()
@@ -201,15 +201,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .filter(|tool| !existing.contains(tool.name()))
                 .map(|tool| crate::tool::provider_schema(tool.as_ref()))
                 .collect();
-            if let Some(preparation) = &self.policy.tool_schemas {
-                extra = crate::tool::prepare_tool_schemas(&extra, preparation);
-            }
             tool_schemas.extend(extra);
             // Keep the combined set name-sorted: every consumer of
             // `tool_schemas` below (and the provider request it feeds) relies
             // on the sort for wire-byte/prompt-cache stability.
             tool_schemas.sort_by(|left, right| left.name.cmp(&right.name));
         }
+        // Provider projection applies once, to the full combined set
+        // (registry + toolset), so a toolset-supplied schema reaches the
+        // wire cleaned exactly like a registered one.
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
