@@ -154,6 +154,29 @@ where
         // the lineage spine stays connected across the resume.
         let initial_parent = Some(checkpoint.checkpoint_id.clone());
 
+        // A mid-step checkpoint (an interrupt/failure boundary — stamped
+        // with `interrupted_nodes` or `failed_node`) leaves its completed
+        // siblings unrouted (see `boundary::advance`'s `carried_completed`
+        // doc, the C2 fix): carry their node ids forward so this resumed
+        // run's *first* boundary routes the whole original step together,
+        // rather than routing only the freshly re-run pending set in
+        // isolation (which would let a successor observe a state missing
+        // whatever the other, already-completed siblings wrote).
+        let mid_step = checkpoint.metadata.get("interrupted_nodes").is_some()
+            || checkpoint.metadata.get("failed_node").is_some();
+        let carried_completed = if mid_step && !checkpoint.completed_tasks.is_empty() {
+            Some(checkpoint.completed_tasks.clone())
+        } else {
+            None
+        };
+        // I3: continue this thread's step counter and per-node visit counts
+        // from the loaded checkpoint instead of restarting at zero, so
+        // `metadata.step` (and `get_state_history`) stays monotonic and
+        // `RecursionPolicy::max_visits_per_node` bounds the whole thread's
+        // lifetime rather than resetting every resume.
+        let initial_steps = checkpoint.to_metadata().step;
+        let initial_node_visits = node_visits_from_persisted(&checkpoint.metadata);
+
         self.execute(RunSeed {
             state: checkpoint.state,
             active,
@@ -162,8 +185,31 @@ where
             barriers: initial_barriers,
             parent: initial_parent,
             binding,
+            resume_seed: crate::compiled::run_ctx::ResumeSeed {
+                initial_steps,
+                initial_node_visits,
+                carried_completed,
+            },
             _update: std::marker::PhantomData,
         })
         .await
     }
+}
+
+/// Parses a checkpoint's persisted `metadata.node_visits` object (see
+/// `boundary`'s checkpoint builders) back into the live per-node visit-count
+/// map. Missing/malformed metadata (checkpoints written before this field
+/// existed) yields an empty map — the pre-I3 behavior for that checkpoint.
+fn node_visits_from_persisted(metadata: &serde_json::Value) -> HashMap<NodeId, usize> {
+    metadata
+        .get("node_visits")
+        .and_then(serde_json::Value::as_object)
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(node, count)| {
+                    count.as_u64().map(|c| (NodeId::from(node.as_str()), c as usize))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
