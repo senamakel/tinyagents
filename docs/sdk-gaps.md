@@ -121,19 +121,18 @@ Status: mostly implemented (runtime-comparison Phase 3, C1).
 
 `MessageDelta { text, reasoning, tool_call }` carries reasoning alongside
 visible text. Block start/end channels now exist too:
-`ModelStreamItem::{BlockStart, BlockDelta, BlockEnd}`
-(`vendor/tinyinference/.../model/types.rs`) give a `BlockKind::{Text,
-Thinking, ToolCall { id, name }}` per index, so a consumer can tell exactly
-when a tool-call block opens/closes without inferring it from delta content;
-`ToolDelta::content_index` carries the same index on the flat compatibility
-channel. The Anthropic adapter maps `content_block_start`/`_delta`/`_stop`
-1:1 onto these; the OpenAI chat-completions adapter stamps `content_index`
-but does not yet derive `BlockStart`/`BlockEnd` (Responses has no streaming
-path here). `ProviderFailed` now also carries `partial_message` and
-`stop_reason` for a mid-stream failure. Remaining: OpenAI block-boundary
-derivation, and true mid-execution *tool* progress streaming — `tinytools::Tool`
-has no progress-callback surface, so `run_on_tool_delta`/`ToolProgress` still
-have no real caller; that needs a `tinytools` capability, not a harness change.
+`ModelStreamItem::{BlockStart, BlockDelta, BlockEnd}` give a
+`BlockKind::{Text, Thinking, ToolCall { id, name }}` per index, so a consumer
+knows exactly when a tool-call block opens/closes instead of inferring it
+from delta content; `ToolDelta::content_index` carries the same index on the
+flat compatibility channel. Anthropic maps `content_block_start`/`_delta`/
+`_stop` 1:1 onto these; OpenAI chat-completions stamps `content_index` but
+does not yet derive `BlockStart`/`BlockEnd` (Responses has no streaming path
+here). `ProviderFailed` now also carries `partial_message`/`stop_reason` for
+a mid-stream failure. Remaining: OpenAI block-boundary derivation, and true
+mid-execution *tool* progress streaming — `tinytools::Tool` has no
+progress-callback surface, so `run_on_tool_delta`/`ToolProgress` still have
+no real caller; that needs a `tinytools` change, not a harness one.
 
 Remaining work:
 
