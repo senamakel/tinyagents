@@ -127,15 +127,13 @@ async fn token_budget_blocks_multi_call_run() {
         .push_middleware(Arc::new(mw));
 
     let ctx = RunContext::new(RunConfig::new("budget-tokens"), ()).with_events(recorder.sink());
-    let err = harness
+    // A1: `BudgetMiddleware` now stops the run gracefully (`JumpTo(End)`)
+    // instead of erroring it out once the budget is already exhausted, so
+    // the run completes with the partial transcript rather than failing.
+    harness
         .invoke_in_context(&(), ctx, vec![Message::user("go")])
         .await
-        .expect_err("the accumulated token budget must block the run");
-
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("an exhausted budget stops the run gracefully, not with an error");
 
     // The warn threshold (10) and the exceed threshold (20) were both crossed.
     assert!(
