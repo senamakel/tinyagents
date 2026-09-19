@@ -352,9 +352,12 @@ Two backends are bundled:
   `tokio::task::spawn_blocking` against a cloned `Arc<Mutex<Connection>>`.
   Each checkpoint is one row in a `checkpoints` table
   keyed by `(thread_id, checkpoint_id)`: the full record is stored as JSON in a
-  `record` column, while the parent id, namespace (json), next nodes (json),
-  source, step, run id, and an interrupts flag are projected into their own
-  columns so thread listing and parent-chain walks are served by indexes
+  `record` column, while the parent id, namespace (json), next nodes (json,
+  projected from `Checkpoint::to_metadata()`'s resolved `tasks`/v1-fallback —
+  never read from the legacy `next_nodes` field directly, which every v2
+  write leaves empty), source, step, run id, an interrupts flag,
+  `format_version`, and `created_at` are projected into their own columns so
+  thread listing and parent-chain walks are served by indexes
   (`idx_checkpoints_thread`, `idx_checkpoints_lookup`) without deserializing whole
   states. A monotonic `seq` primary key preserves insertion order, so `get(None)`
   returns the most recent row, `get(Some(id))` the latest row with that id, and
@@ -362,8 +365,24 @@ Two backends are bundled:
   `state_history(limit)` walks the `parent_checkpoint_id` chain with a
   recursive SQL CTE bounded by `LIMIT`, so requesting a short history from a
   long-lived thread decodes only that many rows rather than every checkpoint
-  in the namespace. Like `FileCheckpointer`, the impl is bound by
+  in the namespace. `get`/`get_scoped`/`get_thread`/`state_history` all call
+  `Checkpoint::normalize` on the decoded `record` JSON before returning it.
+  Like `FileCheckpointer`, the impl is bound by
   `State: Serialize + DeserializeOwned`. Postgres backends remain future work.
+
+  **`format_version`/`created_at` migration.** A database opened from a build
+  that predates these columns has a `checkpoints` table without them.
+  `SqliteCheckpointer::open`/`from_connection` runs a migration after the
+  idempotent `CREATE TABLE IF NOT EXISTS`: it reads `PRAGMA table_info
+  (checkpoints)` and, for each of `format_version`/`created_at` missing from
+  the result, issues `ALTER TABLE checkpoints ADD COLUMN … DEFAULT …`
+  (`format_version INTEGER NOT NULL DEFAULT 1`, `created_at INTEGER NOT NULL
+  DEFAULT 0`). A fresh database created by this build has both columns from
+  `SCHEMA` directly, so the migration is a no-op the very next time the same
+  database is opened. Existing rows backfill to `1`/`0` — the same visibly-unset
+  sentinels a v1 JSON record without a `version`/`created_at` key decodes to —
+  which is correct: a pre-migration row was, by construction, written by a
+  build that only ever produced checkpoint format v1 records.
 
 ### `put_with_writes`
 
