@@ -86,7 +86,10 @@ pub async fn run_store_conformance<S: Store>(store: &S) {
     assert_eq!(got, Some(json!({"v": 2})), "put overwrites the prior value");
 
     // list enumerates every key written to the namespace.
-    store.put("ns-a", "k2", json!("second")).await.expect("put k2");
+    store
+        .put("ns-a", "k2", json!("second"))
+        .await
+        .expect("put k2");
     let mut keys = store.list("ns-a").await.expect("list ns-a");
     keys.sort();
     assert_eq!(
@@ -107,7 +110,10 @@ pub async fn run_store_conformance<S: Store>(store: &S) {
         "a namespace's own write is visible"
     );
     assert_eq!(
-        store.get("ns-a", "k1").await.expect("get ns-a k1 unaffected"),
+        store
+            .get("ns-a", "k1")
+            .await
+            .expect("get ns-a k1 unaffected"),
         Some(json!({"v": 2})),
         "writing to ns-b does not affect ns-a's value for the same key"
     );
@@ -167,7 +173,11 @@ pub async fn run_namespaced_store_conformance<S: NamespacedStore>(store: &S) {
         .await
         .expect("get alice profile")
         .expect("item is present");
-    assert_eq!(item.value, json!({"name": "Alice"}), "get returns what was put");
+    assert_eq!(
+        item.value,
+        json!({"name": "Alice"}),
+        "get returns what was put"
+    );
     assert_eq!(item.namespace, ns_alice, "item records its own namespace");
     assert_eq!(item.key, "profile", "item records its own key");
 
@@ -266,7 +276,11 @@ pub async fn run_namespaced_store_conformance<S: NamespacedStore>(store: &S) {
         })
         .await
         .expect("search with a field filter");
-    assert_eq!(filtered.len(), 1, "the filter selects only the matching item");
+    assert_eq!(
+        filtered.len(),
+        1,
+        "the filter selects only the matching item"
+    );
     assert_eq!(filtered[0].value["name"], json!("Bob"));
 
     // list_namespaces enumerates namespaces matching a prefix query.
@@ -362,7 +376,11 @@ pub async fn run_namespaced_store_conformance<S: NamespacedStore>(store: &S) {
         },
     ];
     let mut results = store.batch(&ops).await.expect("batch");
-    assert_eq!(results.len(), 4, "batch returns one result per submitted operation");
+    assert_eq!(
+        results.len(),
+        4,
+        "batch returns one result per submitted operation"
+    );
     let two = results
         .remove(3)
         .into_item()

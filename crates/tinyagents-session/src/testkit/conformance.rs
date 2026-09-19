@@ -172,7 +172,11 @@ pub fn run_ledger_conformance(workspace_dir: &Path) {
         },
     )
     .expect("cursor-bounded list succeeds");
-    assert_eq!(after.events.len(), 2, "the cursor excludes what was already seen");
+    assert_eq!(
+        after.events.len(),
+        2,
+        "the cursor excludes what was already seen"
+    );
 
     // ── Concurrency ──────────────────────────────────────────────────
     // A workflow lease is the ledger's one compare-and-swap primitive: two
@@ -286,7 +290,11 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
         .append(contract_message("assistant", "hi there"))
         .expect("append succeeds");
     let after_appends = history.messages().expect("messages succeeds");
-    assert_eq!(after_appends.len(), 2, "each append grows the logical set by one");
+    assert_eq!(
+        after_appends.len(),
+        2,
+        "each append grows the logical set by one"
+    );
     assert_eq!(after_appends[0].content, "hello");
     assert_eq!(after_appends[1].content, "hi there");
     assert!(
@@ -340,9 +348,7 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
 
     // ── replace ──────────────────────────────────────────────────────
     let reduced = vec![contract_message("user", "compacted summary")];
-    history
-        .replace(&reduced)
-        .expect("replace succeeds");
+    history.replace(&reduced).expect("replace succeeds");
     assert_eq!(
         history.messages().expect("messages succeeds"),
         reduced,
