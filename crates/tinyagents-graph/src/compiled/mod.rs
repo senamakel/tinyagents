@@ -96,7 +96,7 @@ pub use types::{
 
 pub(crate) use types::AsyncCheckpointWrites;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
