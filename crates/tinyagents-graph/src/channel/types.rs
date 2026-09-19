@@ -295,13 +295,31 @@ pub struct ChannelUpdate {
 /// The reducer's `&self` receiver is unused — the merge rules travel inside the
 /// running state's [`ChannelSet`] — so any `ChannelState` value (for example
 /// [`ChannelState::default`]) can be passed to `set_reducer`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChannelState {
     pub(crate) set: ChannelSet,
     /// The step number of the writes currently accumulated in `step_writes`;
     /// `0` before the first stamped update is seen.
+    #[serde(default)]
     pub(crate) current_step: usize,
     /// Per-channel write counts within `current_step`, used to detect
     /// concurrent writes to non-aggregate channels.
+    #[serde(default)]
     pub(crate) step_writes: HashMap<String, usize>,
+    /// Cumulative per-channel version counter, bumped once per distinct
+    /// channel name touched by each folded [`ChannelUpdate`] (I5/R3: see
+    /// `docs/modules/graph/state-channels.md`'s "channel versions" section).
+    /// Persisted on [`crate::checkpoint::Checkpoint::channel_versions`] at
+    /// every boundary so a resumed run's node-visible versions stay
+    /// continuous across a restart.
+    #[serde(default)]
+    pub(crate) channel_versions: BTreeMap<String, u64>,
+    /// This step's accumulated raw write values for every channel
+    /// registered via [`ChannelSet::with_delta`], reset whenever the
+    /// stamped step advances (mirrors `step_writes`). Read by the
+    /// checkpoint-construction call sites (`compiled::boundary`,
+    /// `compiled::state_api`) into
+    /// [`crate::checkpoint::Checkpoint::channel_deltas`].
+    #[serde(default)]
+    pub(crate) step_deltas: BTreeMap<String, Vec<Value>>,
 }
