@@ -137,9 +137,6 @@ impl<State> SqliteCheckpointer<State> {
         SCHEMA
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        lock_conn(&self.conn)
-    }
 }
 
 /// Locks a checkpointer's shared connection, mapping a poisoned mutex to a
