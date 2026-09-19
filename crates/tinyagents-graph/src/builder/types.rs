@@ -183,9 +183,21 @@ pub struct NodeContext {
     /// This node's own snapshot of [`Self::channel_versions`] as of the last
     /// time it ran (empty on a node's first-ever activation in the thread).
     pub versions_seen: BTreeMap<String, u64>,
+    /// Heartbeat channel for the node's idle timeout
+    /// ([`crate::NodePolicy::idle_timeout`]); see [`Self::heartbeat`].
+    pub idle_clock: IdleClock,
 }
 
 impl NodeContext {
+    /// Signals liveness to the executor's idle-timeout watcher, restarting
+    /// the node's [`crate::NodePolicy::idle_timeout`] window. Cheap (an
+    /// atomic increment plus a notify); a no-op for a node with no idle
+    /// timeout configured. Does not affect the flat
+    /// [`crate::NodePolicy::timeout`] ceiling.
+    pub fn heartbeat(&self) {
+        self.idle_clock.touch();
+    }
+
     /// This activation's stable task identity (R5). See the field docs on
     /// [`Self::task_id`].
     pub fn task_id(&self) -> &TaskId {
