@@ -3330,9 +3330,10 @@ async fn hosted_parent_denial_cannot_be_bypassed_by_a_childs_local_harness() {
         )
         .await
         .expect_err("parent policy denies the child before its host can run");
+    assert_eq!(error.kind, crate::runtime::HostedErrorKind::Internal);
     assert_eq!(
         error.to_string(),
-        "model error: hosted agent invocation failed"
+        "hosted agent invocation failed"
     );
     assert!(
         child_model.requests().is_empty(),
