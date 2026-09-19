@@ -338,6 +338,93 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     }
 
     // -----------------------------------------------------------------------
+    // Registration: capability bundles (gap G3)
+    // -----------------------------------------------------------------------
+
+    /// Registers a [`tinyagents_harness::capability::Capability`] bundle
+    /// under its own [`Capability::name`](tinyagents_harness::capability::Capability::name).
+    ///
+    /// # Why `Ctx` is a method type parameter, not stored on `Self`
+    ///
+    /// Every other executable kind this registry stores — models
+    /// ([`Self::register_model`]), tools ([`Self::register_tool`]), graph
+    /// blueprints, agent definitions — is `Ctx`-free: `Arc<dyn
+    /// ChatModel<State>>`, `Arc<dyn tinytools::Tool>`, `Blueprint`, and
+    /// `AgentDefinition` none of them name a `Ctx` type. A `Capability`,
+    /// however, composes `tinyagents_harness::tool::toolset::ToolSet<State,
+    /// Ctx>` and `tinyagents_harness::middleware::Middleware<State, Ctx>`
+    /// trait objects (see `tinyagents-harness`'s `capability` module doc
+    /// comment for why `Capability` itself cannot live in
+    /// `tinyagents-definition`, the lower crate that would otherwise be the
+    /// natural home for a registry-stored declarative bundle).
+    ///
+    /// Adding a `Ctx` type parameter to `CapabilityRegistry<State>` itself —
+    /// so every one of its dozen kinds carries a `Ctx` dimension only this
+    /// one feature needs — would be a much larger, ecosystem-wide change for
+    /// one bundle type. Instead this method takes `Ctx` as its own type
+    /// parameter and stores the capability type-erased, `Box<dyn Any + Send
+    /// + Sync>`, exactly the same way a heterogeneous-value registry
+    /// conventionally handles "one more type dimension than the container
+    /// itself carries" in Rust. [`Self::capability`] downcasts back to the
+    /// caller-supplied concrete `Capability<State, Ctx>` by re-stating the
+    /// same `Ctx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::DuplicateComponent`] if a capability is
+    /// already registered under this name.
+    pub fn register_capability<Ctx>(
+        &mut self,
+        capability: tinyagents_harness::capability::Capability<State, Ctx>,
+    ) -> Result<&mut Self>
+    where
+        State: 'static,
+        Ctx: Send + Sync + 'static,
+    {
+        let name = capability.name.clone();
+        self.ensure_absent(ComponentKind::Capability, &name)?;
+        self.record_meta(ComponentKind::Capability, &name);
+        self.capabilities.insert(name, Box::new(capability));
+        Ok(self)
+    }
+
+    /// Registers or overwrites a capability bundle under its own name,
+    /// preserving any existing metadata. See [`Self::register_capability`]
+    /// for why `Ctx` is a method type parameter.
+    pub fn replace_capability<Ctx>(
+        &mut self,
+        capability: tinyagents_harness::capability::Capability<State, Ctx>,
+    ) -> &mut Self
+    where
+        State: 'static,
+        Ctx: Send + Sync + 'static,
+    {
+        let name = capability.name.clone();
+        self.record_meta(ComponentKind::Capability, &name);
+        self.capabilities.insert(name, Box::new(capability));
+        self
+    }
+
+    /// Looks up a registered capability bundle by name or alias, downcast to
+    /// `Capability<State, Ctx>`.
+    ///
+    /// Returns `None` both when no capability is registered under `name` and
+    /// when one is registered but under a different `Ctx` than the one
+    /// requested here (a caller-programming-error case — a registry is
+    /// normally used with one consistent `Ctx` per application).
+    pub fn capability<Ctx>(
+        &self,
+        name: &str,
+    ) -> Option<&tinyagents_harness::capability::Capability<State, Ctx>>
+    where
+        State: 'static,
+        Ctx: Send + Sync + 'static,
+    {
+        let canonical = self.resolve_name(ComponentKind::Capability, name)?;
+        self.capabilities.get(&canonical)?.downcast_ref()
+    }
+
+    // -----------------------------------------------------------------------
     // Registration: name-only descriptors (routers, reducers, stores)
     // -----------------------------------------------------------------------
 
