@@ -25,7 +25,7 @@ use crate::host::{
 use crate::ids::ThreadId;
 use crate::middleware::AgentRun;
 
-use super::{AgentHarness, HostInvocationBinding};
+use super::{AgentHarness, HostInvocationBinding, InvocationRuntime};
 
 /// The exact host bundle that authorized the parent invocation.
 ///
@@ -85,6 +85,9 @@ pub struct AgentInvocation<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub request: AgentTurnRequest,
     /// Live execution context for this root run.
     pub context: RunContext<Ctx>,
+    /// Invocation-owned registries and middleware. Absence selects the durable
+    /// harness that receives `invoke_agent`.
+    runtime: Option<std::sync::Arc<InvocationRuntime<State, Ctx>>>,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
@@ -98,7 +101,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
             host: std::sync::Arc::new(host),
             request,
             context,
+            runtime: None,
         }
+    }
+
+    /// Attaches isolated model, tool, and middleware mechanics to this one
+    /// invocation tree without mutating the durable harness.
+    pub fn with_runtime(mut self, runtime: InvocationRuntime<State, Ctx>) -> Self {
+        self.runtime = Some(std::sync::Arc::new(runtime));
+        self
     }
 
     /// Reuses the parent's exact live host bundle for a recursive child.
@@ -114,6 +125,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
             host,
             request,
             context,
+            runtime: None,
         }
     }
 }
@@ -125,6 +137,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentInvocation<State, Ctx> {
 /// invocation's host authority is owned by that context, never by the harness.
 pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
     inner: Option<Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>>>,
+    // Kept after `inner` so Rust drops the borrowed stream before the overlay
+    // that owns its harness. See `extend_overlay_stream_lifetime`.
+    runtime: Option<std::sync::Arc<InvocationRuntime<State, Ctx>>>,
     cancellation: crate::CancellationToken,
     terminal_observer: std::sync::Arc<std::sync::Mutex<Option<crate::context::TerminalObserver>>>,
     terminal_observed: bool,
@@ -309,8 +324,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             host,
             request,
             mut context,
+            runtime,
         } = invocation;
-        let prepared = self
+        let runner = runtime
+            .as_deref()
+            .map(InvocationRuntime::harness)
+            .unwrap_or(self);
+        let prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
         let agent_id = prepared.binding.agent_id.clone();
@@ -318,7 +338,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         context.host_authority = Some(std::sync::Arc::new(HostInvocationAuthority {
             binding: prepared.binding.clone(),
         }));
-        self.install_host_terminal_observer(&mut context, prepared.clone());
+        runner.install_host_terminal_observer(&mut context, prepared.clone());
         emit_host_progress::<State, Ctx>(
             &context,
             ProgressEvent::Started {
@@ -328,7 +348,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
         );
 
-        let outcome = self
+        let outcome = runner
             .invoke_in_context_collecting_partial(state, context, prepared.messages.clone())
             .await;
         match outcome.error {
@@ -406,8 +426,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             host,
             request,
             mut context,
+            runtime,
         } = invocation;
-        let prepared = self
+        let runner = runtime
+            .as_deref()
+            .map(InvocationRuntime::harness)
+            .unwrap_or(self);
+        let prepared = runner
             .prepare_agent_turn_bounded(host, request, &context)
             .await?;
         let agent_id = prepared.binding.agent_id.clone();
@@ -416,7 +441,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             binding: prepared.binding.clone(),
         }));
         let cancellation = context.cancellation.clone();
-        let terminal_observer = self.install_host_terminal_observer(&mut context, prepared.clone());
+        let terminal_observer =
+            runner.install_host_terminal_observer(&mut context, prepared.clone());
         emit_host_progress::<State, Ctx>(
             &context,
             ProgressEvent::Started {
@@ -425,11 +451,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 agent: agent_id,
             },
         );
-        let stream = self
+        let stream = runner
             .invoke_stream_in_context(state, context, prepared.messages.clone())
             .map(|item| item);
         Ok(AgentStream {
-            inner: Some(Box::pin(stream)),
+            // `runtime` is retained by this stream and is declared after
+            // `inner`, so it outlives the stream's borrow of its harness. The
+            // explicit helper records that otherwise non-obvious lifetime
+            // relationship at the one boundary where the owned hosted
+            // invocation meets the borrowed stream API.
+            inner: Some(unsafe { extend_overlay_stream_lifetime::<State, Ctx>(Box::pin(stream)) }),
+            runtime,
             cancellation,
             terminal_observer,
             terminal_observed: false,
@@ -616,6 +648,20 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }));
         observer
     }
+}
+
+/// Extends a stream borrow from an invocation overlay to the caller's stream
+/// lifetime.
+///
+/// Safety is established by `AgentStream`: it stores the exact `Arc` that owns
+/// the overlay alongside `inner`, and field order drops `inner` first. The
+/// other borrowed inputs (`&self` and `&State`) already have the public `'a`
+/// lifetime. No reference can escape the private `AgentStream` wrapper.
+unsafe fn extend_overlay_stream_lifetime<'a, State: Send + Sync + 'static, Ctx: Send + Sync>(
+    stream: Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + '_>>,
+) -> Pin<Box<dyn Stream<Item = AgentStreamItem> + Send + 'a>> {
+    // SAFETY: documented above; the owning Arc is retained by AgentStream.
+    unsafe { std::mem::transmute(stream) }
 }
 
 /// Returns this live context's host authorization, if it is a hosted run.

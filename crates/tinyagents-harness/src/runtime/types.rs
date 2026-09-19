@@ -326,3 +326,27 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// repeated identical request can be served from an earlier run's result.
     pub(crate) response_cache: Option<Arc<dyn ResponseCache>>,
 }
+
+/// The non-serializable mechanics selected for one hosted invocation.
+///
+/// A durable [`AgentHarness`] remains the public entry point and retains only
+/// process-safe dependencies. Hosts whose model, tool, or middleware surface
+/// is selected per turn build an `InvocationRuntime` and attach it to the
+/// [`AgentInvocation`](super::AgentInvocation). It is never installed on the
+/// durable harness or serialized into graph/checkpoint state.
+pub struct InvocationRuntime<State: Send + Sync, Ctx: Send + Sync = ()> {
+    harness: Arc<AgentHarness<State, Ctx>>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> InvocationRuntime<State, Ctx> {
+    /// Freezes an already assembled, invocation-local runtime.
+    pub fn new(harness: AgentHarness<State, Ctx>) -> Self {
+        Self {
+            harness: Arc::new(harness),
+        }
+    }
+
+    pub(crate) fn harness(&self) -> &AgentHarness<State, Ctx> {
+        &self.harness
+    }
+}
