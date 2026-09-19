@@ -176,6 +176,7 @@ pub struct AgentStream<'a, State: Send + Sync + 'static, Ctx: Send + Sync> {
     // `fn() -> Ctx` (rather than bare `Ctx`) keeps this marker `Unpin`
     // regardless of `Ctx`, which is what lets `poll_next` use the safe
     // `Pin::get_mut` below instead of `get_unchecked_mut`.
+    #[allow(clippy::type_complexity)]
     marker: std::marker::PhantomData<(&'a State, fn() -> Ctx)>,
 }
 
