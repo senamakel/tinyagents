@@ -479,6 +479,7 @@ impl HumanApprovalMiddleware {
             label: "human_approval",
             flagged: flagged.into_iter().map(Into::into).collect(),
             approve: None,
+            outcome: None,
         }
     }
 
@@ -487,6 +488,50 @@ impl HumanApprovalMiddleware {
     pub fn with_approval(mut self, approve: ApprovalFn) -> Self {
         self.approve = Some(approve);
         self
+    }
+
+    /// Attaches a callback that decides [`ApprovalOutcome::Allow`],
+    /// [`ApprovalOutcome::Deny`], or [`ApprovalOutcome::Defer`] for each
+    /// flagged call (A2). Takes precedence over [`Self::with_approval`].
+    pub fn with_approval_outcome(mut self, outcome: ApprovalOutcomeFn) -> Self {
+        self.outcome = Some(outcome);
+        self
+    }
+
+    /// Resolves one flagged call to a control outcome, or a signal error the
+    /// tool-admission path turns into a deferral / a denial answer.
+    ///
+    /// A call the resume path already approved is always allowed, so the
+    /// same gate cannot defer it a second time.
+    fn decide<Ctx>(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> Result<MiddlewareControl> {
+        if !self.flagged.contains(&call.name) || ctx.is_call_approved(&call.id) {
+            return Ok(MiddlewareControl::Continue);
+        }
+        if let Some(outcome) = &self.outcome {
+            return match outcome(call) {
+                ApprovalOutcome::Allow => Ok(MiddlewareControl::Continue),
+                ApprovalOutcome::Deny(message) => Err(TinyAgentsError::ToolFailed(message)),
+                ApprovalOutcome::Defer => Err(TinyAgentsError::ApprovalRequired {
+                    metadata: serde_json::json!({
+                        "gate": self.label,
+                        "tool": call.name,
+                    }),
+                }),
+            };
+        }
+        let approved = self
+            .approve
+            .as_ref()
+            .map(|approve| approve(call))
+            .unwrap_or(false);
+        if approved {
+            Ok(MiddlewareControl::Continue)
+        } else {
+            Ok(MiddlewareControl::Interrupt {
+                node: "tool".to_string(),
+                message: format!("tool `{}` requires human approval", call.name),
+            })
+        }
     }
 }
 
@@ -498,27 +543,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for HumanAppro
 
     async fn before_tool(
         &self,
-        _ctx: &mut RunContext<Ctx>,
+        ctx: &mut RunContext<Ctx>,
         _state: &State,
         call: &mut ToolCall,
     ) -> Result<()> {
-        if self.flagged.contains(&call.name) {
-            let approved = self
-                .approve
-                .as_ref()
-                .map(|approve| approve(call))
-                .unwrap_or(false);
-            if !approved {
-                return Err(TinyAgentsError::Interrupted {
-                    node: "tool".to_string(),
-                    message: format!("tool `{}` requires human approval", call.name),
-                });
+        match self.decide(ctx, call)? {
+            MiddlewareControl::Interrupt { node, message } => {
+                Err(TinyAgentsError::Interrupted { node, message })
             }
+            _ => Ok(()),
         }
-        Ok(())
     }
 
-    /// Control-outcome override (A1): a flagged, unapproved call now requests
+    /// Control-outcome override (A1): a flagged, unapproved call requests
     /// [`MiddlewareControl::Interrupt`] instead of erroring the run out
     /// directly. The agent loop drains the request at its next safe
     /// checkpoint — the same place any other interrupt is honored — and
@@ -528,25 +565,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for HumanAppro
     /// control vocabulary a durable HITL host can also inspect via
     /// [`RunContext::take_control`][crate::context::RunContext::take_control]
     /// before it is drained, rather than only as a thrown error.
+    ///
+    /// With an [`ApprovalOutcomeFn`] installed (A2), `Deny` and `Defer` are
+    /// returned as the `ToolFailed` / `ApprovalRequired` signals that tool
+    /// admission answers or defers without failing the run.
     async fn before_tool_control(
         &self,
-        _ctx: &mut RunContext<Ctx>,
+        ctx: &mut RunContext<Ctx>,
         _state: &State,
         call: &mut ToolCall,
     ) -> Result<MiddlewareControl> {
-        if self.flagged.contains(&call.name) {
-            let approved = self
-                .approve
-                .as_ref()
-                .map(|approve| approve(call))
-                .unwrap_or(false);
-            if !approved {
-                return Ok(MiddlewareControl::Interrupt {
-                    node: "tool".to_string(),
-                    message: format!("tool `{}` requires human approval", call.name),
-                });
-            }
-        }
-        Ok(MiddlewareControl::Continue)
+        self.decide(ctx, call)
     }
 }

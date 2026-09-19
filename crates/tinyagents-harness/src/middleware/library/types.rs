@@ -396,6 +396,28 @@ pub struct ContextualToolSelectionMiddleware {
 /// middleware then raises an interrupt).
 pub type ApprovalFn = Arc<dyn Fn(&ToolCall) -> bool + Send + Sync>;
 
+/// What an approval callback decided about one flagged [`ToolCall`] (A2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    /// Run the call now.
+    Allow,
+    /// Do not run it; the model sees the message as a tool-error result and
+    /// the run continues (no interrupt, no deferral).
+    Deny(String),
+    /// Hand the call back to the host: the loop finishes the batch's other
+    /// calls and exits with `AgentRun::deferred` listing this call under
+    /// `approvals` (or resolves it through a registered
+    /// [`DeferredToolHandler`][crate::tool::DeferredToolHandler]). On resume
+    /// the middleware sees the approval through
+    /// [`RunContext::is_call_approved`][crate::context::RunContext::is_call_approved]
+    /// and lets the call through.
+    Defer,
+}
+
+/// A richer approval callback returning an [`ApprovalOutcome`] instead of a
+/// bare `bool`; see [`HumanApprovalMiddleware::with_approval_outcome`].
+pub type ApprovalOutcomeFn = Arc<dyn Fn(&ToolCall) -> ApprovalOutcome + Send + Sync>;
+
 /// Lifecycle middleware implementing a simple human-in-the-loop gate for
 /// sensitive tools.
 ///
@@ -405,6 +427,11 @@ pub type ApprovalFn = Arc<dyn Fn(&ToolCall) -> bool + Send + Sync>;
 /// callback returns `false`, it raises
 /// [`TinyAgentsError::Interrupted`][crate::error::TinyAgentsError::Interrupted]
 /// (node `"tool"`) so the run pauses for human input.
+///
+/// An [`ApprovalOutcomeFn`] (see [`Self::with_approval_outcome`]) replaces
+/// the bare `bool` with [`ApprovalOutcome::{Allow, Deny, Defer}`]: `Deny`
+/// answers the model with a tool-error result instead of interrupting, and
+/// `Defer` turns the call into a resumable deferred request (A2).
 ///
 /// # HITL hookup
 ///
@@ -416,6 +443,8 @@ pub struct HumanApprovalMiddleware {
     pub(crate) label: &'static str,
     pub(crate) flagged: std::collections::HashSet<String>,
     pub(crate) approve: Option<ApprovalFn>,
+    /// Takes precedence over `approve` when set (A2).
+    pub(crate) outcome: Option<ApprovalOutcomeFn>,
 }
 
 // ── StructuredOutputValidatorMiddleware ───────────────────────────────────────
