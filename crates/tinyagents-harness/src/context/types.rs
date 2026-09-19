@@ -374,6 +374,10 @@ pub struct RunContext<Ctx = ()> {
     /// [`RunContext::take_state_updates`]. See that method's docs for why the
     /// loop cannot apply these itself.
     pub(crate) state_updates: std::sync::Arc<std::sync::Mutex<Vec<StateUpdate>>>,
+    /// Queued raw JSON state updates a tool requested via
+    /// [`tinytools::ToolControl::state_update`]. See
+    /// [`RunContext::push_tool_state_update`].
+    pub(crate) tool_state_updates: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
     /// The isolated workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather
