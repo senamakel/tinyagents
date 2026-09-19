@@ -15,7 +15,22 @@
 use std::fmt;
 
 use crate::command::{Interrupt, RouteTarget};
-use tinyagents_harness::ids::NodeId;
+use tinyagents_harness::ids::{NodeId, TaskId};
+
+/// Default value for a `TaskId` field carrying `#[serde(default = "..")]`:
+/// `TaskId` is a foreign newtype (from `tinyagents_harness`), so it cannot
+/// implement `Default` here (orphan rule) — this free function stands in for
+/// it. An empty task id is exactly what a checkpoint written before task
+/// identities existed decodes to.
+fn empty_task_id() -> TaskId {
+    TaskId::from(String::new())
+}
+
+/// `#[serde(skip_serializing_if = "..")]` predicate pairing with
+/// [`empty_task_id`].
+fn task_id_is_empty(id: &TaskId) -> bool {
+    id.as_str().is_empty()
+}
 
 /// Why a checkpoint was written.
 ///
