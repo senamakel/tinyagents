@@ -325,6 +325,7 @@ impl Default for RunPolicy {
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
             truncated_empty_retries: 1,
+            text_dialect_recovery: TextDialectRecovery::default(),
         }
     }
 }
