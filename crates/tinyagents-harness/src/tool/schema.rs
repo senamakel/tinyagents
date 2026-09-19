@@ -364,6 +364,10 @@ impl SchemaCleanr {
         false
     }
 
+    /// Collapses variants that are each a single-value `const`/`enum` of the
+    /// same `type` into one `{ "type", "enum": [...] }` schema. Any variant
+    /// that isn't a same-typed single literal aborts the flatten (`None`),
+    /// leaving the caller to keep the union as-is.
     fn try_flatten_literal_union(variants: &[Value]) -> Option<Value> {
         if variants.is_empty() {
             return None;
