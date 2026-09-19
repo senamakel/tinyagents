@@ -20,6 +20,34 @@ use serde_json::Value;
 
 use crate::Result;
 use tinyagents_harness::cost::ModelPricing;
+use tinyagents_harness::error::TinyAgentsError;
+
+/// Provider ids the catalog accepts without an explicit allowlist override.
+/// Kept intentionally small: an entry naming anything else fails validation
+/// (see [`ModelCatalogSnapshot::validate`]) rather than being silently
+/// accepted, since an unrecognized provider id is the most common way a bad
+/// snapshot generator run slips through review.
+const KNOWN_PROVIDERS: &[&str] = &[
+    "openai",
+    "anthropic",
+    "gemini",
+    "google",
+    "mistral",
+    "cohere",
+    "groq",
+    "deepseek",
+    "xai",
+    "meta",
+    "together",
+    "fireworks",
+    "openrouter",
+    "ollama",
+    "azure",
+    "bedrock",
+    "vertex",
+    "perplexity",
+    "tinyhumans",
+];
 
 const SEED_SNAPSHOT: &str = include_str!("../model-catalog.snapshot.json");
 
