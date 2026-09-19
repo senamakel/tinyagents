@@ -26,7 +26,13 @@ pub type NodeHandler<State, Update> =
 
 /// A conditional routing function over committed state. Returns a route label
 /// resolved against the node's route table at the step boundary.
-pub type RouterFn<State> = dyn Fn(&State) -> String + Send + Sync;
+///
+/// Internally this returns a typed [`Route`] rather than a bare `String` —
+/// `Route` is `From<String>`/cheaply stringifies, so this is purely a
+/// representation change and does not affect
+/// [`super::GraphBuilder::add_conditional_edges`]'s public signature, which
+/// still accepts any router closure returning `impl ToString`.
+pub type RouterFn<State> = dyn Fn(&State) -> Route + Send + Sync;
 
 /// Identifies one branch of a concurrent (fan-out) superstep.
 ///

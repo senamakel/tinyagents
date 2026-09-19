@@ -37,6 +37,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx> for Retry
         self.label
     }
 
+    fn overrides_retry(&self) -> bool {
+        true
+    }
+
     async fn wrap_model(
         &self,
         ctx: &mut RunContext<Ctx>,

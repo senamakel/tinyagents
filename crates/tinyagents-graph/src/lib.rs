@@ -64,7 +64,9 @@ pub use checkpoint::{
     PendingActivation, PendingWrite,
 };
 pub use command::{Command, Interrupt, NodeResult, RouteTarget, Send};
-pub use compiled::{CompiledGraph, GraphExecution, GraphInput, ResumeTarget, StateSnapshot};
+pub use compiled::{
+    CompiledGraph, GraphExecution, GraphInput, ResumeTarget, RunOptions, StateSnapshot,
+};
 pub use dag::{DagIssue, DagNode};
 pub use delegation::{
     CURRENT_SCHEMA_VERSION as DELEGATION_SCHEMA_VERSION, DelegationConfig, DelegationOutcome,
