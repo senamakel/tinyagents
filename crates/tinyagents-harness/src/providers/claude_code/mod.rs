@@ -389,6 +389,10 @@ fn render_content(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// Converts an internal [`ChatResponse`] into the harness's `ModelResponse`.
+/// `tool_calls` is always empty (see `event_mapper`); cost is surfaced via
+/// `raw` only when the CLI reported a non-zero charge, since `finish_reason`
+/// is always `"stop"` — the CLI does not distinguish other reasons.
 fn model_response(response: ChatResponse) -> ModelResponse {
     let usage = response.usage.map(|value| Usage {
         input_tokens: value.input_tokens,
@@ -421,6 +425,8 @@ fn model_response(response: ChatResponse) -> ModelResponse {
     }
 }
 
+/// [`model_response`] plus prompt-tool-call extraction when the request
+/// declared tools, since this provider never returns native `ToolCall`s.
 fn model_response_with_tools(response: ChatResponse, has_tools: bool) -> ModelResponse {
     let response = model_response(response);
     if has_tools {
