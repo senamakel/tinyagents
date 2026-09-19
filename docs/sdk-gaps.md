@@ -435,9 +435,7 @@ Status: partially present.
 
 TinyAgents has registry primitives. OpenHuman still needs richer diagnostics for
 duplicate components, alias resolution, component health, model/provider/tool
-capabilities, and event listener wiring.
-
-Implement:
+capabilities, and event listener wiring. Implement:
 
 - Registry snapshot export with models, tools, middleware, graph nodes,
   checkpointers, task stores, event listeners, and aliases.
