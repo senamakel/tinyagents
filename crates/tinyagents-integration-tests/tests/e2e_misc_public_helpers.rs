@@ -118,6 +118,7 @@ async fn graph_reducers_streams_observability_and_status_helpers_work() {
         },
         GraphEvent::CheckpointSaved {
             checkpoint_id: CheckpointId::new("cp-1"),
+            step: Some(1),
         },
         GraphEvent::InterruptEmitted {
             interrupt: explicit.clone(),
