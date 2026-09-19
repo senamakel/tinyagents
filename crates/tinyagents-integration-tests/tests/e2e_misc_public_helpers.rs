@@ -148,17 +148,25 @@ async fn graph_reducers_streams_observability_and_status_helpers_work() {
     assert_eq!(events[10].step(), None);
     assert_ne!(StreamMode::Values, StreamMode::Debug);
 
+    let envelope = |event: GraphEvent| GraphEventEnvelope {
+        run_id: RunId::new("run-g"),
+        task_id: None,
+        ns: Vec::new(),
+        seq: 0,
+        event,
+    };
+
     let sink = CollectingSink::new();
     assert!(sink.is_empty());
     for event in events.clone() {
-        sink.emit(event);
+        sink.emit(envelope(event));
     }
     assert_eq!(sink.len(), events.len());
     assert_eq!(sink.events()[0].kind(), "run.started");
-    NoopSink.emit(GraphEvent::Custom {
+    NoopSink.emit(envelope(GraphEvent::Custom {
         name: "drop".into(),
         data: json!(null),
-    });
+    }));
 
     let journal = Arc::new(InMemoryGraphEventJournal::new());
     assert!(journal.is_empty("run-g"));
