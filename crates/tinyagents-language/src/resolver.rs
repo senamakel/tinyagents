@@ -262,64 +262,17 @@ impl Resolver {
 
     /// Resolves a compiled [`Blueprint`] that no longer carries source spans.
     ///
-    /// This is the span-less counterpart to [`resolve_program`](Self::resolve_program):
-    /// it returns the same [`TinyAgentsError`] variants and messages as the
-    /// legacy [`CapabilityResolver::bind_blueprint`] gate — [`TinyAgentsError::Compile`]
-    /// for an unknown node kind, [`TinyAgentsError::Capability`] for the first
-    /// unregistered model, tool, agent, subgraph, router, or reducer — extended
-    /// with the agent reference check.
+    /// This is the span-less counterpart to [`resolve_program`](Self::resolve_program).
+    /// It delegates entirely to [`CapabilityResolver::bind_blueprint`] (the one
+    /// binding gate both this resolver and the compiler's capability check
+    /// route through — see the module docs) so the two paths cannot drift.
     ///
     /// # Errors
     ///
-    /// Returns the first resolution failure.
+    /// Returns [`TinyAgentsError::Diagnostics`] carrying every unresolved
+    /// reference and unknown node kind, not just the first.
     pub fn resolve_blueprint(&self, blueprint: &Blueprint) -> Result<()> {
-        for node in &blueprint.nodes {
-            if !self.caps.node_kind_allowed(&node.kind) {
-                return Err(TinyAgentsError::Compile(format!(
-                    "node `{}` has unknown kind `{}`",
-                    node.name, node.kind
-                )));
-            }
-            let subgraph_target = node.subgraph.as_deref().or(node.model.as_deref());
-            if let Some(reference) = CapabilityResolver::classify_reference(
-                &node.kind,
-                node.model.as_deref(),
-                subgraph_target,
-                node.agent.as_deref(),
-                node.script.as_deref(),
-            ) && !self
-                .caps
-                .reference_allowed(reference.class, reference.target)
-            {
-                return Err(unregistered(
-                    reference.class.word(),
-                    &node.name,
-                    reference.target,
-                ));
-            }
-            if let Some(model) = CapabilityResolver::secondary_model_reference(
-                &node.kind,
-                node.model.as_deref(),
-                node.subgraph.is_some(),
-            ) && !self.caps.model_allowed(model)
-            {
-                return Err(unregistered("model", &node.name, model));
-            }
-            for tool in &node.tools {
-                if !self.caps.tool_allowed(tool) {
-                    return Err(unregistered("tool", &node.name, tool));
-                }
-            }
-        }
-        for channel in &blueprint.channels {
-            if !self.caps.reducer_allowed(&channel.reducer) {
-                return Err(TinyAgentsError::Capability(format!(
-                    "channel `{}` references unknown reducer `{}`",
-                    channel.name, channel.reducer
-                )));
-            }
-        }
-        Ok(())
+        self.caps.bind_blueprint(blueprint)
     }
 }
 
