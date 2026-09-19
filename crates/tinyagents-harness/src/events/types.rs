@@ -115,7 +115,9 @@ pub enum AgentEvent {
         direct: usize,
         /// Tools reachable only through `tool_search` / `tool_call`.
         deferred: usize,
-        /// Compact-JSON size of the advertised schemas.
+        /// Compact-JSON size of the pre-middleware schemas above, not of
+        /// whatever a specific request's `before_model` pass narrows or grows
+        /// it to.
         schema_bytes: usize,
     },
 
