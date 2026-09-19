@@ -68,6 +68,11 @@ pub(super) struct RunCtx<'a, State, Update> {
     /// consuming it) to keep carrying it forward across a step that
     /// interrupts or fails more than once in a row.
     pub(super) carried_completed: Option<Vec<(NodeId, Vec<RouteTarget>)>>,
+    /// Optional cooperative-cancellation token for this run (I4 part 2), from
+    /// [`super::RunOptions::cancellation`]. Checked at every superstep
+    /// boundary and raced against the step's in-flight node handlers by
+    /// [`super::executor::CompiledGraph::run_step_with_cancel`].
+    pub(super) cancellation: Option<tinyagents_harness::CancellationToken>,
 }
 
 /// Everything a resumed run seeds `RunCtx` with beyond a fresh run's
