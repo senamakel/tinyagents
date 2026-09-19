@@ -180,6 +180,21 @@ pub struct CheckpointTuple<State> {
 /// through JSON. The in-memory path never needs it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Checkpoint<State> {
+    /// The on-disk record shape. `1` (the implicit shape before this field
+    /// existed — `#[serde(default = "checkpoint_version_v1")]`) or
+    /// [`CHECKPOINT_FORMAT_VERSION`] (`2`). Every writer in this crate stamps
+    /// `2`; a `1` is only ever seen decoding a record written by an older
+    /// build. See [`Checkpoint::normalize`].
+    #[serde(default = "checkpoint_version_v1")]
+    pub version: u32,
+    /// Wall-clock time this checkpoint was written, in milliseconds since the
+    /// Unix epoch (see [`tinyagents_harness::ids::now_ms`]).
+    ///
+    /// `#[serde(default)]` (`0`) for a v1 record, which never carried a
+    /// timestamp at all — `0` is a visibly-unset sentinel, not a plausible
+    /// wall-clock value.
+    #[serde(default)]
+    pub created_at: u64,
     /// Checkpoint lineage key for a conversation/workflow/tenant run series.
     pub thread_id: String,
     /// This checkpoint's id within the thread.
@@ -196,39 +211,35 @@ pub struct Checkpoint<State> {
     pub namespace: Vec<String>,
     /// Committed graph state at this boundary.
     pub state: State,
-    /// Nodes that should run when resuming from this checkpoint.
-    pub next_nodes: Vec<NodeId>,
-    /// Nodes that completed in the step that produced this checkpoint.
-    pub completed_tasks: Vec<NodeId>,
-    /// The explicit `Command::goto` routing each entry of
-    /// [`completed_tasks`](Self::completed_tasks) returned, positionally
-    /// aligned with it (index `i` here is `completed_tasks[i]`'s routing).
+    /// The single source of truth for what runs when this checkpoint is
+    /// resumed: every pending activation, preserving each one's
+    /// per-invocation [`Send`](crate::Send) argument and task identity.
     ///
-    /// A carried-forward completed sibling's routing is otherwise re-resolved
-    /// via static/conditional edges only once its step finally routes (see
-    /// `compiled::boundary::advance`'s `carried_completed` handling) — this
-    /// is what lets an explicit `goto` survive that round trip. An empty
-    /// inner `Vec` means "no explicit goto; use static/conditional edges",
-    /// matching a node that never returned a `Command::goto`.
-    /// `#[serde(default)]` keeps checkpoints written before this field
-    /// existed loadable: they decode to an empty `Vec`, which the resume
-    /// path pads with empty routing (the pre-field behavior).
+    /// Checkpoint format v2 (see [`Checkpoint::version`]). Replaces the v1
+    /// pair of `next_nodes` (a node-id-only projection) and
+    /// `pending_activations` (an `Option`-wrapped superset that was the same
+    /// information, just optional) with exactly one field that is never
+    /// ambiguous with anything else on the record. A v1 record decodes with
+    /// this empty; call [`Checkpoint::normalize`] (every bundled backend's
+    /// decode path does) to populate it from the legacy fields.
     #[serde(default)]
-    pub completed_routes: Vec<Vec<RouteTarget>>,
+    pub tasks: Vec<PendingActivation>,
+    /// The single source of truth for what completed in the step that
+    /// produced this checkpoint, and how each task explicitly routed (if it
+    /// returned a `Command::goto`).
+    ///
+    /// Checkpoint format v2. Replaces the v1 pair of parallel vectors
+    /// `completed_tasks: Vec<NodeId>` and
+    /// `completed_routes: Vec<Vec<RouteTarget>>`, which had to stay
+    /// positionally aligned by convention rather than by type. A v1 record
+    /// decodes with this empty; [`Checkpoint::normalize`] zips the legacy
+    /// pair back into this shape.
+    #[serde(default)]
+    pub completed: Vec<CompletedTask>,
     /// Per-task partial writes preserved when a step partially completes.
     pub pending_writes: Vec<PendingWrite>,
     /// Interrupts that paused the run at this boundary.
     pub interrupts: Vec<Interrupt>,
-    /// Pending activations to schedule on resume, preserving each pending
-    /// node's per-invocation [`Send`](crate::Send) argument.
-    ///
-    /// A richer superset of [`next_nodes`](Self::next_nodes) (which stays the
-    /// node-id projection used for listing and status). `#[serde(default)]`
-    /// keeps checkpoints written before this field loadable: they deserialize
-    /// to `None`, and resume falls back to `next_nodes` (node-only, no send
-    /// arg) — exactly the pre-field behavior.
-    #[serde(default)]
-    pub pending_activations: Option<Vec<PendingActivation>>,
     /// Barrier (waiting-edge) arrivals accumulated across supersteps, persisted
     /// so a join node's precondition survives an interrupt/failure + resume.
     ///
@@ -238,6 +249,33 @@ pub struct Checkpoint<State> {
     pub barrier_arrivals: Vec<BarrierArrivals>,
     /// Free-form metadata (source, step, etc.).
     pub metadata: serde_json::Value,
+
+    // ---- Checkpoint format v1 fields (decode-only) -------------------------
+    //
+    // Every writer in this crate leaves these at their empty default, so a
+    // freshly-written record serializes with none of them present
+    // (`skip_serializing_if`) — only [`Checkpoint::tasks`]/
+    // [`Checkpoint::completed`] above carry pending/completed work going
+    // forward. They exist purely so a record written by a build that
+    // predates checkpoint format v2 still deserializes; [`Checkpoint::normalize`]
+    // is the single place that reads them and folds them into the v2 shape.
+    // Every reader elsewhere in this crate (`compiled::{resume,boundary,
+    // state_api,mod}`) reads `tasks`/`completed` only.
+    /// v1: nodes that should run when resuming from this checkpoint. Decode-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_nodes: Vec<NodeId>,
+    /// v1: nodes that completed in the step that produced this checkpoint.
+    /// Decode-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_tasks: Vec<NodeId>,
+    /// v1: the explicit `Command::goto` routing for each entry of
+    /// [`completed_tasks`](Self::completed_tasks), positionally aligned.
+    /// Decode-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed_routes: Vec<Vec<RouteTarget>>,
+    /// v1: pending activations superset of `next_nodes`. Decode-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_activations: Option<Vec<PendingActivation>>,
 }
 
 /// One pending node activation persisted in a checkpoint: the node to run on
