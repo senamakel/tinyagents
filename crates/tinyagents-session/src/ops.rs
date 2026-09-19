@@ -727,6 +727,8 @@ pub fn set_fts_snippet_bytes(bytes: usize) {
     FTS_SNIPPET_BYTES.store(bytes, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Inserts a message's FTS entry, indexing at most [`fts_snippet_bytes`]
+/// bytes of `content` on a character boundary.
 pub(super) fn index_fts_content(conn: &Connection, session_id: &str, content: &str) -> Result<()> {
     // Slice on a character boundary, not a byte offset. `&content[..2000]`
     // panics whenever byte 2000 lands inside a multi-byte character, which any
@@ -753,6 +755,7 @@ pub(super) fn index_fts_content(conn: &Connection, session_id: &str, content: &s
     Ok(())
 }
 
+/// Inserts a tool call's FTS entry (session_id and content columns empty).
 pub(super) fn index_fts_tool(conn: &Connection, session_id: &str, tool_name: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO sessions_fts (session_id, agent_definition_name, content, tool_name)
