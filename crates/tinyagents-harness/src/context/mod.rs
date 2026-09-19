@@ -14,7 +14,7 @@
 //! - [`RunContext`] is the live handle bundling that config with the run's
 //!   stores, event sink, limit tracker, and arbitrary user data.
 //!
-//! See [`types`] for the field-level definitions.
+//! See `types` for the field-level definitions.
 //!
 //! # Example
 //!
