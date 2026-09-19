@@ -328,15 +328,22 @@ Acceptance criteria:
 
 ### 11. Sub-Agent Steering, Waiting, And Reuse
 
-Status: partially present.
+Status: partially present; queued steering/follow-ups shipped (A4).
 
 TinyAgents has sub-agent and steering primitives, but OpenHuman still owns
 session reuse, wait handles, detached run tracking, user-facing cancellation,
-early-exit handling, and parent-child progress aggregation.
+early-exit handling, and parent-child progress aggregation. The generic
+`DetachedTaskRegistry` owns process-local owner checks, wait/timeout,
+cooperative-cancel-before-abort, steering lookup, and bounded terminal cleanup.
 
-The generic `DetachedTaskRegistry` now owns process-local owner checks,
-wait/timeout, cooperative-cancel-before-abort, steering lookup, and bounded
-terminal cleanup. Reusable durable child sessions and product projections remain.
+A4 (`docs/runtime-comparison/plan.md` Phase 2) put `RunQueue<Message>` on the
+loop path: `RunContext::with_run_queue(RunQueueHandle)`; `Steer` drained after
+each tool batch and at a natural finish, `Followup` at a natural finish (one
+more turn), `Collect` onto `AgentRun::collected`; `RunPolicy::queue_mode`
+(`All` | `OneAtATime`); `AgentEvent::QueuedMessageApplied { lane, count }`.
+`SteeringHandle` is unchanged. OpenHuman's `agent/harness/run_queue/` can be
+deleted in favour of the SDK's. See
+[`docs/modules/harness/runtime.md`](modules/harness/runtime.md#queued-steering-and-follow-ups-a4).
 
 Implement:
 
