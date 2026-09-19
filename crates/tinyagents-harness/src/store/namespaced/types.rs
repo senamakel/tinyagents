@@ -288,6 +288,9 @@ impl StoreResult {
     }
 }
 
+/// Builds the error for a [`StoreResult::into_item`]/`into_items`/
+/// `into_namespaces` shape mismatch, naming both the expected and actual
+/// variant.
 fn mismatch(expected: &str, got: &StoreResult) -> TinyAgentsError {
     TinyAgentsError::Validation(format!(
         "store batch returned a {got:?} result where {expected} was expected — \
