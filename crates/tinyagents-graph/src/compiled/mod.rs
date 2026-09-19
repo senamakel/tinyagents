@@ -64,9 +64,13 @@
 //!   [`CompiledGraph::update_state`] before resuming. Without a checkpointer the
 //!   run aborts immediately, exactly as before.
 
+mod boundary;
 mod executor;
+mod resume;
 mod routing;
+mod run_ctx;
 mod state_api;
+mod step;
 mod types;
 
 pub use types::{CompiledGraph, GraphExecution, GraphInput, ResumeTarget, StateSnapshot};
@@ -132,28 +136,6 @@ fn snapshot_from_tuple<State>(tuple: CheckpointTuple<State>) -> StateSnapshot<St
         parent_config,
         pending_interrupts: checkpoint.interrupts,
     }
-}
-
-/// The folded result of running a superstep's active node set, ready to apply
-/// at the step boundary.
-struct StepRun<Update> {
-    /// Branch updates in deterministic active-set index order.
-    updates: Vec<Update>,
-    /// Explicit routing (plain `goto` nodes and/or [`Send`] packets) keyed by the
-    /// producing branch's active-set index.
-    ///
-    /// Keyed by index rather than node id so repeated [`Send`] activations of
-    /// the *same* node within a step (map-reduce fanout) each keep their own
-    /// [`Command::goto`] — a node-keyed map would let a later activation's
-    /// command clobber an earlier one's routing.
-    goto_map: HashMap<usize, Vec<RouteTarget>>,
-    /// The lowest-index branch interrupt, if any (its active-set index + value).
-    interrupt: Option<(usize, Interrupt)>,
-    /// A node-handler failure that survived the node-retry policy, if any. When
-    /// set, `updates` still carries the updates of the branches that completed
-    /// *before* the failing branch, so the executor can fold that partial
-    /// progress into committed state and persist a resumable failure boundary.
-    failure: Option<StepFailure>,
 }
 
 /// A node-handler failure captured by a runner so the executor can persist a
