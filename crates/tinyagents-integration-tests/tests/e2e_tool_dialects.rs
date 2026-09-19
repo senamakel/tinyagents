@@ -432,6 +432,59 @@ async fn streamed_tool_call_markup_never_reaches_consumers() {
 }
 
 #[tokio::test]
+async fn a_pure_tool_call_stream_leaves_no_raw_markup_in_the_terminal_response() {
+    // A response that is *only* tool-call markup, with no ordinary text
+    // around it, suppresses every delta (the scrubber holds all of it back),
+    // so terminal-content reconciliation must not depend on having seen any
+    // *ordinary* streamed text — only on the scrubber having recovered a
+    // call. Otherwise the raw `<tool_call>` text produced by the provider
+    // (not the scrubbed one) survives in the terminal response's content
+    // block, gets persisted into the transcript, and is replayed to the
+    // model on the very next turn alongside the structured call.
+    let markup = "<tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>";
+    let items = vec![
+        ModelStreamItem::Started,
+        ModelStreamItem::MessageDelta(MessageDelta::text(markup)),
+        ModelStreamItem::Completed(ModelResponse::assistant(markup)),
+    ];
+    let model = Arc::new(StreamingMock::new(items));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness = harness_with(model, &listener);
+    harness
+        .push_middleware(Arc::new(DeltaRecorder { seen: seen.clone() }))
+        .with_policy(RunPolicy {
+            limits: tinyagents_harness::limits::RunLimits {
+                max_model_calls: 1,
+                ..tinyagents_harness::limits::RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_streaming_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run completes");
+
+    let deltas = seen.lock().unwrap().clone();
+    let joined = deltas.concat();
+    assert!(joined.is_empty(), "no ordinary text streamed: {deltas:?}");
+
+    let ids = dispatched_ids(&listener);
+    assert_eq!(ids.len(), 1, "the scrubbed call still dispatches once");
+
+    // The persisted transcript must not carry the raw markup anywhere,
+    // including on the assistant turn the terminal response became.
+    for message in &run.messages {
+        assert!(
+            !message.text().contains("<tool_call"),
+            "raw markup leaked into the transcript: {:?}",
+            run.messages
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_signalled_but_missing_tool_call_is_re_prompted_then_recovered() {
     let mut promised = ModelResponse::assistant("");
     promised.finish_reason = Some("tool_calls".into());
