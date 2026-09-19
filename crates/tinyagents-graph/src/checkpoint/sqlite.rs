@@ -408,21 +408,48 @@ where
         namespace: &[String],
         limit: Option<usize>,
     ) -> Result<Vec<CheckpointTuple<State>>> {
-        // One indexed range read of the namespace's rows, then the lineage walk
-        // in memory — instead of the default's `get_tuple` (and therefore
-        // `get_scoped`) per hop.
+        // Walks the parent chain with a recursive SQL CTE so `LIMIT` is applied
+        // in SQL: a `state_history(Some(1))` call decodes exactly one record
+        // instead of every record in the namespace. See `STATE_HISTORY_CTE`'s
+        // doc comment for the query shape and the cycle-termination argument.
+        let conn = self.conn.clone();
+        let thread_id_owned = thread_id.to_string();
         let namespace_json =
             serde_json::to_string(namespace).map_err(|e| sqlite_err("encode namespace", e))?;
-        let (records, writes) = {
-            let conn = self.lock()?;
-            let mut stmt = conn
-                .prepare(
-                    "SELECT record FROM checkpoints
-                     WHERE thread_id = ?1 AND namespace = ?2 ORDER BY seq ASC",
+        tokio::task::spawn_blocking(move || -> Result<Vec<CheckpointTuple<State>>> {
+            let conn = lock_conn(&conn)?;
+
+            // Total row count in the namespace both answers "is there
+            // anything at all" and, more importantly, bounds the CTE's
+            // recursion depth: it is a safe upper bound on the number of
+            // *distinct* checkpoint ids reachable, so capping recursion there
+            // guarantees termination even over a hand-corrupted or forked
+            // lineage with a parent cycle (the trait's documented hazard —
+            // `parent_checkpoint_id` is caller-set data, not a structurally
+            // acyclic pointer).
+            let total: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?1 AND namespace = ?2",
+                    params![thread_id_owned, namespace_json],
+                    |row| row.get(0),
                 )
+                .map_err(|e| sqlite_err("count state_history rows", e))?;
+            if total == 0 {
+                return Ok(Vec::new());
+            }
+            let cap: i64 = match limit {
+                Some(limit) => (limit as i64).min(total),
+                None => total,
+            };
+            if cap <= 0 {
+                return Ok(Vec::new());
+            }
+
+            let mut stmt = conn
+                .prepare(STATE_HISTORY_CTE)
                 .map_err(|e| sqlite_err("prepare state_history", e))?;
             let rows = stmt
-                .query_map(params![thread_id, namespace_json], |row| {
+                .query_map(params![thread_id_owned, namespace_json, cap], |row| {
                     row.get::<_, String>(0)
                 })
                 .map_err(|e| sqlite_err("query state_history", e))?;
@@ -434,60 +461,45 @@ where
                         .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?,
                 );
             }
-            let writes = read_writes_by_checkpoint(&conn, thread_id, &namespace_json)?;
-            (records, writes)
-        };
-        if records.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Last write wins for a re-used id, matching `get`.
-        let mut by_id: std::collections::HashMap<String, Checkpoint<State>> =
-            std::collections::HashMap::with_capacity(records.len());
-        let mut cursor: Option<String> = None;
-        for record in records {
-            cursor = Some(record.checkpoint_id.clone());
-            by_id.insert(record.checkpoint_id.clone(), record);
-        }
-
-        let mut out = Vec::new();
-        while let Some(id) = cursor {
-            if let Some(limit) = limit
-                && out.len() >= limit
-            {
-                break;
+            if records.is_empty() {
+                return Ok(Vec::new());
             }
-            // `remove` doubles as the cycle guard: each id is visited once.
-            let Some(checkpoint) = by_id.remove(&id) else {
-                break;
-            };
-            cursor = checkpoint.parent_checkpoint_id.clone();
-            let config = CheckpointConfig {
-                thread_id: checkpoint.thread_id.clone(),
-                checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
-                namespace: checkpoint.namespace.clone(),
-            };
-            let parent_config =
-                checkpoint
-                    .parent_checkpoint_id
-                    .as_ref()
-                    .map(|parent| CheckpointConfig {
-                        thread_id: checkpoint.thread_id.clone(),
-                        checkpoint_id: Some(parent.clone()),
-                        namespace: checkpoint.namespace.clone(),
-                    });
-            let pending_writes = writes
-                .get(&checkpoint.checkpoint_id)
-                .cloned()
-                .unwrap_or_else(|| checkpoint.pending_writes.clone());
-            out.push(CheckpointTuple {
-                config,
-                checkpoint,
-                parent_config,
-                pending_writes,
-            });
-        }
-        Ok(out)
+            let writes = read_writes_by_checkpoint(&conn, &thread_id_owned, &namespace_json)?;
+
+            // The CTE already returns newest-first (depth ascending from the
+            // head), so no further sorting or in-memory lineage walk is
+            // needed here.
+            let mut out = Vec::with_capacity(records.len());
+            for checkpoint in records {
+                let config = CheckpointConfig {
+                    thread_id: checkpoint.thread_id.clone(),
+                    checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+                    namespace: checkpoint.namespace.clone(),
+                };
+                let parent_config =
+                    checkpoint
+                        .parent_checkpoint_id
+                        .as_ref()
+                        .map(|parent| CheckpointConfig {
+                            thread_id: checkpoint.thread_id.clone(),
+                            checkpoint_id: Some(parent.clone()),
+                            namespace: checkpoint.namespace.clone(),
+                        });
+                let pending_writes = writes
+                    .get(&checkpoint.checkpoint_id)
+                    .cloned()
+                    .unwrap_or_else(|| checkpoint.pending_writes.clone());
+                out.push(CheckpointTuple {
+                    config,
+                    checkpoint,
+                    parent_config,
+                    pending_writes,
+                });
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(|e| sqlite_err("join blocking state_history task", e))?
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
