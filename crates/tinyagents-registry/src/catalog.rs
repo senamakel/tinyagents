@@ -187,6 +187,19 @@ pub struct ModelCatalogSnapshot {
 }
 
 impl ModelCatalogSnapshot {
+    /// Validates the snapshot against every rule that does not depend on a
+    /// provider allowlist. Equivalent to
+    /// `self.validate_with_providers(None)`. See that method for the full
+    /// list of checks (rule 7, the provider allowlist, is skipped here).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TinyAgentsError::Validation`] with a message identifying the
+    /// offending entry and rule.
+    pub fn validate(&self) -> Result<()> {
+        self.validate_with_providers(None)
+    }
+
     /// Validates the snapshot, returning the first failure found (see
     /// `docs/modules/registry/model-catalog.md`'s "Refresh Workflow" for the
     /// checks this enforces). Checked, in order:
@@ -198,13 +211,17 @@ impl ModelCatalogSnapshot {
     /// 5. no alias collides with another entry's canonical id or alias
     /// 6. every date field (`created_at`, `retrieved_at`, `deprecation_date`)
     ///    parses as `YYYY-MM-DD` or a full ISO-8601 timestamp
-    /// 7. every `provider` is a recognized id (see `KNOWN_PROVIDERS`)
+    /// 7. every `provider` is a member of `allowed_providers`, when given
+    ///    (`None` skips this check entirely, so a hand-written or synthetic
+    ///    test snapshot naming a fictional provider still validates; pass
+    ///    `Some(KNOWN_PROVIDERS)` to enforce the crate's own recognized-id
+    ///    list, as `catalog_gen` does against a live `models.dev` fetch)
     ///
     /// # Errors
     ///
     /// Returns [`TinyAgentsError::Validation`] with a message identifying the
     /// offending entry and rule.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate_with_providers(&self, allowed_providers: Option<&[&str]>) -> Result<()> {
         let mut seen_ids = std::collections::HashSet::new();
         let mut seen_names = std::collections::HashSet::new();
 
