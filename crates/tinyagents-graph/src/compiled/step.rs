@@ -576,22 +576,23 @@ where
 
     /// Runs the active node set concurrently (opt-in via `with_parallel`).
     ///
-    /// Each branch executes on its own cloned `State` snapshot and a
-    /// distinct [`ForkId`], optionally with the [`Send`] argument that
-    /// scheduled it. With no `max_concurrency` bound every branch starts
-    /// before any is awaited and all are driven via
-    /// [`futures::future::join_all`]; with a bound the active set is run in
-    /// chunks of at most that many futures, so at most that many node
-    /// handlers are in flight at once. Every branch is driven to completion
-    /// before this returns, regardless of whether an earlier branch errored
-    /// or interrupted — `outcome.results` always covers the whole active
-    /// set; [`Self::fold_step`] is what stops at the lowest-index
-    /// error/interrupt.
+    /// Each branch executes against this step's shared `Arc<State>` snapshot
+    /// (M2: every branch and retry attempt clones the `Arc`, not `State`
+    /// itself — see [`StepRunner::run_step`]) and a distinct [`ForkId`],
+    /// optionally with the [`Send`] argument that scheduled it. With no
+    /// `max_concurrency` bound every branch starts before any is awaited and
+    /// all are driven via [`futures::future::join_all`]; with a bound the
+    /// active set is run in chunks of at most that many futures, so at most
+    /// that many node handlers are in flight at once. Every branch is driven
+    /// to completion before this returns, regardless of whether an earlier
+    /// branch errored or interrupted — `outcome.results` always covers the
+    /// whole active set; [`Self::fold_step`] is what stops at the
+    /// lowest-index error/interrupt.
     async fn run_parallel(
         &self,
         ctx: &mut RunCtx<'_, State, Update>,
         active: &[Activation],
-        state: &State,
+        state: &Arc<State>,
         step: usize,
     ) -> Result<StepOutcome<Update>> {
         // Build one forked context + future per branch. Node lookup and
