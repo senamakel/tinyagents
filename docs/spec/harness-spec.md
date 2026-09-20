@@ -2,8 +2,9 @@
 
 The harness is the outer runtime for LLM applications. In LangChain terms, this
 is the layer around a model call that owns the agent loop, prompt/context
-assembly, tool execution, middleware, memory, streaming, tracing, retries, and
-testability.
+assembly, tool execution, middleware, streaming, tracing, retries, and
+testability. Hosts own memory and workspace policy through the harness's
+middleware and context seams.
 
 The harness must stay composable. It should not be a single monolithic `Agent`
 type that hides every behavior. A direct model call, a model-plus-tools loop, and
@@ -32,7 +33,8 @@ testing:
 - Resolve model calls from request overrides, reusable state, model hints,
   agent defaults, registry defaults, and fallback policy.
 - Register tools and validate tool calls against schemas.
-- Build model requests from state, prompts, memory, and runtime context.
+- Build model requests from state, prompts, host-provided memory, and runtime
+  context.
 - Apply prompt and message templates.
 - Preserve provider prompt/KV-cache stability by keeping cacheable prompt
   prefixes deterministic and isolating volatile context near the tail of model

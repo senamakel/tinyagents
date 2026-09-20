@@ -159,7 +159,6 @@ crates/tinyagents-harness/src/
   events.rs
   graph_runtime.rs
   limits.rs
-  memory.rs
   message.rs
   middleware.rs
   model.rs
@@ -200,7 +199,6 @@ Feature ownership:
 - `graph_runtime`: explicit state graphs, node commands, reducers,
   checkpointing, HITL, run records, and graph execution blueprints.
 - `limits`: model-call, tool-call, concurrency, timeout, and recursion policy.
-- `memory`: memory contracts and store interfaces supplied by hosts.
 - `message`: structured messages, content blocks, tool call correlation.
 - `middleware`: before/after/wrap hooks and middleware stack ordering.
 - `model`: provider-neutral model traits, requests, responses, streams.
@@ -219,7 +217,6 @@ Feature ownership:
 - `testkit`: fakes, recorders, deterministic ids, trajectory assertions.
 - `tool`: tool traits, schemas, validation, execution, result formatting.
 - `usage`: token accounting, cached token tracking, context-window estimates.
-- `workspace`: host-owned per-agent filesystem/sandbox isolation contracts.
 
 ### Host-authorized invocations and tool timeouts
 
@@ -228,7 +225,7 @@ invocation, and how per-tool timeouts are resolved. See
 [hosting.md](hosting.md).
 
 Continued specifications: [runtime.md](runtime.md) (tool registry, agent loop,
-middleware, and host-owned state), [store.md](store.md) (host persistence), and
+middleware, host-owned state, and stores), [store.md](store.md) (host persistence), and
 [observability-overview.md](observability-overview.md) (structured output,
 events/streaming, errors, testkit, milestones).
 
@@ -458,5 +455,5 @@ and durable state when configured.
 ---
 
 Continues in [`runtime.md`](runtime.md) (tool registry, agent loop,
-middleware, memory/stores) and [`observability-overview.md`](observability-overview.md)
+middleware, host-owned state, and stores) and [`observability-overview.md`](observability-overview.md)
 (structured output, events/streaming, errors, testkit, milestones).
