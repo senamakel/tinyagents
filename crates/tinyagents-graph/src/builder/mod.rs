@@ -236,9 +236,45 @@ where
     }
 
     /// Adds an async node returning a [`NodeResult`].
+    ///
+    /// This is a thin by-value adapter over [`Self::add_node_shared`] (M2 in
+    /// `docs/runtime-comparison/code-review-graph.md`): internally every
+    /// handler receives the step's state as an `Arc<State>`, and this
+    /// adapter clones out of it once per invocation so the handler closure
+    /// keeps taking an owned `State` exactly as before — every existing
+    /// caller of `add_node` compiles unchanged. A handler that does not need
+    /// to mutate or move its own copy of `State` should prefer
+    /// [`Self::add_node_shared`] instead, which hands it the `Arc<State>`
+    /// directly and clones nothing.
     pub fn add_node<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
     where
         F: Fn(State, NodeContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
+    {
+        self.nodes.insert(
+            id.into(),
+            BuilderNode {
+                handler: Arc::new(move |state: Arc<State>, ctx| {
+                    Box::pin(handler((*state).clone(), ctx))
+                }),
+            },
+        );
+        self
+    }
+
+    /// Adds an async node that receives the step's committed state directly
+    /// as an `Arc<State>`, returning a [`NodeResult`].
+    ///
+    /// The zero-clone counterpart to [`Self::add_node`] (M2): a superstep
+    /// clones `State` at most once (building the `Arc` the executor threads
+    /// through that step), and every branch/attempt of a handler added this
+    /// way shares that allocation via a cheap `Arc::clone` — no per-attempt,
+    /// per-branch `State` clone at all. Prefer this over [`Self::add_node`]
+    /// for a large `State` (e.g. a message-history-carrying value) or a node
+    /// that only reads its state.
+    pub fn add_node_shared<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
+    where
+        F: Fn(Arc<State>, NodeContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
     {
         self.nodes.insert(
