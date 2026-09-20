@@ -76,6 +76,7 @@ impl ToolEffectStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",
+            Self::Deferred => "deferred",
         }
     }
 
@@ -88,6 +89,7 @@ impl ToolEffectStatus {
             "completed" => Self::Completed,
             "failed" => Self::Failed,
             "interrupted" => Self::Interrupted,
+            "deferred" => Self::Deferred,
             _ => Self::Started,
         }
     }
@@ -98,6 +100,7 @@ impl ToolEffectStatus {
             HarnessToolEffectStatus::Completed => Self::Completed,
             HarnessToolEffectStatus::Failed => Self::Failed,
             HarnessToolEffectStatus::Interrupted => Self::Interrupted,
+            HarnessToolEffectStatus::Deferred => Self::Deferred,
         }
     }
 
@@ -107,6 +110,7 @@ impl ToolEffectStatus {
             Self::Completed => HarnessToolEffectStatus::Completed,
             Self::Failed => HarnessToolEffectStatus::Failed,
             Self::Interrupted => HarnessToolEffectStatus::Interrupted,
+            Self::Deferred => HarnessToolEffectStatus::Deferred,
         }
     }
 }
