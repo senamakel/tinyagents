@@ -132,7 +132,7 @@ in the same change.
   `parent`/`human` actor separation, no delivery policy, and no
   `add_instruction`/`request_status` commands, so no faithful lowering exists.
   Build the `SteeringPolicy` in the Rust `NodeFactory` instead. See
-  `reference.md`, `subagent` section.
+  `reference-nodes.md`, `subagent` section.
 - Duration literals like `60s` (write timeouts as a number or quoted string).
 - Formatter and round-trip golden tests (milestone L8).
 - Agent-authored review gates (milestone L7). Blueprint provenance itself is
