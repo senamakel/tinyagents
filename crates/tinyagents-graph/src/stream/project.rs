@@ -140,16 +140,14 @@ impl StreamProjection {
         Self::default()
     }
 
-    /// The next cursor value that will be assigned. Equal to the total number
-    /// of items folded in across every view so far.
+    /// The cursor of the most recently folded item, or zero before any item.
     pub fn cursor(&self) -> u64 {
         self.next_cursor
     }
 
     fn next(&mut self) -> u64 {
-        let cursor = self.next_cursor;
         self.next_cursor += 1;
-        cursor
+        self.next_cursor
     }
 
     /// Folds one graph event. Only [`GraphEvent::SubgraphStarted`] /
@@ -248,25 +246,25 @@ impl StreamProjection {
         });
     }
 
-    /// Returns every item across all three views with `cursor >= since`, each
+    /// Returns every item across all three views with `cursor > since`, each
     /// still tagged with its view, in cursor order — what a late-attaching
     /// consumer replays instead of re-reading the full projection.
     pub fn since(&self, since: u64) -> Vec<ProjectedSince> {
         let mut items: Vec<ProjectedSince> = self
             .messages
             .iter()
-            .filter(|item| item.cursor >= since)
+            .filter(|item| item.cursor > since)
             .map(|item| ProjectedSince::Message(item.clone()))
             .chain(
                 self.tool_calls
                     .iter()
-                    .filter(|item| item.cursor >= since)
+                    .filter(|item| item.cursor > since)
                     .map(|item| ProjectedSince::ToolCall(item.clone())),
             )
             .chain(
                 self.subagents
                     .iter()
-                    .filter(|item| item.cursor >= since)
+                    .filter(|item| item.cursor > since)
                     .map(|item| ProjectedSince::Subagent(item.clone())),
             )
             .collect();

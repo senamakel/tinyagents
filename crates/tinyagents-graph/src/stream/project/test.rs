@@ -142,10 +142,9 @@ fn stream_projection_folds_subgraph_events_as_subagents() {
 #[test]
 fn stream_projection_since_replays_only_items_after_the_given_cursor() {
     let mut projection = StreamProjection::new();
-    // First item claims cursor 0; `cursor()` afterward reports 1 (the next
-    // value to be assigned), so `since(0)` is "everything after the first
-    // item" and `since(cursor() - 1)` is the same thing spelled via the
-    // running total instead of a hard-coded cursor value.
+    // Cursors start at one, while zero is the empty-projection sentinel. A
+    // snapshot can therefore be passed directly to `since` without dropping
+    // the first event subsequently folded.
     projection.fold_agent_event(&AgentEvent::ToolStarted {
         call_id: CallId::from("call-1".to_string()),
         tool_name: "search".into(),
@@ -162,12 +161,12 @@ fn stream_projection_since_replays_only_items_after_the_given_cursor() {
     }));
 
     let replay = projection.since(0);
-    assert_eq!(replay.len(), 2, "everything but the first item");
+    assert_eq!(replay.len(), 3, "every item after the empty cursor");
 
     let replay = projection.since(cursor_after_first);
-    assert_eq!(replay.len(), 1, "only what followed the second item");
-    assert!(matches!(replay[0], ProjectedSince::Subagent(_)));
+    assert_eq!(replay.len(), 2, "everything after the first item");
+    assert!(matches!(replay[1], ProjectedSince::Subagent(_)));
 
     // Nothing new since the last item's own cursor.
-    assert!(projection.since(projection.cursor() - 1).is_empty());
+    assert!(projection.since(projection.cursor()).is_empty());
 }
