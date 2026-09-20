@@ -16,8 +16,9 @@ fn parser_extracts_a_delimited_tool_call() {
 
 #[test]
 fn bare_tool_call_accepts_relaxed_json_in_a_fence() {
-    let call = parse_bare_tool_call("```json\n{'name':'search','parameters':{'query':'rust'}}\n```")
-        .expect("a fenced relaxed JSON tool call");
+    let call =
+        parse_bare_tool_call("```json\n{'name':'search','parameters':{'query':'rust'}}\n```")
+            .expect("a fenced relaxed JSON tool call");
 
     assert_eq!(call.name, "search");
     assert_eq!(call.arguments, serde_json::json!({"query": "rust"}));
