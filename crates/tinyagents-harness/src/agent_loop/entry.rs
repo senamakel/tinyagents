@@ -6,6 +6,30 @@
 
 use super::*;
 
+struct AgentLoopBase<'a, State: Send + Sync, Ctx: Send + Sync> {
+    harness: &'a AgentHarness<State, Ctx>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> AgentBaseCall<State, Ctx>
+    for AgentLoopBase<'_, State, Ctx>
+{
+    fn call<'a>(
+        &'a self,
+        ctx: &'a mut RunContext<Ctx>,
+        state: &'a State,
+        request: crate::middleware::AgentRequest,
+        run: &'a mut AgentRun,
+        status: &'a mut HarnessRunStatus,
+    ) -> BoxAgentFuture<'a> {
+        Box::pin(async move {
+            ctx.streaming = request.streaming;
+            self.harness
+                .run_loop(state, ctx, run, status, request.input, request.streaming)
+                .await
+        })
+    }
+}
+
 /// Owns the accumulating run until the driver reaches a terminal outcome.
 ///
 /// If the driving future is dropped at any await point, this guard observes the
@@ -294,14 +318,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
+        let base = AgentLoopBase { harness: self };
         match self
-            .run_loop(
-                state,
+            .middleware
+            .run_wrapped_agent(
                 &mut ctx,
-                &mut terminal.run,
-                &mut status,
+                state,
                 input,
                 streaming,
+                &mut terminal.run,
+                &mut status,
+                &base,
             )
             .await
         {

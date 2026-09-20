@@ -44,7 +44,7 @@ enforcement — only how the turn gets *set up* differs.
 
 | File | Role |
 | --- | --- |
-| `mod.rs` | Builder/registration/accessor methods on `AgentHarness` (`register_model`, `push_middleware`, `with_response_cache`, …). |
+| `mod.rs` | Builder/registration/accessor methods on `AgentHarness` (`register_model`, `push_agent_middleware`, `push_middleware`, `with_response_cache`, …). |
 | `types.rs` | Public type definitions: `RunPolicy` and its sub-policies, `PayloadCapture`, `AgentHarness`'s fields, `InvocationRuntime`, and the crate-private `HostInvocationBinding`. |
 | `agent.rs` | Host-driven invocation: definition resolution, security screening, context composition, memory/experience recall, the `invoke_agent*` entry points, and post-turn memory/learning/experience finalization. |
 | `test.rs` | Tests for `AgentHarness` construction/registration and `RunPolicy` defaults. |

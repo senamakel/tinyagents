@@ -5,9 +5,9 @@ is re-exported through `crate::middleware`, so callers write
 `tinyagents_harness::middleware::RetryMiddleware`, not
 `middleware::library::RetryMiddleware`.
 
-See the parent [`middleware/README.md`](../README.md) for the two extension
-shapes (lifecycle `Middleware` vs. wrap `ModelMiddleware`/`ToolMiddleware`) and
-onion-ordering rules these implementations build on. A handful of other
+See the parent [`middleware/README.md`](../README.md) for the lifecycle and
+around-agent/model/tool extension shapes and the onion-ordering rules these
+implementations build on. A handful of other
 built-in middleware (`LoggingMiddleware`, `MessageTrimMiddleware`,
 `ContextCompressionMiddleware`, `MicrocompactMiddleware`,
 `PromptCacheGuardMiddleware`, `UsageAccountingMiddleware`) live directly in

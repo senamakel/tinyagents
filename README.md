@@ -27,7 +27,7 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
 
 - **`tinyagents-harness`** — provider-neutral model calls, typed tools,
   middleware, structured output, streaming, usage/cost accounting, retries,
-  caching, memory, and a Claude Code CLI model adapter with stream-json,
+  caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
   `tools`, `multimodal`, `tracing`.
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
@@ -138,8 +138,10 @@ inside a larger one.
 
 `tinyagents-harness` runs the model/tool agent loop: provider-neutral model
 calls, typed tool definitions, middleware, structured output, streaming,
-usage and cost accounting, retries and limits, response caching, memory, and
-a testkit for exercising the loop without a live provider. An agent can be
+usage and cost accounting, retries and limits, response caching, and a testkit
+for exercising the loop without a live provider. Memory, workspace lifecycle,
+authorization, and persistence policy stay in the host and can wrap a complete
+run with `AgentMiddleware`. An agent can be
 wrapped as a tool and handed to another agent (`SubAgent` /
 `SubAgentSession` / `SubAgentTool`), which is how multi-agent orchestration
 is composed — plain function composition, not a distinct execution mode.

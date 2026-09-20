@@ -100,7 +100,6 @@ Utilities:
 - `ScriptedChatModel`
 - `FakeStreamingModel`
 - `FakeTool`
-- `InMemoryShortTermMemory`
 - `InMemoryStore`
 - `EventRecorder`
 - deterministic ids

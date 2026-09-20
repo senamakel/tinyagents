@@ -11,7 +11,7 @@
 //! This is the same extension-trait pattern the crate already uses for
 //! [`ChatModel`](tinyinference_llm::model::ChatModel),
 //! [`Tool`](tinytools::Tool),
-//! [`ChatHistory`](crate::memory::ChatHistory) and a dozen others —
+//! host-defined middleware and capabilities —
 //! not a new architecture. See `docs/spec/host-capability-traits-rfc.md`.
 //!
 //! # Required vs optional

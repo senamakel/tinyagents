@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use crate::cache::CacheLayoutEvent;
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
+use crate::events::HarnessRunStatus;
 use crate::ids::{CallId, RunId};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
@@ -255,10 +256,50 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
 /// captures (the run context, application state, and the base handler).
 pub type BoxModelFuture<'a> = Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>;
 
+/// A pinned future that drives one complete agent run.
+pub type BoxAgentFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+/// Mutable input to one complete agent run.
+///
+/// Around-agent middleware owns this value, so it may rewrite the initial
+/// transcript or select the streaming path before forwarding it.
+#[derive(Clone, Debug)]
+pub struct AgentRequest {
+    /// Initial conversation transcript.
+    pub input: Vec<tinyinference_llm::message::Message>,
+    /// Whether provider calls should use their streaming path.
+    pub streaming: bool,
+}
+
+impl AgentRequest {
+    /// Creates a complete-run request.
+    pub fn new(input: Vec<tinyinference_llm::message::Message>, streaming: bool) -> Self {
+        Self { input, streaming }
+    }
+}
+
 /// A pinned, boxed future producing a [`ToolResult`].
 ///
 /// The tool-wrap counterpart of [`BoxModelFuture`].
 pub type BoxToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>>;
+
+/// The innermost agent loop wrapped by [`AgentMiddleware`].
+///
+/// The mutable run is deliberately visible at this boundary. An outer host
+/// middleware can therefore persist a partial transcript or release a
+/// run-scoped resource after `next` returns an error, not only after a clean
+/// completion.
+pub trait AgentBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
+    /// Drives the agent loop with the possibly rewritten input.
+    fn call<'a>(
+        &'a self,
+        ctx: &'a mut RunContext<Ctx>,
+        state: &'a State,
+        request: AgentRequest,
+        run: &'a mut AgentRun,
+        status: &'a mut HarnessRunStatus,
+    ) -> BoxAgentFuture<'a>;
+}
 
 /// The innermost model call wrapped by the [`ModelMiddleware`] onion.
 ///
@@ -370,6 +411,13 @@ pub struct ModelHandler<'a, State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) base: &'a dyn ModelBaseCall<State, Ctx>,
 }
 
+/// A handle to the remainder of the around-agent middleware onion.
+pub struct AgentHandler<'a, State: Send + Sync, Ctx: Send + Sync> {
+    pub(crate) remaining: &'a [Arc<dyn AgentMiddleware<State, Ctx>>],
+    pub(crate) base: &'a dyn AgentBaseCall<State, Ctx>,
+    pub(crate) status: &'a mut HarnessRunStatus,
+}
+
 /// A handle to the remainder of the tool-wrap onion: the inner wrap middleware
 /// plus the innermost [`ToolBaseCall`].
 ///
@@ -433,6 +481,28 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
     ) -> Result<MiddlewareToolOutcome>;
 }
 
+/// Around-call middleware for a complete agent run.
+///
+/// This is the host-policy extension point. It can load memory and prepend it
+/// to `input`, prepare a workspace in `ctx`, short-circuit a run, and perform
+/// cleanup or persistence after `next` returns. Unlike paired lifecycle hooks,
+/// code after `next.run(..).await` also executes when the inner loop fails.
+#[async_trait]
+pub trait AgentMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
+    /// A short, stable label used in middleware lifecycle events.
+    fn name(&self) -> &str;
+
+    /// Wraps the complete agent loop.
+    async fn wrap_agent(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: AgentRequest,
+        run: &mut AgentRun,
+        next: AgentHandler<'_, State, Ctx>,
+    ) -> Result<()>;
+}
+
 // ── MiddlewareStack ───────────────────────────────────────────────────────────
 
 /// An ordered collection of [`Middleware`] composed with onion semantics.
@@ -444,11 +514,8 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
 /// hook that returns `Err` short-circuits the stack: every middleware's
 /// [`Middleware::on_error`] is invoked, then the original error is returned.
 ///
-/// In addition to those lifecycle hooks, the stack holds two ordered lists of
-/// **wrap** (around-call) middleware — [`ModelMiddleware`] and
-/// [`ToolMiddleware`] — composed by [`MiddlewareStack::run_wrapped_model`] and
-/// [`MiddlewareStack::run_wrapped_tool`] as a nested onion whose innermost layer
-/// is the real model/tool call.
+/// In addition to those lifecycle hooks, the stack holds ordered lists of
+/// **wrap** middleware for complete agent runs, model calls, and tool calls.
 ///
 /// # Example
 ///
@@ -462,6 +529,7 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
 /// ```
 pub struct MiddlewareStack<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) middlewares: Vec<Arc<dyn Middleware<State, Ctx>>>,
+    pub(crate) agent_middlewares: Vec<Arc<dyn AgentMiddleware<State, Ctx>>>,
     pub(crate) model_middlewares: Vec<Arc<dyn ModelMiddleware<State, Ctx>>>,
     pub(crate) tool_middlewares: Vec<Arc<dyn ToolMiddleware<State, Ctx>>>,
 }
