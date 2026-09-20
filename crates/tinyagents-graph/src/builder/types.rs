@@ -159,7 +159,13 @@ pub struct NodeContext {
     /// This is how map-reduce / search-fanout branches and external graph
     /// inputs receive custom data that differs from the graph's shared
     /// committed state.
-    pub send_arg: Option<serde_json::Value>,
+    ///
+    /// `Arc`-wrapped (M2) so a repeated `Send` fan-out of the same node, and
+    /// every retry attempt of one activation, share the same allocation
+    /// instead of deep-cloning the argument per attempt. Serializes
+    /// transparently as the underlying `serde_json::Value` (serde's blanket
+    /// `Arc<T>` impl), so on-disk checkpoint records are unaffected.
+    pub send_arg: Option<Arc<serde_json::Value>>,
     /// The root run id of the recursion tree this node executes within. For a
     /// top-level run this equals `run_id`; for a subgraph/sub-agent child run it
     /// is the shared ancestor, so a child a node spawns can preserve the root.
