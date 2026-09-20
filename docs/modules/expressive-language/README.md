@@ -255,7 +255,7 @@ node_ref       = ident | "END"
 
 `steering_decl` is reserved grammar only: it parses, and the compiler then
 rejects it, because no faithful lowering onto the runtime steering policy exists
-yet. See the `subagent` section of [`reference.md`](reference.md).
+yet. See the `subagent` section of [`reference-nodes.md`](reference-nodes.md).
 
 ## AST
 
