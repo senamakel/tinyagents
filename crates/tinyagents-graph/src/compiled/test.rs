@@ -1802,6 +1802,127 @@ async fn higher_index_completed_sibling_not_rerun_after_failure_then_retry() {
     assert_eq!(done.state.value, 22, "20 (hi) + 2 (lo, on retry)");
 }
 
+/// Sequential-mode cousin of the parallel C1 sibling-drop bug: in the
+/// default sequential step runner, `run_sequential` stops invoking further
+/// branches at the first interrupt, so a not-yet-started sibling of the
+/// interrupting branch never even appears in that step's raw results.
+/// Before the `fold_step` fix, such a sibling silently vanished from the
+/// checkpoint's pending set (`Checkpoint::tasks`) instead of being carried
+/// over, so it never ran on resume. This was pinned by a probe
+/// (`drain_test::probe_sequential_stall_keeps_unstarted_siblings_pending`)
+/// that has since been converted into this real assertion.
+#[tokio::test]
+async fn sequential_stall_keeps_unstarted_sibling_pending() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let c_calls = Arc::new(AtomicUsize::new(0));
+    let c_calls_for_node = c_calls.clone();
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s)) })
+        .add_node("b", |_s, c: NodeContext| async move {
+            match c.resume {
+                Some(_) => Ok(NodeResult::Update(10)),
+                None => Ok(NodeResult::Interrupt(Interrupt::new("b", json!({})))),
+            }
+        })
+        .add_node("c", move |s, _c: NodeContext| {
+            let calls = c_calls_for_node.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(s + 1))
+            }
+        })
+        .set_entry("a")
+        .add_edge("a", "b")
+        .add_edge("a", "c")
+        .set_finish("b")
+        .set_finish("c")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let paused = graph.run_with_thread("seq-sibling", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+    // `c` never ran: `b` (index 0) interrupted before `run_sequential` ever
+    // started `c` (index 1).
+    assert_eq!(c_calls.load(AtomicOrdering::SeqCst), 0);
+
+    let snapshot = graph
+        .get_state("seq-sibling", None)
+        .await
+        .unwrap()
+        .expect("an interrupted thread has a resumable checkpoint");
+    let mut pending: Vec<String> = snapshot.next_nodes.iter().map(|n| n.to_string()).collect();
+    pending.sort();
+    assert_eq!(
+        pending,
+        vec!["b".to_string(), "c".to_string()],
+        "the unstarted sibling `c` must be carried into the checkpoint's pending set \
+         alongside the interrupted `b`, not dropped"
+    );
+
+    let done = graph
+        .resume("seq-sibling", Command::resume(json!(null)))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+    assert_eq!(c_calls.load(AtomicOrdering::SeqCst), 1, "c must run exactly once, on resume");
+    assert_eq!(done.state.value, 11, "10 (b's resume value) + 1 (c)");
+}
+
+/// Equivalence regression for the fix above: an interrupted-then-resumed
+/// sequential run must reach the exact same final state as an uninterrupted
+/// run of the same graph, and every node must run exactly once either way.
+#[tokio::test]
+async fn sequential_interrupted_then_resumed_matches_uninterrupted_run() {
+    fn build(cp: Arc<InMemoryCheckpointer<i32>>, interrupt_once: Arc<AtomicBool>) -> CompiledGraph<i32, i32> {
+        GraphBuilder::<i32, i32>::overwrite()
+            .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+            .add_node("b", move |s, c: NodeContext| {
+                let interrupt_once = interrupt_once.clone();
+                async move {
+                    if c.resume.is_none() && !interrupt_once.swap(true, AtomicOrdering::SeqCst) {
+                        return Ok(NodeResult::Interrupt(Interrupt::new("b", json!({}))));
+                    }
+                    Ok(NodeResult::Update(s + 10))
+                }
+            })
+            .add_node("c", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 100)) })
+            .set_entry("a")
+            .add_edge("a", "b")
+            .add_edge("a", "c")
+            .set_finish("b")
+            .set_finish("c")
+            .compile()
+            .unwrap()
+            .with_checkpointer(cp)
+    }
+
+    // Baseline: no interrupt ever fires (the flag starts pre-tripped), so
+    // this is an ordinary uninterrupted sequential run.
+    let baseline_cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let baseline = build(baseline_cp, Arc::new(AtomicBool::new(true)));
+    let baseline_run = baseline.run_with_thread("baseline", 0).await.unwrap();
+    assert!(!baseline_run.is_interrupted());
+
+    // Interrupted variant: `b` interrupts on its first (non-resume) call,
+    // stranding unstarted sibling `c`; resuming must reach the same state.
+    let interrupted_cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let interrupted = build(interrupted_cp, Arc::new(AtomicBool::new(false)));
+    let paused = interrupted.run_with_thread("interrupted", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+    let done = interrupted
+        .resume("interrupted", Command::resume(json!(null)))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+
+    assert_eq!(
+        done.state, baseline_run.state,
+        "an interrupted-then-resumed sequential run must reach the same final \
+         state as an uninterrupted run"
+    );
+}
+
 #[tokio::test]
 async fn send_args_survive_interrupt_and_resume() {
     // A `Send` fanout schedules three workers (args 1, 2, 3); the arg-1 worker
