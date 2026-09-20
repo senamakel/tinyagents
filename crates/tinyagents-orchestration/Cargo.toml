@@ -28,6 +28,11 @@ tracing = [
     "tinyagents-harness/tracing",
     "tinyagents-session/tracing",
 ]
+# Lowers `WorkflowDefinition` to a `tinyagents_graph::CompiledGraph` and lets
+# `WorkflowEngine::drive` dispatch to it (see `workflow::lower`) instead of
+# the legacy one-phase-at-a-time scheduler loop. See
+# `crates/tinyagents-orchestration/src/workflow/README.md`.
+graph-workflows = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
