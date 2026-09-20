@@ -73,6 +73,7 @@ impl ToolEffectStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Interrupted => "interrupted",
+            Self::Deferred => "deferred",
         }
     }
 
@@ -85,6 +86,7 @@ impl ToolEffectStatus {
             "completed" => Self::Completed,
             "failed" => Self::Failed,
             "interrupted" => Self::Interrupted,
+            "deferred" => Self::Deferred,
             _ => Self::Started,
         }
     }
