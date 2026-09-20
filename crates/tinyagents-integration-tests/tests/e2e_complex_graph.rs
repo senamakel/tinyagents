@@ -22,7 +22,6 @@ use tinyagents_graph::END;
 use tinyagents_graph::*;
 use tinyagents_graph::{ClosureStateReducer, adapter_subgraph_node, shared_subgraph_node};
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 
 // ---------------------------------------------------------------------------

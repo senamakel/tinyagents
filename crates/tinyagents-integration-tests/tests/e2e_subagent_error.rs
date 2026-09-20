@@ -24,7 +24,6 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, Trajectory};
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;

@@ -7,8 +7,8 @@ sub-graphs it spawns) unfold in real time.
 ## Why this exists
 
 State snapshots, diffs, model deltas, debug traces, and interrupts from a run
-are projected as filtered [`StreamChunk`]s so a parent — or a REPL/CodeAct
-loop driving the run — can consume only the categories it cares about,
+are projected as filtered [`StreamChunk`]s so a parent driving the run can
+consume only the categories it cares about,
 instead of every caller re-implementing delta reassembly and mode filtering
 over raw [`crate::events::AgentEvent`]s.
 

@@ -5,10 +5,8 @@ load-bearing surfaces of the crate's recursive architecture.
 
 Because a node can embed another compiled graph (`subgraph`) or invoke a
 sub-agent, **graphs run graphs** and orchestration recurses while every step
-stays typed, checkpointed, and observable. A workflow authored from a `.rag`
-blueprint or driven from a host orchestrator lowers into exactly these same
-types, so a model can describe, compile, and re-enter the very runtime it is
-executing inside.
+stays typed, checkpointed, and observable. Workflows driven from a host
+orchestrator use these same runtime types.
 
 Each submodule keeps type definitions in `types.rs`, behavior in `mod.rs`, and
 unit tests in `test.rs` (per repo convention); complex submodules additionally
@@ -26,7 +24,6 @@ carry their own `README.md` — see the module map below.
 | `dag` | Structural validation (duplicates, dangling edges, cycles) of a borrowed dependency-node view, independent of the graph runtime. See [`dag/README.md`](dag/README.md). |
 | `export` | Graph introspection/visualization: topology extraction, Mermaid/JSON export, validation reports. |
 | `goals` | A durable per-thread goal (single "completion contract"), continuation loop, and harness tools. See [`goals/README.md`](goals/README.md). |
-| `language` | Materializes a `tinyagents-language` `.rag` [`Blueprint`] into a compiled whole-state graph via a host-supplied `NodeFactory` (`language.rs`, no submodule directory). |
 | `observability` | Durable graph observability: journals, status stores, the journaling sink, latency/health rollups, Langfuse export. See [`observability/README.md`](observability/README.md). |
 | `orchestration` | Managed child-work controls (`spawn`/`await`/`cancel`/... ) exposed as harness tools, backed by a `TaskStore`. See [`orchestration/README.md`](orchestration/README.md). |
 | `parallel` | `map_reduce` — ordered, bounded-concurrency parallel map/reduce with a configurable failure policy, independent of the graph executor. |

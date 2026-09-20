@@ -21,7 +21,6 @@ use tinyagents_graph::ClosureStateReducer;
 use tinyagents_graph::END;
 use tinyagents_graph::*;
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 
 const DIFF_GATE_MIN_SEQUENCE: usize = 3;

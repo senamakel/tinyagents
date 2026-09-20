@@ -1,7 +1,7 @@
 //! Run configuration and runtime context.
 //!
 //! [`RunContext`] is the unit of recursion in the runtime: every nested layer —
-//! a sub-agent, a sub-graph, a REPL-driven sub-call — runs inside its own
+//! a sub-agent or a sub-graph — runs inside its own
 //! context, and [`RunConfig::depth`]/[`RunConfig::max_depth`] plus
 //! [`RunConfig::child`] track and bound how deep that recursion may go while a
 //! shared [`CancellationToken`] and event sink let signals and observability
@@ -227,7 +227,7 @@ impl RunConfig {
     /// `parent_depth + 1`, or [`crate::error::TinyAgentsError::SubAgentDepth`]
     /// carrying `max_depth` when the child would exceed the cap. Every recursion
     /// surface — [`crate::subagent::SubAgent`], its reuse-session tool,
-    /// and the REPL sub-run builtin — funnels its `depth + 1` check through here
+    /// and every other nested runtime surface funnels its `depth + 1` check through here
     /// so the fail-closed guard cannot drift out of sync between them.
     pub fn checked_child_depth(parent_depth: usize, max_depth: usize) -> Result<usize> {
         let child_depth = parent_depth + 1;

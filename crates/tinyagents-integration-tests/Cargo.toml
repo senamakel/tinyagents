@@ -19,7 +19,6 @@ serde_json = "1"
 tempfile = "3"
 tinyagents-graph = { path = "../tinyagents-graph" }
 tinyagents-harness = { path = "../tinyagents-harness" }
-tinyagents-language = { path = "../tinyagents-language" }
 tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-orchestration = { path = "../tinyagents-orchestration" }
 tinyagents-registry = { path = "../tinyagents-registry" }
