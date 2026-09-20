@@ -293,7 +293,7 @@ where
         &self,
         node_id: &NodeId,
         handler: &Arc<NodeHandler<State, Update>>,
-        state: &State,
+        state: &Arc<State>,
         ctx: NodeContext,
         step: usize,
         policy: &NodePolicy<State, Update>,
