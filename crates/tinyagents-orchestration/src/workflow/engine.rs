@@ -341,6 +341,9 @@ where
                 .values()
                 .any(|phase| phase.get("status").and_then(Value::as_str) == Some("running"))
         }) {
+            // The previous owner may have crashed after registering remote
+            // children. Fence side effects before making its phase runnable.
+            self.executor.cancel_children(&run.child_run_ids).await;
             let mut phase_states = run.phase_states.clone();
             reset_running_phases(
                 &mut phase_states,
@@ -350,7 +353,7 @@ where
                 &run,
                 PersistRequest {
                     phase_states,
-                    child_run_ids: run.child_run_ids.clone(),
+                    child_run_ids: Vec::new(),
                     status: WorkflowRunStatus::Running,
                     summary: None,
                     terminal: false,
@@ -364,7 +367,9 @@ where
                 run_id: tinyagents_harness::ids::RunId::new(run_id),
             },
         );
-        let mut total_spawned = run.child_run_ids.len() as u32;
+        // Registered children from an interrupted attempt are historical, not
+        // part of the retry's spawn budget.
+        let mut total_spawned = 0;
 
         loop {
             if cancel.is_cancelled() {
