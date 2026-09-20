@@ -1646,7 +1646,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     &prepared,
                                     request,
                                     &mut deferred,
-                                );
+                                )
+                                .await;
                                 continue;
                             }
                             self.record_tool_effect_settled(
