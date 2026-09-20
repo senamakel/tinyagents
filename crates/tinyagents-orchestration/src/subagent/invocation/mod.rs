@@ -75,7 +75,7 @@ mod jobs;
 mod types;
 
 pub use jobs::{
-    SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools, subagent_job_tools,
+    SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
 };
 pub use types::*;
 
@@ -636,7 +636,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             }
             Err(error) => return Err(error),
         };
-        let (job_id, steering) = self.jobs.create(&self.tool_name);
+        let (job_id, steering) = self.jobs.create(&self.tool_name, parent.instance_id());
         let child = child.with_steering(steering);
         let jobs = self.jobs.clone();
         let task_job_id = job_id.clone();

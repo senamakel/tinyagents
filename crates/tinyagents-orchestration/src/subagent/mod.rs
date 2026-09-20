@@ -21,7 +21,7 @@ pub use executor::SubagentExecutor;
 pub use invocation::{
     ChildDataPolicy, SubAgent, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry,
     SubAgentJobStatus, SubAgentJobsTool, SubAgentMessageTool, SubAgentSession, SubAgentTool,
-    register_subagent_job_tools, subagent_job_tools,
+    register_subagent_job_tools,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;

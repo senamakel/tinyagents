@@ -20,7 +20,7 @@ async fn live_openai_parent_composes_child_subagent() {
     use tinyagents_harness::runtime::AgentHarness;
     use tinyagents_harness::testkit::{EventRecorder, Trajectory};
     use tinyagents_orchestration::subagent::{
-        ChildDataPolicy, SubAgent, SubAgentTool, subagent_job_tools,
+        ChildDataPolicy, SubAgent, SubAgentTool, register_subagent_job_tools,
     };
     use tinyinference_llm::message::Message;
     use tinyinference_llm::providers::openai::OpenAiModel;
@@ -60,9 +60,7 @@ async fn live_openai_parent_composes_child_subagent() {
     // Parent agent: also a real model, equipped with the sub-agent as a tool.
     let mut parent: AgentHarness<()> = AgentHarness::new();
     parent.register_tool_dispatch(tool);
-    for job_tool in subagent_job_tools(jobs.clone()) {
-        parent.register_tool(job_tool);
-    }
+    register_subagent_job_tools(parent.tool_registry_mut(), jobs.clone());
     parent
         .register_model(
             "openai",

@@ -219,6 +219,8 @@ pub struct SubAgentJobRegistry {
 
 pub(crate) struct SubAgentJobEntry {
     pub(crate) job: SubAgentJob,
+    /// Identity of the parent run that created this capability.
+    pub(crate) owner: u64,
     pub(crate) steering: SteeringHandle,
 }
 
