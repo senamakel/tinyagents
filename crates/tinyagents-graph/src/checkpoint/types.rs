@@ -332,8 +332,14 @@ pub struct PendingActivation {
     pub node: NodeId,
     /// The per-invocation `Send` argument, when the activation was a `Send`
     /// packet (plain edge/goto activations carry `None`).
+    ///
+    /// `Arc`-wrapped (M2 in `docs/runtime-comparison/code-review-graph.md`)
+    /// so a repeated `Send` fan-out of the same node shares one allocation
+    /// in memory; serde's blanket `Arc<T>` impl serializes/deserializes it
+    /// exactly as a bare `serde_json::Value`, so on-disk checkpoint records
+    /// are unaffected by this type change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub send_arg: Option<serde_json::Value>,
+    pub send_arg: Option<Arc<serde_json::Value>>,
     /// Stable identity of this scheduled task within its superstep.
     ///
     /// Unlike `node`, this distinguishes repeated `Send` fan-out activations
