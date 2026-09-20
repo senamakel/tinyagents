@@ -1872,7 +1872,7 @@ async fn sequential_stall_keeps_unstarted_sibling_pending() {
         1,
         "c must run exactly once, on resume"
     );
-    assert_eq!(done.state.value, 11, "10 (b's resume value) + 1 (c)");
+    assert_eq!(done.state, 11, "10 (b's resume value) + 1 (c)");
 }
 
 /// Equivalence regression for the fix above: an interrupted-then-resumed
