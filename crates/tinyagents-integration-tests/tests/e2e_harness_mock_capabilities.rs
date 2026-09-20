@@ -13,9 +13,8 @@ use tinyagents_harness::cache::{InMemoryResponseCache, PROMPT_CACHE_KEY_OPTION, 
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::{LoggingMiddleware, MicrocompactMiddleware, Middleware};
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel};
-use tinyagents_harness::{SubAgent, SubAgentSession, SubAgentTool};
+use tinyagents_orchestration::subagent::{ChildDataPolicy, SubAgent, SubAgentSession, SubAgentTool};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
