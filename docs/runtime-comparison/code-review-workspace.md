@@ -138,7 +138,7 @@ Root `Cargo.toml:13-18` has `version/edition/license/repository` only. The code 
 
 **M3. The headline `.rag` example in the module README does not parse.** `docs/modules/expressive-language/README.md:139-142` uses `metadata { description: "…" }` at graph level (`:` is not a token — `lexer.rs:145-149` rejects it, and `parse_graph_item` has no `metadata` arm) and `timeout 60s` (duration literals are listed as unimplemented in `implementation-status.md:90`). Fix: replace with the `rag_blueprint.rs` example source, which does run. Effort S.
 
-**M4. `router` nodes name their route function through the `model` field, undocumented in the reference.** `capability_resolver.rs:313` `"router" => (ReferenceClass::Router, model?)`; `docs/modules/expressive-language/reference.md:49-56` lists only `routes`/`metadata`. Add a `router "name"` item (parallel to `agent`/`graph`/`script`) and document it. Effort S.
+**M4. `router` nodes name their route function through the `model` field, undocumented in the reference.** `capability_resolver.rs:313` `"router" => (ReferenceClass::Router, model?)`; `docs/modules/expressive-language/reference-nodes.md:55-61` lists only `routes`/`metadata`. Add a `router "name"` item (parallel to `agent`/`graph`/`script`) and document it. Effort S.
 
 **M5. `Blueprint` serde shape is asymmetric and unversioned.** `types.rs:322-330` `model`, `prompt`, `tools`, `routing` have no `#[serde(default)]` while every field added later does (lines 332-367), so a stored blueprint missing `"tools": []` fails to deserialize; there is no `schema_version`. Since blueprints are "stored, diffed, reviewed, and reloaded" (`types.rs:103-105`) add `#[serde(default)]` uniformly and a version field. Effort S.
 
@@ -191,7 +191,7 @@ Doc claims vs code:
 - `docs/modules/expressive-language/README.md:139` example unparseable (M3); `README.md:7-9` and `implementation-status.md` silent on I2.
 - `implementation-status.md:96-98` "An agent-name allowlist on `CapabilityResolver` … not yet registry-validated" contradicts `implementation-status.md:73-76` and `capability_resolver.rs:101-102,282-284` (agents are validated).
 - `implementation-status.md:93-94` lists provenance (L7) as not implemented; `compile_with_provenance` exists (`compiler.rs:442`).
-- `reference.md:49-56` `router` node omits the `model`-field convention (M4).
+- `reference-nodes.md:55-61` `router` node omits the `model`-field convention (M4).
 - `catalog.rs:13-15` says the embedded snapshot is `docs/modules/registry/model-catalog.snapshot.json`; it is the crate-local copy (M7).
 - `docs/modules/registry/*` describes an unimplemented registry (I13).
 - `ROADMAP.md:19-20` "named capability registry (models, tools, agents, graphs, stores, middleware, policy)" — stores/middleware/policy are name-only descriptors (`component/types.rs:39-53`).
