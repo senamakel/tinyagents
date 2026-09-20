@@ -109,7 +109,7 @@ pub fn reset_running_phases(phase_states: &mut Value, reason: &str) {
 }
 
 /// Finds the next phase that should run: a phase that is not already
-/// completed or running, and all of whose dependencies are completed.
+/// completed, running, or failed, and all of whose dependencies are completed.
 ///
 /// Returns the first such phase in definition order, or `None` if no phase is
 /// ready (either all are done, or some have unmet dependencies).
@@ -120,7 +120,7 @@ pub fn next_runnable_phase<'a>(
     definition.phases.iter().find(|phase| {
         !matches!(
             phase_status(phase_states, &phase.name),
-            Some("completed" | "running")
+            Some("completed" | "running" | "failed")
         ) && phase
             .depends_on
             .iter()

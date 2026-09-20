@@ -593,10 +593,16 @@ where
             tokio::select! {
                 outcomes = &mut outcomes => break outcomes,
                 _ = heartbeat.tick() => {
-                    if !self.store.renew(&run.id, owner, self.lease_for)? {
+                    let renewed = self.store.renew(&run.id, owner, self.lease_for);
+                    if !matches!(renewed, Ok(true)) {
                         cancel.cancel();
                         let children = registration.current().child_run_ids;
                         self.executor.cancel_children(&children).await;
+                        if let Err(error) = renewed {
+                            return Err(OrchestrationError(format!(
+                                "workflow lease renewal errored; cancelled registered children: {error}"
+                            )));
+                        }
                         return Err(OrchestrationError(
                             "workflow lease renewal failed; cancelled registered children".to_owned(),
                         ));
@@ -805,10 +811,13 @@ where
     }
 
     fn finish_cancelled(&self, run_id: &str) {
-        // GraphEvent has no cancellation variant. Its terminal error event is
-        // the truthful durable signal for a cooperatively aborted run; callers
-        // distinguish cancellation from failure in the workflow ledger status.
-        self.finish_failed(run_id, "workflow cancelled".to_owned());
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunCancelled {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+            },
+        );
+        self.flush_terminal_events();
     }
 
     fn flush_terminal_events(&self) {
@@ -824,7 +833,12 @@ where
             .load(run_id)
             .ok()
             .flatten()
-            .is_some_and(|current| current.lease_owner.as_deref() != Some(owner))
+            .is_some_and(|current| {
+                current.lease_owner.as_deref() != Some(owner)
+                    || current
+                        .lease_expires_at
+                        .is_none_or(|expires| expires <= Utc::now())
+            })
     }
 
     /// Returns true after emitting the terminal event already committed by a

@@ -88,9 +88,12 @@ fn enforce_blocks_unsafe_paths_and_emits_violation() {
     let recorder = Arc::new(RecordingListener::new());
     events.subscribe(recorder.clone());
 
-    let ws = WorkspaceDescriptor::new("/work/agent-a");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("agent-a");
+    std::fs::create_dir_all(&root).unwrap();
+    let ws = WorkspaceDescriptor::new(&root);
     // Allowed path passes silently with no event.
-    enforce_workspace_path(&ws, Path::new("/work/agent-a/out.txt"), &events).unwrap();
+    enforce_workspace_path(&ws, &root.join("out.txt"), &events).unwrap();
     assert!(recorder.is_empty());
 
     // Unsafe path fails closed and emits a violation.

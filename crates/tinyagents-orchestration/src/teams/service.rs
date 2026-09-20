@@ -274,9 +274,13 @@ impl<L: TeamLedger> TeamService<L> {
         owner_member_id: Option<&str>,
         depends_on: &[String],
     ) -> Result<AgentTeamTask> {
-        self.ledger
+        let team = self
+            .ledger
             .get_team(team_id)?
             .ok_or_else(|| anyhow!("unknown team: {team_id}"))?;
+        if team.status == AgentTeamStatus::Closed {
+            return Err(anyhow!("team is closed: {team_id}"));
+        }
         let existing = self.ledger.list_tasks(team_id)?;
         if let Some(owner) = owner_member_id
             && !self
@@ -414,12 +418,9 @@ impl<L: TeamLedger> TeamService<L> {
     }
 
     fn ensure_member(&self, team_id: &str, member_id: &str) -> Result<()> {
-        if self
-            .ledger
-            .list_members(team_id)?
-            .iter()
-            .any(|member| member.id == member_id)
-        {
+        if self.ledger.list_members(team_id)?.iter().any(|member| {
+            member.id == member_id && member.member_status != AgentTeamMemberStatus::Stopped
+        }) {
             Ok(())
         } else {
             Err(anyhow!(TeamError::UnknownMember {
