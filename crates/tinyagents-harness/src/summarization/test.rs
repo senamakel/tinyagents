@@ -700,6 +700,24 @@ mod rendering {
     }
 
     #[test]
+    fn media_blocks_are_rendered_as_placeholders() {
+        use tinyinference_llm::message::{ContentBlock, MediaRef, UserMessage};
+
+        let msg = Message::User(UserMessage {
+            content: vec![
+                ContentBlock::Audio(MediaRef::url("https://example.com/a.wav")),
+                ContentBlock::Video(MediaRef::base64("AAAA", "video/mp4")),
+                ContentBlock::Document(MediaRef::path("/tmp/doc.pdf")),
+            ],
+        });
+        let rendered = render_message_for_summary(&msg);
+
+        assert!(rendered.contains("<audio />"), "{rendered}");
+        assert!(rendered.contains("<video />"), "{rendered}");
+        assert!(rendered.contains("<document />"), "{rendered}");
+    }
+
+    #[test]
     fn oversized_payloads_are_elided_not_reproduced() {
         let msg = Message::tool("c1", "y".repeat(9_000));
         let rendered = render_message_for_summary(&msg);
