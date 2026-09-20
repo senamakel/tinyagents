@@ -321,9 +321,11 @@ where
 /// stop/resume hand-off or a lease takeover must not manufacture a stale
 /// terminal event *or* a hard error for a driver that has already been
 /// fenced — that case stops the loop silently (`Ok`, no `goto`), matching
-/// `drive_legacy`'s `return Ok(())`. Only a genuine, unfenced infrastructure
-/// failure emits `finish_failed` and propagates as an `Err`, matching
-/// `drive_legacy`'s `return Err(error)`.
+/// `drive_legacy`'s `return Ok(())`. A genuine, unfenced infrastructure
+/// failure instead propagates as an `Err`, matching `drive_legacy`'s
+/// `return Err(error)`; `WorkflowEngine::drive_via_graph`'s single
+/// catch-all around `graph.run(..)` is what emits `finish_failed` for it
+/// (once, regardless of which node's `Err` bubbled up).
 async fn settle_infra_error<S, E>(
     engine: &Arc<WorkflowEngine<S, E>>,
     run_id: &str,
