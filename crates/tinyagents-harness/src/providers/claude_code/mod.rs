@@ -369,14 +369,19 @@ fn response_format_instruction(format: Option<&ResponseFormat>) -> Option<String
 }
 
 /// Flattens a message's content blocks to plain text: text and reasoning
-/// blocks pass through, JSON/extension blocks are stringified, an image
-/// becomes an `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
+/// blocks pass through (with internal image-looking text escaped),
+/// JSON/extension blocks are stringified, an image becomes an
+/// `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
 /// and redacted-thinking blocks are dropped (nothing to show).
 fn render_content(content: &[ContentBlock]) -> String {
     content
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.clone()),
+            // `[OH_IMAGE:…]` is an internal transport marker. User-authored
+            // text that happens to contain that spelling must remain prose,
+            // rather than becoming an unintended native attachment when the
+            // input builder rehydrates image markers below.
+            ContentBlock::Text(text) => Some(text.replace("[OH_IMAGE:", "[OH_IMAGE_LITERAL:")),
             ContentBlock::Image(image) => Some(format!("[OH_IMAGE:{}]", image.url)),
             ContentBlock::Json(value) | ContentBlock::ProviderExtension(value) => {
                 Some(value.to_string())
