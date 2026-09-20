@@ -481,14 +481,11 @@ impl<Ctx> RunContext<Ctx> {
         std::mem::take(&mut self.on_error_dispatched)
     }
 
-    /// Attaches an isolated workspace descriptor that is threaded into every
+    /// Attaches a host-owned workspace descriptor that is threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
-    /// run creates, so tools read their allowed root from context. To prepare
-    /// and tear down the environment via a
-    /// [`WorkspaceIsolation`][crate::workspace::WorkspaceIsolation]
-    /// provider (emitting the workspace lifecycle events), use
-    /// [`crate::workspace::prepare_workspace`] to obtain the descriptor
-    /// first.
+    /// run creates, so tools read their allowed root from context. Preparation,
+    /// cleanup, and sandbox policy belong to the host; around-agent middleware
+    /// can set this before calling the inner run and clean it up afterward.
     pub fn with_workspace(mut self, workspace: tinytools::WorkspaceDescriptor) -> Self {
         self.workspace = Some(workspace);
         self

@@ -102,7 +102,10 @@ use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, HarnessRunStatus, LimitKind};
 use crate::ids::{CallId, ComponentId, HarnessPhase};
-use crate::middleware::{AgentRun, BoxModelFuture, BoxToolFuture, ModelBaseCall, ToolBaseCall};
+use crate::middleware::{
+    AgentBaseCall, AgentRun, BoxAgentFuture, BoxModelFuture, BoxToolFuture, ModelBaseCall,
+    ToolBaseCall,
+};
 use crate::model_registry::{ResolvedModelBinding, model_eligible};
 use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};

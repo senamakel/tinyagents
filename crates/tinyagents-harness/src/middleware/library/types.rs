@@ -1,7 +1,7 @@
 //! Public types for the built-in middleware library.
 //!
 //! This module holds the type definitions for the ready-to-use middleware that
-//! ship with the harness. They build on the two extension surfaces defined in
+//! ship with the harness. They build on extension surfaces defined in
 //! [`crate::middleware`]:
 //!
 //! - the lifecycle [`Middleware`][crate::middleware::Middleware] trait

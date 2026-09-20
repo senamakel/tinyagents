@@ -74,7 +74,6 @@ pub mod handoff;
 pub mod host;
 pub mod ids;
 pub mod limits;
-pub mod memory;
 pub mod middleware;
 pub mod model_registry;
 #[cfg(feature = "multimodal")]
@@ -99,7 +98,6 @@ pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
-pub mod workspace;
 
 /// Re-exported vendor crates. Downstream consumers should reach these
 /// dependencies' types through these re-exports (e.g.
@@ -141,4 +139,3 @@ pub use steering::{
 };
 pub use subagent::{SubAgent, SubAgentSession, SubAgentTool};
 pub use tool::ToolRegistry;
-pub use workspace::{SharedRootWorkspace, WorkspaceIsolation};

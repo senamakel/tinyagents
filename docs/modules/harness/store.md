@@ -444,7 +444,7 @@ Default redaction:
 Example:
 
 ```text
-memory::ConversationMemory
+host-owned memory middleware
   -> store::StoreRegistry["threads"]
   -> MongoStore or JsonlStore
 ```
