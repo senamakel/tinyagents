@@ -615,7 +615,13 @@ fn parse_relaxed_object(raw: &str) -> Option<Value> {
         // A non-object parsed strictly is not a tool call; do not try to
         // "repair" it into one.
         Ok(_) => None,
-        Err(_) => crate::relaxed_json::recover_relaxed_object(raw),
+        Err(_) => crate::relaxed_json::recover_relaxed_object(raw).or_else(|| {
+            // Python-style single-quoted objects are a common local-model
+            // spelling. The conservative parser already rejected the exact
+            // input; retrying its quote-normalized form keeps recovery scoped
+            // to a whole object rather than interpreting prose as a call.
+            crate::relaxed_json::recover_relaxed_object(&raw.replace('\'', "\""))
+        }),
     }
 }
 

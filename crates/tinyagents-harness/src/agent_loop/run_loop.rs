@@ -598,6 +598,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .run_before_model(ctx, state, &mut request)
                 .await?;
 
+            // A forced native dialect cannot silently select a model that
+            // lacks provider-native tool calling. This has to happen after
+            // `before_model`, because middleware may add tools, and before
+            // model resolution, because the resolver is the capability gate.
+            // An automatic structured response also needs this gate: its
+            // fallback may become a native schema tool after selection.
+            if matches!(self.policy.tool_dialect, crate::config::ToolDispatcher::Native)
+                && (!request.tools.is_empty()
+                    || matches!(request.response_format, Some(ResponseFormat::Auto { .. })))
+            {
+                request
+                    .required_capabilities
+                    .get_or_insert_default()
+                    .tool_calling = true;
+            }
+
             // Safe checkpoint: a control requested from `before_model_control`
             // (for example `BudgetMiddleware` finding the budget already
             // exhausted) is honored **before** the model is actually
@@ -873,6 +889,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            let request_has_tools = !request.tools.is_empty();
+            let dialect =
+                super::dialect::RunDialect::resolve(self.policy.tool_dialect, &request.tools);
+            let forced_text_dialect = dialect.is_text();
+            let recovery = super::dialect::TextRecovery {
+                offered: std::sync::Arc::new(request.tools.clone()),
+                registry: dialect.registry_for(&request.tools),
+            };
+            dialect.apply_to_request(&mut request);
+
             // A host budget is acquired only for an explicit host-driven run.
             // Do it after structured-output planning: a synthetic schema tool
             // is part of the provider request and must be included in its
@@ -926,16 +952,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             } else {
                 None
             };
-            let request_has_tools = !request.tools.is_empty();
-            let dialect =
-                super::dialect::RunDialect::resolve(self.policy.tool_dialect, &request.tools);
-            let forced_text_dialect = dialect.is_text();
-            let recovery = super::dialect::TextRecovery {
-                offered: std::sync::Arc::new(request.tools.clone()),
-                registry: dialect.registry_for(&request.tools),
-            };
-            dialect.apply_to_request(&mut request);
-
             let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
             status.mark_running(HarnessPhase::Model);
             status.active_model_call = Some(call_id.clone());
