@@ -411,7 +411,7 @@ where
             };
             active.push(Activation {
                 node,
-                send_arg: input.payload,
+                send_arg: input.payload.map(Arc::new),
                 task_id: TaskId::from(String::new()),
             });
         }
