@@ -11,9 +11,10 @@
 //!
 //! - [`SubAgent`] wraps an [`AgentHarness`] and runs it as a *child run* one
 //!   level deeper in the recursion tree than its caller.
-//! - [`SubAgentTool`] adapts a [`SubAgent`] into a typed
-//!   [`ToolDispatch`] so a parent agent can invoke another agent with its live
-//!   run context.
+//! - [`SubAgentTool`] adapts a [`SubAgent`] into a typed [`ToolDispatch`] that
+//!   returns a job id immediately while the child continues in the background.
+//! - [`SubAgentJobsTool`] and [`SubAgentMessageTool`] let the host or parent
+//!   query those jobs and steer live children by job id.
 //! - [`SubAgentSession`] keeps a single [`SubAgent`] alive across multiple
 //!   turns, *reusing* the same harness while accumulating the conversation
 //!   transcript — the post-completion, human-in-the-loop reuse primitive.
@@ -26,8 +27,8 @@
 //! - **Reuse** ([`SubAgentSession`]): the child run *completes*, the
 //!   orchestrator obtains human input, then calls the **same** sub-agent again
 //!   carrying the prior transcript. Nothing is killed or restarted.
-//! - **Steering** ([`crate::steering`]): an orchestrator/human injects
-//!   commands into a **still-running** agent at safe checkpoints.
+//! - **Steering** ([`SubAgentMessageTool`]): an orchestrator or human sends a
+//!   message to a **still-running** job. Delivery occurs at a safe checkpoint.
 //!
 //! `SubAgentSession` implements the first. The flow is:
 //!
@@ -47,9 +48,9 @@
 //! Every run carries a `depth` in its [`RunConfig`] (top-level runs are depth
 //! `0`). When a sub-agent is invoked at `parent_depth`, its child run is created
 //! at `parent_depth + 1`. The depth cap is
-//! [`RunLimits::max_depth`][crate::limits::RunLimits::max_depth]
-//! (default [`RunLimits::DEFAULT_MAX_DEPTH`][crate::limits::RunLimits::DEFAULT_MAX_DEPTH],
-//! i.e. `8`), read from the child harness's [`RunPolicy`][crate::runtime::RunPolicy].
+//! [`RunLimits::max_depth`][tinyagents_harness::limits::RunLimits::max_depth]
+//! (default [`RunLimits::DEFAULT_MAX_DEPTH`][tinyagents_harness::limits::RunLimits::DEFAULT_MAX_DEPTH],
+//! i.e. `8`), read from the child harness's [`RunPolicy`][tinyagents_harness::runtime::RunPolicy].
 //! If the child depth would exceed the cap, the invocation fails fast with
 //! [`TinyAgentsError::SubAgentDepth`] *before* any model call — a deterministic,
 //! cheap guard against unbounded recursion.
@@ -70,8 +71,12 @@
 //!   typed-parent dispatcher).
 //! - `test.rs` holds focused tests.
 
+mod jobs;
 mod types;
 
+pub use jobs::{
+    SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools, subagent_job_tools,
+};
 pub use types::*;
 
 use std::sync::Arc;
@@ -79,13 +84,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::context::{RunConfig, RunContext};
-use crate::error::{Result, TinyAgentsError};
-use crate::events::{AgentEvent, EventSink};
-use crate::ids::{ThreadId, next_seq};
-use crate::middleware::AgentRun;
-use crate::runtime::AgentHarness;
-use crate::tool::ToolDispatch;
+use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::events::{AgentEvent, EventSink};
+use tinyagents_harness::ids::{ThreadId, next_seq};
+use tinyagents_harness::middleware::AgentRun;
+use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 
 impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
@@ -228,7 +233,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         // bound makes the invocation authority type-safe. Falling through to
         // the explicit loop here would discard the parent's definition and
         // approval authority, so reject it before constructing a child.
-        if parent.host_authority.is_some() {
+        if parent.is_hosted() {
             return Err(TinyAgentsError::Validation(
                 "hosted parent delegation requires invoke_hosted_in_parent".into(),
             ));
@@ -305,7 +310,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         parent: &RunContext<Ctx>,
         input: impl Into<String>,
     ) -> Result<AgentRun> {
-        if parent.host_authority.is_none() {
+        if !parent.is_hosted() {
             return Err(TinyAgentsError::Validation(
                 "hosted subagent invocation requires parent host authority".into(),
             ));
@@ -330,61 +335,27 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         input: String,
         streaming: bool,
     ) -> Result<AgentRun> {
+        if !ctx.is_hosted() {
+            return self.run_child(state, ctx, input, streaming).await;
+        }
         let depth = ctx.depth();
         let messages = self.seed_messages(input.clone());
-        let binding = crate::runtime::host_invocation_binding::<State, Ctx>(&ctx)?;
-        let Some(binding) = binding else {
-            return self.run_child(state, ctx, input, streaming).await;
-        };
-        let parent_agent = ctx.host_agent_id.as_deref().ok_or_else(|| {
-            TinyAgentsError::Validation(
-                "hosted parent delegation is missing its parent agent identity".into(),
-            )
-        })?;
-        let delegates = binding
-            .host
-            .definitions
-            .delegates_for(parent_agent)
-            .await
-            .map_err(|error| {
-                TinyAgentsError::Validation(format!(
-                    "delegate authorization lookup failed: {error}"
-                ))
-            })?;
-        if !delegates.iter().any(|delegate| delegate == &self.name) {
-            return Err(TinyAgentsError::Validation(format!(
-                "agent `{parent_agent}` is not authorized to delegate to `{}`",
-                self.name
-            )));
-        }
-        let runtime = binding.runtime.clone().ok_or_else(|| {
-            TinyAgentsError::Validation(
-                "hosted subagent invocation is missing its parent runtime overlay".into(),
-            )
-        })?;
-
         let events = ctx.events.clone();
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
         });
-        let invocation = crate::runtime::AgentInvocation::from_shared_host(
-            binding.host.clone(),
-            crate::runtime::AgentTurnRequest::new(self.name.clone(), messages),
-            ctx,
-            Some(runtime),
-        );
-        // A hosted parent always re-enters through this exact capability
-        // bundle. The child harness supplies durable mechanics only; it cannot
-        // select an alternate host authority.
-        let run = if streaming {
-            self.harness
-                .invoke_agent_streaming_with_capabilities(invocation, state)
-                .await?
-        } else {
-            self.harness
-                .invoke_agent_with_capabilities(invocation, state)
-                .await?
+        let run = match self
+            .harness
+            .invoke_authorized_child(state, ctx, self.name.clone(), messages, streaming)
+            .await?
+        {
+            Some(run) => run,
+            None => {
+                return Err(TinyAgentsError::Validation(
+                    "hosted child invocation lost its parent authority".into(),
+                ));
+            }
         };
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
@@ -554,7 +525,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
     }
 }
 
-impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<State, Ctx> {
+impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<State, Ctx> {
     /// Default JSON Schema for a sub-agent tool: an object with one required
     /// string field named [`SUBAGENT_INPUT_FIELD`].
     fn default_parameters() -> Value {
@@ -581,7 +552,19 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
             tool_name,
             child_data,
             parameters: Self::default_parameters(),
+            jobs: SubAgentJobRegistry::new(),
         }
+    }
+
+    /// Uses a host-shared registry for spawned jobs and control tools.
+    pub fn with_job_registry(mut self, jobs: SubAgentJobRegistry) -> Self {
+        self.jobs = jobs;
+        self
+    }
+
+    /// Returns the registry that owns jobs spawned by this tool.
+    pub fn job_registry(&self) -> &SubAgentJobRegistry {
+        &self.jobs
     }
 
     /// Overrides the model-visible tool name.
@@ -612,7 +595,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
         }
     }
 
-    /// Invokes this sub-agent from the actual parent [`RunContext`].
+    /// Spawns this sub-agent from the actual parent [`RunContext`].
     ///
     /// This is the agent-native recursive-tool boundary.  It is intentionally
     /// separate from `tinytools::Tool`: TinyTools only receives the narrow
@@ -625,7 +608,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
         &self,
         state: &State,
         args: Value,
-        options: tinytools::ToolCallOptions,
+        _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> Result<tinytools::ToolResult> {
         let input = Self::extract_input(&args);
@@ -653,41 +636,32 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentTool<Stat
             }
             Err(error) => return Err(error),
         };
-        let run = match self
-            .subagent
-            .run_hosted_child(state, child, input, parent.streaming)
-            .await
-        {
-            Ok(run) => run,
-            Err(error) => {
-                if matches!(
-                    error,
-                    TinyAgentsError::LimitExceeded(_)
-                        | TinyAgentsError::Timeout(_)
-                        | TinyAgentsError::SubAgentDepth(_)
-                ) {
-                    return Ok(tinytools::ToolResult::error(format!(
-                        "Sub-agent `{}` stopped before completing because it hit a configured run limit: {error}. The parent orchestrator should treat this as a delegated-agent limit signal, not a completed answer.",
-                        self.tool_name
-                    )));
-                }
-                return Err(error);
-            }
-        };
-        let text = run.text().unwrap_or_default();
-        let result = tinytools::ToolResult::success(text);
-        Ok(if options.prefer_markdown {
-            result.with_markdown(run.text().unwrap_or_default())
-        } else {
-            result
-        })
+        let (job_id, steering) = self.jobs.create(&self.tool_name);
+        let child = child.with_steering(steering);
+        let jobs = self.jobs.clone();
+        let task_job_id = job_id.clone();
+        let subagent = self.subagent.clone();
+        let owned_state = state.clone();
+        let streaming = parent.streaming;
+        tokio::spawn(async move {
+            jobs.mark_running(&task_job_id);
+            let result = subagent
+                .run_hosted_child(&owned_state, child, input, streaming)
+                .await;
+            jobs.mark_result(&task_job_id, result);
+        });
+
+        Ok(tinytools::ToolResult::json(json!({
+            "job_id": job_id,
+            "status": "queued"
+        })))
     }
 }
 
 #[async_trait]
 impl<State, Ctx> ToolDispatch<State, Ctx> for SubAgentTool<State, Ctx>
 where
-    State: Send + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
@@ -698,8 +672,8 @@ where
         })
     }
 
-    fn output_origin(&self) -> crate::host::ContentOrigin {
-        crate::host::ContentOrigin::Agent
+    fn output_origin(&self) -> tinyagents_harness::host::ContentOrigin {
+        tinyagents_harness::host::ContentOrigin::Agent
     }
 
     async fn execute(
@@ -719,7 +693,7 @@ where
 ///
 /// Calling it through `tinytools::Tool` directly is refused because that trait
 /// intentionally lacks the parent `RunContext`; register the enclosing
-/// [`SubAgentTool`] with [`crate::tool::ToolRegistry::register_dispatch`].
+/// [`SubAgentTool`] with [`tinyagents_harness::tool::ToolRegistry::register_dispatch`].
 struct SubAgentToolDeclaration {
     name: String,
     description: String,

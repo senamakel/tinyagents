@@ -16,14 +16,12 @@
 async fn live_openai_parent_composes_child_subagent() {
     use std::sync::Arc;
 
-    use tinyagents_graph::*;
     use tinyagents_harness::context::{RunConfig, RunContext};
     use tinyagents_harness::runtime::AgentHarness;
-    use tinyagents_harness::subagent::ChildDataPolicy;
     use tinyagents_harness::testkit::{EventRecorder, Trajectory};
-    use tinyagents_harness::*;
-    use tinyagents_language::*;
-    use tinyagents_registry::*;
+    use tinyagents_orchestration::subagent::{
+        ChildDataPolicy, SubAgent, SubAgentTool, subagent_job_tools,
+    };
     use tinyinference_llm::message::Message;
     use tinyinference_llm::providers::openai::OpenAiModel;
 
@@ -57,10 +55,14 @@ async fn live_openai_parent_composes_child_subagent() {
         subagent,
         ChildDataPolicy::new(|parent: &()| *parent),
     ));
+    let jobs = tool.job_registry().clone();
 
     // Parent agent: also a real model, equipped with the sub-agent as a tool.
     let mut parent: AgentHarness<()> = AgentHarness::new();
     parent.register_tool_dispatch(tool);
+    for job_tool in subagent_job_tools(jobs.clone()) {
+        parent.register_tool(job_tool);
+    }
     parent
         .register_model(
             "openai",
@@ -76,8 +78,8 @@ async fn live_openai_parent_composes_child_subagent() {
             &(),
             ctx,
             vec![Message::user(
-                "Use the math_expert tool to compute 17 * 23, then state the result in a short \
-                 sentence.",
+                "Start math_expert to compute 17 * 23. Use subagent_jobs with its job_id until \
+                 it completes, then state the result in a short sentence.",
             )],
         )
         .await
@@ -103,5 +105,18 @@ async fn live_openai_parent_composes_child_subagent() {
             run.tool_calls >= 1,
             "a recorded sub-agent tool call should be reflected in run.tool_calls"
         );
+        let job = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                if let Some(job) = jobs.list().into_iter().next()
+                    && job.status.is_terminal()
+                {
+                    return job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("live math subagent job finishes within two minutes");
+        assert!(job.output.is_some(), "completed math job has output");
     }
 }

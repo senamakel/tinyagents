@@ -16,8 +16,8 @@
 //!    menu and decides, via structured output, **which** registered sub-agents
 //!    to invoke. It returns a list of names.
 //! 4. **Bind at runtime.** Each chosen name is resolved from the registry with
-//!    [`CapabilityRegistry::tool`], run (in parallel via `join_all`), and the
-//!    results are composed into a final answer.
+//!    [`CapabilityRegistry::tool`] and spawned in parallel. Each spawn returns
+//!    a job id; the registry is queried until the results can be composed.
 //!
 //! Capabilities are therefore *named, discovered, and bound at runtime* — the
 //! orchestrator never holds a direct handle to any sub-agent; it only knows
@@ -39,15 +39,14 @@ use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::tool::ToolDispatch;
-use tinyagents_harness::*;
-use tinyagents_language::*;
+use tinyagents_orchestration::subagent::{
+    ChildDataPolicy, SubAgent, SubAgentJobRegistry, SubAgentTool,
+};
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ResponseFormat};
 use tinyinference_llm::providers::openai::OpenAiModel;
-use tinyinference_llm::tool::ToolCall;
 
 /// A specialized sub-agent's static identity.
 struct AgentSpec {
@@ -80,7 +79,11 @@ const SPECIALISTS: &[AgentSpec] = &[
 
 /// Builds a [`SubAgentTool`] wrapping a [`SubAgent`] over the shared OpenAI
 /// model with the spec's distinct system prompt.
-fn build_specialist(spec: &AgentSpec, model: Arc<dyn ChatModel<()>>) -> SubAgentTool<()> {
+fn build_specialist(
+    spec: &AgentSpec,
+    model: Arc<dyn ChatModel<()>>,
+    jobs: SubAgentJobRegistry,
+) -> SubAgentTool<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
         .register_model("model", model)
@@ -91,6 +94,7 @@ fn build_specialist(spec: &AgentSpec, model: Arc<dyn ChatModel<()>>) -> SubAgent
         Arc::new(subagent),
         ChildDataPolicy::new(|parent: &()| *parent),
     )
+    .with_job_registry(jobs)
 }
 
 /// Reads the `{ "agents": [..] }` selection out of an [`AgentRun`], preferring
@@ -122,8 +126,9 @@ async fn main() -> Result<()> {
     // 1. Register every specialist sub-agent by name in the capability registry.
     let mut registry: CapabilityRegistry<()> = CapabilityRegistry::new();
     let mut dispatches: HashMap<String, Arc<SubAgentTool<()>>> = HashMap::new();
+    let jobs = SubAgentJobRegistry::new();
     for spec in SPECIALISTS {
-        let dispatch = Arc::new(build_specialist(spec, model.clone()));
+        let dispatch = Arc::new(build_specialist(spec, model.clone(), jobs.clone()));
         registry.register_tool(dispatch.tool())?;
         dispatches.insert(spec.name.to_owned(), dispatch);
     }
@@ -202,8 +207,7 @@ async fn main() -> Result<()> {
     }
     println!("orchestrator chose: {chosen:?}\n");
 
-    // 4. Bind at runtime: resolve each chosen name from the registry and run the
-    //    resolved sub-agents in parallel.
+    // 4. Bind at runtime: resolve each chosen name and spawn its sub-agent job.
     let runs = chosen.iter().enumerate().map(|(i, name)| {
         let dispatch = dispatches
             .get(name)
@@ -220,10 +224,39 @@ async fn main() -> Result<()> {
                     &parent,
                 )
                 .await?;
-            Ok::<(String, String), tinyagents_harness::TinyAgentsError>((name, result.output()))
+            let job_id = serde_json::from_str::<Value>(&result.output())?
+                .get("job_id")
+                .and_then(Value::as_str)
+                .expect("spawn result contains a job id")
+                .to_owned();
+            Ok::<(String, String), tinyagents_harness::TinyAgentsError>((name, job_id))
         }
     });
-    let outputs: Vec<(String, String)> = join_all(runs).await.into_iter().collect::<Result<_>>()?;
+    let spawned: Vec<(String, String)> = join_all(runs).await.into_iter().collect::<Result<_>>()?;
+    let outputs = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            let completed = spawned
+                .iter()
+                .filter_map(|(name, job_id)| {
+                    let job = jobs.get(job_id)?;
+                    job.status.is_terminal().then(|| {
+                        (
+                            name.clone(),
+                            job.output
+                                .or(job.error)
+                                .unwrap_or_else(|| "no output".into()),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            if completed.len() == spawned.len() {
+                return completed;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("subagent jobs finish within two minutes");
 
     for (name, text) in &outputs {
         println!("── {name} ──\n{text}\n");

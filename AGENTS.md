@@ -8,7 +8,9 @@ that owns an API. The public packages are `crates/tinyagents-graph/` (durable
 typed state graphs), `crates/tinyagents-harness/` (provider-neutral model
 calls, tools, middleware, and streaming), `crates/tinyagents-language/` (the
 declarative `.rag` blueprint format), `crates/tinyagents-registry/` (the named
-capability catalog), and `crates/tinyagents-session/` (durable session data).
+capability catalog), `crates/tinyagents-session/` (durable session data), and
+`crates/tinyagents-orchestration/` (direct and durable subagent invocation,
+tools, sessions, lifecycle logic, and focused tests).
 `crates/tinyagents-tracing/` supplies shared opt-in tracing macros, while
 `crates/tinyagents-integration-tests/` owns cross-crate tests and examples.
 
@@ -25,9 +27,10 @@ Cargo features are package-local. `tinyagents-harness` exposes `sqlite`,
 compiled out by default.
 
 Integration tests are in `crates/tinyagents-integration-tests/tests/`, covering serialization, graph routing,
-registry binding, the expressive language, streaming, subagents,
+registry binding, the expressive language, streaming,
 and provider contracts (including live, network-gated tests such as
-`tests/live_*.rs`). Runnable usage examples are in
+`tests/live_*.rs`). Subagent-specific E2E and live tests live with their owner
+in `crates/tinyagents-orchestration/tests/`. Runnable usage examples are in
 `crates/tinyagents-integration-tests/examples/`, especially `basic_graph.rs`.
 Design notes and module-level specifications live
 in `docs/`, with `docs/spec/README.md` as the top-level architecture

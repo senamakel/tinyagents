@@ -199,7 +199,7 @@ impl RunConfig {
     /// Sets this run's depth in the sub-agent / recursion tree.
     ///
     /// Top-level runs are depth `0`; child runs spawned by a
-    /// [`crate::subagent::SubAgent`] carry the parent depth plus one.
+    /// Subagents in `tinyagents-orchestration` carry the parent depth plus one.
     pub fn with_depth(mut self, depth: usize) -> Self {
         self.lineage.depth = depth;
         self
@@ -226,7 +226,7 @@ impl RunConfig {
     /// The single source of truth for the sub-agent depth guard: returns
     /// `parent_depth + 1`, or [`crate::error::TinyAgentsError::SubAgentDepth`]
     /// carrying `max_depth` when the child would exceed the cap. Every recursion
-    /// surface — [`crate::subagent::SubAgent`], its reuse-session tool,
+    /// surface in `tinyagents-orchestration`, its reuse-session tool,
     /// and the REPL sub-run builtin — funnels its `depth + 1` check through here
     /// so the fail-closed guard cannot drift out of sync between them.
     pub fn checked_child_depth(parent_depth: usize, max_depth: usize) -> Result<usize> {
@@ -278,6 +278,13 @@ impl RunConfig {
 // ── RunContext ────────────────────────────────────────────────────────────────
 
 impl<Ctx> RunContext<Ctx> {
+    /// Whether this context carries a host-owned invocation authority.
+    ///
+    /// Orchestration layers use this to fail closed when a hosted parent is
+    /// sent through an explicit-model child entry point.
+    pub fn is_hosted(&self) -> bool {
+        self.host_authority.is_some()
+    }
     /// Builds a live run context from `config` and user `data`.
     ///
     /// A default [`StoreRegistry`] and [`EventSink`] are created, and a

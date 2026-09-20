@@ -144,10 +144,17 @@ inside a larger one.
 `tinyagents-harness` runs the model/tool agent loop: provider-neutral model
 calls, typed tool definitions, middleware, structured output, streaming,
 usage and cost accounting, retries and limits, response caching, memory, and
-a testkit for exercising the loop without a live provider. An agent can be
-wrapped as a tool and handed to another agent (`SubAgent` /
-`SubAgentSession` / `SubAgentTool`), which is how multi-agent orchestration
-is composed — plain function composition, not a distinct execution mode.
+a testkit for exercising the loop without a live provider.
+
+## Subagent orchestration
+
+`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` starts
+a child in the background and returns a stable job id immediately;
+`SubAgentJobsTool` queries job status/results and `SubAgentMessageTool` sends
+messages to a live job. `SubAgentSession` covers retained post-completion
+conversations, while `SubagentDriver` coordinates durable lifecycle
+preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
+are intentionally outside this focused crate.
 
 ## Session runtime
 

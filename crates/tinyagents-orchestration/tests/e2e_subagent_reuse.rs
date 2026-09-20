@@ -13,12 +13,9 @@
 
 use std::sync::Arc;
 
-use tinyagents_graph::*;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
-use tinyagents_harness::*;
-use tinyagents_language::*;
-use tinyagents_registry::*;
+use tinyagents_orchestration::subagent::{SubAgent, SubAgentSession};
 use tinyinference_llm::message::Message;
 
 #[tokio::test]

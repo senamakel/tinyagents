@@ -12,25 +12,21 @@
 //! [`TinyAgentsError::SubAgentDepth`] *before* any model call, both through the
 //! direct invoke path and through the tool path.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use async_trait::async_trait;
 use serde_json::json;
 
-use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::events::AgentEvent;
 use tinyagents_harness::limits::RunLimits;
-use tinyagents_harness::middleware::{Middleware, PromptCacheGuardMiddleware};
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, Trajectory};
-use tinyagents_harness::*;
-use tinyagents_language::*;
-use tinyagents_registry::*;
+use tinyagents_orchestration::subagent::{
+    ChildDataPolicy, SubAgent, SubAgentJobStatus, SubAgentTool,
+};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
-use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
+use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
 use tinyinference_llm::usage::Usage;
@@ -94,86 +90,6 @@ fn child_harness_with_max_depth(answer: &str, max_depth: usize) -> AgentHarness<
     harness
 }
 
-#[derive(Default)]
-struct StablePromptSegments;
-
-#[async_trait]
-impl Middleware<(), ()> for StablePromptSegments {
-    fn name(&self) -> &str {
-        "stable_prompt_segments"
-    }
-
-    async fn before_model(
-        &self,
-        _ctx: &mut RunContext<()>,
-        _state: &(),
-        request: &mut ModelRequest,
-    ) -> tinyagents_harness::Result<()> {
-        let mut segments = vec![PromptSegment {
-            id: "system".into(),
-            role: SegmentRole::System,
-            cacheable: true,
-        }];
-        if !request.tools.is_empty() {
-            segments.push(PromptSegment {
-                id: "tools".into(),
-                role: SegmentRole::Tools,
-                cacheable: true,
-            });
-        }
-        segments.push(PromptSegment {
-            id: "turn".into(),
-            role: SegmentRole::Volatile,
-            cacheable: false,
-        });
-        request.cache_segments = segments;
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct RequestProbe {
-    max_tokens: Mutex<Vec<Option<u32>>>,
-    stable_prefixes: Mutex<Vec<Vec<String>>>,
-}
-
-impl RequestProbe {
-    fn max_tokens(&self) -> Vec<Option<u32>> {
-        self.max_tokens.lock().expect("max_tokens mutex").clone()
-    }
-
-    fn stable_prefixes(&self) -> Vec<Vec<String>> {
-        self.stable_prefixes
-            .lock()
-            .expect("stable_prefixes mutex")
-            .clone()
-    }
-}
-
-#[async_trait]
-impl Middleware<(), ()> for RequestProbe {
-    fn name(&self) -> &str {
-        "request_probe"
-    }
-
-    async fn before_model(
-        &self,
-        _ctx: &mut RunContext<()>,
-        _state: &(),
-        request: &mut ModelRequest,
-    ) -> tinyagents_harness::Result<()> {
-        self.max_tokens
-            .lock()
-            .expect("max_tokens mutex")
-            .push(request.max_tokens);
-        self.stable_prefixes
-            .lock()
-            .expect("stable_prefixes mutex")
-            .push(request.cacheable_prefix_ids());
-        Ok(())
-    }
-}
-
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -188,6 +104,7 @@ async fn parent_drives_subagent_and_composes_answer() {
         child,
         ChildDataPolicy::new(|parent: &()| *parent),
     ));
+    let jobs = tool.job_registry().clone();
 
     // Parent: first turn delegates to the sub-agent tool, second turn composes
     // the final answer.
@@ -219,15 +136,27 @@ async fn parent_drives_subagent_and_composes_answer() {
         Some("Based on the researcher: a systems language.".to_string())
     );
 
-    // The child's answer was woven into the parent transcript as a tool message.
-    let child_answer_present = run
-        .messages
-        .iter()
-        .any(|m| matches!(m, Message::Tool(_)) && m.text() == "RUST_IS_A_SYSTEMS_LANGUAGE");
-    assert!(
-        child_answer_present,
-        "the sub-agent's answer should appear as a tool result in the parent transcript"
-    );
+    // The tool result contains a stable job id rather than blocking for output.
+    let job_id = jobs
+        .list()
+        .into_iter()
+        .next()
+        .expect("the subagent tool registers one job")
+        .id
+        .to_string();
+    let job = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let job = jobs.get(&job_id).expect("job is registered");
+            if job.status.is_terminal() {
+                break job;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("job completes");
+    assert_eq!(job.status, SubAgentJobStatus::Completed);
+    assert_eq!(job.output.as_deref(), Some("RUST_IS_A_SYSTEMS_LANGUAGE"));
 
     // Trajectory assertion: the sub-agent (exposed as the `researcher` tool)
     // really ran, and the run completed cleanly.
@@ -289,139 +218,6 @@ async fn child_subagents_derive_unique_thread_ids_from_parent_thread() {
             !thread.contains('/'),
             "child thread id should not use slash separators: {thread}"
         );
-    }
-}
-
-#[tokio::test]
-async fn nested_subagent_turns_preserve_kv_layout_thread_lineage_and_output_cap() {
-    let researcher_guard = Arc::new(PromptCacheGuardMiddleware::new());
-    let researcher_probe = Arc::new(RequestProbe::default());
-    let mut researcher_harness: AgentHarness<()> = AgentHarness::new();
-    researcher_harness
-        .register_model(
-            "researcher-model",
-            Arc::new(MockModel::constant("research-result")),
-        )
-        .push_middleware(Arc::new(StablePromptSegments))
-        .push_middleware(researcher_guard.clone())
-        .push_middleware(researcher_probe.clone());
-    let researcher = Arc::new(SubAgent::new(
-        "researcher",
-        "answers research questions",
-        Arc::new(researcher_harness),
-    ));
-
-    let worker_probe = Arc::new(RequestProbe::default());
-    let mut worker_harness: AgentHarness<()> = AgentHarness::new();
-    worker_harness
-        .register_tool_dispatch(Arc::new(SubAgentTool::new(
-            researcher,
-            ChildDataPolicy::new(|parent: &()| *parent),
-        )))
-        .register_model(
-            "worker-model",
-            Arc::new(MockModel::with_responses(vec![
-                tool_call_response("r1", "researcher", json!({ "input": "first fact" })),
-                text_response("worker returned first fact"),
-                tool_call_response("r2", "researcher", json!({ "input": "more data" })),
-                text_response("worker returned more data"),
-            ])),
-        )
-        .push_middleware(Arc::new(StablePromptSegments))
-        .push_middleware(worker_probe.clone());
-    let worker = Arc::new(SubAgent::new(
-        "worker",
-        "delegates research",
-        Arc::new(worker_harness),
-    ));
-
-    let orchestrator_probe = Arc::new(RequestProbe::default());
-    let mut orchestrator: AgentHarness<()> = AgentHarness::new();
-    orchestrator
-        .register_tool_dispatch(Arc::new(SubAgentTool::new(
-            worker,
-            ChildDataPolicy::new(|parent: &()| *parent),
-        )))
-        .register_model(
-            "orchestrator-model",
-            Arc::new(MockModel::with_responses(vec![
-                tool_call_response("w1", "worker", json!({ "input": "ask researcher" })),
-                tool_call_response("w2", "worker", json!({ "input": "ask for more" })),
-                text_response("orchestrator composed both research turns"),
-            ])),
-        )
-        .push_middleware(Arc::new(StablePromptSegments))
-        .push_middleware(orchestrator_probe.clone());
-
-    let recorder = EventRecorder::new();
-    let ctx = RunContext::new(
-        RunConfig::new("orchestrator-run")
-            .with_thread("root-thread")
-            .with_max_model_calls(4)
-            .with_max_tool_calls(4)
-            .with_max_turn_output_tokens(16),
-        (),
-    )
-    .with_events(recorder.sink());
-
-    let run = orchestrator
-        .invoke_in_context(&(), ctx, vec![Message::user("coordinate research")])
-        .await
-        .expect("nested orchestrator run succeeds");
-
-    assert_eq!(
-        run.text(),
-        Some("orchestrator composed both research turns".to_string())
-    );
-    assert_eq!(run.tool_calls, 2);
-
-    let researcher_prefixes = researcher_probe.stable_prefixes();
-    assert_eq!(researcher_prefixes, vec![vec!["system"], vec!["system"]]);
-    assert!(
-        researcher_guard.layout_events().is_empty(),
-        "researcher KV-cache stable prefix should stay aligned across turns"
-    );
-    assert_eq!(researcher_probe.max_tokens(), vec![Some(16), Some(16)]);
-    assert_eq!(
-        worker_probe.max_tokens(),
-        vec![Some(16), Some(16), Some(16), Some(16)]
-    );
-    assert_eq!(
-        orchestrator_probe.max_tokens(),
-        vec![Some(16), Some(16), Some(16)]
-    );
-
-    let child_threads: Vec<String> = recorder
-        .events()
-        .into_iter()
-        .filter_map(|event| match event {
-            AgentEvent::RunStarted {
-                thread_id: Some(thread_id),
-                ..
-            } if thread_id.as_str() != "root-thread" => Some(thread_id.to_string()),
-            _ => None,
-        })
-        .collect();
-    let worker_threads: Vec<&String> = child_threads
-        .iter()
-        .filter(|thread| {
-            thread.starts_with("root-thread-subagent-worker-d1-")
-                && !thread.contains("-subagent-researcher-d2-")
-        })
-        .collect();
-    let researcher_threads: Vec<&String> = child_threads
-        .iter()
-        .filter(|thread| thread.contains("-subagent-researcher-d2-"))
-        .collect();
-
-    assert_eq!(worker_threads.len(), 2);
-    assert_ne!(worker_threads[0], worker_threads[1]);
-    assert_eq!(researcher_threads.len(), 2);
-    assert_ne!(researcher_threads[0], researcher_threads[1]);
-    for thread in researcher_threads {
-        assert!(thread.starts_with("root-thread-subagent-worker-d1-"));
-        assert!(thread.contains("-subagent-researcher-d2-"));
-        assert!(!thread.contains('/'));
     }
 }
 

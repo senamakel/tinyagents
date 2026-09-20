@@ -1531,7 +1531,6 @@ dependencies = [
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-language",
- "tinyagents-orchestration",
  "tinyagents-registry",
  "tinyagents-session",
  "tinyinference-embeddings",
@@ -1555,18 +1554,20 @@ version = "2.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
- "chrono",
+ "dotenvy",
+ "futures",
  "parking_lot",
  "serde",
  "serde_json",
- "tempfile",
+ "thiserror",
+ "tinyagents-definition",
  "tinyagents-graph",
  "tinyagents-harness",
+ "tinyagents-registry",
  "tinyagents-runtime",
- "tinyagents-session",
  "tinyinference-llm",
+ "tinytools",
  "tokio",
- "uuid",
 ]
 
 [[package]]

@@ -3,20 +3,22 @@
 //! A [`SubAgent`] wraps an [`AgentHarness`] so it can be invoked as a *child
 //! run*: a fully independent agent loop that runs one level deeper in the
 //! recursion tree than its caller. [`SubAgentTool`] adapts a sub-agent into a
-//! typed [`crate::tool::ToolDispatch`] so a parent agent can call another agent
+//! typed [`tinyagents_harness::tool::ToolDispatch`] so a parent agent can call another agent
 //! through its live run context — the key agent-calling-agent compositional
 //! pattern.
 //!
 //! All public items are re-exported through [`super`] so callers import from
-//! `crate::subagent` directly. Implementations and tests live in the
+//! `tinyagents_orchestration::subagent` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 use serde_json::Value;
 
-use crate::events::EventSink;
-use crate::runtime::AgentHarness;
+use tinyagents_harness::events::EventSink;
+use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::steering::SteeringHandle;
 use tinyinference_llm::message::Message;
 
 /// The argument key a [`SubAgentTool`] reads the child input from.
@@ -29,7 +31,7 @@ pub const SUBAGENT_INPUT_FIELD: &str = "input";
 
 /// Typed policy that constructs a child's user data from its parent data.
 ///
-/// Recursive capabilities are inherited by [`RunContext::child`](crate::context::RunContext::child); this policy
+/// Recursive capabilities are inherited by [`RunContext::child`](tinyagents_harness::context::RunContext::child); this policy
 /// makes the separate application-data decision explicit instead of silently
 /// substituting `Default` or reaching for task-local state.
 #[derive(Clone)]
@@ -60,10 +62,10 @@ impl<Ctx> ChildDataPolicy<Ctx> {
 ///   message (the "fixed prompt template").
 ///
 /// Invoking a sub-agent always produces a *child run* one level deeper than the
-/// caller's depth. The harness's [`crate::limits::RunLimits::max_depth`]
+/// caller's depth. The harness's [`tinyagents_harness::limits::RunLimits::max_depth`]
 /// cap bounds how deep nested sub-agents may recurse; an invocation whose child
 /// depth would exceed the cap fails with
-/// [`crate::error::TinyAgentsError::SubAgentDepth`].
+/// [`tinyagents_harness::error::TinyAgentsError::SubAgentDepth`].
 ///
 /// `SubAgent` is cheap to clone-share via `Arc`; wrap it in an `Arc` to expose
 /// the same child agent through several [`SubAgentTool`]s.
@@ -93,7 +95,7 @@ pub struct SubAgent<State: Send + Sync, Ctx: Send + Sync = ()> {
 /// 1. `send` the first input (e.g. a user question). The session appends it to
 ///    the retained transcript, runs the sub-agent over the full transcript, and
 ///    folds the resulting assistant (and any tool) messages back in.
-/// 2. Inspect the returned [`AgentRun`](crate::middleware::AgentRun) and obtain human input out-of-band.
+/// 2. Inspect the returned [`AgentRun`](tinyagents_harness::middleware::AgentRun) and obtain human input out-of-band.
 /// 3. Wrap that human input as a [`Message::user`] and `send` it again. Because
 ///    the prior turn's messages are still in the transcript, the sub-agent
 ///    answers *with full context* — without being killed and restarted.
@@ -102,9 +104,9 @@ pub struct SubAgent<State: Send + Sync, Ctx: Send + Sync = ()> {
 /// (alongside the usual [`SubAgentStarted`][started]/[`SubAgentCompleted`][completed]
 /// bracket) so reuse is observable in the event stream.
 ///
-/// [reused]: crate::events::AgentEvent::SubAgentReused
-/// [started]: crate::events::AgentEvent::SubAgentStarted
-/// [completed]: crate::events::AgentEvent::SubAgentCompleted
+/// [reused]: tinyagents_harness::events::AgentEvent::SubAgentReused
+/// [started]: tinyagents_harness::events::AgentEvent::SubAgentStarted
+/// [completed]: tinyagents_harness::events::AgentEvent::SubAgentCompleted
 pub struct SubAgentSession<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// The reused child agent. The same `Arc` is shared across every send, so
     /// the underlying harness is never reconstructed.
@@ -127,14 +129,15 @@ pub struct SubAgentSession<State: Send + Sync, Ctx: Send + Sync = ()> {
 /// A typed-parent dispatcher that exposes a [`SubAgent`] to a parent agent —
 /// the surface that turns "agents calling agents" into an ordinary tool call.
 ///
-/// When the parent model calls this tool, [`SubAgentTool`] runs the wrapped
-/// sub-agent as a child run and returns the child's final assistant text as the
-/// [`tinytools::ToolResult`]
-/// content. This makes an entire agent composable as a single tool call, so a
-/// model orchestrating tools is, transparently, a model orchestrating models.
+/// When the parent model calls this tool, [`SubAgentTool`] spawns the wrapped
+/// sub-agent as a background child run and immediately returns a
+/// [`SubAgentJobId`]. It never waits for the child's final answer. Hosts share
+/// the tool's [`SubAgentJobRegistry`] with [`super::SubAgentJobsTool`] and
+/// [`super::SubAgentMessageTool`] so callers can query completion or inject a message
+/// at the child's next steering checkpoint.
 ///
-/// Register this with [`crate::tool::ToolRegistry::register_dispatch`]. The
-/// agent loop calls it with the live parent [`crate::context::RunContext`], so
+/// Register this with [`tinyagents_harness::tool::ToolRegistry::register_dispatch`]. The
+/// agent loop calls it with the live parent [`tinyagents_harness::context::RunContext`], so
 /// its depth, cancellation, events, stores, workspace, steering, and streaming
 /// state are inherited by the child. [`ChildDataPolicy`] makes the separate
 /// application-data decision explicit.
@@ -147,4 +150,90 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) child_data: ChildDataPolicy<Ctx>,
     /// JSON Schema describing the tool's model-visible arguments.
     pub(crate) parameters: Value,
+    /// Shared registry that owns asynchronous child-job state and controls.
+    pub(crate) jobs: SubAgentJobRegistry,
+}
+
+/// Stable identifier returned immediately when a subagent job is spawned.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct SubAgentJobId(pub(crate) String);
+
+impl SubAgentJobId {
+    /// Returns the host-safe identifier string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SubAgentJobId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Observable lifecycle state of an asynchronous subagent job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentJobStatus {
+    /// Accepted and waiting for its Tokio task to begin polling.
+    Queued,
+    /// The child agent loop is executing.
+    Running,
+    /// The child completed successfully.
+    Completed,
+    /// The child failed.
+    Failed,
+    /// The child observed cooperative cancellation.
+    Cancelled,
+}
+
+impl SubAgentJobStatus {
+    /// Whether no further execution transition can occur.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+/// Host-queryable snapshot of one asynchronous subagent job.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SubAgentJob {
+    /// Stable job identifier returned by the spawning tool.
+    pub id: SubAgentJobId,
+    /// Named subagent executing the work.
+    pub agent: String,
+    /// Current lifecycle status.
+    pub status: SubAgentJobStatus,
+    /// Latest successful assistant text, once completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// Host-safe failure text, once failed or cancelled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Shared registry behind asynchronous subagent spawning and host controls.
+#[derive(Clone, Default)]
+pub struct SubAgentJobRegistry {
+    pub(crate) inner: Arc<RwLock<HashMap<SubAgentJobId, SubAgentJobEntry>>>,
+}
+
+pub(crate) struct SubAgentJobEntry {
+    pub(crate) job: SubAgentJob,
+    pub(crate) steering: SteeringHandle,
+}
+
+/// Error returned by job lookup or live-message delivery.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SubAgentJobError {
+    /// No job exists for the supplied id.
+    #[error("unknown subagent job `{0}`")]
+    NotFound(String),
+    /// Messages can only be sent while a job is queued or running.
+    #[error("subagent job `{job_id}` is already {status:?}")]
+    Terminal {
+        /// Target job id.
+        job_id: String,
+        /// Terminal status observed by the registry.
+        status: SubAgentJobStatus,
+    },
 }

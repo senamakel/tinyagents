@@ -15,10 +15,10 @@
 async fn live_openai_subagent_surfaces_tool_failure() {
     use std::sync::Arc;
 
-    use tinyagents_harness::SubAgent;
     use tinyagents_harness::error::TinyAgentsError;
     use tinyagents_harness::runtime::AgentHarness;
     use tinyagents_harness::testkit::FakeTool;
+    use tinyagents_orchestration::subagent::SubAgent;
     use tinyinference_llm::providers::openai::OpenAiModel;
 
     let _ = dotenvy::dotenv();

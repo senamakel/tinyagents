@@ -14,10 +14,10 @@
 async fn live_openai_subagent_times_out_on_tiny_budget() {
     use std::sync::Arc;
 
-    use tinyagents_harness::SubAgent;
     use tinyagents_harness::error::TinyAgentsError;
     use tinyagents_harness::limits::RunLimits;
     use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+    use tinyagents_orchestration::subagent::SubAgent;
     use tinyinference_llm::providers::openai::OpenAiModel;
 
     let _ = dotenvy::dotenv();
