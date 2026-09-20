@@ -149,10 +149,11 @@ impl NodeFactory<TraceState> for TraceFactory {
         let name = spec.name.clone();
         let routing = spec.routing.clone();
         Ok(Arc::new(
-            move |mut state: TraceState, _ctx: NodeContext| -> NodeFuture<TraceState> {
+            move |state: Arc<TraceState>, _ctx: NodeContext| -> NodeFuture<TraceState> {
                 let name = name.clone();
                 let routing = routing.clone();
                 Box::pin(async move {
+                    let mut state = (*state).clone();
                     state.trail.push(name.clone());
                     let result = match &routing {
                         // Static edges (Next/Terminal) route these.
