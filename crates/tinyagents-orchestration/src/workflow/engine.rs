@@ -396,6 +396,16 @@ where
         self
     }
 
+    /// Opts a specific engine instance into (`true`) or out of (`false`) the
+    /// lowered graph path, overriding [`Self::new`]'s feature-gated default
+    /// (`true`). Only available when the `graph-workflows` feature is
+    /// enabled — see [`Self::drive`].
+    #[cfg(feature = "graph-workflows")]
+    pub fn with_graph_execution(mut self, enabled: bool) -> Self {
+        self.use_graph = enabled;
+        self
+    }
+
     /// Runs one blocking `WorkflowStore` call on the blocking-task pool
     /// instead of on the calling tokio worker thread.
     ///
@@ -404,7 +414,7 @@ where
     /// directly from `async fn`s. Every such call in this file is routed
     /// through here so the DB round-trip never occupies a worker thread that
     /// other, unrelated async tasks on this runtime need to make progress.
-    async fn store_op<T, F>(&self, f: F) -> Result<T, OrchestrationError>
+    pub(crate) async fn store_op<T, F>(&self, f: F) -> Result<T, OrchestrationError>
     where
         T: Send + 'static,
         F: FnOnce(&S) -> Result<T, OrchestrationError> + Send + 'static,
