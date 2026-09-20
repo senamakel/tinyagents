@@ -51,7 +51,8 @@ pub struct ProcessProfile {
     /// Total CPU time divided by wall time. One saturated core is 100%; a
     /// multi-threaded workload may exceed 100%.
     pub cpu_utilization_percent: Option<f64>,
-    /// Number of RSS samples taken, including the initial sample.
+    /// Number of successful RSS samples taken, including the initial sample
+    /// when RSS is available.
     pub sample_count: u64,
 }
 
@@ -80,7 +81,7 @@ impl ProcessProfiler {
         let shared = Arc::new(SharedSamples {
             running: AtomicBool::new(true),
             peak_rss_bytes: AtomicU64::new(initial.rss_bytes.unwrap_or(0)),
-            sample_count: AtomicU64::new(1),
+            sample_count: AtomicU64::new(initial.rss_bytes.is_some() as u64),
         });
         let worker = Arc::clone(&shared);
         let interval = sample_interval.max(Duration::from_millis(1));
@@ -158,8 +159,8 @@ fn elapsed_us(start: Option<u64>, end: Option<u64>) -> Option<u64> {
 fn sample_rss(samples: &SharedSamples) {
     if let Some(rss) = current_rss_bytes() {
         samples.peak_rss_bytes.fetch_max(rss, Ordering::Relaxed);
+        samples.sample_count.fetch_add(1, Ordering::Relaxed);
     }
-    samples.sample_count.fetch_add(1, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "linux")]
