@@ -210,11 +210,11 @@ pub struct WorkflowEngine<S, E> {
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
 
 pub(crate) struct PersistRequest {
-    phase_states: Value,
-    child_run_ids: Vec<String>,
-    status: WorkflowRunStatus,
-    summary: Option<String>,
-    terminal: bool,
+    pub(crate) phase_states: Value,
+    pub(crate) child_run_ids: Vec<String>,
+    pub(crate) status: WorkflowRunStatus,
+    pub(crate) summary: Option<String>,
+    pub(crate) terminal: bool,
 }
 
 pub(crate) struct PhaseRegistration<S: WorkflowStore> {
