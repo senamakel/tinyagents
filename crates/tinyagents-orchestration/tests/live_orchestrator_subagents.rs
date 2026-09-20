@@ -26,17 +26,16 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
     use futures::future::join_all;
     use serde_json::{Value, json};
 
-    use tinyagents_graph::*;
     use tinyagents_harness::middleware::AgentRun;
     use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-    use tinyagents_harness::subagent::ChildDataPolicy;
     use tinyagents_harness::tool::ToolDispatch;
-    use tinyagents_harness::*;
+    use tinyagents_orchestration::subagent::{
+        ChildDataPolicy, SubAgent, SubAgentJobRegistry, SubAgentTool,
+    };
     use tinyagents_registry::*;
     use tinyinference_llm::message::Message;
     use tinyinference_llm::model::{ChatModel, ResponseFormat};
     use tinyinference_llm::providers::openai::OpenAiModel;
-    use tinyinference_llm::tool::ToolCall;
 
     if !common::live::require_live(&["OPENAI_API_KEY"]) {
         return;
@@ -83,6 +82,7 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
 
     let mut registry: CapabilityRegistry<()> = CapabilityRegistry::new();
     let mut dispatches: HashMap<String, Arc<SubAgentTool<()>>> = HashMap::new();
+    let jobs = SubAgentJobRegistry::new();
     for (name, description, system_prompt) in specs {
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness
@@ -90,10 +90,13 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
             .set_default_model("model");
         let subagent =
             SubAgent::new(name, description, Arc::new(harness)).with_system_prompt(system_prompt);
-        let dispatch = Arc::new(SubAgentTool::new(
-            Arc::new(subagent),
-            ChildDataPolicy::new(|parent: &()| *parent),
-        ));
+        let dispatch = Arc::new(
+            SubAgentTool::new(
+                Arc::new(subagent),
+                ChildDataPolicy::new(|parent: &()| *parent),
+            )
+            .with_job_registry(jobs.clone()),
+        );
         registry
             .register_tool(dispatch.tool())
             .expect("unique specialist name");
@@ -183,10 +186,35 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
                 )
                 .await
                 .expect("sub-agent run succeeds");
-            (name, result.output())
+            let job_id = serde_json::from_str::<Value>(&result.output())
+                .expect("spawn result is JSON")
+                .get("job_id")
+                .and_then(Value::as_str)
+                .expect("spawn result contains a job id")
+                .to_owned();
+            (name, job_id)
         }
     });
-    let outputs: Vec<(String, String)> = join_all(dispatches).await;
+    let spawned: Vec<(String, String)> = join_all(dispatches).await;
+    let outputs = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            let outputs = spawned
+                .iter()
+                .filter_map(|(name, job_id)| {
+                    let job = jobs.get(job_id)?;
+                    job.status
+                        .is_terminal()
+                        .then(|| (name.clone(), job.output.unwrap_or_default()))
+                })
+                .collect::<Vec<_>>();
+            if outputs.len() == spawned.len() {
+                return outputs;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("live subagent jobs finish within two minutes");
 
     assert!(
         outputs.iter().any(|(_, text)| !text.trim().is_empty()),

@@ -11,15 +11,18 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
-use super::{ChildDataPolicy, SubAgent, SubAgentSession, SubAgentTool};
-use crate::cancel::CancellationToken;
-use crate::context::{RunConfig, RunContext};
-use crate::error::TinyAgentsError;
-use crate::events::{AgentEvent, EventSink, RecordingListener};
-use crate::limits::RunLimits;
-use crate::runtime::{AgentHarness, RunPolicy};
-use crate::tool::{ToolDispatch, ToolRegistry};
+use super::{
+    ChildDataPolicy, SubAgent, SubAgentJob, SubAgentJobRegistry, SubAgentJobStatus,
+    SubAgentSession, SubAgentTool,
+};
+use tinyagents_harness::cancel::CancellationToken;
+use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::error::TinyAgentsError;
+use tinyagents_harness::events::{AgentEvent, EventSink, RecordingListener};
+use tinyagents_harness::limits::RunLimits;
+use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::providers::MockModel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +34,49 @@ fn child_harness<Ctx: Send + Sync>(answer: &str) -> AgentHarness<(), Ctx> {
     let mut harness = AgentHarness::new();
     harness.register_model("child", Arc::new(MockModel::constant(answer)));
     harness
+}
+
+struct BlockedModel {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl ChatModel<()> for BlockedModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(ModelResponse::assistant("finished later"))
+    }
+}
+
+fn spawned_job_id(result: &tinytools::ToolResult) -> String {
+    serde_json::from_str::<serde_json::Value>(&result.output())
+        .expect("spawn result is JSON")
+        .get("job_id")
+        .and_then(serde_json::Value::as_str)
+        .expect("spawn result contains a job id")
+        .to_owned()
+}
+
+async fn wait_for_terminal(jobs: &SubAgentJobRegistry, job_id: &str, owner: u64) -> SubAgentJob {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let job = jobs
+                .get_owned(job_id, owner)
+                .expect("spawned job is registered");
+            if job.status.is_terminal() {
+                return job;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("job reaches a terminal state")
 }
 
 #[test]
@@ -46,6 +92,68 @@ fn child_data_policy_is_an_explicit_typed_transform() {
             value: "root/child".into()
         }
     );
+}
+
+#[tokio::test]
+async fn job_host_tools_query_and_message_a_live_child() {
+    let jobs = SubAgentJobRegistry::new();
+    let owner = 42;
+    let (job_id, steering) = jobs.create("worker", owner);
+    jobs.send_message_owned(job_id.as_str(), owner, "new evidence")
+        .expect("message is queued");
+    assert_eq!(steering.pending(), 1);
+
+    let snapshot = jobs
+        .get_owned(job_id.as_str(), owner)
+        .expect("job is queryable by its owner");
+    assert_eq!(snapshot.id, job_id);
+    assert_eq!(snapshot.status, SubAgentJobStatus::Queued);
+    assert!(jobs.get_owned(job_id.as_str(), owner + 1).is_none());
+}
+
+#[tokio::test]
+async fn subagent_tool_returns_job_id_before_child_completion() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut child_harness = AgentHarness::new();
+    child_harness.register_model(
+        "blocked",
+        Arc::new(BlockedModel {
+            started: started.clone(),
+            release: release.clone(),
+        }),
+    );
+    let tool = SubAgentTool::new(
+        Arc::new(SubAgent::new("worker", "works", Arc::new(child_harness))),
+        ChildDataPolicy::new(|_: &()| ()),
+    );
+    let jobs = tool.job_registry().clone();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        tool.invoke_in_parent_context(
+            &(),
+            json!({"input": "work"}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        ),
+    )
+    .await
+    .expect("spawn does not wait for the child")
+    .expect("spawn succeeds");
+    let job_id = spawned_job_id(&result);
+    started.notified().await;
+    assert_eq!(
+        jobs.get_owned(&job_id, parent.instance_id())
+            .unwrap()
+            .status,
+        SubAgentJobStatus::Running
+    );
+
+    release.notify_one();
+    let job = wait_for_terminal(&jobs, &job_id, parent.instance_id()).await;
+    assert_eq!(job.output.as_deref(), Some("finished later"));
 }
 
 #[tokio::test]
@@ -72,8 +180,7 @@ async fn typed_tool_dispatch_runs_child_with_non_default_parent_data() {
             }
         }),
     ));
-    let mut registry: ToolRegistry<(), NonDefaultContext> = ToolRegistry::new();
-    registry.register_dispatch(tool);
+    let jobs = tool.job_registry().clone();
     let parent = RunContext::new(
         RunConfig::new("parent")
             .with_thread("typed-parent-thread")
@@ -83,10 +190,8 @@ async fn typed_tool_dispatch_runs_child_with_non_default_parent_data() {
         },
     )
     .with_events(events);
-    let result = registry
-        .dispatch("worker")
-        .expect("typed parent dispatcher is registered")
-        .execute(
+    let result = tool
+        .invoke_in_parent_context(
             &(),
             crate::ids::CallId::new("call-1"),
             json!({"input": "work"}),
@@ -96,7 +201,10 @@ async fn typed_tool_dispatch_runs_child_with_non_default_parent_data() {
         .await
         .unwrap();
     assert!(!result.is_error);
-    assert_eq!(result.output(), "child answer");
+    let job_id = spawned_job_id(&result);
+    let job = wait_for_terminal(&jobs, &job_id, parent.instance_id()).await;
+    assert_eq!(job.status, SubAgentJobStatus::Completed);
+    assert_eq!(job.output.as_deref(), Some("child answer"));
     assert_eq!(
         *observed_parent_data
             .lock()
@@ -122,18 +230,14 @@ async fn stricter_parent_depth_cap_is_a_recoverable_typed_tool_result() {
         child,
         ChildDataPolicy::new(|parent: &NonDefaultContext| parent.clone()),
     ));
-    let mut registry: ToolRegistry<(), NonDefaultContext> = ToolRegistry::new();
-    registry.register_dispatch(tool);
     let parent = RunContext::new(
         RunConfig::new("parent").with_max_depth(0),
         NonDefaultContext {
             value: "root".into(),
         },
     );
-    let result = registry
-        .dispatch("worker")
-        .expect("typed parent dispatcher is registered")
-        .execute(
+    let result = tool
+        .invoke_in_parent_context(
             &(),
             crate::ids::CallId::new("call-1"),
             json!({"input": "work"}),
@@ -157,8 +261,7 @@ async fn typed_tool_dispatch_inherits_parent_cancellation() {
         child,
         ChildDataPolicy::new(|parent: &NonDefaultContext| parent.clone()),
     ));
-    let mut registry: ToolRegistry<(), NonDefaultContext> = ToolRegistry::new();
-    registry.register_dispatch(tool);
+    let jobs = tool.job_registry().clone();
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     let parent = RunContext::new(
@@ -169,10 +272,8 @@ async fn typed_tool_dispatch_inherits_parent_cancellation() {
     )
     .with_cancellation(cancellation);
 
-    let error = registry
-        .dispatch("worker")
-        .expect("typed parent dispatcher is registered")
-        .execute(
+    let result = tool
+        .invoke_in_parent_context(
             &(),
             crate::ids::CallId::new("call-1"),
             json!({"input": "work"}),
@@ -180,11 +281,9 @@ async fn typed_tool_dispatch_inherits_parent_cancellation() {
             &parent,
         )
         .await
-        .expect_err("cancelled parent stops the typed child invocation");
-    assert!(matches!(
-        error.downcast_ref::<TinyAgentsError>(),
-        Some(TinyAgentsError::Cancelled)
-    ));
+        .expect("asynchronous spawn returns its job id");
+    let job = wait_for_terminal(&jobs, &spawned_job_id(&result), parent.instance_id()).await;
+    assert_eq!(job.status, SubAgentJobStatus::Cancelled);
 }
 
 #[tokio::test]

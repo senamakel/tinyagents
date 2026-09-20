@@ -5,11 +5,10 @@
 //! propagates out of the child agent loop, so:
 //!
 //! - [`SubAgent::invoke`] returns `Err(TinyAgentsError::Tool(..))`,
-//! - [`SubAgentTool::call`] surfaces the *same* error by propagation (its
-//!   `call` does `self.subagent.invoke(..).await?`, so the contract is a
-//!   propagated `Err`, not an error-tagged `ToolResult`), and
-//! - an orchestrator that calls the failing sub-agent-as-tool observes the
-//!   failure: its run errors out and a `RunFailed` event is recorded.
+//! - [`SubAgentTool`] returns a job id immediately, and the job registry later
+//!   records the sanitized failure, and
+//! - an orchestrator remains live after spawning a failing child and can query
+//!   that failure through host tools.
 //!
 //! All assertions are structural / on the error variant — never on model prose.
 
@@ -17,17 +16,37 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::subagent::ChildDataPolicy;
-use tinyagents_harness::testkit::{EventRecorder, FakeTool, Trajectory};
-use tinyagents_harness::*;
-use tinyagents_registry::*;
+use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, Trajectory};
+use tinyagents_orchestration::subagent::{
+    ChildDataPolicy, SubAgent, SubAgentJobRegistry, SubAgentJobStatus, SubAgentTool,
+};
 use tinyinference_llm::message::Message;
+use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
+
+async fn wait_for_failed_job(jobs: &SubAgentJobRegistry) {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(job) = jobs.list().into_iter().next()
+                && job.status.is_terminal()
+            {
+                assert_eq!(job.status, SubAgentJobStatus::Failed);
+                assert_eq!(
+                    job.error.as_deref(),
+                    Some("tool error: tool dispatch failed")
+                );
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("failing child job reaches a terminal state");
+}
 
 /// Builds a child harness whose model always asks for the `broken` tool, which
 /// fails with a foreign `anyhow` error. The harness maps that to its stable,
@@ -62,18 +81,17 @@ async fn subagent_invoke_propagates_tool_failure() {
 }
 
 #[tokio::test]
-async fn subagent_tool_call_surfaces_failure_as_err() {
-    // Contract: SubAgentTool::call propagates the child failure as an `Err`
-    // (it does not swallow it into an error-tagged ToolResult).
+async fn subagent_tool_call_returns_job_id_and_records_failure() {
     let subagent = Arc::new(SubAgent::new(
         "broken_worker",
         "a worker whose tool always fails",
         Arc::new(failing_child_harness()),
     ));
     let tool = SubAgentTool::new(subagent, ChildDataPolicy::new(|parent: &()| *parent));
+    let jobs = tool.job_registry().clone();
     let parent = RunContext::new(RunConfig::new("parent"), ());
 
-    let err = tool
+    let result = tool
         .invoke_in_parent_context(
             &(),
             json!({ "input": "x" }),
@@ -81,19 +99,13 @@ async fn subagent_tool_call_surfaces_failure_as_err() {
             &parent,
         )
         .await
-        .expect_err("SubAgentTool::call must surface the child failure as an Err");
-
-    match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
-        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
-    }
+        .expect("spawning a child is independent from its eventual result");
+    assert!(result.output().contains("job_id"));
+    wait_for_failed_job(&jobs).await;
 }
 
 #[tokio::test]
-async fn orchestrator_observes_failing_subagent_tool() {
-    // An orchestrator equipped with the failing sub-agent as a tool. Its model
-    // delegates to the tool on the first turn; the tool's propagated Err aborts
-    // the orchestrator run and is recorded as a RunFailed event.
+async fn orchestrator_survives_a_failing_subagent_job() {
     let subagent = Arc::new(SubAgent::new(
         "broken_worker",
         "a worker whose tool always fails",
@@ -103,34 +115,35 @@ async fn orchestrator_observes_failing_subagent_tool() {
         subagent,
         ChildDataPolicy::new(|parent: &()| *parent),
     ));
+    let jobs = tool.job_registry().clone();
 
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
     orchestrator.register_tool_dispatch(tool);
+    let mut delegation = ModelResponse::assistant("");
+    delegation.message.tool_calls.push(ToolCall::new(
+        "delegate",
+        "broken_worker",
+        json!({ "input": "delegate" }),
+    ));
     orchestrator.register_model(
         "parent-model",
-        Arc::new(MockModel::with_tool_call(
-            "broken_worker",
-            json!({ "input": "delegate" }),
-        )),
+        Arc::new(ScriptedModel::new(vec![
+            delegation,
+            ModelResponse::assistant("job spawned"),
+        ])),
     );
 
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("orchestrator-run"), ()).with_events(recorder.sink());
 
-    let err = orchestrator
+    let run = orchestrator
         .invoke_in_context(&(), ctx, vec![Message::user("delegate this")])
         .await
-        .expect_err("the failing sub-agent tool must abort the orchestrator run");
-
-    match err {
-        TinyAgentsError::Tool(msg) => assert_eq!(msg, "tool dispatch failed"),
-        other => panic!("expected a sanitized TinyAgentsError::Tool, got {other:?}"),
-    }
+        .expect("child failure does not abort the spawning orchestrator");
+    assert_eq!(run.text().as_deref(), Some("job spawned"));
+    wait_for_failed_job(&jobs).await;
 
     // The orchestrator run emitted a RunFailed event (on_error fan-out path).
     let traj = Trajectory::from_events(recorder.events());
-    assert!(
-        traj.failed(),
-        "orchestrator run should record a RunFailed event when the sub-agent tool fails"
-    );
+    traj.assert_completed();
 }

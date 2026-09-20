@@ -501,6 +501,65 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for PreparedAgentTurn<State, Ct
 }
 
 impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<State, Ctx> {
+    /// Re-enters a child agent through the exact host capability bundle carried
+    /// by `context`.
+    ///
+    /// Returns `Ok(None)` for an explicit-model context. Hosted contexts enforce
+    /// the parent's delegate allowlist and require its invocation-local runtime
+    /// overlay before dispatching the child.
+    pub async fn invoke_authorized_child(
+        &self,
+        state: &State,
+        context: RunContext<Ctx>,
+        child_agent_id: impl Into<String>,
+        messages: Vec<tinyinference_llm::message::Message>,
+        streaming: bool,
+    ) -> Result<Option<AgentRun>> {
+        let Some(binding) = host_invocation_binding::<State, Ctx>(&context)? else {
+            return Ok(None);
+        };
+        let parent_agent = context.host_agent_id.as_deref().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "hosted parent delegation is missing its parent agent identity".into(),
+            )
+        })?;
+        let child_agent_id = child_agent_id.into();
+        let delegates = binding
+            .host
+            .definitions
+            .delegates_for(parent_agent)
+            .await
+            .map_err(|error| {
+                TinyAgentsError::Validation(format!(
+                    "delegate authorization lookup failed: {error}"
+                ))
+            })?;
+        if !delegates.iter().any(|delegate| delegate == &child_agent_id) {
+            return Err(TinyAgentsError::Validation(format!(
+                "agent `{parent_agent}` is not authorized to delegate to `{child_agent_id}`"
+            )));
+        }
+        let runtime = binding.runtime.clone().ok_or_else(|| {
+            TinyAgentsError::Validation(
+                "hosted child invocation is missing its parent runtime overlay".into(),
+            )
+        })?;
+        let invocation = AgentInvocation::from_shared_host(
+            binding.host.clone(),
+            AgentTurnRequest::new(child_agent_id, messages),
+            context,
+            Some(runtime),
+        );
+        let run = if streaming {
+            self.invoke_agent_streaming_with_capabilities(invocation, state)
+                .await?
+        } else {
+            self.invoke_agent_with_capabilities(invocation, state)
+                .await?
+        };
+        Ok(Some(run))
+    }
+
     /// Runs an agent through this invocation's host-capability bundle.
     ///
     /// The invocation type requires the four mandatory capabilities at

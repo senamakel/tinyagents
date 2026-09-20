@@ -3,7 +3,7 @@
 //! This loop is the innermost turn of the recursive runtime: it is where one
 //! model call is driven to completion, and because a
 //! whole harness can be exposed as a tool
-//! ([`crate::subagent::SubAgentTool`]), the very tools this loop
+//! (`SubAgentTool` in `tinyagents-orchestration`), the very tools this loop
 //! executes may themselves be other agents — so "a model calling a model" is
 //! just this loop nested inside one of its own tool calls. Each invocation runs
 //! inside a [`RunContext`] that tracks recursion depth, fans usage/cost up to a

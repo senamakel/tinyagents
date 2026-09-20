@@ -20,8 +20,8 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tinyagents-graph = { path = "../tinyagents-graph" }
 tinyagents-harness = { path = "../tinyagents-harness" }
-tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-orchestration = { path = "../tinyagents-orchestration" }
+tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-registry = { path = "../tinyagents-registry" }
 tinyagents-session = { path = "../tinyagents-session" }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }

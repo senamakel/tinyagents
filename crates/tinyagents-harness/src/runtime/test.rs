@@ -19,7 +19,6 @@ use crate::limits::RunLimits;
 use crate::middleware::{LoggingMiddleware, ModelFallbackMiddleware};
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy};
-use crate::subagent::{ChildDataPolicy, SubAgent, SubAgentTool};
 use crate::testkit::ScriptedModel;
 use futures::StreamExt;
 use tinyagents_definition::{
@@ -2445,14 +2444,6 @@ async fn explicit_model_paths_accept_borrowed_state() {
             .await
             .expect("explicit streaming invocation accepts borrowed state");
         assert_eq!(streaming.text().as_deref(), Some(state));
-
-        let child_harness = Arc::new(harness);
-        let child = SubAgent::new("borrowed-child", "uses borrowed state", child_harness);
-        let child_run = child
-            .invoke(&state, (), 0, "delegate")
-            .await
-            .expect("explicit subagent invocation accepts borrowed state");
-        assert_eq!(child_run.text().as_deref(), Some(state));
     }
 
     let owned = String::from("borrowed state remains valid");
