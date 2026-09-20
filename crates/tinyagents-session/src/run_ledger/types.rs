@@ -729,7 +729,7 @@ pub struct AgentTeamListRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentTeamListResponse {
     pub teams: Vec<AgentTeam>,
-    /// Number of teams in `teams` (not the total matching count).
+    /// Total number of teams matching the request filters, before pagination.
     pub count: usize,
 }
 
