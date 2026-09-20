@@ -53,6 +53,15 @@ pub enum ToolEffectStatus {
     /// [`crate::runtime::AgentHarness::reconcile_tool_effects`] settled it
     /// this way instead of running it again.
     Interrupted,
+    /// The call was paused mid-execution by the tool itself
+    /// (`ApprovalRequired`/`CallDeferred`) and is waiting on
+    /// [`crate::runtime::AgentHarness::resume_deferred`] to answer it. This
+    /// is a deliberate pause, not a crash artifact: settling to this status
+    /// (instead of leaving the row `started`) is what keeps
+    /// [`crate::runtime::AgentHarness::reconcile_tool_effects`] — which only
+    /// reconciles rows still `started` — from mistaking a live deferral for
+    /// an interrupted run.
+    Deferred,
 }
 
 impl ToolEffectStatus {
