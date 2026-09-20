@@ -209,7 +209,7 @@ pub struct WorkflowEngine<S, E> {
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
 
-struct PersistRequest {
+pub(crate) struct PersistRequest {
     phase_states: Value,
     child_run_ids: Vec<String>,
     status: WorkflowRunStatus,
@@ -920,7 +920,7 @@ where
         Ok((updated, 0))
     }
 
-    async fn persist(
+    pub(crate) async fn persist(
         &self,
         run: &WorkflowRun,
         request: PersistRequest,
@@ -948,13 +948,13 @@ where
             })
     }
 
-    fn emit(&self, event: tinyagents_graph::GraphEvent) {
+    pub(crate) fn emit(&self, event: tinyagents_graph::GraphEvent) {
         if let Some(sink) = &self.event_sink {
             sink.emit(event);
         }
     }
 
-    fn finish_completed(&self, run_id: &str, steps: usize) {
+    pub(crate) fn finish_completed(&self, run_id: &str, steps: usize) {
         self.emit(tinyagents_graph::GraphEvent::RunCompleted {
             run_id: tinyagents_harness::ids::RunId::new(run_id),
             steps,
@@ -962,7 +962,7 @@ where
         self.flush_terminal_events();
     }
 
-    fn finish_failed(&self, run_id: &str, error: String) {
+    pub(crate) fn finish_failed(&self, run_id: &str, error: String) {
         self.emit(tinyagents_graph::GraphEvent::RunFailed {
             run_id: tinyagents_harness::ids::RunId::new(run_id),
             error,
@@ -970,7 +970,7 @@ where
         self.flush_terminal_events();
     }
 
-    fn finish_cancelled(&self, run_id: &str) {
+    pub(crate) fn finish_cancelled(&self, run_id: &str) {
         // GraphEvent has no cancellation variant. Its terminal error event is
         // the truthful durable signal for a cooperatively aborted run; callers
         // distinguish cancellation from failure in the workflow ledger status.
@@ -985,7 +985,7 @@ where
 
     /// A lifecycle hand-off or lease takeover has fenced this driver. It must
     /// not manufacture a terminal graph event for the replacement owner.
-    async fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
+    pub(crate) async fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
         let run_id = run_id.to_owned();
         let owner = owner.to_owned();
         self.store_op(move |store| store.load(&run_id))
@@ -998,7 +998,7 @@ where
     /// Returns true after emitting the terminal event already committed by a
     /// newer lifecycle owner. This is the stale-driver escape hatch: it never
     /// writes, so a stop/resume hand-off cannot be overwritten by its loser.
-    async fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
+    pub(crate) async fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
         let owned_run_id = run_id.to_owned();
         let Ok(Some(current)) = self.store_op(move |store| store.load(&owned_run_id)).await else {
             return false;
