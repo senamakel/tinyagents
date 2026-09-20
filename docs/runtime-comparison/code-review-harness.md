@@ -48,7 +48,7 @@ drivers). OpenAI/Anthropic/local adapters live in `vendor/tinyinference/crates/t
 | `runtime.md:112` "Run `on_tool_delta` middleware for tool progress streams" | `MiddlewareStack::run_on_tool_delta` (`middleware/mod.rs:245`) has **no caller**; `AgentEvent::ToolProgress` is never emitted. |
 | `docs/modules/harness/structured-output.md:84-95` `StructuredOutputErrorPolicy { RetryWithDefaultMessage, … }` with retry events | Nothing of the kind exists. The loop does `extractor.extract(&response)?` (`run_loop.rs:791`) — one shot, run fails. The only in-loop retry is truncated-empty recovery. |
 | `docs/audit.md:37-49` "malformed OpenAI tool-call JSON fails closed", citing `src/providers/openai/mod.rs` | That path no longer exists in this crate (moved to vendor), and the behaviour is now the opposite by design: provider-marked `ToolCall::invalid` is *recovered* as a tool-error result (`tools.rs:276-287`). The "resolved" entry describes a state that has since been reversed. |
-| `docs/sdk-gaps.md` §2 "Recoverable unknown tool calls — Status: missing" | Implemented (`tools.rs:305-371`, `UnknownToolPolicy::{Fail,ReturnToolError,Rewrite}`); the gaps doc is stale. §3 reasoning deltas: `MessageDelta.reasoning` exists; tool-call start/complete channels do not. |
+| `docs/sdk-gaps/tools.md` §2 "Recoverable unknown tool calls — Status: missing" | Implemented (`tools.rs:305-371`, `UnknownToolPolicy::{Fail,ReturnToolError,Rewrite}`); the gaps doc is stale. §3 reasoning deltas: `MessageDelta.reasoning` exists; tool-call start/complete channels do not. |
 | `structured/repair.rs:11-14` links `tinyinference_llm::providers::openai::relaxed_json` | No such module; `cargo doc` reports it as a broken link. Two lenient JSON repair ladders now exist (`relaxed_json.rs`, vendor `convert.rs:497`) and neither is applied to `call.invalid` in admission (see I-13). |
 
 `cargo clippy -p tinyagents-harness --all-targets -- -W clippy::pedantic`: 1 042 warnings (386 `must_use`, 103 backtick docs,
@@ -167,7 +167,7 @@ Some(_) => Err(TinyAgentsError::Model("hosted agent invocation failed".to_string
 ```
 `LimitExceeded`, `EmptyResponse`, `Validation`, `Interrupted`, `Steering` all become a generic `Model` error, and the partial `run` is
 dropped. `sanitize_hosted_event` (`:206-236`) does the same to `RunFailed.error` on the public stream. A host cannot tell "budget
-exhausted" from "provider 500" without a private event listener — the very thing `docs/sdk-gaps.md` §7 asks for.
+exhausted" from "provider 500" without a private event listener — the very thing `docs/sdk-gaps/cost-and-model-catalog.md` §7 asks for.
 *Fix (S):* return a `HostedError { kind: HostedErrorKind, run: Box<AgentRun> }` where `kind` is a closed, non-leaking enum
 (`Cancelled | Timeout | LimitExceeded | Policy | Provider | Internal`); sanitise the message, not the classification.
 
@@ -191,7 +191,7 @@ to tool-wrap middleware) and add `RunLimits::max_tool_concurrency` with `futures
 .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&schema.name))
 ```
 `allowed_tools` is `definition.tools.into_iter().collect()` (`runtime/agent.rs:615`); an agent definition that declares no tools
-gets **every** registered tool. `docs/sdk-gaps.md` §9 lists "fail-closed when policy metadata is missing" as the goal.
+gets **every** registered tool. `docs/sdk-gaps/tools.md` §9 lists "fail-closed when policy metadata is missing" as the goal.
 *Fix (S):* make `allowed_tools: Option<HashSet<String>>` (`None` = definition did not declare; `Some(empty)` = no tools), and treat
 `None` as fail-closed under a `HostCapabilities` flag.
 
