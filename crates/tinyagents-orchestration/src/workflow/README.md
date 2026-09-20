@@ -78,8 +78,9 @@ things:
   declares", inspectable via `CompiledGraph::topology()`/`export::to_json`,
   analogous to `scheduler_topology_preview` above.
 - **`lower_workflow(..)`** — the *executable* lowering `WorkflowEngine::drive`
-  actually runs (`drive_via_graph`) when the feature is on and
-  `WorkflowEngineOptions.use_graph` is set (the feature's default). It is
+  actually runs (`drive_via_graph`) when the feature is on and the engine's
+  `use_graph` flag is set — `true` by default under the feature; override
+  per instance with `WorkflowEngine::with_graph_execution(bool)`. It is
   **not** the literal waiting-edge topology: it is a small `dispatch ->
   <phase> -> dispatch -> ...` graph, where `dispatch` picks the next
   runnable phase via the same `next_runnable_phase` the legacy scheduler
