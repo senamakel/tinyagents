@@ -61,7 +61,6 @@ fn assistant_calling(id: &str) -> Message {
             serde_json::json!({"city": "Paris"}),
         )],
         usage: None,
-
         origin: None,
     })
 }
@@ -138,7 +137,6 @@ fn max_tokens_never_orphans_a_tool_result() {
             serde_json::json!({"city": "Paris"}),
         )],
         usage: None,
-
         origin: None,
     });
     let messages = vec![
@@ -168,7 +166,6 @@ fn a_tool_only_assistant_turn_trips_the_compaction_gate() {
             serde_json::json!({"query": "q".repeat(2_000)}),
         )],
         usage: None,
-
         origin: None,
     });
     assert_eq!(heavy.text(), "", "precondition: no visible text");

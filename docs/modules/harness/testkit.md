@@ -60,6 +60,33 @@ pub struct DeterministicFakeEmbedding {
 }
 ```
 
+### `SchemaDrivenModel` (implemented)
+
+`crates/tinyagents-harness/src/testkit/{types.rs,mod.rs}` adds
+`SchemaDrivenModel`, a `ChatModel` double that exercises every tool a request
+declares rather than a hand-scripted subset: on call `N` it returns a single
+tool call for the request's `N`th declared `ToolSchema`, with arguments
+synthesized from that schema by `generate_args_from_schema` (fills every
+declared property by JSON-Schema `type`: `"test"` for `string`, `0`/`0.0` for
+`integer`/`number`, `false` for `boolean`, a one-element array for `array`,
+recursing into nested `object`s). Once every declared tool has been called
+once, it returns a configured final response on every subsequent call.
+
+```rust
+use tinyagents_harness::testkit::SchemaDrivenModel;
+
+let model = SchemaDrivenModel::with_final_text("done");
+// invoke() #0 calls request.tools[0] with schema-shaped args, #1 calls
+// request.tools[1], ...; once every declared tool has been called once,
+// invoke() returns the configured final response.
+```
+
+This is deliberately schema-driven rather than hand-scripted: adding a tool
+to a harness under test does not require updating a script, and every tool's
+argument-schema validation path is genuinely exercised (not just the tools a
+test author remembered to script). See
+`crates/tinyagents-harness/src/testkit/test.rs` for the coverage.
+
 ## Trajectory Assertions
 
 Tests should be able to assert:

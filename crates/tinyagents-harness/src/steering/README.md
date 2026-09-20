@@ -4,7 +4,7 @@ Policy-checked, observable orchestrator → sub-agent steering: how a *parent*
 in the run tree exerts typed control over a *child* it is currently running,
 without killing or restarting it.
 
-This is the mid-run counterpart to `crate::subagent::SubAgentSession` reuse
+This is the mid-run counterpart to `tinyagents_orchestration::subagent::SubAgentSession` reuse
 (which resumes a *completed* child) — together they cover both ways an
 orchestrator keeps a sub-agent "in play". An orchestrating agent, a human UI,
 a graph supervisor, or a test harness attaches a `SteeringHandle` to a run's

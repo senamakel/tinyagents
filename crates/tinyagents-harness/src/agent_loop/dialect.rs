@@ -210,7 +210,7 @@ pub(super) fn recover_text_calls(
         return;
     }
     for diagnostic in &outcome.diagnostics {
-        tinyagents_tracing::debug!(?diagnostic, "[agent_loop] text-dialect recovery");
+        tracing::debug!(?diagnostic, "[agent_loop] text-dialect recovery");
     }
     // Appended, not assigned: a provider can legitimately return one native
     // structured call *and* narrate a second one as text in the same

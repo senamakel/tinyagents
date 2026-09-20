@@ -27,7 +27,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use tinyagents_harness::TinyAgentsError;
-use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use tinyagents_harness::cost::ModelPricing;
 use tinyagents_harness::events::AgentEvent;
 use tinyagents_harness::middleware::{
@@ -51,7 +51,6 @@ fn tool_call_response(id: &str, name: &str, input: u64, output: u64) -> ModelRes
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, json!({}))],
             usage: Some(Usage::new(input, output)),
-
             origin: None,
         },
         usage: Some(Usage::new(input, output)),
@@ -73,7 +72,6 @@ fn text_response(text: &str, input: u64, output: u64) -> ModelResponse {
             content: vec![ContentBlock::Text(text.into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(input, output)),
-
             origin: None,
         },
         usage: Some(Usage::new(input, output)),
@@ -131,15 +129,13 @@ async fn token_budget_blocks_multi_call_run() {
         .push_middleware(Arc::new(mw));
 
     let ctx = RunContext::new(RunConfig::new("budget-tokens"), ()).with_events(recorder.sink());
-    let err = harness
+    // A1: `BudgetMiddleware` now stops the run gracefully (`JumpTo(End)`)
+    // instead of erroring it out once the budget is already exhausted, so
+    // the run completes with the partial transcript rather than failing.
+    harness
         .invoke_in_context(&(), ctx, vec![Message::user("go")])
         .await
-        .expect_err("the accumulated token budget must block the run");
-
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("an exhausted budget stops the run gracefully, not with an error");
 
     // The warn threshold (10) and the exceed threshold (20) were both crossed.
     assert!(
@@ -224,18 +220,16 @@ async fn shared_tracker_rolls_up_and_blocks_across_runs() {
             BudgetMiddleware::new(limits).with_tracker(tracker.clone()),
         ));
 
-    let err = harness_b
+    // A1: graceful stop, not an error — see the comment on the first test in
+    // this file.
+    harness_b
         .invoke_in_context(
             &(),
             RunContext::new(RunConfig::new("budget-child"), ()),
             vec![Message::user("child")],
         )
         .await
-        .expect_err("the shared budget must block the second run");
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("the shared budget stops the second run gracefully");
 
     // Both runs rolled into the single tracker: 16 (parent) + 16 (child) = 32.
     assert_eq!(
@@ -291,7 +285,6 @@ async fn cost_pricing_records_and_enforces_money_budget() {
             content: vec![ContentBlock::Text("priced".into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(4, 2)),
-
             origin: None,
         },
         usage: Some(Usage::new(4, 2)),
@@ -328,16 +321,17 @@ async fn cost_pricing_records_and_enforces_money_budget() {
         "a UsageRecorded event accompanies the recorded usage"
     );
 
-    // The next preflight blocks because 6.0 >= the 5.0 cost budget.
+    // A1: the next preflight now requests `JumpTo(End)` (graceful stop)
+    // instead of erroring, because 6.0 >= the 5.0 cost budget.
     let mut req = ModelRequest::new(vec![Message::user("go")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("the cost budget must block the next model call");
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("an exhausted cost budget stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(LoopTarget::End))
+    ));
     assert!(
         any_event(&recorder, |e| matches!(
             e,
@@ -523,7 +517,6 @@ async fn cached_input_budget_blocks_next_call() {
                 cache_read_tokens: 12,
                 ..Usage::new(2, 1)
             }),
-
             origin: None,
         },
         usage: Some(Usage {
@@ -549,16 +542,17 @@ async fn cached_input_budget_blocks_next_call() {
         "the tracker accumulates the reported cache-read tokens"
     );
 
-    // The next preflight blocks because 12 >= the 10-token cached-input budget.
+    // A1: the next preflight now requests `JumpTo(End)` (graceful stop)
+    // instead of erroring, because 12 >= the 10-token cached-input budget.
     let mut req = ModelRequest::new(vec![Message::user("next")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("the cached-input budget must block the next model call");
-    assert!(
-        matches!(err, TinyAgentsError::LimitExceeded(_)),
-        "expected LimitExceeded, got {err:?}"
-    );
+        .expect("an exhausted cached-input budget stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(LoopTarget::End))
+    ));
     assert!(
         any_event(&recorder, |e| matches!(
             e,

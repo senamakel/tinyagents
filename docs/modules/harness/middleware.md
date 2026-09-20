@@ -294,12 +294,30 @@ Exposure only changes what the model *sees*; pair it with
 [tool policy enforcement](#tool-policy-enforcement) or `ToolAllowlistMiddleware`
 so a model that calls a hidden tool is still stopped at execution.
 
-## Middleware control
+## Middleware control (A1)
 
 Any middleware (or step) can steer the loop out-of-band via
 `RunContext::request_control(MiddlewareControl)`
-([context feature](context.md#middleware-control-outcomes)):
+([context feature](context.md#middleware-control-outcomes)). `MiddlewareControl`
+has five variants:
 
+- `MiddlewareControl::Continue` — no instruction; never installed as a pending
+  request (`request_control` treats it as a no-op).
+- `MiddlewareControl::JumpTo(LoopTarget)` — reroute the loop. `LoopTarget::Model`
+  abandons the rest of the current turn (closing out any unanswered tool calls
+  on the last assistant row) and restarts from a fresh model call;
+  `LoopTarget::Tools` is a no-op — the turn's tool calls already run whenever
+  they exist, so there is nothing else to route to; `LoopTarget::End` finishes
+  the run, using `AgentRun::final_response` if already set, otherwise the most
+  recent assistant text.
+- `MiddlewareControl::UpdateState(StateUpdate)` — queue a typed state mutation.
+  The loop only ever holds `state: &State` (a shared reference), so it cannot
+  apply this itself: it pushes the `StateUpdate` onto
+  `RunContext::push_state_update`, and a host that owns `&mut State` between
+  runs drains the queue with `RunContext::take_state_updates` and applies each
+  one. `StateUpdate::new::<S>(f: impl Fn(&mut S))` captures the closure behind
+  an `Arc` (so `MiddlewareControl` stays `Clone`) and is a no-op if applied
+  against a mismatched `State` type.
 - `MiddlewareControl::StopWithFinal(text)` — stop now, using `text` as the final
   assistant response.
 - `MiddlewareControl::Interrupt { node, message }` — pause at the next safe
@@ -307,12 +325,107 @@ Any middleware (or step) can steer the loop out-of-band via
   and resume.
 
 Requests are resolved by **precedence, not last-writer**: `request_control`
-keeps the highest-`precedence()` pending request within a turn (`Interrupt` (2)
-outranks `StopWithFinal` (1)), so a stronger pause is never silently downgraded
-to a stop by a later weaker request. The agent loop drains the request at its
-safe checkpoint (after each model response) via `RunContext::take_control` and,
-when it honors one, emits `AgentEvent::ControlApplied { control, detail }` where
-`control` is the outcome's `kind()` label.
+keeps the highest-`precedence()` pending request within a turn — `Interrupt`
+(4) outranks `StopWithFinal` (3), which outranks `JumpTo`/`UpdateState` (2/1),
+which outranks `Continue` (0) — so a stronger pause is never silently
+downgraded to a stop by a later weaker request. The agent loop drains the
+request at its safe checkpoints (before dispatching a model call, after the
+model response, and after tool execution) via `RunContext::take_control` and,
+when it honors one, emits `AgentEvent::ControlApplied { control, detail }`
+where `control` is the outcome's `kind()` label (`"continue"`,
+`"jump_to:model"`, `"jump_to:tools"`, `"jump_to:end"`, `"update_state"`,
+`"stop_with_final"`, `"interrupt"`). `UpdateState` is queued silently (no
+`ControlApplied` event) since it carries no loop-level decision.
+
+### Returning control from a hook
+
+Every lifecycle hook has a `_control`-suffixed counterpart
+(`before_model_control`, `after_model_control`, `before_tool_control`,
+`after_tool_control`, `before_agent_control`, `after_agent_control`) that the
+`MiddlewareStack` actually drives. Each defaults to calling the plain hook and
+returning `Continue`, so an existing `Middleware` impl that only overrides the
+plain hooks keeps compiling and behaving identically — this is the source-
+compatibility shim A1 was built around. Override the `_control` variant
+directly (not both) when a hook needs to steer the loop:
+
+```rust
+async fn before_model_control(
+    &self,
+    ctx: &mut RunContext<Ctx>,
+    state: &State,
+    request: &mut ModelRequest,
+) -> Result<MiddlewareControl> {
+    if budget_exhausted() {
+        return Ok(MiddlewareControl::JumpTo(LoopTarget::End));
+    }
+    Ok(MiddlewareControl::Continue)
+}
+```
+
+A returned control is resolved into exactly the same `request_control` call a
+hook could have made explicitly — returning control is sugar over the side
+channel, not a second mechanism.
+
+### Precedence within one phase, and `is_observer`
+
+Within one phase (e.g. every registered middleware's `before_model_control`),
+the **first** non-`Continue` outcome wins. Every hook *after* it in that same
+phase is skipped — not called at all — unless `Middleware::is_observer`
+returns `true` for it, in which case it still runs (for logging, metrics,
+audit) but its own control outcome is discarded; only the first winner is ever
+applied. This mirrors LangChain's `@hook_config(can_jump_to=[...])`
+declaration without requiring middleware to declare targets up front.
+
+### Turn-boundary stop: `should_stop_after_turn`
+
+`Middleware::should_stop_after_turn(&self, ctx, run) -> bool` (default `false`)
+is evaluated once at the turn boundary — after tool execution, before the loop
+would otherwise continue to the next model call. It exists for a decision that
+depends on the *whole turn's* tool results rather than any single call (a
+tally, a cross-tool invariant); returning `true` has the same effect as
+requesting `JumpTo(End)` from `after_tool_control`.
+
+### Tools returning control
+
+A canonical tool's own `ToolResult` (from vendored `tinytools`) carries an
+optional `ToolControl { return_direct, terminate, goto, state_update }`. The
+loop translates it into the same `MiddlewareControl` vocabulary after
+`after_tool`/`after_tool_control` run:
+
+- `return_direct` or `terminate` — the tool's own output becomes
+  `AgentRun::final_response` and the loop requests `JumpTo(End)` (recording the
+  final response directly rather than falling back to the last assistant
+  text, which `JumpTo(End)` alone cannot target precisely).
+- `goto: Some("model" | "tools" | "end")` — mapped to the matching
+  `JumpTo(LoopTarget)`; an unrecognized value is logged and ignored.
+- `state_update: Some(json)` — queued as raw JSON via
+  `RunContext::push_tool_state_update` / `take_tool_state_updates` (a separate
+  queue from `MiddlewareControl::UpdateState`'s typed closures, since a
+  canonical tool has no access to the harness's `State` type).
+
+### Wrap outcomes: `Command`
+
+`MiddlewareModelOutcome` and `MiddlewareToolOutcome` (both `#[non_exhaustive]`)
+each gained a `Command { control: MiddlewareControl }` variant alongside their
+existing `Response`/`Result` variant, for a `wrap_model`/`wrap_tool`
+implementation that decides — before ever calling `next` — that the run
+should stop or jump. There is no real response/result in that case;
+`into_response()`/`into_result()` return an empty placeholder, and
+`into_response_with_control()`/`into_result_with_control()` additionally
+recover the control, which the agent loop queues via `request_control` at the
+next safe checkpoint exactly like any other control request.
+
+### Built-ins rebased on control outcomes
+
+`BudgetMiddleware::before_model_control` requests `JumpTo(End)` when the
+budget is already exhausted, instead of erroring the run out — a stop that
+preserves the partial transcript rather than discarding it.
+`HumanApprovalMiddleware::before_tool_control` requests `Interrupt` for a
+flagged, unapproved call instead of returning `Err` directly, so the interrupt
+is expressed in the shared control vocabulary (visible via
+`RunContext::take_control` before it drains) rather than only as a thrown
+error; the loop still surfaces the identical
+`TinyAgentsError::Interrupted` once drained.
 
 ## State And Request Mutation
 

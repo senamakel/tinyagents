@@ -33,7 +33,6 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(6, 2)),
-
             origin: None,
         },
         usage: Some(Usage::new(6, 2)),
@@ -54,7 +53,6 @@ fn text_response(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(3, 1)),
-
             origin: None,
         },
         usage: Some(Usage::new(3, 1)),

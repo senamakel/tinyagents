@@ -21,9 +21,14 @@ recursively-generated sub-workflow compiles through, one level down.
 - `mark_command_routing`, `with_command_destinations` — declares a node
   routes exclusively via `Command::goto` rather than static/conditional
   edges; `compile()` rejects nodes that mix the two.
-- `with_node_kind`, `with_node_metadata`, `mark_subgraph`, `mark_interrupt`,
-  `mark_deferred` — behavior-free introspection markers surfaced by
-  `graph::export`.
+- `with_node_kind`, `with_node_metadata`, `mark_subgraph` — behavior-free
+  introspection markers surfaced by `graph::export`. `mark_deferred` and
+  `mark_interrupt` also set the marker but are *not* behavior-free:
+  `mark_deferred` is `NodePolicy::defer`, and `mark_interrupt` is an alias
+  for `interrupt_before`.
+- `interrupt_before`, `interrupt_after` — executor-level pauses at named
+  nodes (before the handler runs / after it runs but before its result is
+  applied); see `docs/modules/graph/interrupts.md`.
 - `with_parallel`, `with_max_concurrency`, `with_node_timeout`,
   `with_recursion_limit`, `with_graph_id`, `with_name`, `set_defaults` —
   per-graph configuration, either called directly or bundled via

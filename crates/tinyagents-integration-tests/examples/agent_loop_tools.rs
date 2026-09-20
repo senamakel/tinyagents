@@ -7,7 +7,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run --example agent_loop_tools
+//! cargo run -p tinyagents-integration-tests --example agent_loop_tools
 //! ```
 
 use std::sync::Arc;
@@ -64,7 +64,6 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(12, 4)),
-
             origin: None,
         },
         usage: Some(Usage::new(12, 4)),
@@ -86,7 +85,6 @@ fn text_response(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.to_string())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(20, 8)),
-
             origin: None,
         },
         usage: Some(Usage::new(20, 8)),

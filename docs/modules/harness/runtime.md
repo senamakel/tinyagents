@@ -100,11 +100,23 @@ Detailed lifecycle:
 11. Emit model events and append assistant message.
 12. If tool calls exist, validate name, schema, and limits.
 13. Run `before_tool` middleware per call.
-14. Execute tools — concurrently when the turn has two or more calls and no
-    tool-wrap (`ToolMiddleware`) middleware is registered (wrap middleware
-    holds `&mut RunContext` across each call, so it forces the serial path);
-    results always fold back in original call order.
-15. Run `on_tool_delta` middleware for tool progress streams.
+14. Execute tools — concurrently only when *all* of: the turn has two or more
+    calls, zero tool-wrap (`ToolMiddleware`) middleware is registered (wrap
+    middleware holds `&mut RunContext` across each call, so it forces the
+    serial path), and every call's tool reports `is_concurrency_safe() ==
+    true` (the trait default is `false`, so concurrency is opt-in per tool);
+    see `should_execute_tools_concurrently` in
+    `crates/tinyagents-harness/src/agent_loop/tools.rs`. Lifecycle middleware
+    no longer forces the serial path: every `before_tool` hook runs during
+    serial admission, which completes in full before any concurrent future is
+    built, so there is nothing left for it to mutate once execution starts.
+    When the concurrent path runs, it is bounded by
+    `RunLimits::max_tool_concurrency` (`futures::stream::iter(..)
+    .buffered(n)`; `None`, the default, is unbounded). Results always fold
+    back in original call order.
+15. `on_tool_delta` middleware exists on the `Middleware` trait and
+    `MiddlewareChain::run_on_tool_delta` is implemented, but the agent loop
+    does not call it yet — no tool progress stream is wired up today.
 16. Run `after_tool` middleware per result.
 17. Append tool messages.
 18. Repeat until no tool calls remain.
@@ -116,12 +128,128 @@ Hard limits:
 
 - `max_model_calls`
 - `max_tool_calls`
-- `max_concurrency`
 - wall-clock timeout
 - per-call timeout
 - retry budget
 
 The loop must fail closed when a limit is reached.
+
+A per-call ceiling (`RunLimits::max_model_call_ms`) firing raises
+`TinyAgentsError::CallTimeout`, distinct from a run-deadline
+`TinyAgentsError::Timeout`: `CallTimeout` is retryable and is still consulted
+against the fallback chain (the model wedged, not the run), while `Timeout`
+is terminal (the run itself is out of wall-clock budget).
+
+Step 12's text-dialect recovery (parsing `<tool_call>`-style markup out of
+an assistant's visible text through the `tinytools-agent` grammars, both on
+the streamed deltas and on the terminal response) always runs under a forced
+text dialect (`RunPolicy::tool_dialect` of `Xml` / `Pformat`, or `Auto`
+falling back to Xml for a model without native tool calling) — there, parsing
+text is the protocol. Under a native dialect it is gated by
+`RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On | Auto`,
+default `Auto`): it only runs when the resolved model's profile does not
+report native tool calling, and it always skips markup that appears only
+inside a fenced code block. A model that quotes the syntax while explaining
+it (or answers under a model that *does* support native tool calling) is
+never executed as a real call.
+
+Every safe checkpoint above — before a model call is dispatched, after the
+model response, and after tool execution — also drains any pending
+`MiddlewareControl` (see
+[middleware control outcomes](middleware.md#middleware-control-a1)) and, at
+the tool-execution checkpoint, first asks
+`MiddlewareStack::any_should_stop_after_turn` whether any registered
+middleware wants to end the run based on the whole turn's results. Step 19's
+structured-output validation is the output-validation retry loop (A3, see
+[structured-output.md](structured-output.md#error-policy-the-output-validation-retry-loop-a3)):
+a schema failure or an `OutputValidator` rejection re-asks the model (bounded
+by `RunPolicy::output_retry.max_attempts`) instead of failing the run on the
+first attempt. Step 12's tool-call handling additionally honors
+`RunPolicy::end_strategy` (A6, see
+[structured-output.md](structured-output.md#endstrategy-output-tool--function-tools-in-one-turn-a6))
+when a turn returns both a structured-output tool call and real tool calls.
+
+### Loop exits: finished, limit stop, paused, deferred
+
+The loop distinguishes four deliberate stops. A normal finish and a
+`LimitBehavior::StopWithPartial` limit stop complete the run
+(`HarnessRunStatus` `Completed`, `AgentEvent::RunCompleted`). A steering
+**pause** sets `AgentRun::paused` and a **deferred** tool batch (A2) sets
+`AgentRun::deferred`; both report the run `Interrupted`, emit
+`ControlApplied { control: "paused" | "deferred" }`, leave `final_response`
+unset, and are resumed from `run.messages`. The working transcript is written
+onto the `AgentRun` on every exit path, including errors.
+
+Resuming a deferred run is `AgentHarness::resume_deferred(state, ctx,
+run.messages, DeferredToolResults)` (sugar over
+`RunContext::with_deferred_results`), or on the hosted path
+`AgentTurnRequest::new(agent, run.messages).with_deferred_results(results)`.
+The loop applies the decisions to the unanswered tool calls on the last
+assistant row *before* its first model call, then proceeds normally. See
+[tool.md](tool.md#deferred-tool-calls-approval-and-external-execution-a2)
+for the triggers, decision vocabulary, and the inline `DeferredToolHandler`.
+
+**Durability is the host's responsibility.** The harness does not write to
+the session run ledger (`tinyagents-session` depends on the harness, not the
+other way round), and the only state a resume needs is `run.messages` plus
+`run.deferred` — both `serde` types. Persist them wherever the run's other
+state lives; `tinyagents_session::run_ledger::AgentRun::checkpoint` (a JSON
+column keyed by run id, alongside a `Paused`/`Interrupted` status) is the
+natural slot, and a host that also wants per-call approval rows keeps those
+in its own tables keyed by `DeferredToolRequests` call ids.
+
+### Queued steering and follow-ups (A4)
+
+A run can carry a `RunQueueHandle` (`Arc<RunQueue<Message>>`, attached with
+`RunContext::with_run_queue`). Anything with a clone of the handle — a UI, a
+parent agent, a tool — pushes `Message`s onto one of three lanes while the
+run is in flight, and the loop drains them only at safe boundaries:
+
+| Lane | Drained when | Effect |
+|---|---|---|
+| `Steer` | after a tool batch's results are all on the transcript (never mid-batch), and at a natural finish before any follow-up | appended to the transcript; the next model call sees it |
+| `Followup` | at a natural finish, only when no steer is pending | appended; the loop runs another turn instead of returning |
+| `Collect` | once, at run end, on every exit path | delivered on `AgentRun::collected`; never enters the transcript |
+
+`RunPolicy::queue_mode` picks how many items a boundary takes:
+`QueueMode::All` (default) applies every pending item; `OneAtATime` applies
+the oldest and leaves the rest for the next boundary. Each application emits
+`AgentEvent::QueuedMessageApplied { lane, count }`. A "natural finish" is
+the model producing a final answer (including a structured-output finish
+under `EndStrategy::Early`/`Graceful`); a middleware `StopWithFinal` /
+`JumpTo(End)`, a limit stop, a pause, or a deferral is terminal and leaves
+the queue untouched for the host. Follow-up turns count against
+`max_model_calls` like any other, which bounds a host that keeps queueing.
+
+The queue is content injection only. `SteeringHandle` / `SteeringCommand`
+(pause, resume, cancel, `InjectMessage`, `Redirect`) is the unchanged control
+channel and is drained at its own checkpoint before each model call; the two
+mechanisms are independent. A child context never inherits its parent's
+queue — a queue has no per-run addressing, so a child draining it would
+steal the parent's messages.
+
+```rust
+let queue: RunQueueHandle = Arc::new(RunQueue::new());
+let ctx = RunContext::new(RunConfig::new("r"), ()).with_run_queue(queue.clone());
+// ...from another task while the run is in flight:
+queue.push(QueueLane::Steer, Message::user("prefer the cheaper option")).await;
+queue.push(QueueLane::Followup, Message::user("now summarize what you did")).await;
+```
+
+### `RunPolicy` fields added by Phase 2 (A1/A3/A4/A6)
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `output_retry` | `OutputRetryPolicy { max_attempts: u8, message_template: String }` | `max_attempts = 1` | Bounds the output-validation retry loop. |
+| `end_strategy` | `EndStrategy` | `Graceful` | Resolves output-tool + function-tool turns. |
+| `structured_strategy_override` | `Option<StructuredStrategyOverride>` | `None` | Forces `Prompted`/`ToolCallUnion` for `ResponseFormat::Auto`. |
+| `queue_mode` | `QueueMode` | `All` | How many `RunQueue` items each boundary applies (A4). |
+
+`AgentHarness::with_output_validator(Arc<dyn OutputValidator<State, Ctx>>)`
+registers the validator the output-retry loop consults; only one may be
+installed (calling it again replaces the previous one).
+`AgentHarness::with_deferred_tool_handler(Arc<dyn DeferredToolHandler>)`
+(A2) likewise installs the single inline resolver for deferred tool calls.
 
 ## Middleware
 

@@ -18,6 +18,7 @@ pub type Result<T> = std::result::Result<T, TinyAgentsError>;
 /// execution, model/tool invocation, run limits and policy, graph durability,
 /// and graph execution.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TinyAgentsError {
     /// A graph was compiled or run without a configured `START` edge, so there
     /// is no entry node to begin execution from.
@@ -129,6 +130,69 @@ pub enum TinyAgentsError {
     #[error("tool error: {0}")]
     Tool(String),
 
+    /// A tool or an output validator ([`crate::structured::OutputValidator`])
+    /// reported a *recoverable* failure the model should be asked to fix and
+    /// retry, rather than one that ends the run.
+    ///
+    /// Mirrors Pydantic AI's `ModelRetry`. A tool returning this from
+    /// [`tinytools::Tool::execute`] is folded into a recoverable
+    /// [`tinytools::ToolResult::retry`] result instead of aborting the run —
+    /// see `agent_loop/tools.rs`'s `map_tool_dispatch_error`. An
+    /// [`crate::structured::OutputValidator`] returning it on the agent
+    /// loop's final turn drives the output-validation retry loop (A3): the
+    /// message is pushed back to the model as a repair prompt and the turn
+    /// continues, bounded by
+    /// [`crate::runtime::RunPolicy::output_retry`]'s `max_attempts`.
+    /// Contrast with [`Self::ToolFailed`], which is permanent.
+    #[error("retryable failure: {0}")]
+    ModelRetry(String),
+
+    /// A tool reported a **permanent** failure that must not be retried —
+    /// the counterpart to [`Self::ModelRetry`]. Folded into a
+    /// [`tinytools::ToolResult::failed`] result (still recoverable at the
+    /// transcript level — the model sees the message — but
+    /// [`crate::retry::RetryMiddleware`] and any other retry policy treat it
+    /// as non-retryable rather than re-attempting the call).
+    #[error("permanent tool failure: {0}")]
+    ToolFailed(String),
+
+    /// A tool (from [`tinytools::Tool::execute`]) or a `before_tool`
+    /// middleware asked for **human approval** before this call runs (A2).
+    ///
+    /// The agent loop does not treat this as a failure: it finishes the rest
+    /// of the batch, lists the call under
+    /// [`crate::tool::DeferredToolRequests::approvals`] with `metadata`
+    /// attached, and exits with `AgentRun::deferred` set (or resolves it
+    /// inline through a registered
+    /// [`crate::tool::DeferredToolHandler`]). Mirrors Pydantic AI's
+    /// `ApprovalRequired`. Never retried by [`crate::retry::is_retryable`].
+    #[error("tool call requires approval")]
+    ApprovalRequired {
+        /// Host-only context for the approver (never shown to the model).
+        metadata: serde_json::Value,
+    },
+
+    /// A tool asked the **host** to execute this call out of band (A2):
+    /// the loop lists it under [`crate::tool::DeferredToolRequests::calls`]
+    /// and expects a [`crate::tool::DeferredCallResult`] on resume. Raised
+    /// automatically for a tool registered through
+    /// [`crate::tool::ToolRegistry::register_external`], and equally by
+    /// [`crate::tool::toolset::ExternalToolSet`]'s
+    /// [`crate::tool::toolset::ToolSet::call`] (gap B3, mirroring Pydantic
+    /// AI's `defer_loading`/deferred-tools model) — both call sites raise
+    /// this same variant so a host sees one deferred-call signal regardless
+    /// of which registration path advertised the tool. `metadata` is
+    /// host-only context describing how to execute the call; the call's own
+    /// name and arguments are already carried on the
+    /// [`crate::tool::DeferredToolRequests`] entry, so most callers leave it
+    /// `Value::Null`. Mirrors Pydantic AI's `CallDeferred`. Never retried by
+    /// [`crate::retry::is_retryable`].
+    #[error("tool call deferred to the host")]
+    CallDeferred {
+        /// Host-only context describing how to execute the call.
+        metadata: serde_json::Value,
+    },
+
     /// A run referenced a tool name that is not present in the
     /// [`crate::tool::ToolRegistry`]. The payload is the tool name.
     #[error("tool `{0}` is not registered")]
@@ -164,8 +228,25 @@ pub enum TinyAgentsError {
     EmptyResponse,
 
     /// The run exceeded its wall-clock deadline.
+    ///
+    /// Terminal: the run itself is out of time, so retrying or falling back
+    /// to another model would just spin until the next deadline check fails
+    /// identically. See [`TinyAgentsError::CallTimeout`] for the per-call
+    /// counterpart, which *is* retryable.
     #[error("run timed out: {0}")]
     Timeout(String),
+
+    /// A single call (currently: a model call bounded by
+    /// [`crate::limits::RunLimits::max_model_call_ms`]) ran past its own
+    /// ceiling while the run still has wall-clock budget left.
+    ///
+    /// Unlike [`TinyAgentsError::Timeout`], this does not mean the run is out
+    /// of time — it means *this one call* wedged. [`crate::retry::is_retryable`]
+    /// treats it as transient, and the model-resolution retry/fallback loop
+    /// (`invoke_model_resolving`) does not treat it as a reason to skip the
+    /// fallback chain the way it does a run-deadline `Timeout`.
+    #[error("call timed out: {0}")]
+    CallTimeout(String),
 
     /// The run was cancelled before completion.
     #[error("run cancelled")]
@@ -247,6 +328,57 @@ pub enum TinyAgentsError {
     /// underlying driver message.
     #[error("storage error: {0}")]
     Storage(String),
+
+    /// One or more `.rag` language diagnostics, collected together instead of
+    /// stopping at the first offending reference or construct.
+    ///
+    /// The payload is [`RenderedDiagnostic`], not
+    /// `tinyagents_language::Diagnostic`, because `tinyagents-language`
+    /// depends on this crate for [`Result`]/`TinyAgentsError`; holding the
+    /// language crate's structured type here would create an import cycle.
+    /// `tinyagents_language::diagnostic::into_diagnostics_error` builds this
+    /// variant from a `Vec<tinyagents_language::Diagnostic>` by rendering each
+    /// one down to its message, code, and resolved position. Never
+    /// constructed with an empty vector.
+    #[error("{}", render_diagnostics_summary(.0))]
+    Diagnostics(Vec<RenderedDiagnostic>),
+}
+
+/// One `.rag` language diagnostic, rendered to a crate-boundary-safe,
+/// serializable payload for [`TinyAgentsError::Diagnostics`].
+///
+/// See that variant's docs for why this mirrors (rather than reuses)
+/// `tinyagents_language::Diagnostic`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RenderedDiagnostic {
+    /// The diagnostic's stable code (e.g. `E-rag-unknown-model`), if any.
+    pub code: Option<String>,
+    /// The headline message, without source context.
+    pub message: String,
+    /// The 1-based line the diagnostic's primary span begins at.
+    pub line: usize,
+    /// The 1-based column the diagnostic's primary span begins at.
+    pub column: usize,
+    /// The full presentation: the caret-underline rendering against source
+    /// when it was available at construction time, otherwise the
+    /// source-free `message` plus a `-->` position anchor.
+    pub rendered: String,
+}
+
+/// Renders the [`TinyAgentsError::Diagnostics`] `Display` text: the first
+/// diagnostic's full rendering, plus a `(and N more)` suffix when there is
+/// more than one.
+fn render_diagnostics_summary(diagnostics: &[RenderedDiagnostic]) -> String {
+    match diagnostics.split_first() {
+        Some((first, [])) => first.rendered.clone(),
+        Some((first, rest)) => format!(
+            "{} (and {} more diagnostic{})",
+            first.rendered,
+            rest.len(),
+            if rest.len() == 1 { "" } else { "s" }
+        ),
+        None => "no diagnostics".to_string(),
+    }
 }
 
 impl From<tinyinference_llm::Error> for TinyAgentsError {
@@ -257,7 +389,7 @@ impl From<tinyinference_llm::Error> for TinyAgentsError {
             tinyinference_llm::Error::Validation(message) => Self::Validation(message),
             tinyinference_llm::Error::Serialization(error) => Self::Serialization(error),
             tinyinference_llm::Error::Catalog(message) => Self::Model(message),
-            tinyinference_llm::Error::Unsupported(message) => Self::Model(message),
+            tinyinference_llm::Error::Unsupported(message) => Self::Validation(message),
         }
     }
 }
@@ -291,7 +423,7 @@ impl TinyAgentsError {
         if error.code.as_deref()
             == Some(tinyinference_llm::providers::openai::CONTEXT_OVERFLOW_CODE)
         {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 "[error] promoting provider `{}` context-overflow code to a typed error",
                 error.provider
             );

@@ -42,18 +42,39 @@ A turn's tool calls are driven in three phases — serial **admission**
 (cancellation/deadline/limit checks, `before_tool`, unknown-tool policy,
 schema validation, `ToolStarted`), **execution**, and a serial **fold** in
 original call order (`after_tool`, `ToolCompleted`, transcript append).
+The fold also records a result's host-only `metadata` on the event and on
+`AgentRun::tool_metadata`, and hands back its `follow_up` content as a user
+message that the batch driver appends only after the batch's last tool row
+(B2) — a provider requires every tool row to follow its assistant row
+directly, so follow-ups never interleave with tool rows. The same holds for
+the deferred-resume batch in `apply_deferred_results`.
 
-When a turn requests two or more tools and **no tool-wrap middleware**
-(`ToolMiddleware`) is registered, execution runs concurrently (`join_all`),
-so turn latency is the slowest tool instead of the sum. Tool-wrap middleware
-holds `&mut RunContext` across each wrapped call — part of its public
-contract — so its presence keeps the historical serial path. In both modes
-results are attached to their original `tool_call_id` in the calls' original
-order, every call's `ToolStarted` precedes its `ToolCompleted`, and
-`ToolCompleted` events are emitted in call order. The first failing call (in
-call order) fails the turn; in concurrent mode already-launched siblings run
-to completion before the error surfaces. See `tools.rs` for the full design
-notes.
+Execution runs concurrently only when *all* of the following hold: the turn
+requests two or more tools, zero tool-wrap middleware (`ToolMiddleware`) is
+registered, and every call's tool reports `Tool::is_concurrency_safe() ==
+true` (the trait default is `false`, so a tool must opt in). See
+`should_execute_tools_concurrently` and `batch_is_canonical_parallel_safe` in
+`tools.rs`. Tool-wrap middleware holds `&mut RunContext` across each wrapped
+call — part of its public contract — so its presence keeps the historical
+serial path. Lifecycle middleware does **not** force the serial path: every
+`before_tool` hook runs during serial admission, which completes in full for
+every call in the batch before any concurrent future is built, so there is
+nothing left for a lifecycle middleware to mutate once execution starts
+(I-8; this used to force serial execution unconditionally).
+
+When concurrency does trigger, the batch runs via `futures::stream::iter(..)
+.buffered(n)` — not an unbounded `join_all` — where `n` is
+`RunPolicy::limits.max_tool_concurrency` (unbounded, i.e. every eligible call
+starts at once, when `None`, the default). `buffered` yields results in input
+order, same as `join_all` did, so downstream folding is unaffected; it just
+caps how many calls are in flight simultaneously. Turn latency is then the
+slowest *batch* of at most `n` tools instead of the slowest single tool. In
+both modes results are attached to their original `tool_call_id` in the
+calls' original order, every call's `ToolStarted` precedes its
+`ToolCompleted`, and `ToolCompleted` events are emitted in call order. The
+first failing call (in call order) fails the turn; in concurrent mode
+already-launched siblings run to completion before the error surfaces. See
+`tools.rs` for the full design notes.
 
 ## Limits
 
@@ -63,6 +84,22 @@ wall-clock deadline (from the run config) is checked each iteration and
 surfaces as `TinyAgentsError::Timeout`. The run context's own
 `limits::LimitTracker` is also advanced so its counters stay consistent with
 the enforced caps.
+
+## Cancellation and wall-clock bounding
+
+Every host/provider I/O boundary on the loop path (model resolution, budget
+admission and usage recording, tool authorization, tool-output screening,
+host turn preparation, the unary provider call) races cooperative
+cancellation against an optional wall-clock deadline through one shared
+helper, `context::RunContext::bounded(deadline, fut, timeout_message)`,
+instead of each call site copying its own `tokio::select! { biased; _ =
+cancelled() => .., _ = timeout(remaining, fut) => .. }` block (R-1 from
+`docs/runtime-comparison/code-review-harness.md`). `timeout_message` is a
+closure so the call-specific message is only built on the timeout path, not
+on every call. The streaming provider loop's per-chunk pull races
+cancellation against `stream.next()` directly — its future yields an
+`Option`, not a `Result`, so it does not fit `bounded`'s signature and stays
+a bespoke `select!`.
 
 ## Backoff
 

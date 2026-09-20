@@ -56,7 +56,6 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(6, 2)),
-
             origin: None,
         },
         usage: Some(Usage::new(6, 2)),
@@ -189,7 +188,6 @@ async fn tool_call_strategy_reads_named_tool_arguments() {
                 ToolCall::new("c1", "answer", json!({ "value": "tooled", "score": 7 })),
             ],
             usage: None,
-
             origin: None,
         },
         usage: None,
@@ -368,7 +366,6 @@ async fn provider_schema_reads_text_content_blocks() {
             content: vec![ContentBlock::Text(r#"{"value":"blocky","score":5}"#.into())],
             tool_calls: Vec::new(),
             usage: None,
-
             origin: None,
         },
         usage: None,

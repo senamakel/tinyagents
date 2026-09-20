@@ -1,26 +1,24 @@
 //! Regression tests for the harness store backends and the file
 //! checkpointer's on-disk durability.
 
-use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer, FileCheckpointer};
+use std::sync::Arc;
+
+use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer, FileCheckpointer, PendingActivation};
 use tinyagents_harness::ids::NodeId;
 use tinyagents_harness::store::{AppendStore, FileStore, JsonlAppendStore};
 
 fn checkpoint(thread: &str, id: &str) -> Checkpoint<i32> {
-    Checkpoint {
-        thread_id: thread.to_string(),
-        checkpoint_id: id.to_string(),
-        run_id: None,
-        parent_checkpoint_id: None,
-        namespace: vec![],
-        state: 1,
-        next_nodes: vec![NodeId::from("n")],
-        completed_tasks: vec![],
-        pending_writes: vec![],
-        interrupts: vec![],
-        pending_activations: None,
-        barrier_arrivals: vec![],
-        metadata: serde_json::json!({ "source": "loop", "step": 1 }),
-    }
+    Checkpoint::new(
+        1,
+        vec![PendingActivation {
+            node: NodeId::from("n"),
+            send_arg: None,
+            task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+        }],
+    )
+    .with_thread_id(thread.to_string())
+    .with_checkpoint_id(id.to_string())
+    .with_metadata(serde_json::json!({ "source": "loop", "step": 1 }))
 }
 
 // ── SESS-5: thread-id escaping ───────────────────────────────────────────────

@@ -89,6 +89,9 @@ fn render_content(content: &[ContentBlock]) -> Vec<String> {
                 "<provider_extension>{}</provider_extension>",
                 elide(&value.to_string())
             )),
+            ContentBlock::Audio(_) => Some("<audio />".to_string()),
+            ContentBlock::Video(_) => Some("<video />".to_string()),
+            ContentBlock::Document(_) => Some("<document />".to_string()),
         })
         .collect()
 }
@@ -106,7 +109,7 @@ pub fn render_message_for_summary(message: &Message) -> String {
         Message::User(m) => render_content(&m.content),
         Message::Assistant(m) => render_content(&m.content),
         Message::Tool(m) => render_content(&m.content),
-        Message::Custom(m) => m.display.clone().into_iter().collect(),
+        Message::Custom(m) => return format!("custom: {}", m.display.clone().unwrap_or_default()),
     };
 
     match message {

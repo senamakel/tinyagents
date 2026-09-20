@@ -38,11 +38,16 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   agents, graphs, and routers), plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage.
+- **`tinyagents-definition`** — the host-owned agent definition vocabulary:
+  identity, description, declared model/tools/delegates, and a read-only
+  catalogue seam. Authorization, prompt construction, and execution stay with
+  the host and harness.
 - **`tinyagents-runtime`** — host-neutral stateful turns over the harness and
   append-only transcript seam; hosts retain policy, prompt composition,
   authorization, and durable-dialect conversion.
-- **`tinyagents-tracing`** — the `tracing` macros the other crates gate behind
-  their `tracing` feature. Compiled out by default.
+- **`tinyagents-orchestration`** — host-neutral composition of durable
+  multi-agent work (teams and workflows) over the graph, harness, and session
+  layers; depends one-way on those crates and stays host-free.
 - **`tinyagents-integration-tests`** — cross-crate tests and the runnable
   examples referenced below (not published, workspace-internal).
 
@@ -141,10 +146,19 @@ calls, typed tool definitions, middleware, structured output, streaming,
 usage and cost accounting, retries and limits, response caching, and a testkit
 for exercising the loop without a live provider. Memory, workspace lifecycle,
 authorization, and persistence policy stay in the host and can wrap a complete
-run with `AgentMiddleware`. An agent can be
-wrapped as a tool and handed to another agent (`SubAgent` /
-`SubAgentSession` / `SubAgentTool`), which is how multi-agent orchestration
-is composed — plain function composition, not a distinct execution mode.
+run with `AgentMiddleware`.
+
+## Subagent orchestration
+
+`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a
+typed parent-context dispatcher: it starts a child in the background and
+returns a stable job id immediately. `SubAgentJobsTool` queries job
+status/results and `SubAgentMessageTool` sends messages to a live job;
+hosts register these control tools over the same explicitly shared
+`SubAgentJobRegistry`. `SubAgentSession` covers retained post-completion
+conversations, while `SubagentDriver` coordinates durable lifecycle
+preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
+are intentionally outside this focused crate.
 
 ## Session runtime
 

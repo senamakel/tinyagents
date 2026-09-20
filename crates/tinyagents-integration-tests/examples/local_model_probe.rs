@@ -10,7 +10,7 @@
 //! OPENAI_BASE_URL=http://localhost:1234/v1 \
 //! OPENAI_MODEL=qwen/qwen3-4b \
 //! OPENAI_API_KEY=local \
-//! cargo run --example local_model_probe
+//! cargo run -p tinyagents-integration-tests --example local_model_probe
 //! ```
 
 use futures::StreamExt;
@@ -150,7 +150,6 @@ async fn tool_roundtrip(model: &OpenAiModel) -> Outcome {
         content: resp.message.content.clone(),
         tool_calls: resp.message.tool_calls.clone(),
         usage: None,
-
         origin: None,
     });
     let mut req2 = base_request(vec![

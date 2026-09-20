@@ -64,6 +64,13 @@ reachable under `session::`, `session::run_ledger::`, and
   [README](./transcript/README.md)
 - **Connections** — `with_connection` (autocommit) and `with_transaction`
   (`BEGIN IMMEDIATE`)
+- **Testkit** — `testkit::conformance::run_ledger_conformance` and
+  `transcript_history_conformance`: contract suites certifying that a run
+  ledger workspace or a `TranscriptHistory` implementation behaves like the
+  bundled ones. Run against the SQLite run ledger (two independent
+  workspaces) and both `FileTranscriptHistory` and the in-memory
+  `testkit::InMemoryTranscriptHistory` double in
+  `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
 ## Schema
 

@@ -1,18 +1,33 @@
-# Subagent lifecycle
+# Subagent orchestration
 
-`tinyagents_orchestration::subagent` coordinates a host-resolved subagent
-lifecycle without making any product-policy decision. Its direct dependency
-direction is:
+`tinyagents_orchestration::subagent` is the public home for child-agent work.
+It contains two complementary surfaces.
+
+The invocation surface provides `SubAgent`, `SubAgentTool`,
+`SubAgentJobRegistry`, `SubAgentSession`, and `ChildDataPolicy`. It wraps an
+`AgentHarness` as a child run, enforces recursion depth, and inherits live
+parent cancellation, events, and host authority. Model-facing delegation is
+always asynchronous: `SubAgentTool` returns a job id immediately while the
+child continues in the background. A host registers `SubAgentJobsTool` and
+`SubAgentMessageTool` over the same registry to query status/results and send
+messages to queued or running jobs. Message delivery is cooperative at the
+child loop's next safe steering checkpoint. The registry is process-local and
+host-owned; durable lifecycle persistence remains the separate surface below.
+
+The durable lifecycle surface coordinates a host-resolved subagent lifecycle
+without making product-policy decisions. Its dependency direction is:
 
 ```text
 orchestration::subagent -> tinyagents-runtime -> {tinyagents-harness, tinyagents-session}
 ```
 
-Hosts provide three object-safe seams. `SubagentPlanner<C, H>` transforms a
-live `SubagentRequest<C, H>` into a complete `PreparedSubagent<C>`: resolved
+Hosts provide three object-safe lifecycle seams. `SubagentPlanner<C, H>`
+transforms a live `SubagentRequest<C, H>` into a complete
+`PreparedSubagent<C>`: resolved
 agent identity, model messages, immutable `ToolSnapshot`, and an explicit,
 owned `RunContext<C>`. `H` is opaque per-call host options and is forwarded
-unchanged only to the planner. `SubagentExecutor<C>` executes precisely that plan. The
+unchanged only to the planner. `SubagentExecutor<C>` executes precisely that
+plan. The
 planner and executor own prompts, model choice, tool authorization, workspace
 policy, artifact resolution, and host context data; this module owns none of
 them. `SubagentPersistence` owns a host's durable resume and lifecycle records.
@@ -28,8 +43,7 @@ durable thread identity; a request carries no duplicate thread field.
 
 Hosts must assign unique durable `RunConfig` ids to parent and child runs. The
 constructors reject an equal parent/child id but cannot prove global uniqueness.
-Persistence,
-in-flight coalescing, and terminal caching all use this scoped key: two parents
+Persistence, in-flight coalescing, and terminal caching all use this scoped key: two parents
 may reuse a task id without sharing state, while repeat calls for the same
 durable scope deduplicate and resume correctly.
 
@@ -38,8 +52,7 @@ prepares anything. It then loads a resume only when the caller did not provide o
 then prepares and executes. An awaiting-input result calls `save_pause`; all
 other results call `record_terminal`. These operations are mutually exclusive.
 The driver caches only successfully persisted terminal outcomes by scoped
-`SubagentTaskKey`, so
-repeated calls through the same driver return them without executing or
+`SubagentTaskKey`, so repeated calls through the same driver return them without executing or
 recording again. A pause is never cached: the next call loads its resume state
 and executes the continuation. Concurrent calls for the same task coalesce;
 different scoped task keys, including nested child tasks on the same driver,

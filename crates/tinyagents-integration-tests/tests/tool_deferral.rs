@@ -121,7 +121,6 @@ fn tool_call(id: &str, name: &str, arguments: Value) -> ModelResponse {
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(1, 1)),
-
             origin: None,
         },
         usage: Some(Usage::new(1, 1)),
@@ -142,7 +141,6 @@ fn text(body: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(body.to_string())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(1, 1)),
-
             origin: None,
         },
         usage: Some(Usage::new(1, 1)),

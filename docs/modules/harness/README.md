@@ -238,6 +238,7 @@ Feature details:
 - [State graph runtime feature](state-graph.md)
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
+- [Tool execution context and rich returns (B1/B2)](tool-context.md)
 - [Tool exposure, discovery, and schema budgets](tool-discovery.md)
 - [Tool dialects](tool-dialect.md)
 - [Middleware feature](middleware.md)
@@ -245,6 +246,7 @@ Feature details:
 - [Structured output feature](structured-output.md)
 - [Limits, retry, fallback, and rate limiting](limits-retry.md)
 - [Summarization feature](summarization.md)
+- [Compaction: rules, split turns, iterative summaries, overflow recovery](compaction.md)
 - [Usage feature](usage.md)
 - [Cost feature](cost.md)
 - [Cache feature](cache.md)
@@ -255,55 +257,13 @@ Feature details:
 - [Testkit feature](testkit.md)
 - [Host authorization and tool timeouts](hosting.md)
 - [LangChain feature parity map](langchain-parity.md)
+- [Design notes: harness core-type sketch](design-notes.md)
 
-## Core Types
+## Core Types (moved)
 
-```rust
-pub struct AgentHarness<State, Ctx = ()> {
-    models: ModelRegistry<State, Ctx>,
-    embeddings: EmbeddingRegistry<Ctx>,
-    tools: ToolRegistry<State, Ctx>,
-    middleware: MiddlewareStack<State, Ctx>,
-    policy: RunPolicy,
-}
-
-pub struct RunConfig {
-    pub run_id: RunId,
-    pub parent_run_id: Option<RunId>,
-    pub root_run_id: RunId,
-    pub thread_id: Option<ThreadId>,
-    pub tags: Vec<String>,
-    pub metadata: serde_json::Value,
-    pub configurable: serde_json::Value,
-    pub timeout: Option<Duration>,
-    pub max_model_calls: usize,
-    pub max_tool_calls: usize,
-    pub max_concurrency: usize,
-}
-
-pub struct RunContext<Ctx = ()> {
-    pub config: RunConfig,
-    pub data: Ctx,
-    pub events: EventSink,
-    pub stores: StoreRegistry,
-    pub cancellation: CancellationToken,
-}
-```
-
-`RunConfig` is serializable invocation policy and identity. `RunContext` is the
-runtime dependency container. This split keeps tests deterministic and prevents
-global singletons.
-
-Nested model calls, tools, sub-agents, and graph nodes must inherit the root run
-id, selected tags, inherited metadata, event sink, cancellation token, stores,
-usage tracker, cost tracker, and configured budget policy. They may add local
-tags and metadata, but they must not mutate parent config in place.
-
-Nested runs may also receive steering commands. Steering is explicit runtime
-control from a parent orchestrator, human, graph supervisor, middleware, or
-test. A steered run must record actor, target, policy, payload summary, and the
-safe boundary where the command was applied. See
-[Sub-agent and orchestrator steering](subagent-steering.md).
+See [`design-notes.md`](design-notes.md) for the harness core-type sketch
+(`AgentHarness`, `RunConfig`, `RunContext`) — moved out of this file to keep
+it under the repo's 500-line Markdown limit.
 
 ## Messages
 

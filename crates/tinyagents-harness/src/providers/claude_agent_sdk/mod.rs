@@ -105,6 +105,8 @@ fn build_invocation(
 /// transcript is present so the model can distinguish its own prior output
 /// from the next user turn.
 fn render_transcript(messages: &[Message]) -> String {
+    // `Message::Custom` is a host-side out-of-band record (e.g. a compaction
+    // marker); it never rides to a provider transcript.
     let non_system: Vec<&Message> = messages
         .iter()
         .filter(|message| !matches!(message, Message::System(_) | Message::Custom(_)))
@@ -192,7 +194,7 @@ impl ClaudeAgentSdkProvider {
             .stdin(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[claude_agent_sdk] spawning claude binary={} model={} message_len={}",
             self.config.binary,
             model,
@@ -200,7 +202,7 @@ impl ClaudeAgentSdkProvider {
         );
 
         let mut child = cmd.spawn().map_err(|source| {
-            tinyagents_tracing::warn!(
+            tracing::warn!(
                 error = %source,
                 binary = %self.config.binary,
                 "[claude_agent_sdk] failed to spawn claude binary"
@@ -255,7 +257,7 @@ impl ClaudeAgentSdkProvider {
                 if line.is_empty() {
                     continue;
                 }
-                tinyagents_tracing::trace!(
+                tracing::trace!(
                     "[claude_agent_sdk] ndjson line received line_len={}",
                     line.len()
                 );
@@ -269,7 +271,7 @@ impl ClaudeAgentSdkProvider {
                         total_cost_usd,
                     }) => {
                         if let Some(cost) = total_cost_usd {
-                            tinyagents_tracing::debug!(
+                            tracing::debug!(
                                 "[claude_agent_sdk] request completed total_cost_usd={:.6}",
                                 cost
                             );
@@ -286,12 +288,10 @@ impl ClaudeAgentSdkProvider {
                         error_message = Some(error.message);
                     }
                     Ok(SdkMessage::Unknown) => {
-                        tinyagents_tracing::trace!(
-                            "[claude_agent_sdk] unknown ndjson message type, skipping"
-                        );
+                        tracing::trace!("[claude_agent_sdk] unknown ndjson message type, skipping");
                     }
                     Err(e) => {
-                        tinyagents_tracing::warn!(
+                        tracing::warn!(
                             error = %e,
                             line_len = line.len(),
                             "[claude_agent_sdk] failed to parse ndjson line"
@@ -317,7 +317,7 @@ impl ClaudeAgentSdkProvider {
                 anyhow::anyhow!("[claude_agent_sdk] subprocess timed out while waiting for exit")
             })??;
         let stderr_output = stderr_task.await.unwrap_or_default();
-        tinyagents_tracing::debug!("[claude_agent_sdk] subprocess exited status={}", status);
+        tracing::debug!("[claude_agent_sdk] subprocess exited status={}", status);
 
         if !status.success() {
             anyhow::bail!(
@@ -336,7 +336,7 @@ impl ClaudeAgentSdkProvider {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| text_parts.join(""));
 
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[claude_agent_sdk] response collected output_len={}",
             output.len()
         );

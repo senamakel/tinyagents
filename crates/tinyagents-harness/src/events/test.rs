@@ -150,6 +150,7 @@ fn completed_events_deserialize_without_started_at_ms() {
         duration_ms: Some(12),
         output_bytes: Some(5),
         error: None,
+        metadata: None,
     };
     let json = serde_json::to_value(&event).unwrap();
     assert_eq!(json["started_at_ms"], 1_704_067_199_000u64);
@@ -498,4 +499,88 @@ fn every_started_variant_pairs_with_both_a_completed_and_a_failed_variant() {
             "{prefix} has no failed partner"
         );
     }
+}
+
+#[test]
+fn custom_event_round_trips_with_its_call_id_and_payload() {
+    let event = AgentEvent::Custom {
+        call_id: Some(crate::ids::CallId::new("call-9")),
+        payload: serde_json::json!({ "progress": 0.5 }),
+    };
+    assert_eq!(event.kind(), "custom");
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["kind"], "custom");
+    assert_eq!(json["call_id"], "call-9");
+    assert_eq!(json["payload"]["progress"], 0.5);
+    let back: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+
+    // Outside a tool call the correlation is absent and omitted on the wire.
+    let event = AgentEvent::Custom {
+        call_id: None,
+        payload: serde_json::json!("ping"),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert!(json.get("call_id").is_none());
+    let back: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+}
+
+#[test]
+fn tool_completed_metadata_is_optional_and_round_trips() {
+    let event: AgentEvent =
+        serde_json::from_str(r#"{"kind":"tool_completed","call_id":"t1","tool_name":"lookup"}"#)
+            .expect("pre-metadata tool_completed still deserializes");
+    assert!(matches!(
+        event,
+        AgentEvent::ToolCompleted { metadata: None, .. }
+    ));
+
+    let event = AgentEvent::ToolCompleted {
+        call_id: crate::ids::CallId::new("t2"),
+        tool_name: "lookup".to_string(),
+        started_at_ms: None,
+        input: None,
+        output: None,
+        duration_ms: None,
+        output_bytes: None,
+        error: None,
+        metadata: Some(serde_json::json!({ "coords": [1, 2] })),
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["metadata"]["coords"][0], 1);
+    let back: AgentEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+}
+
+// ── EventSink::emit zero-listener fast path ─────────────────────────────────
+
+#[test]
+fn emit_with_no_listeners_still_mints_ids_in_offset_order() {
+    let sink = EventSink::new();
+    assert_eq!(sink.len(), 0);
+
+    let first = sink.emit(AgentEvent::StateUpdate);
+    let second = sink.emit(AgentEvent::StateUpdate);
+
+    assert_eq!(first.offset, 0);
+    assert_eq!(second.offset, 1);
+    assert_ne!(first.id, second.id);
+}
+
+#[test]
+fn emit_delivers_normally_once_a_listener_subscribes_after_a_quiet_run() {
+    let sink = EventSink::new();
+    // Emitted while nobody is listening: takes the fast path.
+    sink.emit(AgentEvent::StateUpdate);
+
+    let recorder = Arc::new(RecordingListener::new());
+    sink.subscribe(recorder.clone());
+
+    // Emitted once a listener exists: should be delivered and continue the
+    // same offset sequence rather than resetting or skipping an id.
+    let delivered = sink.emit(AgentEvent::StateUpdate);
+    assert_eq!(delivered.offset, 1);
+    assert_eq!(recorder.events().len(), 1);
+    assert_eq!(recorder.events()[0].offset, 1);
 }

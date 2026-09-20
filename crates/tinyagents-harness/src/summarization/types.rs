@@ -74,7 +74,7 @@ pub enum MessageRole {
     Assistant,
     /// [`Message::Tool`].
     Tool,
-    /// Host-defined out-of-band record.
+    /// [`Message::Custom`].
     Custom,
 }
 
@@ -276,6 +276,93 @@ pub trait Summarizer: Send + Sync {
     /// is rejected).  The caller is responsible for deciding how to handle the
     /// error — fall back to trimming, propagate, or surface a context error.
     async fn summarize(&self, messages: &[Message]) -> Result<SummaryRecord>;
+
+    /// [`Self::summarize`], but iterative: `request` also carries the
+    /// previous compaction's summary text (when this is not the first
+    /// compaction of a run), so an LLM-backed implementation can *refine* the
+    /// running summary instead of re-deriving it from scratch every time.
+    ///
+    /// The default implementation ignores
+    /// [`SummaryRequest::previous_summary`] and delegates to [`Self::summarize`],
+    /// so every existing implementor (in particular [`ConcatSummarizer`))
+    /// keeps compiling and behaving exactly as before. Override this method
+    /// directly (instead of, not in addition to, `summarize`) to thread the
+    /// previous summary into a real prompt.
+    async fn summarize_request(&self, request: &SummaryRequest) -> Result<SummaryRecord> {
+        self.summarize(&request.messages).await
+    }
+
+    /// Merges two or more per-half [`SummaryRecord`]s produced by
+    /// [`Self::summarize_request`] into one, for the "split turn" case where a
+    /// single turn's messages exceeded the per-call summarization budget and
+    /// were summarized in separate halves (see
+    /// [`crate::summarization::compaction::summarize_with_split`]).
+    ///
+    /// The default merges deterministically by concatenating each summary's
+    /// text under a numbered header, union-ing their provenance
+    /// [`CompressionProvenance::source_ids`] and token estimates — no LLM call
+    /// is made. An LLM-backed [`Summarizer`] may override this to ask the
+    /// model to fuse the two summaries into fluent prose instead.
+    ///
+    /// # Panics
+    ///
+    /// Never panics; an empty `summaries` slice returns an empty summary with
+    /// no provenance rather than panicking, since a caller invoking this with
+    /// nothing to merge is a caller bug, not a data condition worth
+    /// crashing over.
+    async fn merge(&self, summaries: &[SummaryRecord]) -> Result<SummaryRecord> {
+        let mut parts: Vec<String> = Vec::with_capacity(summaries.len() + 1);
+        parts.push("=== Merged Summary ===".to_string());
+        let mut source_ids = Vec::new();
+        let mut original_token_estimate = 0u64;
+        let mut summary_token_estimate = 0u64;
+        for (i, record) in summaries.iter().enumerate() {
+            parts.push(format!("[part {}] {}", i + 1, record.summary.text()));
+            source_ids.extend(record.provenance.source_ids.iter().cloned());
+            original_token_estimate += record.provenance.original_token_estimate;
+            summary_token_estimate += record.provenance.summary_token_estimate;
+        }
+        let summary_text = parts.join("\n");
+        Ok(SummaryRecord {
+            summary: Message::system(summary_text),
+            provenance: CompressionProvenance {
+                source_ids,
+                original_token_estimate,
+                summary_token_estimate,
+                reason: "merged split-turn summaries (default concatenation)".to_string(),
+            },
+        })
+    }
+}
+
+/// Input to [`Summarizer::summarize_request`]: the messages to condense, plus
+/// (when this compaction is not the first in a run) the previous compaction's
+/// summary text so an iterative summarizer can refine rather than restart.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SummaryRequest {
+    /// The messages to condense into a new summary.
+    pub messages: Vec<Message>,
+    /// The summary text produced by the previous [`CompactionRecord`] on this
+    /// run's transcript, when one exists. `None` for the first compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_summary: Option<String>,
+}
+
+impl SummaryRequest {
+    /// Builds a request with no previous summary (the common, first-compaction
+    /// case).
+    pub fn new(messages: Vec<Message>) -> Self {
+        Self {
+            messages,
+            previous_summary: None,
+        }
+    }
+
+    /// Sets the previous summary text for iterative refinement.
+    pub fn with_previous_summary(mut self, previous_summary: impl Into<String>) -> Self {
+        self.previous_summary = Some(previous_summary.into());
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,4 +465,101 @@ impl Default for SummarizationPolicy {
             threshold_fraction: default_threshold_fraction(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Compaction record
+// ---------------------------------------------------------------------------
+
+/// Why a compaction ran.
+///
+/// Mirrors pi's `before_compaction{reason: manual|threshold|overflow}` (see
+/// `docs/runtime-comparison/pi.md` §4.5): the reason is carried through to the
+/// durable [`CompactionRecord`] and to
+/// [`crate::events::AgentEvent::Compacted`] so a host or auditor can tell a
+/// proactive threshold-triggered compaction apart from a reactive
+/// overflow-recovery one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    /// Triggered explicitly by a caller (a `/compact`-style host command).
+    Manual,
+    /// Triggered by [`SummarizationPolicy::should_summarize`] crossing its
+    /// configured token threshold.
+    Threshold,
+    /// Triggered reactively by
+    /// [`crate::summarization::compaction::OverflowClassifier`] classifying a
+    /// model provider error as a context-window overflow, as part of the
+    /// overflow → compact → retry recovery path.
+    Overflow,
+}
+
+impl CompactionReason {
+    /// A stable, lowercase label for this reason (matches the `serde` wire
+    /// form), for logging and event payloads that want a plain string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CompactionReason::Manual => "manual",
+            CompactionReason::Threshold => "threshold",
+            CompactionReason::Overflow => "overflow",
+        }
+    }
+}
+
+/// A durable record of one compaction operation, returned by the compaction
+/// step (see `crate::summarization::compaction`) and, when a
+/// [`CompactionSink`] is attached to the run, handed to it for persistence.
+///
+/// Mirrors pi's `CompactionEntry{summary, firstKeptEntryId, tokensBefore,
+/// usage, details}` (`docs/runtime-comparison/pi.md` §4.5); the session
+/// crate's `tinyagents_session::entry_tree::CompactionEntry` is the durable,
+/// tree-anchored counterpart that a session-backed [`CompactionSink`] writes
+/// this record into, translating [`Self::first_kept_index`] (a position in
+/// the message slice compaction operated over) into that entry tree's
+/// `EntryId`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CompactionRecord {
+    /// The replacement summary text installed as the new leading context.
+    pub summary: String,
+    /// Index, into the non-system message slice compaction operated over, of
+    /// the first message that survives verbatim (everything before it was
+    /// folded into [`Self::summary`]). Matches [`CutPoint::index`] when the
+    /// record was produced from a [`CutPoint`].
+    pub first_kept_index: usize,
+    /// Estimated total tokens of the transcript immediately before
+    /// compaction.
+    pub tokens_before: u64,
+    /// Estimated total tokens of the transcript immediately after
+    /// compaction (summary + kept messages).
+    pub tokens_after: u64,
+    /// Usage/cost of the summarization call(s) that produced
+    /// [`Self::summary`], when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<tinyinference_llm::usage::Usage>,
+    /// Additional host- or policy-defined provenance: which cut-point rule
+    /// fired, split-turn bookkeeping, the hook (if any) that authored or
+    /// replaced the summary, and so on. Defaults to JSON `null`.
+    #[serde(default)]
+    pub details: serde_json::Value,
+    /// Why this compaction ran.
+    pub reason: CompactionReason,
+}
+
+/// A durable sink a host attaches to a [`crate::context::RunContext`] so
+/// every [`CompactionRecord`] a run produces is persisted somewhere durable
+/// (typically a session's `tinyagents_session::entry_tree::EntryTree`),
+/// instead of only living as long as the in-process
+/// [`crate::middleware::ContextCompressionMiddleware::records`] buffer.
+///
+/// `tinyagents-harness` cannot depend on `tinyagents-session` (the dependency
+/// runs the other way), so this trait — not a concrete `Arc<EntryTree>` slot
+/// — is what [`crate::context::RunContext::compaction_sink`] holds; a
+/// session-backed implementation lives in `tinyagents-session`.
+pub trait CompactionSink: Send + Sync {
+    /// Persists `record`. Implementations should be idempotent-safe to call
+    /// once per compaction (the compaction step calls this exactly once per
+    /// successful compaction) and should not block the run indefinitely — a
+    /// slow or failing sink should return promptly with an error rather than
+    /// stall the agent loop.
+    fn persist(&self, record: &CompactionRecord) -> Result<()>;
 }
