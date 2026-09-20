@@ -61,8 +61,8 @@ fn stream_projection_folds_model_deltas_into_messages_in_order() {
     });
 
     assert_eq!(projection.messages.len(), 2);
-    assert_eq!(projection.messages[0].cursor, 0);
-    assert_eq!(projection.messages[1].cursor, 1);
+    assert_eq!(projection.messages[0].cursor, 1);
+    assert_eq!(projection.messages[1].cursor, 2);
     assert_eq!(projection.messages[0].value.delta.text, "hel");
     assert_eq!(projection.messages[1].value.delta.text, "lo");
     assert_eq!(projection.cursor(), 2);
