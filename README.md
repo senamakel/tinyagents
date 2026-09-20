@@ -148,10 +148,12 @@ a testkit for exercising the loop without a live provider.
 
 ## Subagent orchestration
 
-`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` starts
-a child in the background and returns a stable job id immediately;
-`SubAgentJobsTool` queries job status/results and `SubAgentMessageTool` sends
-messages to a live job. `SubAgentSession` covers retained post-completion
+`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a
+typed parent-context dispatcher: it starts a child in the background and
+returns a stable job id immediately. `SubAgentJobsTool` queries job
+status/results and `SubAgentMessageTool` sends messages to a live job;
+hosts register these control tools over the same explicitly shared
+`SubAgentJobRegistry`. `SubAgentSession` covers retained post-completion
 conversations, while `SubagentDriver` coordinates durable lifecycle
 preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
 are intentionally outside this focused crate.

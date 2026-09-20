@@ -168,7 +168,13 @@ impl Tool for SubAgentJobsTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        if let Some(job_id) = args.get("job_id").and_then(Value::as_str) {
+        let object = args
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("arguments must be an object"))?;
+        if let Some(value) = object.get("job_id") {
+            let job_id = value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
             let job = self
                 .jobs
                 .get(job_id)

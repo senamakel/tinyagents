@@ -20,7 +20,8 @@ on orchestration policy.
 The direct invocation implementation and its tool-focused tests live in
 `subagent/invocation/`. Durable lifecycle files live beside it in `subagent/`.
 End-to-end and live subagent tests live in the crate-level `tests/` directory,
-and `examples/orchestrator_subagents.rs` demonstrates job-based delegation.
+and `tests/live_orchestrator_subagents.rs` exercises network-backed job-based
+delegation.
 
 ## Boundaries
 
