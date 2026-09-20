@@ -6114,4 +6114,250 @@ mod tool_effects_test {
             .expect("LedgerFailure::Continue must not fail the run");
         assert_eq!(run.tool_calls, 1);
     }
+
+    // ── `resume_deferred` + tool-effect ledger (reconcile hazard fix) ───────
+
+    use crate::tool::DeferredToolResults;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Raises `ApprovalRequired` on its first invocation (mid-execution
+    /// deferral); on every later invocation, either succeeds or fails per
+    /// `fail_on_retry`, so a test can drive both the `Completed` and `Failed`
+    /// post-resume ledger transitions from the same tool shape.
+    struct ApprovalOnceTool {
+        attempts: AtomicUsize,
+        fail_on_retry: bool,
+    }
+
+    #[async_trait]
+    impl Tool for ApprovalOnceTool {
+        fn name(&self) -> &str {
+            "wire"
+        }
+        fn description(&self) -> &str {
+            "defers once, then runs for real"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+        async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(TinyAgentsError::ApprovalRequired {
+                    metadata: serde_json::Value::Null,
+                }
+                .into());
+            }
+            if self.fail_on_retry {
+                anyhow::bail!("boom");
+            }
+            Ok(ToolResult::success("approved-result"))
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_deferred_settles_the_deferred_row_completed_without_a_synthesized_crash_answer()
+     {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                tool_call_response("call-1", "wire", json!({})),
+                text_response("all done", 4, 2),
+            ])),
+        );
+        harness.register_tool(Arc::new(ApprovalOnceTool {
+            attempts: AtomicUsize::new(0),
+            fail_on_retry: false,
+        }));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger::default());
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_tool_effect_ledger(ledger.clone());
+        let first = harness
+            .invoke_in_context(&(), ctx, vec![Message::user("go")])
+            .await
+            .expect("a mid-execution deferral is not an error");
+        let pending = first.deferred.clone().expect("approval pending");
+        assert_eq!(pending.approvals[0].id, "call-1");
+
+        // The call left `started` only briefly: `defer_started_tool_call`
+        // settles it `Deferred` the instant the deferral is filed, not left
+        // `started` for `reconcile_tool_effects` to mistake for a crash.
+        let effect = ledger
+            .get("run-1", "call-1")
+            .expect("ledger recorded the call");
+        assert_eq!(effect.status, ToolEffectStatus::Deferred);
+        assert!(effect.settled_at.is_some());
+
+        let results = DeferredToolResults::new().approve("call-1");
+        let ctx2: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_tool_effect_ledger(ledger.clone());
+        let run = harness
+            .resume_deferred(&(), ctx2, first.messages.clone(), results)
+            .await
+            .expect("resume completes the run");
+
+        // The call must receive its real answer, never the synthesized
+        // "interrupted before settlement" a crash-reconcile would produce.
+        let answer = run.messages.iter().find_map(|message| match message {
+            Message::Tool(tool) if tool.tool_call_id == "call-1" => Some(message.text()),
+            _ => None,
+        });
+        assert_eq!(answer.as_deref(), Some("approved-result"));
+        assert_eq!(run.text().as_deref(), Some("all done"));
+
+        assert_eq!(
+            ledger.get("run-1", "call-1").unwrap().status,
+            ToolEffectStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_deferred_settles_the_deferred_row_failed_when_the_retry_errors() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![tool_call_response(
+                "call-1",
+                "wire",
+                json!({}),
+            )])),
+        );
+        harness.register_tool(Arc::new(ApprovalOnceTool {
+            attempts: AtomicUsize::new(0),
+            fail_on_retry: true,
+        }));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger::default());
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_tool_effect_ledger(ledger.clone());
+        let first = harness
+            .invoke_in_context(&(), ctx, vec![Message::user("go")])
+            .await
+            .expect("a mid-execution deferral is not an error");
+        assert_eq!(
+            ledger.get("run-1", "call-1").unwrap().status,
+            ToolEffectStatus::Deferred
+        );
+
+        let results = DeferredToolResults::new().approve("call-1");
+        let ctx2: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
+            .with_tool_effect_ledger(ledger.clone());
+        harness
+            .resume_deferred(&(), ctx2, first.messages.clone(), results)
+            .await
+            .expect_err("the retried execution error propagates");
+
+        assert_eq!(
+            ledger.get("run-1", "call-1").unwrap().status,
+            ToolEffectStatus::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_deferred_reconciles_a_crashed_sibling_but_excludes_the_call_it_resolves() {
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![text_response("all done", 4, 2)])),
+        );
+        harness.register_tool(Arc::new(FakeTool::new("approve_tool", "approved-result")));
+        harness.register_tool(Arc::new(ReplayTool {
+            name: "risky_tool",
+            replay: tinytools::ToolReplay::Never,
+        }));
+
+        let ledger = Arc::new(InMemoryToolEffectLedger::default());
+        // `call-a` was deliberately deferred mid-execution (already settled
+        // `Deferred`, matching what `defer_started_tool_call` does).
+        ledger
+            .started(ToolEffectStart {
+                run_id: RunId::new("run-x"),
+                call_id: CallId::new("call-a"),
+                tool: "approve_tool".to_string(),
+                idempotency_key: "key-a".to_string(),
+                effect_summary: None,
+            })
+            .await
+            .unwrap();
+        ledger
+            .settled(ToolEffectSettle {
+                run_id: RunId::new("run-x"),
+                call_id: CallId::new("call-a"),
+                status: ToolEffectStatus::Deferred,
+                effect_summary: None,
+            })
+            .await
+            .unwrap();
+        // `call-b`'s process crashed mid-flight: admitted and started, but
+        // never settled or deferred — the genuine crash artifact.
+        ledger
+            .started(ToolEffectStart {
+                run_id: RunId::new("run-x"),
+                call_id: CallId::new("call-b"),
+                tool: "risky_tool".to_string(),
+                idempotency_key: "key-b".to_string(),
+                effect_summary: None,
+            })
+            .await
+            .unwrap();
+
+        let recorder = crate::testkit::EventRecorder::new();
+        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-x"), ())
+            .with_events(recorder.sink())
+            .with_tool_effect_ledger(ledger.clone());
+
+        let messages = vec![
+            Message::user("go"),
+            Message::Assistant(AssistantMessage {
+                id: None,
+                content: Vec::new(),
+                tool_calls: vec![
+                    ToolCall::new("call-a", "approve_tool", json!({})),
+                    ToolCall::new("call-b", "risky_tool", json!({})),
+                ],
+                usage: None,
+                origin: None,
+            }),
+        ];
+        let results = DeferredToolResults::new().approve("call-a");
+
+        let run = harness
+            .resume_deferred(&(), ctx, messages, results)
+            .await
+            .expect("resume completes despite the crashed sibling");
+
+        // `call-b` had no live `results` entry: `reconcile_tool_effects`
+        // (run before `results` is applied) answered it as interrupted,
+        // per its default `ToolReplay::Never`.
+        let call_b_answer = run.messages.iter().find_map(|message| match message {
+            Message::Tool(tool) if tool.tool_call_id == "call-b" => Some(message.text()),
+            _ => None,
+        });
+        assert_eq!(call_b_answer.as_deref(), Some("interrupted before settlement"));
+        assert_eq!(
+            ledger.get("run-x", "call-b").unwrap().status,
+            ToolEffectStatus::Interrupted
+        );
+
+        // `call-a` is exactly what `results` resolves: it must not receive a
+        // synthesized crash answer, and it ran for real through the approval
+        // path instead.
+        let call_a_answer = run.messages.iter().find_map(|message| match message {
+            Message::Tool(tool) if tool.tool_call_id == "call-a" => Some(message.text()),
+            _ => None,
+        });
+        assert_eq!(call_a_answer.as_deref(), Some("approved-result"));
+        assert_eq!(
+            ledger.get("run-x", "call-a").unwrap().status,
+            ToolEffectStatus::Completed
+        );
+
+        assert!(
+            recorder
+                .kinds()
+                .contains(&"tool.effect_reconciled".to_string()),
+            "the crashed sibling was reconciled"
+        );
+    }
 }
