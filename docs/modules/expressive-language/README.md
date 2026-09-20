@@ -396,4 +396,6 @@ help: did you mean `tools`?
 
 Continues in [`reference.md`](reference.md) (node kinds, binding to
 Rust, state model, routes, policies, comments/strings, safety,
-examples, formatting, testkit, milestones).
+examples, formatting, testkit, milestones), split into
+[`reference-nodes.md`](reference-nodes.md) and
+[`reference-graph.md`](reference-graph.md).
