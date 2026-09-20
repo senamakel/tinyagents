@@ -90,7 +90,7 @@ fn pending_activation_send_arg_roundtrips() {
         1i32,
         vec![super::PendingActivation {
             node: NodeId::from("w"),
-            send_arg: Some(json!({ "item": 42 })),
+            send_arg: Some(std::sync::Arc::new(json!({ "item": 42 }))),
             task_id: tinyagents_harness::ids::TaskId::from("1:0:w"),
         }],
     )
