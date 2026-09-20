@@ -220,10 +220,12 @@ where
 
     /// Runs one node handler under the node's effective retry policy.
     ///
-    /// Builds a fresh handler future (and re-clones the context) for each
-    /// attempt, so a retried node re-runs from its start — matching the
-    /// durable execution model, where a node is never suspended mid-flight.
-    /// On a [retryable][tinyagents_harness::retry::is_retryable] error, when
+    /// Builds a fresh handler future (re-cloning the context, and — M2 —
+    /// sharing this step's `Arc<State>` via `Arc::clone` rather than
+    /// re-cloning `State`) for each attempt, so a retried node re-runs from
+    /// its start — matching the durable execution model, where a node is
+    /// never suspended mid-flight. On a
+    /// [retryable][tinyagents_harness::retry::is_retryable] error, when
     /// a [`RetryPolicy`](tinyagents_harness::retry::RetryPolicy) is
     /// configured and permits another attempt, it emits
     /// [`GraphEvent::NodeRetryScheduled`], sleeps the (opt-in) backoff, and
