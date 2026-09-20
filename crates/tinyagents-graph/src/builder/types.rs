@@ -29,8 +29,19 @@ pub type NodeFuture<Update> = Pin<Box<dyn Future<Output = Result<NodeResult<Upda
 
 /// A durable node handler: receives a state snapshot and per-task context,
 /// returns a [`NodeResult`].
+///
+/// Internally every handler receives the step's committed state as an
+/// `Arc<State>` (M2 in `docs/runtime-comparison/code-review-graph.md`): a
+/// superstep clones `State` at most once (building this `Arc`), and every
+/// branch/attempt within that step shares it via a cheap `Arc::clone`
+/// instead of re-cloning the whole state. [`super::GraphBuilder::add_node`]
+/// (the by-value convenience entry point) is a thin adapter over this
+/// signature that clones out of the `Arc` on every invocation; callers that
+/// want the zero-clone path use
+/// [`super::GraphBuilder::add_node_shared`], whose closure receives the
+/// `Arc<State>` directly.
 pub type NodeHandler<State, Update> =
-    dyn Fn(State, NodeContext) -> NodeFuture<Update> + Send + Sync;
+    dyn Fn(Arc<State>, NodeContext) -> NodeFuture<Update> + Send + Sync;
 
 /// A conditional routing function over committed state. Returns a route label
 /// resolved against the node's route table at the step boundary.
