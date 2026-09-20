@@ -187,7 +187,7 @@ where
                     ..state
                 }))
             }
-            Err(error) => Err(settle_infra_error(&engine, &run_id, &owner, state, error).await),
+            Err(error) => settle_infra_error(&engine, &run_id, &owner, state, error).await,
         };
     }
 
@@ -221,7 +221,7 @@ where
                     ..state
                 }))
             }
-            Err(error) => Err(settle_infra_error(&engine, &run_id, &owner, state, error).await),
+            Err(error) => settle_infra_error(&engine, &run_id, &owner, state, error).await,
         };
     }
 
@@ -247,7 +247,7 @@ where
                 ..state
             }))
         }
-        Err(error) => Err(settle_infra_error(&engine, &run_id, &owner, state, error).await),
+        Err(error) => settle_infra_error(&engine, &run_id, &owner, state, error).await,
     }
 }
 
@@ -311,7 +311,7 @@ where
                 Ok(NodeResult::Update(next))
             }
         }
-        Err(error) => Err(settle_infra_error(&engine, &run_id, &owner, state, error).await),
+        Err(error) => settle_infra_error(&engine, &run_id, &owner, state, error).await,
     }
 }
 
