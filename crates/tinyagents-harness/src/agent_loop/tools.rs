@@ -1869,7 +1869,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .collect();
         let unanswered: Vec<&ToolCall> = pending_calls
             .iter()
-            .filter(|call| !already_answered.contains(call.id.as_str()))
+            .filter(|call| {
+                !already_answered.contains(call.id.as_str())
+                    && !excluded.contains(&CallId::new(call.id.clone()))
+            })
             .collect();
         if unanswered.is_empty() {
             return Ok(synthesized);
