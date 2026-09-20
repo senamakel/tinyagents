@@ -63,6 +63,9 @@ pub enum ToolEffectStatus {
     Failed,
     /// Left `started` across a resume and settled as unsafe to re-execute.
     Interrupted,
+    /// Paused mid-execution by the tool itself (`ApprovalRequired`/
+    /// `CallDeferred`) and waiting on a resume to answer it.
+    Deferred,
 }
 
 impl ToolEffectStatus {
