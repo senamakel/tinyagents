@@ -104,7 +104,10 @@ fn pending_activation_send_arg_roundtrips() {
     let round: Checkpoint<i32> =
         serde_json::from_str(&serde_json::to_string(&cp).unwrap()).unwrap();
     assert_eq!(round.version, super::CHECKPOINT_FORMAT_VERSION);
-    assert_eq!(round.tasks[0].send_arg, Some(json!({ "item": 42 })));
+    assert_eq!(
+        round.tasks[0].send_arg,
+        Some(std::sync::Arc::new(json!({ "item": 42 })))
+    );
     assert_eq!(round.barrier_arrivals[0].arrived, vec![NodeId::from("p1")]);
 }
 
