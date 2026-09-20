@@ -2,7 +2,6 @@
 members = ["crates/*"]
 default-members = [
     "crates/tinyagents-harness",
-    "crates/tinyagents-language",
     "crates/tinyagents-graph",
     "crates/tinyagents-registry",
     "crates/tinyagents-session",

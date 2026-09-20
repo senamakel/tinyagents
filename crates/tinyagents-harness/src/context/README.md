@@ -6,7 +6,7 @@ a harness run.
 ## Why this exists
 
 `RunContext` is the unit of recursion in the runtime: every nested layer — a
-sub-agent, a sub-graph, a REPL-driven sub-call — runs inside its own context.
+sub-agent or a sub-graph — runs inside its own context.
 `RunConfig::depth`/`RunConfig::max_depth` plus `RunConfig::child` track and
 bound how deep that recursion may go, while a shared `CancellationToken` and
 event sink let cancellation signals and observability flow across the whole
@@ -58,8 +58,8 @@ middleware, the agent loop, and graph nodes code against.
   of the two; an unset cap lets the policy raise or lower it freely. Do not
   collapse this back to a plain default — that reintroduced a real bug once
   (see the field doc on `max_model_calls`).
-- Every recursion surface (`SubAgent`, its reuse-session tool, the REPL
-  sub-run builtin) must route its `depth + 1` check through
+- Every recursion surface (`SubAgent` and its reuse-session tool) must route
+  its `depth + 1` check through
   `RunConfig::checked_child_depth` rather than reimplementing the comparison,
   so the fail-closed depth guard cannot drift out of sync between call sites.
 - `RunContext::child` shallow-merges metadata automatically (object keys

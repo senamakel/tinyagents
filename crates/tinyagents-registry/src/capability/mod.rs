@@ -2,21 +2,16 @@
 //! behind recursion.
 //!
 //! This is where a name like `"researcher"` or `"summarize"` becomes a real,
-//! callable handle. By registering capabilities here and then handing the
-//! registry to the language layer, a parent run lets a `.rag` blueprint or a
-//! host session spawn sub-models, sub-agents, and sub-graphs it never
-//! hardcoded — while the registry's allowlist guarantees those references can
-//! only resolve to capabilities a human actually registered.
+//! callable handle. A host session can use the registry to resolve sub-models,
+//! sub-agents, and sub-graphs without hardcoding their concrete implementations.
 //!
 //! See `types` for the data definitions. This module provides registration,
 //! lookup, aliasing, duplicate validation, and conveniences for handing the
 //! catalog's models and tools to a harness ([`to_model_registry`] /
-//! [`to_tool_registry`]) or to the `.rag` capability resolver
-//! ([`capability_resolver`]).
+//! [`to_tool_registry`]).
 //!
 //! [`to_model_registry`]: CapabilityRegistry::to_model_registry
 //! [`to_tool_registry`]: CapabilityRegistry::to_tool_registry
-//! [`capability_resolver`]: CapabilityRegistry::capability_resolver
 
 mod types;
 
@@ -26,8 +21,6 @@ use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::model_registry::ModelRegistry;
 use tinyagents_harness::tool::ToolRegistry;
-use tinyagents_language::Blueprint;
-use tinyagents_language::capability_resolver::CapabilityResolver;
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
@@ -39,7 +32,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         Self {
             models: std::collections::HashMap::new(),
             tools: std::collections::HashMap::new(),
-            graphs: std::collections::HashMap::new(),
             agents: std::collections::HashMap::new(),
             meta: std::collections::HashMap::new(),
             aliases: std::collections::HashMap::new(),
@@ -133,42 +125,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     }
 
     // -----------------------------------------------------------------------
-    // Registration: graph blueprints
-    // -----------------------------------------------------------------------
-
-    /// Registers a compiled graph [`Blueprint`] under `name`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TinyAgentsError::DuplicateComponent`] if a blueprint is already
-    /// registered under `name`. Use
-    /// [`replace_graph_blueprint`](Self::replace_graph_blueprint) to overwrite.
-    pub fn register_graph_blueprint(
-        &mut self,
-        name: impl Into<String>,
-        blueprint: Blueprint,
-    ) -> Result<&mut Self> {
-        let name = name.into();
-        self.ensure_absent(ComponentKind::Graph, &name)?;
-        self.record_meta(ComponentKind::Graph, &name);
-        self.graphs.insert(name, blueprint);
-        Ok(self)
-    }
-
-    /// Registers or overwrites a graph [`Blueprint`] under `name`, preserving
-    /// any existing metadata.
-    pub fn replace_graph_blueprint(
-        &mut self,
-        name: impl Into<String>,
-        blueprint: Blueprint,
-    ) -> &mut Self {
-        let name = name.into();
-        self.record_meta(ComponentKind::Graph, &name);
-        self.graphs.insert(name, blueprint);
-        self
-    }
-
-    // -----------------------------------------------------------------------
     // Registration: executable agents
     // -----------------------------------------------------------------------
 
@@ -211,9 +167,8 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
 
     /// Registers a router (conditional-routing function) by name.
     ///
-    /// Routers are name-only descriptors for now: the registry records that the
-    /// name is an allowed router so `.rag` sources can bind to it, but the
-    /// executable routing logic lives in Rust.
+    /// Routers are name-only descriptors; executable routing logic lives in
+    /// Rust.
     ///
     /// # Errors
     ///
@@ -236,11 +191,11 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// [`register_reducer`](Self::register_reducer), and is the general
     /// public fallback for every other kind that has no dedicated typed
     /// registration method — [`ComponentKind::Store`],
-    /// [`ComponentKind::Script`], [`ComponentKind::Middleware`],
+    /// [`ComponentKind::Graph`], [`ComponentKind::Middleware`],
     /// [`ComponentKind::Checkpointer`], [`ComponentKind::TaskStore`], and
     /// [`ComponentKind::Listener`]. [`ComponentKind::Model`],
-    /// [`ComponentKind::Tool`], [`ComponentKind::Graph`], and
-    /// [`ComponentKind::Agent`] have their own dedicated `register_*` methods
+    /// [`ComponentKind::Tool`] and [`ComponentKind::Agent`] have dedicated
+    /// `register_*` methods
     /// instead.
     ///
     /// # Errors
@@ -338,12 +293,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         self.tools.get(&canonical).cloned()
     }
 
-    /// Looks up a registered graph blueprint by name or alias.
-    pub fn graph_blueprint(&self, name: &str) -> Option<&Blueprint> {
-        let canonical = self.resolve_name(ComponentKind::Graph, name)?;
-        self.graphs.get(&canonical)
-    }
-
     /// Returns `true` when `name` (or an alias of it) is registered for `kind`.
     pub fn has(&self, kind: ComponentKind, name: &str) -> bool {
         self.resolve_name(kind, name).is_some()
@@ -365,10 +314,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Returns the canonical registered names for `kind` *and* every alias of
     /// that kind, in sorted, de-duplicated order.
     ///
-    /// This is the set of names declarative `.rag` source may reference
-    /// for `kind`: both the canonical registration and any alias resolve to a
-    /// real component, so both are valid references. It backs
-    /// [`CapabilityResolver::from_registry`].
+    /// Both canonical registrations and aliases resolve to real components.
     pub fn names_including_aliases(&self, kind: ComponentKind) -> Vec<String> {
         let mut names = self.names(kind);
         for (k, alias) in self.aliases.keys() {
@@ -388,7 +334,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     }
 
     // -----------------------------------------------------------------------
-    // Handoff to harness / language layers
+    // Handoff to harness registries
     // -----------------------------------------------------------------------
 
     /// Builds a harness [`ModelRegistry`] from the registered models, including
@@ -423,21 +369,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
             registry.register(tool.clone());
         }
         registry
-    }
-
-    /// Builds a fully populated `.rag` [`CapabilityResolver`] from every
-    /// registered capability — models, tools, graph blueprints, routers, and
-    /// reducers, including their aliases — plus the default node kinds.
-    ///
-    /// This is the bridge the language layer uses: declarative source may only
-    /// reference names that this registry has registered (or aliased), which is
-    /// what makes agent-authored `.rag` safe to compile. The returned resolver
-    /// is equivalent to [`CapabilityResolver::from_registry`] and enables the
-    /// strict checks (subgraph/router/reducer references and node kinds) when
-    /// used with [`CapabilityResolver::bind_blueprint`] or
-    /// [`bind_capabilities_with_registry`](tinyagents_language::bind_capabilities_with_registry).
-    pub fn capability_resolver(&self) -> CapabilityResolver {
-        CapabilityResolver::from_registry(self)
     }
 
     // -----------------------------------------------------------------------

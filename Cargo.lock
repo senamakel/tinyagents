@@ -1474,7 +1474,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tinyagents-harness",
- "tinyagents-language",
  "tinyagents-tracing",
  "tinyinference-llm",
  "tinytools",
@@ -1493,6 +1492,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures",
+ "libc",
  "log",
  "regex",
  "reqwest",
@@ -1530,7 +1530,6 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-graph",
  "tinyagents-harness",
- "tinyagents-language",
  "tinyagents-orchestration",
  "tinyagents-registry",
  "tinyagents-session",
@@ -1538,15 +1537,6 @@ dependencies = [
  "tinyinference-llm",
  "tinytools",
  "tokio",
-]
-
-[[package]]
-name = "tinyagents-language"
-version = "2.1.2"
-dependencies = [
- "serde",
- "serde_json",
- "tinyagents-harness",
 ]
 
 [[package]]
@@ -1581,7 +1571,6 @@ dependencies = [
  "serde_json",
  "tinyagents-definition",
  "tinyagents-harness",
- "tinyagents-language",
  "tinyinference-llm",
  "tinytools",
  "tokio",

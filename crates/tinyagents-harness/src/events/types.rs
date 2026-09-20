@@ -799,6 +799,9 @@ pub struct EventSink {
     pub(crate) inner: Arc<Mutex<EventSinkInner>>,
 }
 
+type ListenerSnapshot = Arc<Vec<Arc<dyn EventListener>>>;
+type PendingEvent = (EventRecord, ListenerSnapshot);
+
 /// Interior state shared among all clones of an [`EventSink`].
 pub(crate) struct EventSinkInner {
     /// Stream-scoping prefix for emitted [`EventId`]s. Combined with the
@@ -808,12 +811,14 @@ pub(crate) struct EventSinkInner {
     pub(crate) stream_id: String,
     /// Next offset to assign; incremented atomically on each `emit`.
     pub(crate) next_offset: u64,
-    /// Registered listeners, notified in insertion order.
-    pub(crate) listeners: Vec<Arc<dyn EventListener>>,
+    /// Registered listeners, notified in insertion order. Stored behind an
+    /// `Arc` so each emitted event takes a cheap immutable snapshot without
+    /// allocating and cloning the full listener vector.
+    pub(crate) listeners: ListenerSnapshot,
     /// Records assigned an offset but not yet delivered to listeners, in
     /// offset order. Each entry carries the listener snapshot taken when the
     /// offset was assigned so late subscribers never see earlier offsets.
-    pub(crate) pending: std::collections::VecDeque<(EventRecord, Vec<Arc<dyn EventListener>>)>,
+    pub(crate) pending: std::collections::VecDeque<PendingEvent>,
     /// `true` while some emitter is draining `pending`. Guarantees a single
     /// drainer at a time, which is what makes listener delivery globally
     /// ordered by offset (and keeps re-entrant emits from listeners safe:

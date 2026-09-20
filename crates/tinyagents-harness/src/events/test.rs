@@ -188,6 +188,29 @@ fn smoke_sink_clone_shares_state() {
 }
 
 #[test]
+fn listener_free_emits_do_not_build_a_dispatch_backlog() {
+    let sink = EventSink::with_stream_id("empty-fast-path");
+    let clones = (0..16).map(|_| sink.clone()).collect::<Vec<_>>();
+    std::thread::scope(|scope| {
+        for clone in clones {
+            scope.spawn(move || {
+                for index in 0..1_000 {
+                    clone.emit(AgentEvent::RunStarted {
+                        run_id: RunId::new(format!("run-{index}")),
+                        thread_id: None,
+                    });
+                }
+            });
+        }
+    });
+
+    let inner = super::lock_recovering(&sink.inner);
+    assert_eq!(inner.next_offset, 16_000);
+    assert!(inner.pending.is_empty());
+    assert!(!inner.dispatching);
+}
+
+#[test]
 fn sink_listener_can_emit_to_same_sink_without_deadlock() {
     let sink = EventSink::new();
     let recorder = Arc::new(RecordingListener::new());
