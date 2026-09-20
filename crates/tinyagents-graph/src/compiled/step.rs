@@ -490,10 +490,16 @@ where
         state: &State,
         step: usize,
     ) -> Result<StepRun<Update>> {
+        // M2: clone `State` exactly once per superstep, into an `Arc` that
+        // every branch/attempt below shares via a cheap `Arc::clone` — the
+        // boundary above and below this call still deal in a plain `&State`
+        // (`RunCtx`/`boundary`/`executor` are unchanged), so this is the one
+        // place the per-attempt clone the review flagged is eliminated.
+        let state = Arc::new(state.clone());
         let outcome = if self.graph.parallel && active.len() > 1 {
-            self.run_parallel(ctx, active, state, step).await?
+            self.run_parallel(ctx, active, &state, step).await?
         } else {
-            self.run_sequential(ctx, active, state, step).await?
+            self.run_sequential(ctx, active, &state, step).await?
         };
         Ok(self.fold_step(outcome, active, step, &mut ctx.visited))
     }
