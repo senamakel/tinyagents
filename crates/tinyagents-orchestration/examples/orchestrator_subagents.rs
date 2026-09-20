@@ -256,7 +256,11 @@ async fn main() -> Result<()> {
         }
     })
     .await
-    .map_err(|_| "subagent jobs did not finish within two minutes")?;
+    .map_err(|_| {
+        tinyagents_harness::TinyAgentsError::Validation(
+            "subagent jobs did not finish within two minutes".into(),
+        )
+    })?;
 
     for (name, text) in &outputs {
         println!("── {name} ──\n{text}\n");
