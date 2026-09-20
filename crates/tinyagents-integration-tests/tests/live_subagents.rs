@@ -26,7 +26,6 @@ async fn live_openai_parent_composes_child_subagent() {
     use tinyagents_harness::subagent::ChildDataPolicy;
     use tinyagents_harness::testkit::{EventRecorder, Trajectory};
     use tinyagents_harness::*;
-    use tinyagents_language::*;
     use tinyagents_registry::*;
     use tinyinference_llm::message::Message;
     use tinyinference_llm::providers::openai::OpenAiModel;

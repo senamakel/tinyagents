@@ -3,9 +3,8 @@
 Structured output: how a caller gets *typed values* back out of a model call
 instead of free-form prose. In the recursive architecture this is the
 boundary that turns a model's output into a program input — it underpins
-agents that return machine-checkable results and, at the deepest level, a
-model emitting a schema-conformant `.rag` blueprint the same runtime then
-compiles and runs.
+agents that return machine-checkable results or schema-conformant data for the
+runtime to consume next.
 
 ## Design
 
@@ -90,6 +89,6 @@ it, each owned by its own submodule:
 
 `response_format_for_strategy` supplies the `ResponseFormat` for a
 `tinyinference_llm::model::ModelRequest`; `repair::parse_lenient` reuses
-`crate::relaxed_json::recover_relaxed_object`, the same relaxed-JSON repair
+`tinytools_agent::repair::json::recover_object`, the same relaxed-JSON repair
 tool-call argument parsing already uses, rather than a second divergent
 implementation.

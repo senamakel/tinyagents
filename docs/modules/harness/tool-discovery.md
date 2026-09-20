@@ -121,11 +121,15 @@ quarter earlier instead of overflowing.
 ## Prompt-guided models
 
 For models without native tool calling the tool list is rendered into the
-system prompt. It now uses a compact TypeScript-style signature per tool —
-`Arguments: {path: string, limit?: integer}` plus one note per described
-top-level argument — instead of the raw JSON Schema (`tool::type_signature`,
-`tool::argument_notes`). Constraints and nested descriptions are dropped; the
-native path is unaffected.
+system prompt by `tinytools-agent` (see [tool-dialect.md](tool-dialect.md)),
+not by this crate: the JSON-in-tag dialect lists each tool's parameter
+schema, and the P-Format dialect lists a compact positional call signature
+(`read_file[0|<path>|1|<limit>]`). The bridge schemas above go through the same
+renderer as any other tool, so `tool_search` / `tool_call` are callable from
+either text dialect. `tool::type_signature` / `tool::argument_notes` remain
+available as compact TypeScript-style formatters
+(`{path: string, limit?: integer}`) for hosts that build their own prompt
+text. The native path is unaffected.
 
 ## Live proof
 

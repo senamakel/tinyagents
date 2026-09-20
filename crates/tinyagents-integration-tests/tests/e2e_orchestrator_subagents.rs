@@ -36,7 +36,6 @@ use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ResponseFormat;

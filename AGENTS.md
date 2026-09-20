@@ -6,12 +6,9 @@ TinyAgents is a Rust 2024 virtual workspace rooted at `Cargo.toml`. It has no
 compatibility facade crate: consumers depend directly on the focused package
 that owns an API. The public packages are `crates/tinyagents-graph/` (durable
 typed state graphs), `crates/tinyagents-harness/` (provider-neutral model
-calls, tools, middleware, and streaming), `crates/tinyagents-language/` (the
-declarative `.rag` blueprint format), `crates/tinyagents-registry/` (the named
-capability catalog), `crates/tinyagents-session/` (durable session data),
-`crates/tinyagents-definition/` (the host-owned agent definition vocabulary),
-and `crates/tinyagents-orchestration/` (host-neutral team/workflow
-composition over the graph, harness, and session layers).
+calls, tools, middleware, and streaming), `crates/tinyagents-registry/` (the named
+capability catalog), and `crates/tinyagents-session/` (durable session data).
+`crates/tinyagents-tracing/` supplies shared opt-in tracing macros, while
 `crates/tinyagents-integration-tests/` owns cross-crate tests and examples.
 
 Prefer small, focused modules that do one thing extremely well. New feature
@@ -27,7 +24,7 @@ Cargo features are package-local. `tinyagents-harness` exposes `sqlite`,
 compiled out by default.
 
 Integration tests are in `crates/tinyagents-integration-tests/tests/`, covering serialization, graph routing,
-registry binding, the expressive language, streaming, subagents,
+registry binding, streaming, subagents,
 and provider contracts (including live, network-gated tests such as
 `tests/live_*.rs`). Runnable usage examples are in
 `crates/tinyagents-integration-tests/examples/`, especially `basic_graph.rs`.

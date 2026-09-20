@@ -12,11 +12,13 @@
 
 mod protocol;
 
-use crate::tool::{coalesce_prompt_tool_results, with_prompt_tool_instructions};
 use anyhow::Context;
 use async_trait::async_trait;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
+use tinyinference_llm::prompt_tools::{
+    coalesce_tool_results, recover_tool_calls, with_tool_instructions,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -367,8 +369,8 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        let messages = coalesce_prompt_tool_results(&request.messages);
-        let messages = with_prompt_tool_instructions(&messages, &request.tools);
+        let messages = coalesce_tool_results(&request.messages);
+        let messages = with_tool_instructions(&messages, &request.tools, &request.tool_choice);
         let system = coalesce_system_prompt(&messages);
         let transcript = render_transcript(&messages);
         let model = request
@@ -385,7 +387,7 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         Ok(if request.tools.is_empty() {
             response
         } else {
-            crate::tool::apply_prompt_tool_calls(response)
+            recover_tool_calls(response, &request.tools)
         })
     }
 }

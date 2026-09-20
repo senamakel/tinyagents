@@ -97,16 +97,6 @@ fn structured_variants_render_their_named_fields() {
         interrupted.to_string(),
         "graph interrupted at node `approve`: need a human"
     );
-
-    let parse = TinyAgentsError::Parse {
-        message: "unexpected token".into(),
-        line: 4,
-        column: 12,
-    };
-    assert_eq!(
-        parse.to_string(),
-        "parse error at line 4, column 12: unexpected token"
-    );
 }
 
 #[test]

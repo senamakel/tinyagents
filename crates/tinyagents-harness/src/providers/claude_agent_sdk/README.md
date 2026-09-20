@@ -44,12 +44,12 @@ rather than hanging the caller.
 ## Tool calling
 
 `ModelProfile` carries no native tool-calling flag override here — when the
-request declares tools, `mod.rs` runs the harness's prompt-tool
-instructions/coalescing (`crate::tool::with_prompt_tool_instructions`,
-`crate::tool::coalesce_prompt_tool_results`) on the way in and
-`crate::tool::apply_prompt_tool_calls` on the way out, the same
-prompt-guided tool-calling convention used elsewhere in the harness for
-models without native tool support.
+request declares tools, `mod.rs` runs the shared prompt-tool
+instructions/coalescing (`tinyinference_llm::prompt_tools::with_tool_instructions`,
+`tinyinference_llm::prompt_tools::coalesce_tool_results`) on the way in and
+`tinyinference_llm::prompt_tools::recover_tool_calls` on the way out — the
+`tinytools-agent` protocol used everywhere in the harness for models without
+native tool support.
 
 ## Selection
 

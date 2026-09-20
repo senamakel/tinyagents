@@ -6,12 +6,10 @@
 //! assistant text, and a single malformed brace on the final turn discarded the
 //! whole run — every tool call and token already spent. Meanwhile the crate
 //! already carried a repair ladder for the *other* place a model emits JSON:
-//! tool-call arguments, repaired by
-//! [`recover_tool_arguments`][rta] over
-//! [`relaxed_json`][rj]. Structured output got none of it.
+//! tool-call arguments, repaired by the protocol crate's
+//! [`recover_object`][rj]. Structured output got none of it.
 //!
-//! [rta]: tinyinference_llm::providers::openai
-//! [rj]: tinyinference_llm::providers::openai::relaxed_json
+//! [rj]: tinytools_agent::repair::json::recover_object
 //!
 //! # The ladder
 //!
@@ -25,7 +23,7 @@
 //! | `Strict` | nothing — the input was already valid | — |
 //! | `CodeFence` | ```` ```json … ``` ```` wrappers | ubiquitous |
 //! | `Slice` | prose around the value (`Here is the JSON: {…}`) | — |
-//! | `Relaxed` | unquoted keys, doubled braces, leaked chat-template quote tokens | [`relaxed_json`][rj] |
+//! | `Relaxed` | unquoted keys, doubled braces, leaked chat-template quote tokens | [`recover_object`][rj] |
 //! | `Closed` | truncated output: unterminated strings and unclosed brackets | LangChain `parse_partial_json` |
 //!
 //! # What it deliberately does not do
@@ -96,29 +94,35 @@ pub fn parse_lenient(raw: &str) -> Option<(Value, JsonRepair)> {
     if unfenced != trimmed
         && let Ok(value) = serde_json::from_str::<Value>(unfenced)
     {
-        tracing::debug!("[structured::repair] recovered JSON by removing a markdown code fence");
+        tinyagents_tracing::debug!(
+            "[structured::repair] recovered JSON by removing a markdown code fence"
+        );
         return Some((value, JsonRepair::CodeFence));
     }
 
     if let Some(sliced) = slice_json_span(unfenced)
         && let Ok(value) = serde_json::from_str::<Value>(sliced)
     {
-        tracing::debug!(
+        tinyagents_tracing::debug!(
             "[structured::repair] recovered JSON by slicing it out of surrounding text"
         );
         return Some((value, JsonRepair::Slice));
     }
 
-    // Reuses the crate's existing relaxed-JSON repairs rather than a second,
+    // Reuses the protocol crate's repair ladder rather than a second,
     // divergent implementation. It only yields objects, which is the shape a
     // JSON-Schema structured output almost always declares.
-    if let Some(value) = crate::relaxed_json::recover_relaxed_object(unfenced) {
-        tracing::debug!("[structured::repair] recovered JSON through the relaxed-JSON repairs");
+    if let Some(value) = tinytools_agent::repair::json::recover_object(unfenced) {
+        tinyagents_tracing::debug!(
+            "[structured::repair] recovered JSON through the relaxed-JSON repairs"
+        );
         return Some((value, JsonRepair::Relaxed));
     }
 
     if let Some(value) = close_truncated(unfenced) {
-        tracing::debug!("[structured::repair] recovered JSON by closing a truncated value");
+        tinyagents_tracing::debug!(
+            "[structured::repair] recovered JSON by closing a truncated value"
+        );
         return Some((value, JsonRepair::Closed));
     }
 

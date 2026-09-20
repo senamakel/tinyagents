@@ -4,10 +4,13 @@ Harness-side registration, projection, and execution support for canonical
 tools. Tool *vocabulary* (`Tool`, `ToolCall`, `ToolResult`, `ToolPolicy`,
 `ToolTimeout`, `WorkspaceDescriptor`, ...) belongs to the `tinytools` crate;
 this module owns only the host concerns that sit between a declared tool and
-a live agent run: name lookup, provider-schema projection, prompt-guided
-(text-mode) tool calling, injected-argument enforcement, timeout resolution,
-and the explicit recursive-dispatch handoff for tools that must see the typed
-parent run.
+a live agent run: name lookup, provider-schema projection, injected-argument
+enforcement, timeout resolution, and the explicit recursive-dispatch handoff
+for tools that must see the typed parent run. Prompt-guided (text-mode) tool
+calling is *not* owned here: the protocol (render, parse, repair, stream
+scrub) lives in `tinytools-agent`, reached through
+`tinyinference_llm::prompt_tools`, and the host-side dialect choice lives in
+`agent_loop/dialect.rs`.
 
 ## Public surface
 
@@ -79,30 +82,17 @@ path, not by this module itself.
 - `require_all_properties` / `set_additional_properties_false` — the two
   halves of OpenAI strict-mode sanitization.
 
-### Prompt-guided (text-mode) tool calling (`prompt.rs`)
+### Prompt-guided (text-mode) tool calling
 
-For provider adapters whose model profile has no native tool calling:
-
-- `prompt_tool_instructions` / `with_prompt_tool_instructions` — embed the
-  `<tool_call>` protocol and the tool catalogue into the system prompt.
-- `coalesce_prompt_tool_results` — renders structured assistant tool calls
-  back into `<tool_call>` text and folds consecutive tool results into one
-  `[Tool results]` user turn.
-- `ensure_resolvable_user_turn` — inserts a content-free continuation user
-  turn when none is present, so chat templates that hard-require a locatable
-  user query (e.g. Qwen 3's) don't reject the request outright.
-- `parse_prompt_tool_calls_from_text` — extracts `<tool_call>` blocks (and
-  DeepSeek's native delimiter) from completed text into `ToolCall`s.
-- `ToolCallStreamScrubber` — the streaming counterpart: scrubs `<tool_call>`
-  markup out of live text deltas as fragments arrive, holding back any tail
-  that could still grow into an opening delimiter.
-- `should_recover` / `apply_prompt_tool_calls` — decide whether text-mode
-  recovery should run over a completed `ModelResponse` (always for
-  prompt-guided models, as a fallback for native models that returned no
-  structured calls) and perform it.
-- `SYNTHETIC_CALL_ID_PREFIX` / `next_synthetic_call_id` — mint
-  process-unique, human-readable ids (`ptc_{sequence}_{slot}`) for a recovered
-  call, since a per-response counter collides across turns.
+Not implemented in this module. The `<tool_call>` / P-Format protocols —
+instructions, catalogue rendering, coalescing of tool results into a user
+turn, `ensure_resolvable_user_turn`, parsing, argument repair, and the
+streaming scrubber — are owned by `tinytools-agent` and exposed to adapters
+through `tinyinference_llm::prompt_tools` (`with_tool_instructions`,
+`coalesce_tool_results`, `recover_tool_calls`, `TextScrubber`). The agent
+loop selects the run's dialect (`RunPolicy::tool_dialect`) and mints
+`{model_call_id}-tool-{n}` ids for calls recovered from text in
+`agent_loop/dialect.rs`. See `docs/modules/harness/tool-dialect.md`.
 
 ### Timeouts (`timeout.rs`)
 
@@ -129,7 +119,6 @@ the model. Re-exported here as `pub mod select` and via `pub use select::*`.
 | `injected.rs` | Injected (host-only) argument stripping and schema projection. |
 | `schema.rs` | `SchemaCleanr`, `CleaningStrategy`; low-level JSON Schema cleaning. |
 | `schema_prepare.rs` | Provider projection seam built on `schema.rs`; strict-mode sanitizer. |
-| `prompt.rs` | Prompt-guided tool-call protocol: instructions, coalescing, parsing, streaming scrub. |
 | `timeout.rs` | `ToolTimeoutSettings`, `ResolvedToolTimeout`. |
 | `select/` | Prompt-driven tool ranking (own submodule; see its README/module doc). |
 | `*_test.rs`, `test.rs` | Unit tests colocated by concern, listed via `#[path = "..."]` or `mod ..._test;`. |
@@ -143,13 +132,10 @@ the model. Re-exported here as `pub mod select` and via `pub use select::*`.
 - **Schema cleaning must run before strict-mode sanitization**
   (`prepare_parameters`), so `required` is computed from the resolved
   property set rather than one still hidden behind an unresolved `$ref`.
-- **`ToolCallStreamScrubber` is stateful and per-stream.** Create one per
-  response stream, feed every fragment through `feed`, and call `flush` once
-  at the end to drain the final safe remainder; reusing one across streams or
-  skipping `flush` will misplace or drop trailing text.
-- **Synthetic call ids are process-global, not per-response**, specifically
-  so two recovered calls in different turns of the same run never collide;
-  do not reset or shard `SYNTHETIC_CALL_SEQUENCE`.
+- **Never re-add tool-call markup matching here.** Model-specific
+  render/parse/scrub logic belongs in `tinytools-agent`; this crate only
+  consumes it, so a new dialect quirk is fixed upstream, not by a harness
+  regex.
 - Canonical tool vocabulary, execution, and policy enforcement itself remain
   in `tinytools`; this module never redeclares them, only bridges them to a
   live harness run.
