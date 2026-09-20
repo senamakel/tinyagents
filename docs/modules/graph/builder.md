@@ -71,6 +71,28 @@ mid-super-step and cannot leave a clean checkpoint. It bounds scheduling, not a
 single in-flight node — pair it with `with_node_timeout` to also bound
 individual handlers.
 
+## `add_node` vs `add_node_shared` (state cloning)
+
+```rust
+// By value — clones out of the step's Arc<State> once per invocation.
+.add_node("summarize", |state: State, ctx: NodeContext| async move { .. })
+
+// Zero-clone — receives the step's Arc<State> directly.
+.add_node_shared("summarize", |state: Arc<State>, ctx: NodeContext| async move { .. })
+```
+
+Internally every node handler receives the step's committed state as an
+`Arc<State>` (`docs/runtime-comparison/code-review-graph.md` M2): a
+superstep clones `State` at most once, and every branch of a parallel
+`Send` fan-out and every retry attempt of a task shares that `Arc` via a
+cheap `Arc::clone`. `add_node` is the pre-existing, source-compatible entry
+point — it wraps the closure so it still receives an owned `State`, cloning
+out of the `Arc` on each call. `add_node_shared` skips that clone entirely
+by handing the closure the `Arc<State>` directly; prefer it for a node with
+a large state or one that only reads state. See
+[nodes.md](nodes.md#actual-handler-signature-and-state-cloning-m2) for the
+full rationale and the matching `NodeContext::send_arg` change.
+
 ## Interrupt selectors
 
 ```rust
