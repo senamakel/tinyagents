@@ -39,6 +39,11 @@ Superstep lifecycle:
    within the same still-in-progress superstep is never re-run just because
    an interrupt/failure boundary was hit — see step 6.
 4. Run active tasks under concurrency, timeout, retry, and cancellation policy.
+   `State` is cloned at most once per superstep here (into an `Arc<State>`,
+   `code-review-graph.md` M2): every active task and every retry attempt of
+   one task shares that `Arc` via a cheap `Arc::clone` instead of a fresh
+   `State` clone per attempt/branch — see
+   [nodes.md](nodes.md#actual-handler-signature-and-state-cloning-m2).
 5. Collect writes, commands, sends, interrupts, and errors — every result,
    not only the ones before the first stalled (errored/interrupted) branch
    (`crates/tinyagents-graph/src/compiled/step.rs::fold_step`).
