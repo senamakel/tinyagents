@@ -679,6 +679,94 @@ where
         }
     }
 
+    /// The `graph-workflows` path: lowers `definition` to a
+    /// [`tinyagents_graph::CompiledGraph`] (see [`super::lower`]) and runs
+    /// it to completion instead of `drive_legacy`'s hand-written `while`
+    /// loop.
+    ///
+    /// The driver-lease claim and crash recovery prologue are identical to
+    /// [`Self::drive_legacy`]'s (deliberately duplicated rather than shared,
+    /// to keep this addition purely additive and the legacy path
+    /// byte-for-byte unchanged). Once claimed, every phase transition —
+    /// marking a phase running, persisting its completion/failure,
+    /// registering children, renewing the lease, handling cancellation —
+    /// happens exactly as it does today, inside [`Self::run_phase`], reused
+    /// unchanged by the lowered graph's per-phase nodes. The lowered
+    /// graph's own nodes durably persist and emit every terminal outcome
+    /// themselves (see `super::lower::lower_workflow`'s doc), so a
+    /// successful `graph.run(..)` here almost never itself needs to decide
+    /// anything further; the `Err` arm below is a defensive net for a
+    /// genuine infrastructure failure (e.g. a hit recursion limit) that no
+    /// node had a chance to handle.
+    #[cfg(feature = "graph-workflows")]
+    async fn drive_via_graph(
+        &self,
+        run_id: &str,
+        definition: &WorkflowDefinition,
+        cancel: CancellationToken,
+    ) -> Result<(), OrchestrationError> {
+        let owner = uuid::Uuid::new_v4().to_string();
+        let claim = {
+            let claim_run_id = run_id.to_owned();
+            let claim_owner = owner.clone();
+            let lease_for = self.lease_for;
+            self.store_op(move |store| store.claim(&claim_run_id, &claim_owner, lease_for))
+                .await?
+        };
+        let mut run = match claim {
+            WorkflowLeaseClaim::Acquired(run) => run,
+            WorkflowLeaseClaim::Busy(_) => return Ok(()),
+            WorkflowLeaseClaim::Missing => {
+                return Err(OrchestrationError(format!(
+                    "workflow run {run_id} vanished before start"
+                )));
+            }
+        };
+        if run.phase_states.as_object().is_some_and(|phases| {
+            phases
+                .values()
+                .any(|phase| phase.get("status").and_then(Value::as_str) == Some("running"))
+        }) {
+            let mut phase_states = run.phase_states.clone();
+            reset_running_phases(
+                &mut phase_states,
+                "workflow owner expired; phase will retry after lease takeover",
+            );
+            run = self
+                .persist(
+                    &run,
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: run.child_run_ids.clone(),
+                        status: WorkflowRunStatus::Running,
+                        summary: None,
+                        terminal: false,
+                    },
+                    &owner,
+                )
+                .await?;
+        }
+        self.emit(tinyagents_graph::GraphEvent::RunStarted {
+            run_id: tinyagents_harness::ids::RunId::new(run_id),
+        });
+
+        let total_spawned = run.child_run_ids.len() as u32;
+        let engine = Arc::new(self.clone());
+        let graph = super::lower::lower_workflow(
+            engine,
+            Arc::new(definition.clone()),
+            run_id.to_owned(),
+            owner,
+            cancel,
+        )?;
+        let initial = super::lower::SchedulerState { run, total_spawned };
+        if let Err(error) = graph.run(initial).await {
+            self.finish_failed(run_id, error.to_string());
+            return Err(OrchestrationError::from(error));
+        }
+        Ok(())
+    }
+
     /// Runs exactly one phase to completion (or an interrupt/failure
     /// boundary), including its own agent fan-out, durable persistence, and
     /// child-lease heartbeat. `pub(crate)` so [`super::lower::lower_workflow`]
