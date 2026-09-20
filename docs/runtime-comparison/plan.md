@@ -35,9 +35,9 @@ types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
   `ModelStreamItem`/`AssistantFrame` events (C1) shipped. The frame
   codec/reducer (C2) shipped and is journaled, but `ToolProgress`/
   `on_tool_delta` still has no real mid-execution caller (see (b)).
-  `GraphEventEnvelope{run_id, ns, seq}` (C3) shipped, but `task_id` is `None`
-  today and `StreamMode::{Tasks, Checkpoints}` were not added. The OTel sink
-  (C4) is OpenHuman and out of scope.
+  `GraphEventEnvelope{run_id, ns, seq}`, `StreamMode::{Tasks, Checkpoints}`
+  and `StreamProjection` (C3) shipped; `task_id` on envelopes is still `None`.
+  The OTel sink (C4) is OpenHuman and out of scope.
 - **Phase 4** (durability v2) — built but not merged. Checkpoint v2
   (`Checkpoint::version`, `channel_versions`, delta-channel history), the
   `NodePolicy`/`TaskCacheKey` pair, `interrupt_before`/`interrupt_after` +
@@ -61,11 +61,12 @@ types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
   generator (`crates/tinyagents-registry/src/bin/catalog_gen.rs`) (F2), and
   backend conformance suites for both session and graph stores (G4) shipped.
   `ContentBlock::{Audio, Video, Document}` (F3) shipped, but SSRF-guarded URL
-  download stayed OpenHuman. Deferred/background model responses (F5) and
-  request/response escape hatches (`on_payload`/`on_response`) (F6) were not
-  built. `SchemaDrivenModel` (G2) shipped, but `deny_network_models()` was
-  not found anywhere. The evals crate (G1) and semantic store search (D6)
-  are OpenHuman, out of scope.
+  download stayed OpenHuman. Deferred/background model responses (F5,
+  `ModelStreamItem::Deferred` + `fetch_deferred`) and request/response escape
+  hatches (F6, `ProviderRequestOptions`) shipped in vendor `tinyinference`.
+  `SchemaDrivenModel` (G2) shipped in the harness testkit and
+  `deny_network_models()` in vendor `tinyinference`. The evals crate (G1) and
+  semantic store search (D6) are OpenHuman, out of scope.
 
 ### (b) Narrowed or descoped from the original plan
 
@@ -78,16 +79,15 @@ types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
   each phase still re-derives what it needs from `RunContext` directly.
 - **`GraphLoopDriver` is not itself checkpointable**: by design, per its own
   doc comment in `crates/tinyagents-graph/src/agent_loop/mod.rs` — it drives
-  the same phase node bodies as `compile_loop`/`LoopIter` but "is not itself
-  a resumable `CompiledGraph` checkpoint"; a host wanting graph-level
-  checkpoint/resume across the loop's own interrupts has to drive it inside
-  a real `CompiledGraph` node instead.
-- **`channels` in `.rag` remain inert**: `docs/modules/expressive-language/
-  implementation-status.md` documents that a `channel <name> <reducer>`
-  declaration is parsed but not applied to the runtime state merge — a
-  non-`overwrite` reducer is silently not honoured. Full `.rag` lowering
-  (channels, joins, sends, route tables) stayed a Phase 5 item that did not
-  ship.
+  the same phase node bodies without a checkpointer so it can be a drop-in
+  `LoopDriver`. `compile_loop`/`LoopIter` are the real `CompiledGraph` path
+  and have interrupt → checkpoint → resume tests (`loop_as_graph.rs`).
+- **`channels` in `.rag` remain inert**: `build_graph` now lowers joins,
+  `join_sources`, per-node `timeout`/`retry` (graph-wide when all nodes
+  agree), validated `sends`/route tables, and exports `options`/`metadata`;
+  `channel <name> <reducer>` is still parsed but not applied because generic
+  `State` gives no reducer binding point — documented in
+  `docs/modules/expressive-language/implementation-status.md`.
 - **Lease renewal loop**: exists at the orchestration layer only.
   `WorkflowEngine` has a real heartbeat that renews a short lease while a
   child run is in flight (`crates/tinyagents-orchestration/src/workflow/
