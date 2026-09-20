@@ -1346,7 +1346,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // paused pending external resolution, not settled, and
                     // `reconcile_tool_effects` (or the resume path) is what
                     // eventually judges it.
-                    self.defer_started_tool_call(ctx, status, &prepared, request, deferred);
+                    self.defer_started_tool_call(ctx, status, &prepared, request, deferred)
+                        .await;
                     return Ok(None);
                 }
                 self.record_tool_effect_settled(ctx, &prepared, ToolEffectStatus::Failed)
