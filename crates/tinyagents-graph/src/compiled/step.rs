@@ -624,8 +624,8 @@ where
                 step,
             });
 
-            let send_arg = activation.send_arg.clone();
-            let cache_key = self.cache_key_for(node_id, state, send_arg.as_ref());
+            let cache_key =
+                self.cache_key_for(node_id, state, activation.send_arg.as_deref());
             let cache_hit = match &cache_key {
                 Some(key) => self.cache_get(node_id, key).await,
                 None => None,
