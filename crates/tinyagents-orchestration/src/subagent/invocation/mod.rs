@@ -74,9 +74,7 @@
 mod jobs;
 mod types;
 
-pub use jobs::{
-    SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
-};
+pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
 pub use types::*;
 
 use std::sync::Arc;

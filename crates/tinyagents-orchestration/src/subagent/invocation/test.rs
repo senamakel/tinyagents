@@ -13,7 +13,7 @@ use serde_json::json;
 
 use super::{
     ChildDataPolicy, SubAgent, SubAgentJob, SubAgentJobRegistry, SubAgentJobStatus,
-    SubAgentJobsTool, SubAgentMessageTool, SubAgentSession, SubAgentTool,
+    SubAgentSession, SubAgentTool,
 };
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::{RunConfig, RunContext};
@@ -24,7 +24,6 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::providers::MockModel;
-use tinytools::Tool;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NonDefaultContext {
@@ -146,7 +145,9 @@ async fn subagent_tool_returns_job_id_before_child_completion() {
     let job_id = spawned_job_id(&result);
     started.notified().await;
     assert_eq!(
-        jobs.get_owned(&job_id, parent.instance_id()).unwrap().status,
+        jobs.get_owned(&job_id, parent.instance_id())
+            .unwrap()
+            .status,
         SubAgentJobStatus::Running
     );
 
