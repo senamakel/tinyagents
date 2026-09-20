@@ -126,7 +126,11 @@ where
 
     for spec in &blueprint.nodes {
         let handler = factory.make(spec)?;
-        builder = builder.add_node(spec.name.as_str(), move |state, ctx| {
+        // `BoxedNode` is already `Arc<NodeHandler<State, State>>` (M2's
+        // `Arc<State>`-taking internal handler shape), so wiring it in via
+        // `add_node_shared` forwards the factory's handler directly with no
+        // extra clone.
+        builder = builder.add_node_shared(spec.name.as_str(), move |state, ctx| {
             (handler.clone())(state, ctx)
         });
         builder = match &spec.routing {
