@@ -74,7 +74,7 @@ where
                 }
                 // `Send` activations may repeat the same node (each carries its
                 // own arg); plain activations are deduplicated by node.
-                let send_arg = target.send_arg().cloned();
+                let send_arg = target.send_arg().cloned().map(Arc::new);
                 if send_arg.is_some() {
                     next.push(Activation {
                         node: tnode,
