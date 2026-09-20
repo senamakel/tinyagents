@@ -196,6 +196,15 @@ pub struct WorkflowEngine<S, E> {
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
     lease_for: Duration,
+    /// Dispatches [`Self::drive`] to the lowered [`super::lower`] graph
+    /// runner instead of the legacy scheduler loop. Only present (and only
+    /// settable, via [`Self::with_graph_execution`]) when the
+    /// `graph-workflows` feature is enabled; defaults to `true` under that
+    /// feature so an embedder that turns the feature on gets the graph path
+    /// without further opt-in, matching `WorkflowEngineOptions.use_graph`'s
+    /// documented default.
+    #[cfg(feature = "graph-workflows")]
+    use_graph: bool,
 }
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
