@@ -604,9 +604,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // model resolution, because the resolver is the capability gate.
             // An automatic structured response also needs this gate: its
             // fallback may become a native schema tool after selection.
-            if matches!(self.policy.tool_dialect, crate::config::ToolDispatcher::Native)
-                && (!request.tools.is_empty()
-                    || matches!(request.response_format, Some(ResponseFormat::Auto { .. })))
+            if matches!(
+                self.policy.tool_dialect,
+                crate::config::ToolDispatcher::Native
+            ) && (!request.tools.is_empty()
+                || matches!(request.response_format, Some(ResponseFormat::Auto { .. })))
             {
                 request
                     .required_capabilities
