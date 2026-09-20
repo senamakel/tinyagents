@@ -201,7 +201,7 @@ where
                 // `Send` activations may legitimately repeat a node (each
                 // carries its own arg); plain ones are deduplicated so a
                 // successor already pending is not scheduled twice.
-                let send_arg = target.send_arg().cloned();
+                let send_arg = target.send_arg().cloned().map(Arc::new);
                 if send_arg.is_some() || seen.insert(tnode.clone()) {
                     merged.push(Activation {
                         node: tnode,
