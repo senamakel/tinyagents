@@ -159,7 +159,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
     /// `parent` is `None` only for the standalone entry points
     /// ([`Self::invoke`]/[`Self::invoke_with_events`]) that are not called
     /// with a live parent context at all; those fall back to
-    /// [`crate::ids::next_seq`] since there is no parent run to derive
+    /// [`tinyagents_harness::ids::next_seq`] since there is no parent run to derive
     /// determinism from.
     ///
     /// Returns [`TinyAgentsError::SubAgentDepth`] when the child depth
@@ -712,7 +712,7 @@ where
     async fn execute(
         &self,
         state: &State,
-        _call_id: crate::ids::CallId,
+        _call_id: tinyagents_harness::ids::CallId,
         arguments: Value,
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
