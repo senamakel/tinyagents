@@ -10,6 +10,8 @@
 //! depend on this composition layer.
 
 pub mod subagent;
+pub mod teams;
+pub mod workflow;
 
 #[cfg(test)]
 mod boundary_tests {
