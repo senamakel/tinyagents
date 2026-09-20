@@ -21,6 +21,7 @@ use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::events::{AgentEvent, EventSink, RecordingListener};
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::tool::ToolDispatch;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::providers::MockModel;
