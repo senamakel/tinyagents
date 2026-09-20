@@ -118,7 +118,7 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
     let id = ComponentId::new("researcher");
     assert_eq!(id.as_str(), "researcher");
     assert_eq!(id.to_string(), "researcher");
-    assert_eq!(ComponentKind::ALL.len(), 11);
+    assert_eq!(ComponentKind::ALL.len(), 12);
     assert_eq!(ComponentKind::Agent.as_str(), "agent");
     assert_eq!(ComponentKind::TaskStore.as_str(), "task_store");
     assert_eq!(ComponentKind::Tool.to_string(), "tool");

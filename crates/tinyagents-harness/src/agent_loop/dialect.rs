@@ -35,8 +35,13 @@ pub(super) enum RunDialect {
 
 impl RunDialect {
     /// Resolves the policy against the tools this run offers.
-    pub(super) fn resolve(dispatcher: ToolDispatcher, tools: &[ToolSchema]) -> Self {
+    pub(super) fn resolve(
+        dispatcher: ToolDispatcher,
+        tools: &[ToolSchema],
+        native_tool_calling: Option<bool>,
+    ) -> Self {
         match dispatcher {
+            ToolDispatcher::Auto if native_tool_calling == Some(false) => Self::Xml,
             ToolDispatcher::Auto | ToolDispatcher::Native => Self::Native,
             ToolDispatcher::Xml => Self::Xml,
             ToolDispatcher::Pformat => Self::PFormat(Arc::new(tinytools_agent::build_registry(

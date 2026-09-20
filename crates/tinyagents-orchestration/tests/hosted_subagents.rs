@@ -89,13 +89,15 @@ async fn authorized_child_reuses_the_parent_host_bundle() {
         ModelResponse::assistant("parent answer"),
     ]));
     let worker_model = Arc::new(ScriptedModel::replies(vec!["child answer"]));
-    let parent = AgentDefinition::new("parent", "Parent", "delegates").with_subagents(["worker"]);
+    let parent = AgentDefinition::new("parent", "Parent", "delegates")
+        .with_subagents(["worker"])
+        .with_tools(["worker"]);
     let entry = AgentHarness::new();
     let (runtime, jobs) = runtime_with_worker(AgentHarness::new());
     let run = entry
         .invoke_agent(
             AgentInvocation::new(
-                host(parent, parent_model, worker_model),
+                host(parent, parent_model.clone(), worker_model),
                 AgentTurnRequest::new(
                     "parent",
                     vec![tinyinference_llm::message::Message::user("delegate")],
@@ -137,7 +139,8 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
         .invoke_agent(
             AgentInvocation::new(
                 host(
-                    AgentDefinition::new("parent", "Parent", "does not delegate"),
+                    AgentDefinition::new("parent", "Parent", "does not delegate")
+                        .with_tools(["worker"]),
                     parent_model,
                     Arc::new(ScriptedModel::replies(vec!["host worker"])),
                 ),
@@ -155,7 +158,7 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
 
     assert_eq!(
         error.to_string(),
-        "model error: hosted agent invocation failed"
+        "hosted agent invocation failed at the model provider"
     );
     assert!(
         local_child_model.requests().is_empty(),
