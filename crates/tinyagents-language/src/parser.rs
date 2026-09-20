@@ -558,7 +558,7 @@ impl Parser<'_> {
     /// [`SteeringDecl`](crate::ast::SteeringDecl), and
     /// [`compile`](crate::compiler::compile) then rejects any node
     /// carrying one, because no faithful lowering onto
-    /// [`SteeringPolicy`](crate::harness::steering::SteeringPolicy) exists yet.
+    /// [`SteeringPolicy`](tinyagents_harness::steering::SteeringPolicy) exists yet.
     fn parse_steering_block(&mut self) -> Result<SteeringDecl> {
         self.expect(&Token::LBrace)?;
         let mut steering = SteeringDecl::default();

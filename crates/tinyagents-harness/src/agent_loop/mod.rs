@@ -111,10 +111,11 @@ use serde_json::Value;
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
     ChatModel, ModelDelta, ModelRequest, ModelResolutionSource, ModelResponse, ModelStreamItem,
-    ResolvedModel, ResponseFormat, StreamAccumulator, ToolChoice,
+    PromptSegment, ResolvedModel, ResponseFormat, SegmentRole, StreamAccumulator, ToolChoice,
 };
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
+mod dialect;
 mod entry;
 mod model_call;
 mod run_loop;

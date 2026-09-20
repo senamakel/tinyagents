@@ -1,4 +1,35 @@
 //! Claude Code CLI model adapter.
+//!
+//! [`ClaudeCodeProvider`] implements `ChatModel<()>` by driving the
+//! `claude` CLI as a long-lived, session-resuming subprocess (one turn per
+//! [`invoke`][ChatModel::invoke]/[`stream`][ChatModel::stream] call, sharing a
+//! `--session-id`/`--resume` UUID across a conversation). This is the
+//! agentic sibling of [`crate::providers::claude_agent_sdk`]: Claude Code
+//! runs its own built-in tools internally and never returns them to this
+//! harness as `ToolCall`s (see `event_mapper`), so from the harness's
+//! point of view it behaves as a prompt-guided chat model even though the
+//! CLI itself is doing real multi-step tool use.
+//!
+//! ## How the pieces fit together
+//! - This file wires request/response conversion (`request_messages`,
+//!   `model_response`) and owns per-thread concurrency
+//!   ([`MAX_CONCURRENT_TURNS`] semaphore + per-thread mutex in `run_chat`).
+//! - [`driver`] spawns the CLI once per turn and drives its stdin/stdout.
+//! - `input_builder` renders the JSONL stdin payload; `stream_parser`
+//!   parses the JSONL stdout back into typed events; `event_mapper` folds
+//!   those events into deltas and a final response.
+//! - `session_store` persists the thread-key → CC session UUID mapping so
+//!   a conversation resumes instead of restarting.
+//! - [`auth`] resolves which credential the spawned CLI uses;
+//!   [`auth_status`] separately probes the CLI's own sign-in state for UIs.
+//! - [`settings`] persists the user's full-access opt-in;
+//!   [`version_check`] locates and version-gates the CLI binary; [`types`]
+//!   holds the small shared value types.
+//! - `bridge` holds the crate-private normalized message/response shapes
+//!   these modules pass between each other.
+//!
+//! See `README.md` in this directory for the CLI invocation shape, the
+//! permission/sandbox model, and the auth resolution order in full detail.
 
 pub mod auth;
 pub mod auth_status;
@@ -16,10 +47,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::tool::{
-    ToolCallStreamScrubber, apply_prompt_tool_calls, coalesce_prompt_tool_results,
-    with_prompt_tool_instructions,
-};
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
@@ -27,9 +54,15 @@ use tinyinference_llm::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
     ResponseFormat,
 };
+use tinyinference_llm::prompt_tools::{
+    TextScrubber, coalesce_tool_results, recover_tool_calls, with_tool_instructions,
+};
 use tinyinference_llm::usage::Usage;
 use tokio::sync::Semaphore;
 
+/// Aborts the wrapped task when dropped, so a caller that stops polling the
+/// stream returned by [`ChatModel::stream`] does not leave the spawned CLI
+/// driver task running past the caller's interest in it.
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -171,6 +204,16 @@ impl ClaudeCodeProvider {
         self
     }
 
+    /// Runs one turn: acquires a concurrency permit, serializes against any
+    /// other in-flight turn on the same `thread_id`, and delegates to
+    /// [`driver::run_turn`].
+    ///
+    /// The per-thread lock (not just the global semaphore) matters because
+    /// two overlapping calls for the same conversation would otherwise race
+    /// on the same CC `--session-id`/`--resume` UUID. The lock map entry for
+    /// an idle thread is opportunistically removed once its only other
+    /// holder is this method's own now-dropped guard, so the map does not
+    /// grow unboundedly across many distinct threads.
     async fn run_chat(
         &self,
         messages: &[ChatMessage],
@@ -275,10 +318,14 @@ fn thread_key_from_request(request: &ModelRequest) -> String {
     format!("ephemeral_{}", uuid::Uuid::new_v4())
 }
 
+/// Converts a `ModelRequest` into the flattened [`ChatMessage`] list this
+/// provider sends downstream: prompt-tool coalescing/instructions applied
+/// first, then any structured [`ResponseFormat`] is appended as a trailing
+/// system instruction (see [`response_format_instruction`]).
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
-    let mut messages = coalesce_prompt_tool_results(&request.messages);
+    let mut messages = coalesce_tool_results(&request.messages);
     if !request.tools.is_empty() {
-        messages = with_prompt_tool_instructions(&messages, &request.tools);
+        messages = with_tool_instructions(&messages, &request.tools, &request.tool_choice);
     }
     if let Some(instruction) = response_format_instruction(request.response_format.as_ref()) {
         messages.push(Message::system(instruction));
@@ -321,6 +368,10 @@ fn response_format_instruction(format: Option<&ResponseFormat>) -> Option<String
     ))
 }
 
+/// Flattens a message's content blocks to plain text: text and reasoning
+/// blocks pass through, JSON/extension blocks are stringified, an image
+/// becomes an `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
+/// and redacted-thinking blocks are dropped (nothing to show).
 fn render_content(content: &[ContentBlock]) -> String {
     content
         .iter()
@@ -344,6 +395,10 @@ fn render_content(content: &[ContentBlock]) -> String {
         .join("")
 }
 
+/// Converts an internal [`ChatResponse`] into the harness's `ModelResponse`.
+/// `tool_calls` is always empty (see `event_mapper`); cost is surfaced via
+/// `raw` only when the CLI reported a non-zero charge, since `finish_reason`
+/// is always `"stop"` — the CLI does not distinguish other reasons.
 fn model_response(response: ChatResponse) -> ModelResponse {
     let usage = response.usage.map(|value| Usage {
         input_tokens: value.input_tokens,
@@ -376,15 +431,24 @@ fn model_response(response: ChatResponse) -> ModelResponse {
     }
 }
 
-fn model_response_with_tools(response: ChatResponse, has_tools: bool) -> ModelResponse {
+/// [`model_response`] plus text-dialect tool-call recovery when the request
+/// declared tools, since this provider never returns native `ToolCall`s.
+fn model_response_with_tools(
+    response: ChatResponse,
+    tools: &[tinyinference_llm::tool::ToolSchema],
+) -> ModelResponse {
     let response = model_response(response);
-    if has_tools {
-        apply_prompt_tool_calls(response)
-    } else {
+    if tools.is_empty() {
         response
+    } else {
+        recover_tool_calls(response, tools)
     }
 }
 
+/// Classifies a driver failure into `Model` (retryable) or `Validation`
+/// (not) by running its message through the shared provider-failure
+/// classifier, so a CLI spawn/timeout/exit failure gets the same retry
+/// treatment as other providers' errors.
 fn map_error(error: anyhow::Error) -> tinyinference_llm::Error {
     let message = format!("claude-code model call failed: {error}");
     if !matches!(
@@ -417,11 +481,10 @@ impl ChatModel<()> for ClaudeCodeProvider {
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
         let thread_id = thread_key_from_request(&request);
-        let has_tools = !request.tools.is_empty();
         let messages = request_messages(&request);
         self.run_chat(&messages, None, request.model.as_deref(), thread_id)
             .await
-            .map(|response| model_response_with_tools(response, has_tools))
+            .map(|response| model_response_with_tools(response, &request.tools))
             .map_err(map_error)
     }
     async fn stream(
@@ -432,7 +495,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
         let provider = self.clone();
         let thread_id = thread_key_from_request(&request);
         let model_override = request.model.clone();
-        let has_tools = !request.tools.is_empty();
+        let tools = request.tools.clone();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let handle = AbortOnDrop(tokio::spawn(async move {
             let _ = tx.send(ModelStreamItem::Started);
@@ -440,7 +503,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
             // text deltas can split `<tool_call>` markup across arbitrary CLI
             // chunks. Hold that markup back from live consumers; terminal
             // parsing below still turns the complete block into a ToolCall.
-            let mut tool_call_scrubber = has_tools.then(ToolCallStreamScrubber::new);
+            let mut tool_call_scrubber = (!tools.is_empty()).then(|| TextScrubber::new(&tools));
             let messages = request_messages(&request);
             let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel(64);
             let call = provider.run_chat(
@@ -458,7 +521,7 @@ impl ChatModel<()> for ClaudeCodeProvider {
             }
             flush_tool_call_scrubber(&tx, tool_call_scrubber.as_mut());
             let terminal = response
-                .map(|response| model_response_with_tools(response, has_tools))
+                .map(|response| model_response_with_tools(response, &tools))
                 .map(ModelStreamItem::Completed)
                 .unwrap_or_else(|error| ModelStreamItem::Failed(map_error(error).to_string()));
             let _ = tx.send(terminal);
@@ -471,15 +534,20 @@ impl ChatModel<()> for ClaudeCodeProvider {
     }
 }
 
+/// Converts one [`ProviderDelta`] into a `ModelStreamItem::MessageDelta`,
+/// running text through `tool_call_scrubber` (when the request has tools)
+/// so streamed `<tool_call>` markup does not reach the live consumer.
 fn forward_delta(
     sender: &tokio::sync::mpsc::UnboundedSender<ModelStreamItem>,
     delta: ProviderDelta,
-    tool_call_scrubber: Option<&mut ToolCallStreamScrubber>,
+    tool_call_scrubber: Option<&mut TextScrubber>,
 ) {
     let item = match delta {
         ProviderDelta::TextDelta { delta } => {
+            // Calls the scrubber completes mid-stream are dropped here: the
+            // terminal response is parsed once and dispatches each exactly once.
             let text = match tool_call_scrubber {
-                Some(scrubber) => scrubber.feed(&delta),
+                Some(scrubber) => scrubber.feed(&delta).0,
                 None => delta,
             };
             (!text.is_empty()).then(|| MessageDelta::text(text))
@@ -491,14 +559,16 @@ fn forward_delta(
     }
 }
 
+/// Emits any text the scrubber is still holding once the stream ends, so a
+/// turn that finished mid-buffer does not silently drop trailing text.
 fn flush_tool_call_scrubber(
     sender: &tokio::sync::mpsc::UnboundedSender<ModelStreamItem>,
-    tool_call_scrubber: Option<&mut ToolCallStreamScrubber>,
+    tool_call_scrubber: Option<&mut TextScrubber>,
 ) {
     let Some(scrubber) = tool_call_scrubber else {
         return;
     };
-    let text = scrubber.flush();
+    let text = scrubber.flush().0;
     if !text.is_empty() {
         let _ = sender.send(ModelStreamItem::MessageDelta(MessageDelta::text(text)));
     }

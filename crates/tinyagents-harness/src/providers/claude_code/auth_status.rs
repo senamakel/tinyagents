@@ -45,6 +45,7 @@ pub enum AuthSource {
     /// subscription type returned best-effort; absent when the schema
     /// drifts.
     Subscription {
+        /// Signed-in account's email, when the CLI reports one.
         account_email: Option<String>,
         /// `"max"` / `"pro"` etc., for display. Absent when not reported.
         subscription_type: Option<String>,
@@ -64,13 +65,17 @@ pub enum AuthSource {
     /// failed, non-zero exit (e.g. a CLI older than `auth status`), or
     /// unparseable output. We surface this as "couldn't determine" and a
     /// Reconnect affordance, **never** as signed-out.
-    Unknown { reason: Option<String> },
+    Unknown {
+        /// Human-readable cause, when known, for logs and UI diagnostics.
+        reason: Option<String>,
+    },
 }
 
 /// Returned by the `claude_code_auth_status` RPC. Snake-case Serde so the
 /// TS side discriminates on `source`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatus {
+    /// The classified auth state.
     #[serde(flatten)]
     pub source: AuthSource,
     /// Unix seconds when this probe ran — UI shows "last checked" so users

@@ -17,6 +17,7 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
+pub use crate::config::ToolDispatcher;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -69,26 +70,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
     }
 }
 
-/// Declarative, run-scoped policy shared by every invocation of an
-/// [`AgentHarness`].
-///
-/// A `RunPolicy` carries the four cross-cutting concerns the agent loop needs
-/// to bound and steer a run:
-///
-/// - `limits`: hard caps (model calls, tool calls, wall-clock) enforced
-///   fail-closed by the loop.
-/// - `retry`: exponential-backoff retry policy applied to each model call.
-/// - `fallback`: optional ordered chain of model names to try when the current
-///   model exhausts its retries.
-/// - `default_response_format`: when set, attached to every [`tinyinference_llm::model::ModelRequest`]
-///   the loop builds; a [`ResponseFormat::JsonSchema`] also drives structured
-///   output extraction on the final response.
-///
-/// [`RunPolicy::default`] yields the crate-default limits and retry policy, no
-/// fallback chain, no response format, and a [`CachePolicy`] whose response
-/// caching is enabled — caching only takes effect once a [`ResponseCache`] is
-/// actually attached via [`AgentHarness::with_response_cache`], so the default
-/// is safe even without a cache.
 /// How the agent loop reacts when the model calls a tool that is not
 /// registered.
 ///
@@ -202,6 +183,26 @@ impl PayloadCapture {
     }
 }
 
+/// Declarative, run-scoped policy shared by every invocation of an
+/// [`AgentHarness`].
+///
+/// A `RunPolicy` carries the four cross-cutting concerns the agent loop needs
+/// to bound and steer a run:
+///
+/// - `limits`: hard caps (model calls, tool calls, wall-clock) enforced
+///   fail-closed by the loop.
+/// - `retry`: exponential-backoff retry policy applied to each model call.
+/// - `fallback`: optional ordered chain of model names to try when the current
+///   model exhausts its retries.
+/// - `default_response_format`: when set, attached to every [`tinyinference_llm::model::ModelRequest`]
+///   the loop builds; a [`ResponseFormat::JsonSchema`] also drives structured
+///   output extraction on the final response.
+///
+/// [`RunPolicy::default`] yields the crate-default limits and retry policy, no
+/// fallback chain, no response format, and a [`CachePolicy`] whose response
+/// caching is enabled — caching only takes effect once a [`ResponseCache`] is
+/// actually attached via [`AgentHarness::with_response_cache`], so the default
+/// is safe even without a cache.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunPolicy {
     /// Hard run limits enforced fail-closed by the agent loop.
@@ -238,6 +239,35 @@ pub struct RunPolicy {
     /// rely on empty finals; opt in to turn a silent blank success into a typed
     /// error the caller can re-prompt on.
     pub error_on_empty_response: bool,
+    /// How tools are spoken to the model: through the provider's native
+    /// channel, or through one of the text protocols owned by
+    /// `tinytools-agent`.
+    ///
+    /// [`ToolDispatcher::Auto`] (the default) sends tool schemas on the wire
+    /// and lets the provider adapter decide — the OpenAI-compatible adapter
+    /// switches to the JSON-in-tag protocol by itself for a profile without
+    /// native tool calling. [`ToolDispatcher::Xml`] and
+    /// [`ToolDispatcher::Pformat`] force a text protocol regardless of
+    /// provider: the schemas are rendered into the system prompt, nothing goes
+    /// on the wire as `tools`, and the answer is parsed here. P-Format is the
+    /// cheapest on tokens and the most demanding on the model, which is why
+    /// it is opt-in only.
+    ///
+    /// Whatever the dispatcher, a response with no structured calls is still
+    /// read through every text grammar, because native models narrate calls
+    /// as text often enough to matter.
+    pub tool_dialect: ToolDispatcher,
+    /// Maximum consecutive re-prompts when a model signals a tool call it did
+    /// not make: `finish_reason == "tool_calls"` with no structured call and
+    /// no text-recoverable one.
+    ///
+    /// Some routers rewrite finish reasons, and some models emit the
+    /// intention without the call. Treating that as the final answer ends the
+    /// turn on an empty promise; re-prompting once with "issue the actual
+    /// tool call now" recovers it far more often than not. Each re-prompt is a
+    /// model call and counts against `limits.max_model_calls`. Defaults to
+    /// `3`; `0` disables it.
+    pub dropped_tool_call_nudges: u32,
     /// Number of automatic retries when a model call returns a *truncated
     /// empty* completion — `finish_reason == "length"` with no visible text, no
     /// tool calls, and no structured output.
@@ -256,6 +286,21 @@ pub struct RunPolicy {
     /// Defaults to `1` (one retry, two attempts total). Set to `0` to disable
     /// for exact-replay callers that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// How [`tinytools::ToolExposure::Deferred`] tools are surfaced: never in
+    /// the request's `tools` array, but findable through the intrinsic
+    /// `tool_search` / `tool_call` bridge. See
+    /// [`crate::tool::discover::ToolDiscoveryPolicy`].
+    pub discovery: crate::tool::discover::ToolDiscoveryPolicy,
+    /// Optional projection applied to every advertised tool schema before it
+    /// is sent (ref resolution, provider keyword stripping, byte budgets). See
+    /// [`crate::tool::SchemaPreparation`].
+    ///
+    /// `None` (the default) sends declarations verbatim, as the loop always
+    /// has. A host that registers third-party schemas — MCP servers, plugins —
+    /// should set one; a host that authors every schema by hand rarely needs
+    /// to. Admission still validates arguments against the *declared* schema,
+    /// which is never looser than the projected one.
+    pub tool_schemas: Option<crate::tool::SchemaPreparation>,
 }
 
 impl Default for RunPolicy {
@@ -277,10 +322,14 @@ impl Default for RunPolicy {
             },
             // Opt-in: preserve the historical blank-final behavior by default.
             error_on_empty_response: false,
+            tool_dialect: ToolDispatcher::Auto,
+            dropped_tool_call_nudges: 3,
             // On by default: a truncated-empty completion is useless to every
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
             truncated_empty_retries: 1,
+            discovery: crate::tool::discover::ToolDiscoveryPolicy::default(),
+            tool_schemas: None,
         }
     }
 }

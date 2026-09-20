@@ -1,3 +1,6 @@
+//! Tests for [`RunQueue`]: per-lane push/drain FIFO ordering, status
+//! snapshots, `clear`, and lane independence.
+
 use super::*;
 
 #[tokio::test]

@@ -196,8 +196,8 @@ pub struct ChildRun {
     /// Token usage rolled up from the child run, when the child reported any.
     ///
     /// Subgraph children leave this at the default (their usage is tracked by
-    /// their own model calls); a [`crate::subagent_node`] sub-agent child
-    /// folds the delegated harness agent's [`UsageTotals`] here so it is visible
+    /// their own model calls); a [`mod@crate::subagent_node`] sub-agent child
+    /// folds the delegated harness agent's [`UsageTotals`](tinyinference_llm::usage::UsageTotals) here so it is visible
     /// on the parent [`GraphExecution`](crate::GraphExecution) rollup.
     #[serde(default)]
     pub usage: tinyinference_llm::usage::UsageTotals,

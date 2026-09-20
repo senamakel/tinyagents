@@ -6,6 +6,7 @@ default-members = [
     "crates/tinyagents-graph",
     "crates/tinyagents-registry",
     "crates/tinyagents-session",
+    "crates/tinyagents-runtime",
     "crates/tinyagents-orchestration",
 ]
 exclude = ["vendor", "worktrees"]
@@ -27,3 +28,12 @@ all = { level = "warn", priority = -1 }
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# `tinyinference-llm` names `tinytools-agent` as a git dependency (it is not on
+# crates.io). Inside this workspace that crate is the vendored submodule, so the
+# git source is redirected onto the path — one copy of the protocol crate in the
+# graph, and the harness's `path` dependency and the provider's dependency are
+# the same type.
+[patch."https://github.com/tinyhumansai/tinytools"]
+tinytools-agent = { path = "vendor/tinytools/crates/tinytools-agent" }
+tinytools = { path = "vendor/tinytools/crates/tinytools" }

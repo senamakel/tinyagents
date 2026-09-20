@@ -90,9 +90,11 @@ enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
         dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
         tool: Arc<dyn tinytools::Tool>,
     },
-    /// Unknown-tool recovery: no tool runs; this tool-error message is
-    /// appended to the transcript at the call's original position.
-    ErrorMessage(String),
+    /// No tool runs; this result is appended to the transcript at the call's
+    /// original position. A tool-error result for the recovery paths (unknown
+    /// tool, invalid arguments); a success result for an intrinsic answer
+    /// (`tool_search`).
+    Answered(tinytools::ToolResult),
 }
 
 /// One requested call after admission, in original order.
@@ -107,10 +109,13 @@ enum AdmittedCall<State: Send + Sync, Ctx: Send + Sync> {
         tool: Arc<dyn tinytools::Tool>,
         call: ToolCall,
     },
-    /// A recovery: no tool runs, but the call is still answered through the
-    /// normal result pipeline so it emits the same started/completed pair and
-    /// runs the same `after_tool` hooks (TOOL-11).
-    Recovered { call: ToolCall, message: String },
+    /// A recovery or an intrinsic answer: no tool runs, but the call is still
+    /// answered through the normal result pipeline so it emits the same
+    /// started/completed pair and runs the same `after_tool` hooks (TOOL-11).
+    Recovered {
+        call: ToolCall,
+        result: tinytools::ToolResult,
+    },
 }
 
 /// One transcript slot per requested call, in original order, used by the
@@ -119,7 +124,10 @@ enum ToolSlot {
     /// An executed call: consumes the next prepared/result pair in order.
     Execute,
     /// A recovery, folded in place through the normal result pipeline.
-    Recovered { call: ToolCall, message: String },
+    Recovered {
+        call: ToolCall,
+        result: tinytools::ToolResult,
+    },
 }
 
 /// Admission metadata for one executable call, paired 1:1 (in order) with its
@@ -135,6 +143,110 @@ struct PreparedToolCall {
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Builds the run's deferred-tool catalogue: every
+    /// [`tinytools::ToolExposure::Deferred`] registration the host allow-list
+    /// admits, or an empty catalogue when discovery is disabled.
+    pub(super) fn deferred_catalog(
+        &self,
+        host_allows: &dyn Fn(&str) -> bool,
+    ) -> crate::tool::discover::DeferredCatalog {
+        if !self.policy.discovery.enabled {
+            return crate::tool::discover::DeferredCatalog::default();
+        }
+        let mut schemas = self
+            .tools
+            .deferred_schemas()
+            .into_iter()
+            .filter(|schema| host_allows(&schema.name))
+            .collect::<Vec<_>>();
+        if let Some(preparation) = &self.policy.tool_schemas {
+            schemas = crate::tool::prepare_tool_schemas(&schemas, preparation);
+        }
+        crate::tool::discover::DeferredCatalog::build(schemas)
+    }
+
+    /// Resolves the discovery bridge for one call, when it is one.
+    ///
+    /// Returns `Some` with the answer for a `tool_search` call (no tool runs),
+    /// `None` after rewriting a `tool_call` in place to the real tool so
+    /// admission continues with it, and `None` untouched for any other name.
+    /// A malformed `tool_call` payload is answered with a tool error rather
+    /// than passed on, so the model can correct it.
+    fn answer_discovery_bridge(
+        &self,
+        ctx: &RunContext<Ctx>,
+        status: &mut HarnessRunStatus,
+        call: &mut ToolCall,
+    ) -> Result<Option<ResolvedToolCall<State, Ctx>>> {
+        use crate::tool::discover::{TOOL_CALL_NAME, TOOL_SEARCH_NAME};
+        if !self.policy.discovery.enabled
+            || (call.name != TOOL_SEARCH_NAME && call.name != TOOL_CALL_NAME)
+        {
+            return Ok(None);
+        }
+        let allowed_tools = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
+            .map(|binding| binding.allowed_tools);
+        let host_allows = |name: &str| {
+            allowed_tools
+                .as_ref()
+                .is_none_or(|allowed| allowed.is_empty() || allowed.contains(name))
+        };
+        let catalog = self.deferred_catalog(&host_allows);
+        if catalog.is_empty() {
+            // Nothing was deferred, so the bridge was never advertised; let
+            // the call fall through to the unknown-tool policy.
+            return Ok(None);
+        }
+        if call.name == TOOL_SEARCH_NAME {
+            let (result, matched) = crate::tool::discover::answer_tool_search(
+                &catalog,
+                &self.policy.discovery,
+                &call.arguments,
+            );
+            let record = ctx.emit(AgentEvent::ToolSearched {
+                call_id: CallId::new(call.id.clone()),
+                query: call
+                    .arguments
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                matched,
+            });
+            status.set_last_event(record.id);
+            return Ok(Some(ResolvedToolCall::Answered(result)));
+        }
+        match crate::tool::discover::unwrap_tool_call(&call.arguments) {
+            Ok((name, arguments)) => {
+                // `unwrap_tool_call` accepts any non-empty `name` — it only
+                // validates the wrapper's shape, not that `name` is actually
+                // in the deferred catalogue. A model can wrap a direct,
+                // hidden, or entirely fabricated name in a `tool_call`
+                // payload just as validly, and admission (via
+                // `model_dispatch`/the unknown-tool policy below) decides
+                // what happens to it next. Emitting `DeferredToolCall`
+                // unconditionally would misrepresent that outcome to an
+                // audit consumer — recording "a deferred call happened" for
+                // a call that admission is about to execute as a direct
+                // tool or reject as unknown/hidden. Only emit it when the
+                // target is actually in the catalogue this bridge searched.
+                if catalog.get(&name).is_some() {
+                    let record = ctx.emit(AgentEvent::DeferredToolCall {
+                        call_id: CallId::new(call.id.clone()),
+                        tool_name: name.clone(),
+                    });
+                    status.set_last_event(record.id);
+                }
+                call.name = name;
+                call.arguments = arguments;
+                Ok(None)
+            }
+            Err(message) => Ok(Some(ResolvedToolCall::Answered(
+                tinytools::ToolResult::error(message),
+            ))),
+        }
+    }
+
     /// Resolves this tool's own timeout policy. The separate run wall-clock
     /// budget remains the outer hard deadline: a per-tool timeout becomes a
     /// recoverable tool-error result, while exhausting the run budget aborts.
@@ -148,6 +260,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .map(|settings| settings.resolve(tool.timeout_policy(&call.arguments)))
     }
 
+    /// Races `fut` against `timeout`'s deadline (if any), returning
+    /// `timeout_value` instead of an error when the deadline elapses first.
+    ///
+    /// This is the crate-owned tool-timeout policy: unlike
+    /// [`Self::with_call_budget`], which surfaces a run-level
+    /// [`TinyAgentsError::Timeout`] and aborts the run, an elapsed per-tool
+    /// deadline here becomes a *recoverable* `Ok(timeout_value)` (a
+    /// `ToolResult::error`) so the run continues and the model can react.
     async fn with_tool_policy_timeout<T, F>(
         timeout: Option<crate::tool::ResolvedToolTimeout>,
         timeout_value: T,
@@ -216,10 +336,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
     ) -> Result<ResolvedToolCall<State, Ctx>> {
-        // Preserve the exact attacker-controlled provider payload for host
-        // authorization/audit. `call.arguments` is later canonicalized for
-        // execution and must not overwrite what the gate evaluates.
-        let model_arguments = call.arguments.clone();
         // Safe cancellation checkpoint: stop before invoking the next
         // (side-effecting) tool if cancellation was requested.
         if ctx.cancellation.is_cancelled() {
@@ -243,6 +359,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
             return Err(TinyAgentsError::LimitExceeded(err.to_string()));
         }
+
+        // Discovery bridge, resolved before any hook runs. `tool_call` is
+        // unwrapped here so every `before_tool` hook, allow-list, and the host
+        // authorization gate below see the *real* tool name and arguments —
+        // a deferred tool is admitted exactly as if the model had called it
+        // directly. `tool_search` is answered from the run's catalogue without
+        // running a tool. A host-registered tool under either name wins, and
+        // a call the provider could not parse is left for the recovery below.
+        if call.invalid.is_none()
+            && self.tools.dispatch(&call.name).is_none()
+            && let Some(answered) = self.answer_discovery_bridge(ctx, status, call)?
+        {
+            return Ok(answered);
+        }
+        // Preserve the exact attacker-controlled provider payload for host
+        // authorization/audit, taken *after* discovery-bridge resolution:
+        // `answer_discovery_bridge` rewrites `call.name`/`call.arguments` in
+        // place when the call was a `tool_call` bridge wrapper (returning
+        // `None` so admission continues with the unwrapped call), so the
+        // snapshot here already reflects the real tool payload — not the
+        // stale `{"name", "arguments"}` wrapper the model actually sent.
+        // `call.arguments` is later canonicalized for execution and must not
+        // overwrite what the gate evaluates.
+        let model_arguments = call.arguments.clone();
 
         // The slot is *reserved* above (cap-first, so a middleware hook never
         // runs for a call the budget has already refused) and *released* here
@@ -283,7 +423,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::ErrorMessage(detail));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                detail,
+            )));
         }
 
         // Hosted turns carry an explicit definition allowlist. Do not merely
@@ -295,7 +437,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .as_ref()
             .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&call.name));
         let (dispatch, tool) = match is_allowed
-            .then(|| self.tools.dispatch(&call.name))
+            .then(|| self.tools.model_dispatch(&call.name))
             .flatten()
         {
             Some(dispatch) => {
@@ -345,7 +487,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // tool-call budget slot above, bounding the loop.
                     let valid = self
                         .tools
-                        .names()
+                        .model_callable_names()
                         .into_iter()
                         .filter(|name| {
                             allowed_tools
@@ -367,7 +509,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         recovery: "tool_error".to_string(),
                     });
                     status.set_last_event(record.id);
-                    return Ok(ResolvedToolCall::ErrorMessage(message));
+                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                        message,
+                    )));
                 }
             }
         };
@@ -416,9 +560,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 if matches!(self.policy.invalid_args, InvalidArgsPolicy::Fail) {
                     return Err(TinyAgentsError::Validation(error.to_string()));
                 }
-                return Ok(ResolvedToolCall::ErrorMessage(format!(
-                    "invalid injected arguments for tool `{}`: {error}",
-                    call.name
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                    format!(
+                        "invalid injected arguments for tool `{}`: {error}",
+                        call.name
+                    ),
                 )));
             }
         };
@@ -458,7 +604,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 recovery: "tool_error".to_string(),
             });
             status.set_last_event(record.id);
-            return Ok(ResolvedToolCall::ErrorMessage(message));
+            return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                message,
+            )));
         }
         // Host authorization is deliberately last in admission: the gate sees
         // the raw provider arguments (including any forged hidden fields),
@@ -499,7 +647,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // approval denials cannot exhaust the tool budget and block a
                 // later authorized call in the same turn.
                 ctx.limits.rollback_tool_calls(1);
-                return Ok(ResolvedToolCall::ErrorMessage(reason));
+                return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                    reason,
+                )));
             }
         }
         Ok(ResolvedToolCall::Tool { dispatch, tool })
@@ -770,8 +920,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         for mut call in tool_calls {
             let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
                 ResolvedToolCall::Tool { dispatch, .. } => dispatch,
-                ResolvedToolCall::ErrorMessage(message) => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, message)
+                ResolvedToolCall::Answered(result) => {
+                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                     continue;
                 }
@@ -850,10 +1000,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         call: &ToolCall,
-        message: String,
+        result: tinytools::ToolResult,
     ) -> Result<()> {
         tinyagents_tracing::debug!(
-            "[agent_loop::tools] recovering call `{}` for `{}` without executing a tool",
+            "[agent_loop::tools] answering call `{}` for `{}` without executing a tool",
             call.id,
             call.name
         );
@@ -865,7 +1015,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             false,
             crate::host::ContentOrigin::Tool,
         );
-        let result = tinytools::ToolResult::error(message);
         self.finish_tool_call(state, ctx, run, status, messages, prepared, result)
             .await
     }
@@ -898,8 +1047,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool,
                     call,
                 }),
-                ResolvedToolCall::ErrorMessage(message) => {
-                    admitted.push(AdmittedCall::Recovered { call, message })
+                ResolvedToolCall::Answered(result) => {
+                    admitted.push(AdmittedCall::Recovered { call, result })
                 }
             }
         }
@@ -919,8 +1068,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool,
                     call,
                 } => (dispatch, tool, call),
-                AdmittedCall::Recovered { call, message } => {
-                    slots.push(ToolSlot::Recovered { call, message });
+                AdmittedCall::Recovered { call, result } => {
+                    slots.push(ToolSlot::Recovered { call, result });
                     continue;
                 }
             };
@@ -976,8 +1125,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut executed = prepared.into_iter().zip(results);
         for slot in slots {
             match slot {
-                ToolSlot::Recovered { call, message } => {
-                    self.recover_tool_call(state, ctx, run, status, messages, &call, message)
+                ToolSlot::Recovered { call, result } => {
+                    self.recover_tool_call(state, ctx, run, status, messages, &call, result)
                         .await?;
                 }
                 ToolSlot::Execute => {
@@ -1117,13 +1266,23 @@ pub(super) fn map_tool_dispatch_error(error: anyhow::Error) -> TinyAgentsError {
 
 /// Repairs provider-neutral argument shape defects before schema validation.
 ///
-/// Schema-valid arguments are already canonical. A string containing valid
-/// JSON is decoded, optionally through a markdown code fence, and the decoded
-/// value is preserved for validation even when it remains invalid. Undecodable
-/// or non-string values become an empty object only for object-capable schemas
-/// that declare no required fields; required-field schemas retain the original
-/// value so the validation error remains precise and model-visible.
+/// Schema-valid arguments are already canonical. Otherwise the protocol
+/// crate's argument repairs ([`tinytools_agent::repair::args`]) are applied in
+/// order — a stringified (possibly fenced, possibly relaxed) JSON document is
+/// decoded; an object buried one level down in an envelope the model invented
+/// is unwrapped; string scalars are coerced to the types the schema declares —
+/// and each rewrite is kept only when the result validates, or (for the
+/// decode) when it is at least the object the model meant, so the validation
+/// error the model sees stays precise. Undecodable or non-object values become
+/// an empty object only for object-capable schemas that declare no required
+/// fields; required-field schemas retain the original value.
+///
+/// This is host policy, not parsing: it runs only under a recovering
+/// [`InvalidArgsPolicy`](crate::runtime::InvalidArgsPolicy), and the schema
+/// validator that gates every rewrite is the harness's.
 fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
+    use tinytools_agent::repair::args;
+
     // Never rewrite a value the declared schema already accepts. In
     // particular, an object-capable union may validly accept a primitive too.
     if schema.validate_call(call).is_ok() {
@@ -1131,39 +1290,59 @@ fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
     }
 
     let parameters = &schema.parameters;
-    let accepts_object = parameters.get("type").is_some_and(|kind| {
-        kind.as_str() == Some("object")
-            || kind
-                .as_array()
-                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("object")))
-    }) || parameters.get("properties").is_some()
-        || parameters.get("required").is_some()
-        || parameters
-            .get("enum")
-            .and_then(Value::as_array)
-            .is_some_and(|values| values.iter().any(Value::is_object));
-    if !accepts_object {
+    if !args::accepts_object(parameters) {
         return;
     }
 
+    let template = ToolCall::new(call.id.clone(), call.name.clone(), Value::Null);
+    let validates = |arguments: &Value| {
+        let mut candidate = template.clone();
+        candidate.arguments = arguments.clone();
+        schema.validate_call(&candidate).is_ok()
+    };
+
     if let Some(raw) = call.arguments.as_str() {
-        let candidate = strip_markdown_code_fence(raw);
-        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
-            let mut normalized = call.clone();
-            normalized.arguments = value;
+        let candidate = tinytools_agent::repair::json::strip_code_fence(raw);
+        let decoded = serde_json::from_str::<Value>(candidate)
+            .ok()
+            .or_else(|| tinytools_agent::repair::json::recover_object(candidate));
+        if let Some(value) = decoded {
             // Decoding must be lossless even when the decoded value is still
             // schema-invalid. Preserve it so the validation below reports the
             // actual bad field/type instead of silently replacing it with `{}`.
-            call.arguments = normalized.arguments;
-            return;
+            call.arguments = value;
+            if validates(&call.arguments) {
+                return;
+            }
+            // A successfully decoded non-object value (e.g. the stringified
+            // JSON `true`) is not an object, so it never reaches the
+            // `is_object` repair branch below — it would otherwise fall
+            // through to the has-no-required-fields fallback further down
+            // and get silently replaced with `{}`, discarding the decoded
+            // scalar the model actually sent and making an invalid-typed
+            // call quietly "succeed" with fabricated empty arguments instead
+            // of surfacing its real validation error. Only a value that
+            // never decoded at all should reach that fallback.
+            if !call.arguments.is_object() {
+                return;
+            }
         }
     }
 
     // A provider-native object is already the shape normalization is trying to
-    // recover. If its contents violate the schema, preserve them so the model
-    // sees the real validation error instead of executing with an empty object.
+    // recover. If its contents violate the schema, try the envelope unwrap and
+    // the scalar coercion, each kept only when it validates; otherwise
+    // preserve them so the model sees the real validation error instead of
+    // executing with an empty object.
     if call.arguments.is_object() {
-        unwrap_wrapped_arguments(call, schema);
+        if let Some(inner) = args::unwrap_envelope(&call.arguments, parameters, &validates) {
+            call.arguments = inner;
+            return;
+        }
+        let coerced = args::coerce_to_schema(call.arguments.clone(), parameters);
+        if coerced != call.arguments && validates(&coerced) {
+            call.arguments = coerced;
+        }
         return;
     }
 
@@ -1174,94 +1353,6 @@ fn normalize_tool_arguments(call: &mut ToolCall, schema: &ToolSchema) {
     if !has_required_fields {
         call.arguments = serde_json::json!({});
     }
-}
-
-/// Keys under which a model commonly buries the real arguments object.
-///
-/// `properties` is the JSON-Schema echo; the rest are the wrapper names small
-/// models invent when they confuse the *call* envelope with its payload. All of
-/// them were observed on local runtimes — see [`unwrap_wrapped_arguments`].
-const ARGUMENT_WRAPPER_KEYS: [&str; 7] = [
-    "properties",
-    "arguments",
-    "args",
-    "parameters",
-    "params",
-    "param",
-    "input",
-];
-
-/// Recovers arguments a model buried one level deep inside an envelope.
-///
-/// Small local models (observed on `llama3.2:3b` via Ollama) routinely send
-/// something other than a bare arguments object. All three of these are real
-/// captures for a tool declaring one required `city` string:
-///
-/// ```text
-/// {"type":"object","required":["city"],"properties":{"city":"Paris"}}
-/// {"properties":{...},"required":[...],"arguments":{"city":"Paris"}}
-/// {"param":{"city":"Paris"}}
-/// ```
-///
-/// In each case the intended `{"city":"Paris"}` is present, one level down.
-/// Without this the call fails validation, costs a repair round trip, and on
-/// the default [`InvalidArgsPolicy::Fail`] aborts the run outright.
-///
-/// The rewrite is deliberately conservative and cannot corrupt a legitimate
-/// call. For each candidate key it applies only when the outer object is
-/// already schema-invalid, when the tool does not itself declare an argument of
-/// that name (so the key is not meaningfully the model's own data), and when
-/// the unwrapped value *does* validate. If no candidate satisfies all three the
-/// original arguments are left untouched, so the model still sees a precise
-/// validation error rather than a rewritten one.
-///
-/// [`InvalidArgsPolicy::Fail`]: crate::runtime::InvalidArgsPolicy::Fail
-fn unwrap_wrapped_arguments(call: &mut ToolCall, schema: &ToolSchema) {
-    let declared = schema
-        .parameters
-        .get("properties")
-        .and_then(Value::as_object);
-
-    for key in ARGUMENT_WRAPPER_KEYS {
-        // A tool that genuinely takes an argument of this name must never have
-        // it unwrapped — for such a tool the key is data, not an envelope.
-        if declared.is_some_and(|declared| declared.contains_key(key)) {
-            continue;
-        }
-        let Some(inner) = call
-            .arguments
-            .get(key)
-            .filter(|inner| inner.is_object())
-            .cloned()
-        else {
-            continue;
-        };
-
-        let mut candidate = call.clone();
-        candidate.arguments = inner;
-        if schema.validate_call(&candidate).is_ok() {
-            call.arguments = candidate.arguments;
-            return;
-        }
-    }
-}
-
-fn strip_markdown_code_fence(raw: &str) -> &str {
-    let trimmed = raw.trim();
-    let Some(after_open) = trimmed.strip_prefix("```") else {
-        return trimmed;
-    };
-    let body = match after_open.find('\n') {
-        Some(newline)
-            if after_open[..newline]
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric()) =>
-        {
-            &after_open[newline + 1..]
-        }
-        _ => after_open,
-    };
-    body.trim().strip_suffix("```").unwrap_or(body).trim()
 }
 
 pub(super) fn timeout_result(

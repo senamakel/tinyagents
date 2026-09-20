@@ -37,13 +37,19 @@ use serde_json::Value;
 use super::bridge::{ChatResponse, ProviderDelta, UsageInfo};
 use super::stream_parser::ClaudeCodeEvent;
 
+/// In-progress state for one content block between its `content_block_start`
+/// and `content_block_stop` events.
 #[derive(Debug, Clone)]
 struct BlockState {
     kind: BlockKind,
+    /// Tool name for a `Tool` block; unused for `Text`/`Thinking`.
     tool_name: Option<String>,
+    /// Text or thinking accumulated for this block so far (unused for
+    /// `Tool`, whose argument deltas are discarded, not accumulated).
     text_accum: String,
 }
 
+/// What kind of content block a stream index is currently tracking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BlockKind {
     Text,
@@ -51,24 +57,35 @@ enum BlockKind {
     Tool,
 }
 
+/// Stateful accumulator that folds a stream of [`ClaudeCodeEvent`]s into a
+/// final [`ChatResponse`]. One instance is created per turn in `driver.rs`.
 #[derive(Debug, Default)]
 pub struct EventMapper {
+    /// Per-content-block accumulator state, keyed by the block's stream
+    /// index; entries are removed on `content_block_stop`.
     blocks: HashMap<u64, BlockState>,
+    /// Assistant text accumulated across all `text` blocks seen so far.
     pub final_text: String,
-    /// Always empty because Claude Code executes its own tool calls.
+    /// Always empty: kept only so tests can assert this provider never
+    /// surfaces a tool call, since Claude Code executes its own tool calls
+    /// internally and this slot exists purely as a documented invariant, not
+    /// live state (see the module docs).
     #[cfg(test)]
     pub tool_calls: Vec<()>,
-    /// Always empty for the self-executing `claude` CLI: its `tool_use` blocks
-    /// are calls it already ran itself, so they are never surfaced as OpenHuman
-    /// tool calls (see the module docs). Kept as the response's `tool_calls`
-    /// slot so the harness always sees a terminal, tool-less response.
+    /// Token/cost usage parsed from the terminal `result` event, if any.
     pub usage: Option<UsageInfo>,
+    /// Error message surfaced by the CLI (`error` event, or `result` with
+    /// `subtype == "error"`), if the turn failed.
     pub error: Option<String>,
+    /// CC session id reported by the CLI's `system` event, used to persist
+    /// the accepted session UUID once the turn completes.
     pub session_id: Option<String>,
+    /// Set once a terminal `result` event has been handled.
     pub finished: bool,
 }
 
 impl EventMapper {
+    /// Creates an empty mapper for a fresh turn.
     pub fn new() -> Self {
         Self::default()
     }
@@ -284,6 +301,9 @@ impl EventMapper {
     }
 }
 
+/// Extracts token counts from a `result` event's `usage` object.
+/// `reasoning_tokens` and `charged_amount_usd` are not part of this payload
+/// and are filled in separately by the caller.
 fn parse_usage(v: &Value) -> UsageInfo {
     let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
     UsageInfo {

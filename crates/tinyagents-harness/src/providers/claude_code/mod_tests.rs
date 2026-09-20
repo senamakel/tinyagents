@@ -1,3 +1,6 @@
+//! Unit tests for `thread_key_from_request` metadata precedence and
+//! `ClaudeCodeProvider`'s `ModelProfile` construction.
+
 use super::*;
 
 #[test]
@@ -78,6 +81,15 @@ fn cache_identity_includes_project_scope() {
     assert_ne!(first.cache_identity(), second.cache_identity());
 }
 
+fn lookup_schema() -> tinyinference_llm::tool::ToolSchema {
+    tinyinference_llm::tool::ToolSchema {
+        name: "lookup".into(),
+        description: "look something up".into(),
+        parameters: serde_json::json!({"type": "object"}),
+        format: Default::default(),
+    }
+}
+
 #[test]
 fn prompt_guided_tool_response_is_exposed_to_the_harness() {
     let response = model_response_with_tools(
@@ -88,7 +100,7 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
             ),
             usage: None,
         },
-        true,
+        &[lookup_schema()],
     );
     assert_eq!(response.text(), "before");
     assert_eq!(response.message.tool_calls.len(), 1);
@@ -98,7 +110,7 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
 #[test]
 fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut scrubber = ToolCallStreamScrubber::new();
+    let mut scrubber = TextScrubber::new(&[]);
     let fragments = [
         "before ",
         "<tool_",
@@ -145,9 +157,11 @@ fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
             text: Some(fragments.concat()),
             usage: None,
         },
-        true,
+        &[lookup_schema()],
     );
-    assert_eq!(response.text(), "before  after");
+    // The terminal parse joins the narrative fragments on a newline, where the
+    // live stream preserved the model's own spacing; both carry the same words.
+    assert_eq!(response.text(), "before\nafter");
     assert_eq!(response.message.tool_calls.len(), 1);
     assert_eq!(response.message.tool_calls[0].name, "lookup");
     assert_eq!(

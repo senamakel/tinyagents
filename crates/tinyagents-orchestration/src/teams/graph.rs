@@ -1,3 +1,13 @@
+//! Member worker graph execution: a generic three-step DAG that invokes a host
+//! worker, routes on success/failure, and calls back to the host.
+//!
+//! This module owns the structure of member execution as seen by the graph
+//! layer (entry → execute → complete/fail → done), while letting the host
+//! supply the actual work (`run_worker`) and post-work effects (`on_complete`
+//! and `on_failed`). It is the bridge between durable team coordination
+//! (membership, tasks, event delivery) and the graph's lifecycle and event
+//! streaming.
+
 use std::future::Future;
 use std::sync::Arc;
 
@@ -9,8 +19,15 @@ use tinyagents_graph::{
 };
 
 /// Terminal classification of a host worker run.
+///
+/// Returned by a host's `run_worker` callback to signal whether the member
+/// completed its work successfully or failed. The member graph routes on this
+/// outcome and calls the appropriate host callback (`on_complete` or
+/// `on_failed`).
 pub enum MemberOutcome {
+    /// Member completed successfully; carries the output to be recorded.
     Completed { output: String },
+    /// Member failed; carries the failure reason to be recorded.
     Failed { reason: String },
 }
 
@@ -136,6 +153,10 @@ where
 }
 
 /// Structure-only view of the generic member execution graph.
+///
+/// Returns a topology that reflects the nodes and edges (entry, execute,
+/// complete, fail, done, routing rules) without running any real worker or
+/// calling effects. Used for introspection and documentation.
 pub fn member_graph_topology() -> Result<GraphTopology> {
     Ok(build_member_graph(
         || async {

@@ -1,4 +1,9 @@
-//! Module-local tests for the hierarchical store.
+//! Tests for the hierarchical namespaced store: namespace validation and
+//! prefix/suffix matching, `InMemoryNamespacedStore` put/get/delete,
+//! subtree/filtered/paginated search, wildcard `list_namespaces`, TTL expiry
+//! and defaulting, positional alignment of batch results, and that
+//! [`FlatNamespacedStore`] preserves the flat [`Store`](crate::store::Store)
+//! surface.
 
 use super::*;
 use crate::store::Store as FlatStore;

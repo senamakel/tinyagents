@@ -13,12 +13,11 @@ async-trait = "0.1"
 # Keep this aligned with reqwest's transitive version. Claude Code request
 # rendering and multimodal data URIs both require it.
 base64 = "0.22"
-bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", optional = true }
 flate2 = { version = "1", optional = true }
 futures = "0.3"
-dirs = "5"
+dirs = "6"
 log = "0.4"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
@@ -29,10 +28,10 @@ sha2 = "0.11"
 thiserror = "2"
 tinyagents-tracing = { path = "../tinyagents-tracing", version = "2.1.2", default-features = false }
 tinyagents-definition = { path = "../tinyagents-definition", version = "2.1.2" }
-tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", version = "0.2.0", default-features = false }
+tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", version = "0.3.0", default-features = false }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
 tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.3.0" }
-tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.2.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.3.0" }
 tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs", "io-util", "process"] }
 tempfile = "3"
 wait-timeout = "0.2"

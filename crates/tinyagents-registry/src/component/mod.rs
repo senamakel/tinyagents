@@ -8,7 +8,7 @@
 //! capability be discovered, listed, and bound by name long after the process
 //! that registered it has exited.
 //!
-//! See [`types`] for the definitions. This module adds constructors, accessors,
+//! See `types` for the definitions. This module adds constructors, accessors,
 //! and string conversions used by the [`crate::CapabilityRegistry`].
 
 mod types;

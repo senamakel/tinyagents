@@ -6,7 +6,7 @@
 //! telemetry, and checkpoint references — enough for a host to reconstruct
 //! what was in flight after a crash and resume or interrupt it.
 //!
-//! Shares the session database and connection helper with [`super::store`], so
+//! Shares the session database and connection helper with `super::store`, so
 //! a run and the session that produced it are queryable together.
 
 pub mod ops;

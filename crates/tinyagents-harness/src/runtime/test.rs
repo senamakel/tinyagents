@@ -106,6 +106,41 @@ struct RecordingBudget {
     records: Mutex<Vec<Usage>>,
 }
 
+/// A permissive budget that records every `estimate.estimated_input_tokens`
+/// it is asked to admit, so a test can assert the preflight estimate saw the
+/// request the provider actually receives — not a smaller one taken before a
+/// later rewrite grew it.
+struct EstimateRecordingBudget {
+    estimates: Mutex<Vec<u64>>,
+}
+
+impl EstimateRecordingBudget {
+    fn new() -> Self {
+        Self {
+            estimates: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl BudgetGate for EstimateRecordingBudget {
+    async fn acquire(&self, estimate: &CallEstimate) -> crate::error::Result<Permit> {
+        self.estimates
+            .lock()
+            .expect("estimate budget lock")
+            .push(estimate.estimated_input_tokens);
+        Ok(Permit::unlimited())
+    }
+
+    async fn record(&self, _usage: &Usage) -> crate::error::Result<()> {
+        Ok(())
+    }
+
+    fn compression_hint(&self, _state: &ContextState) -> CompressionHint {
+        CompressionHint::None
+    }
+}
+
 /// Per-invocation trace used by the overlap test below.  Each adapter writes
 /// both its capability name and the identity-bearing value it received, so a
 /// capability bundle accidentally borrowed from the other root is observable
@@ -1704,6 +1739,99 @@ async fn security_gate_sees_raw_provider_arguments_while_tools_receive_prepared_
     );
 }
 
+/// A deferred tool that echoes its argument, used to exercise the
+/// `tool_call` discovery bridge's argument unwrapping under host
+/// authorization.
+struct DeferredEchoTool;
+
+#[async_trait]
+impl Tool for DeferredEchoTool {
+    fn name(&self) -> &str {
+        "quote"
+    }
+
+    fn description(&self) -> &str {
+        "echoes its argument"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {"symbol": {"type": "string"}},
+            "required": ["symbol"]
+        })
+    }
+
+    fn exposure(&self) -> tinytools::ToolExposure {
+        tinytools::ToolExposure::Deferred
+    }
+
+    async fn execute(&self, arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success(arguments.to_string()))
+    }
+}
+
+/// Regression: `admit_tool_call` used to snapshot `model_arguments` for host
+/// authorization *before* the `tool_call` discovery bridge unwrapped the
+/// call, so the host's `SecurityGate` saw the stale `{"name", "arguments"}`
+/// wrapper the model literally sent instead of the real tool's arguments
+/// that validation and execution actually use — an argument-sensitive
+/// authorization decision could approve a different payload than the one it
+/// reviewed. The gate must see the unwrapped real arguments.
+#[tokio::test]
+async fn security_gate_sees_unwrapped_arguments_for_a_bridged_deferred_call() {
+    let mut tool_response = ModelResponse::assistant("");
+    tool_response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "real-call",
+            crate::tool::discover::TOOL_CALL_NAME,
+            json!({"name": "quote", "arguments": {"symbol": "ACME"}}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_response,
+        ModelResponse::assistant("done"),
+    ]));
+    let gate = Arc::new(RecordingArgumentGate {
+        seen: Mutex::new(Vec::new()),
+    });
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        gate.clone(),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(DeferredEchoTool));
+
+    harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("bridged-args"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the deferred tool call completes");
+
+    assert_eq!(
+        *gate.seen.lock().expect("gate lock"),
+        vec![json!({"symbol": "ACME"})],
+        "the host must authorize the unwrapped real-tool arguments, not the \
+         stale `tool_call` bridge wrapper"
+    );
+}
+
 #[tokio::test]
 async fn denied_tool_calls_release_their_reserved_limit_for_a_later_approval() {
     fn call(id: &str) -> ModelResponse {
@@ -2447,6 +2575,109 @@ async fn hard_budget_compression_hint_reduces_context_before_the_provider_call()
         "the reduced request retains a complete user/tool conversational payload"
     );
     assert_eq!(budget.records.lock().expect("budget lock").len(), 1);
+}
+
+/// A tool with a deliberately long description, so folding its catalogue
+/// entry into the system prompt (as a forced text dialect does) is a large,
+/// easily distinguished jump in estimated prompt size.
+struct VerboseTool;
+
+#[async_trait]
+impl Tool for VerboseTool {
+    fn name(&self) -> &str {
+        "verbose_lookup"
+    }
+
+    fn description(&self) -> &str {
+        // ~2 KiB: large enough that folding it into the system prompt moves
+        // the token estimate by hundreds of tokens under the `chars / 4`
+        // heuristic `token_estimation::estimate_slice_tokens` uses.
+        "look something up in the verbose index. "
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": { "q": { "type": "string", "description": "x".repeat(2000) } },
+            "required": ["q"]
+        })
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("verbose-output"))
+    }
+}
+
+#[tokio::test]
+async fn budget_preflight_estimate_reflects_the_dialect_rewritten_request() {
+    // A forced text dialect (`Xml` here) folds the protocol block and full
+    // tool catalogue into `request.messages` and clears `request.tools`.
+    // `token_estimation::estimate_slice_tokens` only looks at
+    // `request.messages`, so the host budget preflight estimate has to be
+    // taken *after* that rewrite or it silently estimates a request far
+    // smaller than the one actually sent to the provider — the whole point
+    // of a pre-call budget limit defeated by the rewrite arriving late.
+    let model = Arc::new(ScriptedModel::replies(vec!["done"]));
+    let budget = Arc::new(EstimateRecordingBudget::new());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+            "helper",
+            "Helper",
+            "test helper",
+        )])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_budget(budget.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_tool(Arc::new(VerboseTool))
+        .with_policy(RunPolicy {
+            tool_dialect: crate::config::ToolDispatcher::Xml,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("dialect-budget"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.text().as_deref(), Some("done"));
+
+    // The request the provider actually received carries the rendered
+    // catalogue, not a schema — confirming the dialect rewrite did happen
+    // before this call.
+    let request = model.requests().pop().expect("provider was called once");
+    assert!(request.tools.is_empty(), "no schema goes on the wire");
+    let system = request
+        .messages
+        .iter()
+        .find(|m| matches!(m, tinyinference_llm::message::Message::System(_)))
+        .expect("a system turn carries the protocol")
+        .text();
+    assert!(system.contains("verbose_lookup"), "{system}");
+
+    let estimates = budget.estimates.lock().expect("estimate budget lock");
+    assert_eq!(estimates.len(), 1);
+    // The bare user turn ("go") alone estimates to a handful of tokens; the
+    // rewritten request additionally carries the ~2 KiB tool description
+    // folded into the system prompt. A stale pre-rewrite estimate would stay
+    // near the former; this asserts it reflects the latter.
+    assert!(
+        estimates[0] > 300,
+        "preflight estimate ({}) does not reflect the dialect-rewritten request",
+        estimates[0]
+    );
 }
 
 #[tokio::test]

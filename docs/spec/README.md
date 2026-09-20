@@ -5,13 +5,14 @@ typed state-graph runtime. It takes its shape from LangChain (models, tools,
 middleware, structured output, streaming, usage/cost) and LangGraph
 (`START`/`END`, nodes, conditional edges, channels/reducers, checkpoints,
 interrupts, subgraphs, time travel) — rebuilt as ordinary, typed Rust. The
-system is organized as five public crates:
+system is organized as six public crates:
 
 1. the harness
 2. the graph
 3. the registry
 4. the expressive language
 5. durable sessions
+6. host-neutral session runtime
 
 The goal is to make agent systems easy to define, inspect, run, test, and
 serialize without hiding the Rust types that make production systems reliable.
@@ -42,6 +43,7 @@ observability, or test contracts.
   - [Embeddings and retrieval](../modules/harness/embeddings.md)
   - [Prompt](../modules/harness/prompt.md)
   - [Tool](../modules/harness/tool.md)
+  - [Tool exposure and discovery](../modules/harness/tool-discovery.md)
   - [Middleware](../modules/harness/middleware.md)
   - [Sub-agent and orchestrator steering](../modules/harness/subagent-steering.md)
   - [Structured output](../modules/harness/structured-output.md)
@@ -77,6 +79,7 @@ observability, or test contracts.
   - [Design](../modules/registry/design.md)
   - [Model catalog and local snapshots](../modules/registry/model-catalog.md)
 - [Expressive language module](../modules/expressive-language/README.md)
+- [Session runtime module](../modules/runtime/README.md)
 
 Docs should follow the module layout. Do not place standalone specification
 files directly in `docs/` or `docs/modules/`; each high-level topic should have
@@ -119,6 +122,16 @@ default, `Millis` is clamped and padded with configured grace, and `Unbounded`
 has no per-tool deadline. Expiry is a recoverable tool result returned to the
 model; only the enclosing run wall-clock deadline aborts the run.
 
+Tool schemas are advertised by exposure, not by registration. Only
+`ToolExposure::Direct` tools appear in a request's `tools` array; `Deferred`
+tools are indexed per run and reached through the intrinsic `tool_search` /
+`tool_call` bridge, whose `tool_call` is unwrapped to the real tool before
+admission so policy and authorization see the true name. The `tools` array
+therefore stays byte-stable for a whole run when no per-turn exposure
+middleware (dynamic/contextual tool selection, tool-policy filtering) changes
+the advertised direct set, which is what a provider prompt cache depends on.
+`RunPolicy::tool_schemas` optionally projects and byte-budgets every schema.
+
 ## Module 2: Graph
 
 The graph is the durable, typed state-graph runtime: `START`/`END`, nodes,
@@ -151,6 +164,7 @@ crates/
   tinyagents-graph/             # durable typed state graphs
   tinyagents-registry/          # named capabilities and model catalog
   tinyagents-session/           # durable session history and run ledger
+  tinyagents-runtime/           # host-neutral stateful harness sessions
   tinyagents-tracing/           # shared opt-in tracing macros
   tinyagents-integration-tests/ # cross-crate tests and runnable examples
 ```

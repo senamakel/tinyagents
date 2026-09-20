@@ -147,6 +147,7 @@ pub enum GitWorktreeError {
     Io(#[from] std::io::Error),
 }
 
+/// Shorthand for a result carrying [`GitWorktreeError`].
 type GitResult<T> = std::result::Result<T, GitWorktreeError>;
 
 /// Creates an isolated worktree for `run_id` and returns its status snapshot.
@@ -313,6 +314,8 @@ pub fn detect_worktree_overlaps(
         .collect()
 }
 
+/// Runs `git` in `cwd` with `args`, returning trimmed stdout on success or a
+/// [`GitWorktreeError::GitFailed`] carrying stderr on a non-zero exit.
 fn git(cwd: &Path, args: &[&str]) -> GitResult<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if !output.status.success() {
@@ -325,6 +328,9 @@ fn git(cwd: &Path, args: &[&str]) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Like [`git`], but returns raw (untrimmed) stdout — used where leading
+/// column characters (e.g. `git status --porcelain` status codes) are
+/// significant.
 fn git_raw(cwd: &Path, args: &[&str]) -> GitResult<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if !output.status.success() {
@@ -337,6 +343,10 @@ fn git_raw(cwd: &Path, args: &[&str]) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Confirms `repo_root` is inside a git work tree and returns the repo's
+/// top-level directory (`git rev-parse --show-toplevel`), which every
+/// worktree operation anchors on regardless of which subdirectory of the repo
+/// `repo_root` names.
 fn validate_repo_root(repo_root: &Path) -> GitResult<PathBuf> {
     if !repo_root.exists() {
         return Err(GitWorktreeError::NotAGitRepo(repo_root.to_path_buf()));
@@ -351,6 +361,9 @@ fn validate_repo_root(repo_root: &Path) -> GitResult<PathBuf> {
     Ok(PathBuf::from(top.trim()))
 }
 
+/// Resolves the ref [`GitWorktreeBaseRef::Fresh`] branches from: the remote's
+/// default branch (`origin/HEAD`) if set, else the local `HEAD`'s symbolic
+/// name, else the literal `"main"` as a last resort.
 fn resolve_fresh_base(repo_top: &Path) -> String {
     if let Ok(sym) = git(
         repo_top,
@@ -367,6 +380,9 @@ fn resolve_fresh_base(repo_top: &Path) -> String {
     "main".to_string()
 }
 
+/// Parses `git status --porcelain` for `worktree_path` into a dirty flag plus
+/// the sorted, deduplicated list of changed paths (rename entries `a -> b` are
+/// reduced to `b`).
 fn dirty_state(worktree_path: &Path) -> GitResult<(bool, Vec<PathBuf>)> {
     let porcelain = git_raw(worktree_path, &["status", "--porcelain"])?;
     let mut changed = Vec::new();
@@ -382,6 +398,9 @@ fn dirty_state(worktree_path: &Path) -> GitResult<(bool, Vec<PathBuf>)> {
     Ok((!changed.is_empty(), changed))
 }
 
+/// Maps `run_id` to a filesystem- and git-ref-safe slug: non-alphanumeric
+/// characters (other than `_`/`-`) become `-`, leading/trailing `-` is
+/// trimmed, and an empty result falls back to `"worker"`.
 fn sanitize_run_id(run_id: &str) -> String {
     let cleaned: String = run_id
         .chars()

@@ -258,7 +258,7 @@ pub(crate) struct EventJournalState {
 /// Cheaply clonable through an inner [`Arc`]; clones share the same streams.
 /// There is no durability — entries are lost when the last clone drops.
 ///
-/// Retains at most [`InMemoryEventJournal::max_runs`] distinct `run_id`
+/// Retains at most `max_runs` distinct `run_id`
 /// streams (default [`DEFAULT_JOURNAL_MAX_RUNS`]); once exceeded, the oldest
 /// run (by first-append order) is evicted wholesale to keep memory bounded
 /// across long-lived processes that journal many runs.
@@ -351,7 +351,7 @@ pub(crate) struct StatusStoreState {
 ///
 /// Cheaply clonable through an inner [`Arc`]; clones share the same map.
 ///
-/// Retains at most [`InMemoryStatusStore::max_runs`] distinct runs (default
+/// Retains at most `max_runs` distinct runs (default
 /// [`DEFAULT_STATUS_STORE_MAX_RUNS`]). Once exceeded, the oldest **terminal**
 /// runs (anything not `Pending`/`Running`/`Interrupted`) are evicted first so
 /// an in-flight run's status is never dropped out from under it; active runs

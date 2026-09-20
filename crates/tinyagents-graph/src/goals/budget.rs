@@ -1,6 +1,6 @@
 //! Charging a turn against a goal, and stopping one that would overrun it.
 //!
-//! [`store::account_usage`](super::store::account_usage) is the raw write.
+//! [`store::account_usage`] is the raw write.
 //! This module is the policy around it — the two halves of budget enforcement a
 //! host otherwise reimplements:
 //!

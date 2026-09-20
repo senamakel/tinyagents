@@ -22,6 +22,10 @@ pub fn resolve_keyed_transcript_path(workspace_dir: &Path, stem: &str) -> Result
     resolve_keyed_transcript_path_in_dir(&raw_dir, stem)
 }
 
+/// Like [`resolve_keyed_transcript_path`], but takes the raw session
+/// directory directly rather than deriving it from a workspace root — the
+/// seam tests use to point at a tempdir without going through the full
+/// `{workspace}/session_raw` layout.
 pub fn resolve_keyed_transcript_path_in_dir(raw_dir: &Path, stem: &str) -> Result<PathBuf> {
     fs::create_dir_all(raw_dir)
         .with_context(|| format!("create session_raw dir {}", raw_dir.display()))?;
@@ -152,6 +156,8 @@ pub(super) fn md_companion_path(jsonl_path: &Path) -> PathBuf {
     out.with_extension("md")
 }
 
+/// Sanitizes an agent name for use as a filename prefix: keeps
+/// alphanumerics, `-`, and `_`; replaces everything else with `_`.
 pub(super) fn sanitize_agent_name(name: &str) -> String {
     name.chars()
         .map(|c| {

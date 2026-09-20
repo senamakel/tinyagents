@@ -28,7 +28,7 @@
 //! provider metadata to the shared tool result.
 //!
 //! **Dependency rule:** `serde` + `std` only, matching the inert-value-type
-//! carve-out in [`crate::config::types`]. A host can implement this
+//! carve-out in `crate::config`'s type definitions. A host can implement this
 //! trait without pulling an engine.
 
 use serde::{Deserialize, Serialize};

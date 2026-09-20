@@ -12,38 +12,37 @@ use serde_json::Value;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum ClaudeCodeEvent {
+    /// Session metadata, emitted once near the start of a turn; carries the
+    /// CC session id and the stream schema version, when reported.
     System {
         session_id: Option<String>,
         schema_version: Option<String>,
         raw: Value,
     },
-    User {
-        message: Value,
-    },
-    Assistant {
-        message: Value,
-    },
-    StreamEvent {
-        event: Value,
-    },
-    RateLimit {
-        raw: Value,
-    },
+    /// A `tool_result` (or other) user-role event echoed by the CLI's own
+    /// internal tool loop; not surfaced to the harness (see `event_mapper`).
+    User { message: Value },
+    /// A fully-assembled assistant message (as opposed to a `stream_event`
+    /// partial); CC 2.x emits one of these after streaming completes.
+    Assistant { message: Value },
+    /// A partial streaming update (`content_block_start`/`_delta`/`_stop`)
+    /// for the in-progress assistant message.
+    StreamEvent { event: Value },
+    /// Rate-limit telemetry from the CLI; not currently interpreted.
+    RateLimit { raw: Value },
+    /// The terminal event for the turn: final text (via `raw`), usage, and
+    /// cost.
     Result {
         subtype: Option<String>,
         usage: Option<Value>,
         total_cost_usd: Option<f64>,
         raw: Value,
     },
-    Error {
-        message: String,
-    },
+    /// An explicit CLI-level error for the turn.
+    Error { message: String },
     /// JSONL line that failed to parse. Kept so the driver can log without
     /// dropping silently. Not surfaced as a `ProviderDelta`.
-    ParseError {
-        line: String,
-        reason: String,
-    },
+    ParseError { line: String, reason: String },
 }
 
 /// Stateful parser that takes byte chunks from `proc.stdout` and emits
@@ -105,6 +104,7 @@ fn decode_carrying_tail(bytes: &[u8]) -> (String, Vec<u8>) {
 }
 
 impl StreamJsonParser {
+    /// Creates an empty parser with no buffered input.
     pub fn new() -> Self {
         Self::default()
     }
