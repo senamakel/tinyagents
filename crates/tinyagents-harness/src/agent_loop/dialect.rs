@@ -22,6 +22,9 @@ use tinytools_agent::{PFormatRegistry, StreamScrubber};
 use crate::config::ToolDispatcher;
 use crate::ids::CallId;
 
+#[cfg(test)]
+mod test;
+
 /// The dialect a run speaks, resolved once from policy.
 #[derive(Debug, Clone)]
 pub(super) enum RunDialect {

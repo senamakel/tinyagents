@@ -331,6 +331,12 @@ fn thread_key_from_request(request: &ModelRequest) -> String {
 /// provider sends downstream: prompt-tool coalescing/instructions applied
 /// first, then any structured [`ResponseFormat`] is appended as a trailing
 /// system instruction (see [`response_format_instruction`]).
+///
+/// `Message::Custom` remains in the host transcript as out-of-band metadata;
+/// it is intentionally omitted from the provider prompt. Hosts that want such
+/// information available to the model must add it as an explicit system or
+/// user message. Its optional `display` text is for transcript presentation,
+/// not an implicit prompt channel.
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
     let provider_messages: Vec<_> = request
         .messages

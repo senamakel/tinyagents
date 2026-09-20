@@ -718,6 +718,28 @@ mod rendering {
     }
 
     #[test]
+    fn custom_messages_render_the_display_or_an_empty_value() {
+        use tinyinference_llm::message::CustomMessage;
+
+        let displayed = Message::Custom(CustomMessage {
+            kind: "compaction".into(),
+            payload: json!({"summary": "host-only"}),
+            display: Some("Compacted 40 turns".into()),
+        });
+        let hidden = Message::Custom(CustomMessage {
+            kind: "label".into(),
+            payload: json!({"name": "checkpoint"}),
+            display: None,
+        });
+
+        assert_eq!(
+            render_message_for_summary(&displayed),
+            "custom: Compacted 40 turns"
+        );
+        assert_eq!(render_message_for_summary(&hidden), "custom: ");
+    }
+
+    #[test]
     fn oversized_payloads_are_elided_not_reproduced() {
         let msg = Message::tool("c1", "y".repeat(9_000));
         let rendered = render_message_for_summary(&msg);
