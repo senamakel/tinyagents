@@ -1817,7 +1817,9 @@ async fn sequential_stall_keeps_unstarted_sibling_pending() {
     let c_calls = Arc::new(AtomicUsize::new(0));
     let c_calls_for_node = c_calls.clone();
     let graph = GraphBuilder::<i32, i32>::overwrite()
-        .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s)) })
+        .add_node("a", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s))
+        })
         .add_node("b", |_s, c: NodeContext| async move {
             match c.resume {
                 Some(_) => Ok(NodeResult::Update(10)),
@@ -1865,7 +1867,11 @@ async fn sequential_stall_keeps_unstarted_sibling_pending() {
         .await
         .unwrap();
     assert!(!done.is_interrupted());
-    assert_eq!(c_calls.load(AtomicOrdering::SeqCst), 1, "c must run exactly once, on resume");
+    assert_eq!(
+        c_calls.load(AtomicOrdering::SeqCst),
+        1,
+        "c must run exactly once, on resume"
+    );
     assert_eq!(done.state.value, 11, "10 (b's resume value) + 1 (c)");
 }
 
@@ -1874,9 +1880,14 @@ async fn sequential_stall_keeps_unstarted_sibling_pending() {
 /// run of the same graph, and every node must run exactly once either way.
 #[tokio::test]
 async fn sequential_interrupted_then_resumed_matches_uninterrupted_run() {
-    fn build(cp: Arc<InMemoryCheckpointer<i32>>, interrupt_once: Arc<AtomicBool>) -> CompiledGraph<i32, i32> {
+    fn build(
+        cp: Arc<InMemoryCheckpointer<i32>>,
+        interrupt_once: Arc<AtomicBool>,
+    ) -> CompiledGraph<i32, i32> {
         GraphBuilder::<i32, i32>::overwrite()
-            .add_node("a", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 1)) })
+            .add_node("a", |s, _c: NodeContext| async move {
+                Ok(NodeResult::Update(s + 1))
+            })
             .add_node("b", move |s, c: NodeContext| {
                 let interrupt_once = interrupt_once.clone();
                 async move {
@@ -1886,7 +1897,9 @@ async fn sequential_interrupted_then_resumed_matches_uninterrupted_run() {
                     Ok(NodeResult::Update(s + 10))
                 }
             })
-            .add_node("c", |s, _c: NodeContext| async move { Ok(NodeResult::Update(s + 100)) })
+            .add_node("c", |s, _c: NodeContext| async move {
+                Ok(NodeResult::Update(s + 100))
+            })
             .set_entry("a")
             .add_edge("a", "b")
             .add_edge("a", "c")
