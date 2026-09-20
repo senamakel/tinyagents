@@ -132,7 +132,7 @@ pub struct ToolRegistry<State: Send + Sync, Ctx: Send + Sync> {
 ///
 /// Returned by [`ToolRegistry::try_register`]/[`ToolRegistry::try_register_dispatch`]
 /// so a caller that cares can detect the collision instead of it silently
-/// overwriting the earlier registration (M-5; `docs/sdk-gaps.md` §15 asks for
+/// overwriting the earlier registration (M-5; `docs/sdk-gaps/cost-and-model-catalog.md` §15 asks for
 /// duplicate-registration diagnostics).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RegisterOutcome {

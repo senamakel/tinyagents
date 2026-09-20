@@ -2031,7 +2031,7 @@ fn tool_message_from_result(
                 tinytools::ToolContent::Text { text } => ContentBlock::Text(text.clone()),
                 tinytools::ToolContent::Json { data } => ContentBlock::Json(data.clone()),
                 // Image/File blocks have no provider-neutral `ContentBlock`
-                // representation yet (see `docs/sdk-gaps.md`); render the same
+                // representation yet (see `docs/sdk-gaps/tools.md`); render the same
                 // short placeholder `ToolContent::render()` uses so a model
                 // still sees *something* rather than the block vanishing.
                 other @ (tinytools::ToolContent::Image { .. }

@@ -3,7 +3,7 @@
 //! [`ToolExposureExplanation`] is the audit payload: *why* a tool did not
 //! reach the model unchanged this turn. It is additive on
 //! [`crate::events::AgentEvent::ToolsFiltered`] so existing consumers of that
-//! event keep working unchanged (`docs/sdk-gaps.md` §9 asks for exactly this
+//! event keep working unchanged (`docs/sdk-gaps/tools.md` §9 asks for exactly this
 //! explainability, and `docs/runtime-comparison/pydantic-ai.md` §4 notes
 //! TinyAgents' middleware-based filtering makes "why was this tool hidden"
 //! hard to answer without it).

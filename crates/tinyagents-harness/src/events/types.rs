@@ -187,7 +187,7 @@ pub enum AgentEvent {
         /// changed or withheld a tool this turn, keyed by the tool's
         /// original name.
         ///
-        /// Additive (`docs/sdk-gaps.md` §9's "explainable exposure
+        /// Additive (`docs/sdk-gaps/tools.md` §9's "explainable exposure
         /// decisions"): `#[serde(default)]` keeps events recorded before
         /// this field existed deserializable, and a middleware that only
         /// reports `excluded` (no explanations) leaves this empty rather
