@@ -14,7 +14,7 @@ that the feature would extend.
 
 ## A. Agent-loop control and human-in-the-loop
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | A1 | Middleware control outcomes: hooks return state updates and may `jump_to` model/tools/end; wrap hooks return commands; tools return `Command`; `return_direct`; `terminate` / `should_stop_after_turn` hints | LG, pi | LG §3.1, pi §4.4, `sdk-gaps/orchestration.md` §13 | `MiddlewareControl::{StopWithFinal, Interrupt}`, `MiddlewareModelOutcome` (`#[non_exhaustive]`) | RT harness | 1 | shipped |
 | A2 | Deferred tool calls as a typed, resumable output: `DeferredToolRequests{calls, approvals, metadata}` / `DeferredToolResults` with per-call ids, approve / edit-args / reject / respond decisions, external execution (`CallDeferred`), durable across process restart | PA, LG (HITL middleware) | PA §3.2, LG §3.2 | `HumanApprovalMiddleware` (`Fn(&ToolCall) -> bool`), `Err(Interrupted)`, graph `Interrupt`, delegation `PendingApproval`, `ToolPolicy.access.approval_required` | RT+OH (OpenHuman `security/approval::ApprovalGate` becomes a handler) | 1 | shipped |
@@ -26,7 +26,7 @@ that the feature would extend.
 
 ## B. Tools
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | B1 | `ToolRuntime` parity: tool sees `call_id`, store, state view, stream writer, execution info | LG, PA (`RunContext`) | LG §3.6 | `ToolExecutionContext{run_id, thread_id, depth, events, cancel, workspace}`, `tool/injected.rs` | RT harness | 1 | shipped |
 | B2 | Rich tool return: model-visible value + separate multimodal follow-up content + app metadata / artifact never shown to the model | PA (`ToolReturn`), LG (`ToolMessage.artifact`) | PA §3.3, LG §3.6 | `ToolContent::{Text, Json}` (vendor tinytools), `artifacts/`, `handoff.rs` | RT tinytools+harness | 1 | shipped |
@@ -38,7 +38,7 @@ that the feature would extend.
 
 ## C. Streaming and events
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | C1 | Block-indexed stream events (`text/thinking/toolcall _start/_delta/_end` with `content_index`), error terminals that carry the partial assistant message and stop reason | pi | pi §4.2, `sdk-gaps/streaming.md` §3 | `ModelStreamItem::{MessageDelta, ToolCallDelta, UsageDelta, Completed}` | RT tinyinference+harness | 1 | shipped |
 | C2 | Compact durable frame codec + reducer for partial messages (crash recovery, reconnecting clients) | pi | pi §4.2 | `AgentEvent::ModelDelta` journaled, `HarnessEventJournal` | RT harness | 2 | partial (frame codec/reducer shipped and journaled; `ToolProgress`/`on_tool_delta` still has no real mid-execution caller pending a tinytools progress seam) |
@@ -47,7 +47,7 @@ that the feature would extend.
 
 ## D. Graph durability
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | D1 | Real pending writes: completed parallel siblings are never re-run after an interrupt/failure and their successors run in the right superstep (today's C1/C2 bugs) | LG | [`code-review-graph.md`](code-review-graph.md) C1, C2, R2 | `PendingWrite` (markers only), `completed_tasks` | RT graph | 1 | shipped |
 | D2 | Per-node `RetryPolicy`, `CachePolicy` (task cache with backends), `TimeoutPolicy{run, idle}`, `error_handler`, real `defer` scheduling | LG | LG §3.3 | graph-wide `with_node_retry` / `with_node_timeout`, harness `ResponseCache`, `mark_deferred` (export-only) | RT graph | 2 | shipped (phase-4, pending merge) |
@@ -58,7 +58,7 @@ that the feature would extend.
 
 ## E. Sessions and context
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | E1 | Conversation entry tree: `id/parent_id`, in-place branching, labels, fork/clone with `parent_session`, `BranchSummaryEntry`, context projection that never reads past the newest compaction | pi | pi §4.3 | `tinyagents-session` linear JSONL + SQLite, graph `fork_state` | RT session; `/fork`, `/tree`, labels UI in OH | 2 | shipped |
 | E2 | Compaction rules: cut points at user/assistant boundaries, `keep_recent_tokens`, split turns, iterative summaries, durable `CompactionRecord{first_kept, tokens_before, usage}`, overflow classifier → compact → retry same turn, hook may decline/replace | pi, PA (`Compaction` capability), LG (`SummarizationMiddleware`) | pi §4.5 | `summarization/` (policy, trim, pairing, `Summarizer`), `ContextCompressionMiddleware`, `MicrocompactMiddleware` | RT harness+session; summary prompt wording in OH | 2 | shipped |
@@ -68,7 +68,7 @@ that the feature would extend.
 
 ## F. Models and providers
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | F1 | `ModelProfile` as behaviour: `json_schema_transformer`, `default_structured_output_mode`, `prompted_output_template`, `thinking_tags` parsing, per-API compat matrix (~30 flags), `thinking_level_map` | PA, pi | PA §3.6, pi §4.8 | `ModelProfile` + `CapabilitySet` (capability data), `SchemaPreparation`, `ReasoningConfig` | RT tinyinference | 2 | shipped |
 | F2 | Generated model catalog (models.dev) with tiered pricing, `refresh_models()`, availability filtered by resolved auth | pi, PA (`genai-prices`) | pi §4.8 | `ModelCatalogEntry`, 5-model stale seed (`code-review-workspace.md` M7), `ModelPricing` | RT registry+tinyinference | 2 | shipped |
@@ -79,7 +79,7 @@ that the feature would extend.
 
 ## G. Testing and composition
 
-| # | Gap | Who has it | Source | Existing seam | Layer | Value Status |
+| # | Gap | Who has it | Source | Existing seam | Layer | Value | Status |
 |---|---|---|---|---|---|---|---|
 | G1 | Evals: `Dataset` / `Case` / `Evaluator` trait, `LLMJudge`, span-based evaluators, report | PA (`pydantic_evals`), LG (`agentevals`) | PA §3.7 | `testkit::Trajectory` | RT new crate `tinyagents-evals`; datasets in OH | 2 | OpenHuman |
 | G2 | Schema-driven `TestModel` (auto-calls every tool with generated args), process-wide `deny_network_models()` kill-switch | PA | PA §3.10 | `ScriptedModel`, `StreamingMock`, `FakeTool` | RT harness testkit + tinyinference | 3 | partial (`SchemaDrivenModel` shipped; `deny_network_models()` kill-switch not found) |
