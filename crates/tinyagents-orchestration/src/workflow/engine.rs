@@ -423,7 +423,32 @@ where
 
     /// Drive a run to a terminal state. Completed phases are never executed
     /// again, so a host may safely call this after process restart or resume.
+    ///
+    /// Dispatches to the lowered [`super::lower`] graph runner
+    /// ([`Self::drive_via_graph`]) when the `graph-workflows` feature is
+    /// enabled and [`Self::with_graph_execution`] has not turned it off
+    /// (the feature's default), else runs the legacy one-phase-at-a-time
+    /// scheduler loop ([`Self::drive_legacy`]) unchanged.
     pub async fn drive(
+        &self,
+        run_id: &str,
+        definition: &WorkflowDefinition,
+        cancel: CancellationToken,
+    ) -> Result<(), OrchestrationError> {
+        #[cfg(feature = "graph-workflows")]
+        {
+            if self.use_graph {
+                return self.drive_via_graph(run_id, definition, cancel).await;
+            }
+        }
+        self.drive_legacy(run_id, definition, cancel).await
+    }
+
+    /// The legacy scheduler: a `while` loop that picks exactly one runnable
+    /// phase per iteration ([`next_runnable_phase`]) and runs it to
+    /// completion before picking the next. Unchanged by the `graph-workflows`
+    /// feature; see [`Self::drive_via_graph`] for the lowered alternative.
+    async fn drive_legacy(
         &self,
         run_id: &str,
         definition: &WorkflowDefinition,
