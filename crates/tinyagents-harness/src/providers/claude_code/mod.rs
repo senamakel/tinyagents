@@ -323,7 +323,13 @@ fn thread_key_from_request(request: &ModelRequest) -> String {
 /// first, then any structured [`ResponseFormat`] is appended as a trailing
 /// system instruction (see [`response_format_instruction`]).
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
-    let mut messages = coalesce_tool_results(&request.messages);
+    let provider_messages: Vec<_> = request
+        .messages
+        .iter()
+        .filter(|message| !matches!(message, Message::Custom(_)))
+        .cloned()
+        .collect();
+    let mut messages = coalesce_tool_results(&provider_messages);
     if !request.tools.is_empty() {
         messages = with_tool_instructions(&messages, &request.tools, &request.tool_choice);
     }
@@ -338,12 +344,14 @@ fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
                 Message::User(_) => "user",
                 Message::Assistant(_) => "assistant",
                 Message::Tool(_) => "tool",
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             let content = match message {
                 Message::System(value) => render_content(&value.content),
                 Message::User(value) => render_content(&value.content),
                 Message::Assistant(value) => render_content(&value.content),
                 Message::Tool(value) => render_content(&value.content),
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             ChatMessage::new(role, content)
         })
@@ -387,6 +395,9 @@ fn render_content(content: &[ContentBlock]) -> String {
             }
             ContentBlock::Thinking { text, .. } => Some(text.clone()),
             ContentBlock::RedactedThinking { .. } => None,
+            ContentBlock::Audio(_) => Some("[audio content]".to_string()),
+            ContentBlock::Video(_) => Some("[video content]".to_string()),
+            ContentBlock::Document(_) => Some("[document content]".to_string()),
         })
         .collect::<Vec<_>>()
         // Content-block boundaries carry no implicit whitespace. Inserting a
@@ -416,6 +427,8 @@ fn model_response(response: ChatResponse) -> ModelResponse {
             content: response.text.into_iter().map(ContentBlock::Text).collect(),
             tool_calls: Vec::new(),
             usage,
+
+            origin: None,
         },
         usage,
         finish_reason: Some("stop".into()),

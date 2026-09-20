@@ -1229,6 +1229,35 @@ fn tool_message_from_result(
             .map(|block| match block {
                 tinytools::ToolContent::Text { text } => ContentBlock::Text(text.clone()),
                 tinytools::ToolContent::Json { data } => ContentBlock::Json(data.clone()),
+                tinytools::ToolContent::Image { media_type, data } => {
+                    let url = match data {
+                        tinytools::ImageData::Base64(data) => {
+                            format!("data:{media_type};base64,{data}")
+                        }
+                        tinytools::ImageData::Url(url) => url.clone(),
+                    };
+                    ContentBlock::Image(tinyinference_llm::message::ImageRef {
+                        url,
+                        mime_type: Some(media_type.clone()),
+                    })
+                }
+                tinytools::ToolContent::File {
+                    media_type, data, ..
+                } => {
+                    use tinyinference_llm::message::MediaRef;
+                    let media = match data {
+                        tinytools::FileData::Base64(data) => MediaRef::Base64 {
+                            data: data.clone(),
+                            media_type: media_type.clone(),
+                        },
+                        tinytools::FileData::Url(url) => MediaRef::url(url.clone()),
+                        tinytools::FileData::Path(path) => MediaRef::Path {
+                            path: path.clone(),
+                            media_type: Some(media_type.clone()),
+                        },
+                    };
+                    ContentBlock::Document(media)
+                }
             })
             .collect()
     };
@@ -1428,6 +1457,7 @@ mod canonical_result_tests {
             ],
             is_error: true,
             markdown_formatted: Some("## compact failure".to_string()),
+            ..ToolResult::default()
         }
     }
 

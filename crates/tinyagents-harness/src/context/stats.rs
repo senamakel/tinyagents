@@ -51,6 +51,7 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                 }
                 &message.content
             }
+            Message::Custom(_) => continue,
         };
         for block in content {
             match block {
@@ -61,6 +62,7 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                     stats.text_chars += value.to_string().chars().count();
                 }
                 ContentBlock::Image(_) => stats.images += 1,
+                ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => {}
                 ContentBlock::RedactedThinking { .. } => {}
             }
         }
@@ -82,6 +84,7 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
                 Message::User(message) => &message.content,
                 Message::Assistant(message) => &message.content,
                 Message::Tool(message) => &message.content,
+                Message::Custom(_) => return 0,
             };
             let mut visible = content
                 .iter()

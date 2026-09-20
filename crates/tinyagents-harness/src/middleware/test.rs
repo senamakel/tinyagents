@@ -34,6 +34,8 @@ fn response_with_usage(usage: Usage) -> ModelResponse {
             content: vec![ContentBlock::Text("ok".to_string())],
             tool_calls: Vec::new(),
             usage: None,
+
+            origin: None,
         },
         usage: Some(usage),
         finish_reason: None,
@@ -1073,6 +1075,8 @@ fn response_text(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.to_string())],
             tool_calls: Vec::new(),
             usage: None,
+
+            origin: None,
         },
         usage: None,
         finish_reason: None,

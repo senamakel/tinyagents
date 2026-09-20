@@ -306,6 +306,8 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(7, 3)),
+
+            origin: None,
         },
         usage: Some(Usage::new(7, 3)),
         finish_reason: Some("tool_calls".to_string()),
@@ -333,6 +335,8 @@ fn invalid_tool_call_response(id: &str, name: &str, raw: &str) -> ModelResponse 
             content: Vec::new(),
             tool_calls: vec![ToolCall::invalid(id, name, raw, reason)],
             usage: Some(Usage::new(7, 3)),
+
+            origin: None,
         },
         usage: Some(Usage::new(7, 3)),
         finish_reason: Some("tool_calls".to_string()),
@@ -353,6 +357,8 @@ fn text_response(text: &str, input: u64, output: u64) -> ModelResponse {
             content: vec![ContentBlock::Text(text.to_string())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(input, output)),
+
+            origin: None,
         },
         usage: Some(Usage::new(input, output)),
         finish_reason: Some("stop".to_string()),
@@ -377,6 +383,8 @@ fn truncated_empty_response(reasoning_tokens: u64) -> ModelResponse {
             content: Vec::new(),
             tool_calls: Vec::new(),
             usage: Some(Usage::new(4, reasoning_tokens)),
+
+            origin: None,
         },
         usage: Some(Usage::new(4, reasoning_tokens)),
         finish_reason: Some("length".to_string()),
@@ -2919,6 +2927,7 @@ async fn streaming_middleware_can_suppress_a_standalone_tool_delta() {
                 call_id: "blocked-call".to_string(),
                 content: "{}".to_string(),
                 tool_name: Some("blocked".to_string()),
+                content_index: None,
             }),
             ModelStreamItem::Completed(terminal),
         ])),
@@ -2964,6 +2973,7 @@ async fn streaming_tool_delta_transform_controls_terminal_dispatch() {
                 call_id: "raw-call".to_string(),
                 content: r#"{"raw":true}"#.to_string(),
                 tool_name: Some("blocked".to_string()),
+                content_index: None,
             }),
             ModelStreamItem::Completed(terminal),
         ])),
@@ -4088,6 +4098,8 @@ fn multi_tool_call_response(calls: Vec<(&str, &str)>) -> ModelResponse {
             content: Vec::new(),
             tool_calls,
             usage: Some(Usage::new(7, 3)),
+
+            origin: None,
         },
         usage: Some(Usage::new(7, 3)),
         finish_reason: Some("tool_calls".to_string()),

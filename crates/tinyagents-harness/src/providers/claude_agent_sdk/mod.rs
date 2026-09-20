@@ -107,7 +107,7 @@ fn build_invocation(
 fn render_transcript(messages: &[Message]) -> String {
     let non_system: Vec<&Message> = messages
         .iter()
-        .filter(|message| !matches!(message, Message::System(_)))
+        .filter(|message| !matches!(message, Message::System(_) | Message::Custom(_)))
         .collect();
     if non_system.len() == 1 {
         return non_system[0].text();
@@ -121,6 +121,7 @@ fn render_transcript(messages: &[Message]) -> String {
                 Message::Assistant(_) => "ASSISTANT",
                 Message::Tool(_) => "TOOL",
                 Message::System(_) => unreachable!("system messages were filtered"),
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             format!("[{role}]\n{}\n[/{role}]", message.text())
         })

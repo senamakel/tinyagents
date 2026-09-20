@@ -40,6 +40,8 @@ fn multi_tool_call_response(calls: Vec<ToolCall>) -> ModelResponse {
             content: Vec::new(),
             tool_calls: calls,
             usage: Some(Usage::new(8, 3)),
+
+            origin: None,
         },
         usage: Some(Usage::new(8, 3)),
         finish_reason: Some("tool_calls".into()),
@@ -63,6 +65,8 @@ fn text_response(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(4, 2)),
+
+            origin: None,
         },
         usage: Some(Usage::new(4, 2)),
         finish_reason: Some("stop".into()),

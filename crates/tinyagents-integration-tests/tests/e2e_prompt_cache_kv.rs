@@ -92,6 +92,8 @@ impl ChatModel<()> for KvCacheMockServer {
                         json!({ "query": format!("part-{call}") }),
                     )],
                     usage: Some(Usage::new(100, 10)),
+
+                    origin: None,
                 },
                 usage: Some(Usage::new(100, 10)),
                 finish_reason: Some("tool_calls".to_string()),

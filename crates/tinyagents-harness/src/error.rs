@@ -257,6 +257,7 @@ impl From<tinyinference_llm::Error> for TinyAgentsError {
             tinyinference_llm::Error::Validation(message) => Self::Validation(message),
             tinyinference_llm::Error::Serialization(error) => Self::Serialization(error),
             tinyinference_llm::Error::Catalog(message) => Self::Model(message),
+            tinyinference_llm::Error::Unsupported(message) => Self::Model(message),
         }
     }
 }

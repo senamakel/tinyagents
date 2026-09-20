@@ -51,6 +51,8 @@ fn tool_call_response(id: &str, name: &str, input: u64, output: u64) -> ModelRes
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, json!({}))],
             usage: Some(Usage::new(input, output)),
+
+            origin: None,
         },
         usage: Some(Usage::new(input, output)),
         finish_reason: Some("tool_calls".into()),
@@ -71,6 +73,8 @@ fn text_response(text: &str, input: u64, output: u64) -> ModelResponse {
             content: vec![ContentBlock::Text(text.into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(input, output)),
+
+            origin: None,
         },
         usage: Some(Usage::new(input, output)),
         finish_reason: Some("stop".into()),
@@ -287,6 +291,8 @@ async fn cost_pricing_records_and_enforces_money_budget() {
             content: vec![ContentBlock::Text("priced".into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(4, 2)),
+
+            origin: None,
         },
         usage: Some(Usage::new(4, 2)),
         finish_reason: Some("stop".into()),
@@ -517,6 +523,8 @@ async fn cached_input_budget_blocks_next_call() {
                 cache_read_tokens: 12,
                 ..Usage::new(2, 1)
             }),
+
+            origin: None,
         },
         usage: Some(Usage {
             cache_read_tokens: 12,

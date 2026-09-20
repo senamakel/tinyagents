@@ -265,6 +265,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for RedactionM
                     }
                 }
                 ToolContent::Json { data } => hits += self.redact_value(data),
+                ToolContent::Image { data, .. } => match data {
+                    tinytools::ImageData::Base64(value) | tinytools::ImageData::Url(value) => {
+                        let (redacted, count) = self.redact(value);
+                        if count > 0 {
+                            *value = redacted;
+                            hits += count;
+                        }
+                    }
+                },
+                ToolContent::File { data, .. } => match data {
+                    tinytools::FileData::Base64(value)
+                    | tinytools::FileData::Url(value)
+                    | tinytools::FileData::Path(value) => {
+                        let (redacted, count) = self.redact(value);
+                        if count > 0 {
+                            *value = redacted;
+                            hits += count;
+                        }
+                    }
+                },
             }
         }
         if let Some(markdown) = &mut result.markdown_formatted {

@@ -39,6 +39,8 @@ fn text_response(text: &str) -> ModelResponse {
             )],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(1, 1)),
+
+            origin: None,
         },
         usage: Some(Usage::new(1, 1)),
         finish_reason: Some("stop".to_string()),
@@ -87,6 +89,8 @@ impl ChatModel<()> for RecordingModel {
                     content: Vec::new(),
                     tool_calls: vec![ToolCall::new("c1", "noop", json!({}))],
                     usage: Some(Usage::new(1, 1)),
+
+                    origin: None,
                 },
                 usage: Some(Usage::new(1, 1)),
                 finish_reason: Some("tool_calls".to_string()),

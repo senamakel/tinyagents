@@ -236,3 +236,21 @@ fn request_rendering_keeps_private_image_marker_text_literal() {
     assert_eq!(content[0]["text"], "literal ");
     assert_eq!(content[1]["text"], "[OH_IMAGE:data:image/png;base64,QUJD]");
 }
+
+#[test]
+fn request_messages_filter_host_custom_records() {
+    let request = ModelRequest::new(vec![
+        Message::user("hello"),
+        Message::Custom(tinyinference_llm::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: serde_json::json!({"summary": "host-only"}),
+            display: Some("host-only".into()),
+        }),
+    ]);
+
+    let messages = request_messages(&request);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].content, "hello");
+}

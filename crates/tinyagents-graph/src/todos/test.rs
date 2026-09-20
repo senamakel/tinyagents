@@ -526,7 +526,9 @@ mod tool_tests {
             .iter()
             .find_map(|block| match block {
                 ToolContent::Json { data } => Some(data),
-                ToolContent::Text { .. } => None,
+                ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => {
+                    None
+                }
             })
             .expect("successful todo result has a JSON payload")
     }
