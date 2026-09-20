@@ -784,16 +784,27 @@ where
     /// step's `failure`/`interrupt`; every stalled branch, including any
     /// later error/interrupt beyond the first, still lands in `stalled` so
     /// the boundary can schedule it for resume rather than silently
-    /// dropping it or mistaking it for completed. For a sequential run
-    /// (which already stops invoking further branches at the first
-    /// stop condition — see [`Self::run_sequential`]), `outcome.results` is
-    /// simply a strict prefix, so this fold is behaviorally identical to the
-    /// old stop-early fold in that mode; the behavior change is scoped to
-    /// parallel steps, where `outcome.results` always covers the whole
-    /// active set.
+    /// dropping it or mistaking it for completed.
+    ///
+    /// [`Self::run_sequential`] stops invoking further branches at the first
+    /// stop condition, so `outcome.results` may be a strict prefix of
+    /// `active` there; [`Self::run_parallel`] always drives the whole active
+    /// set, so `outcome.results` covers it completely. This is the
+    /// sequential-mode cousin of the C1 fix above `outcome.results` itself:
+    /// every `active` entry with no entry in `outcome.results` (because
+    /// `run_sequential` never started it) is a not-yet-started sibling of
+    /// the branch that stopped the step, and is folded into `stalled` here
+    /// too — using its *own* original active-set index, one past the
+    /// highest index `outcome.results` covers — so the boundary schedules it
+    /// as a pending task exactly like an errored/interrupted branch, instead
+    /// of silently dropping it from the checkpoint's pending set. Without
+    /// this, a sequential branch that interrupts or fails strands its
+    /// unstarted siblings: they never run on resume/retry, and the final
+    /// state permanently diverges from an uninterrupted run.
     fn fold_step(
         &self,
         outcome: StepOutcome<Update>,
+        active: &[Activation],
         step: usize,
         visited: &mut Vec<NodeId>,
     ) -> StepRun<Update> {
@@ -807,6 +818,7 @@ where
         let mut failure: Option<StepFailure> = None;
         let mut task_writes: Vec<PendingWrite> = Vec::new();
 
+        let ran = outcome.results.len();
         for (index, (activation, (result, writes))) in outcome.results.into_iter().enumerate() {
             let node_id = activation.node.clone();
             match result {
@@ -836,6 +848,17 @@ where
                     }
                 }
             }
+        }
+
+        // Sequential-mode sibling drop fix: any `active` entries beyond
+        // what `outcome.results` covers were never started this step
+        // (`run_sequential` stopped at the first error/interrupt). Carry
+        // them into `stalled` unexecuted, keyed by their own original
+        // active-set index, so they become pending tasks at the
+        // failure/interrupt boundary and are run exactly once on
+        // resume/retry rather than being dropped.
+        for (index, activation) in active.iter().enumerate().skip(ran) {
+            stalled.push((index, activation.clone()));
         }
 
         StepRun {
