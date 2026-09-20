@@ -1872,7 +1872,10 @@ async fn sequential_stall_keeps_unstarted_sibling_pending() {
         1,
         "c must run exactly once, on resume"
     );
-    assert_eq!(done.state, 1, "overwrite reducer: c (index 1) applied last, overwriting b's 10");
+    assert_eq!(
+        done.state, 1,
+        "overwrite reducer: c (index 1) applied last, overwriting b's 10"
+    );
 }
 
 /// Equivalence regression for the fix above: an interrupted-then-resumed
