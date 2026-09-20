@@ -7,6 +7,8 @@
 
 mod engine;
 mod graph;
+#[cfg(feature = "graph-workflows")]
+mod lower;
 mod state;
 mod types;
 mod validate;
@@ -16,6 +18,8 @@ pub use engine::{
     WorkflowChildResult, WorkflowEngine, WorkflowExecutor, WorkflowStore,
 };
 pub use graph::scheduler_topology_preview;
+#[cfg(feature = "graph-workflows")]
+pub use lower::lowered_topology;
 pub use state::{
     PhaseStatus, all_phases_completed, init_phase_states, next_runnable_phase, phase_prompt,
     phase_status, reset_running_phases, synthesize_summary, upstream_outputs,
