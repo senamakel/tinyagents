@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 use crate::command::{Interrupt, RouteTarget};
 use tinyagents_harness::ids::{NodeId, TaskId};
