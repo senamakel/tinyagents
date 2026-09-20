@@ -977,8 +977,7 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::new("host system")),
         Arc::new(InMemoryDefinitionRegistry::new(vec![
-            AgentDefinition::new("helper", "Helper", "test helper")
-                .with_tools(["verbose_lookup"]),
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["verbose_lookup"]),
         ])),
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model.clone())),
@@ -2772,11 +2771,9 @@ async fn budget_preflight_estimate_reflects_the_dialect_rewritten_request() {
     let budget = Arc::new(EstimateRecordingBudget::new());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
-        Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
-            "helper",
-            "Helper",
-            "test helper",
-        )])),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["verbose_lookup"]),
+        ])),
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model.clone())),
     )
