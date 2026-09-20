@@ -6156,7 +6156,7 @@ mod tool_effects_test {
 
     #[tokio::test]
     async fn resume_deferred_settles_the_deferred_row_completed_without_a_synthesized_crash_answer()
-     {
+    {
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness.register_model(
             "mock",
@@ -6171,8 +6171,8 @@ mod tool_effects_test {
         }));
 
         let ledger = Arc::new(InMemoryToolEffectLedger::default());
-        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
-            .with_tool_effect_ledger(ledger.clone());
+        let ctx: RunContext<()> =
+            RunContext::new(RunConfig::new("run-1"), ()).with_tool_effect_ledger(ledger.clone());
         let first = harness
             .invoke_in_context(&(), ctx, vec![Message::user("go")])
             .await
@@ -6190,8 +6190,8 @@ mod tool_effects_test {
         assert!(effect.settled_at.is_some());
 
         let results = DeferredToolResults::new().approve("call-1");
-        let ctx2: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
-            .with_tool_effect_ledger(ledger.clone());
+        let ctx2: RunContext<()> =
+            RunContext::new(RunConfig::new("run-1"), ()).with_tool_effect_ledger(ledger.clone());
         let run = harness
             .resume_deferred(&(), ctx2, first.messages.clone(), results)
             .await
@@ -6229,8 +6229,8 @@ mod tool_effects_test {
         }));
 
         let ledger = Arc::new(InMemoryToolEffectLedger::default());
-        let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
-            .with_tool_effect_ledger(ledger.clone());
+        let ctx: RunContext<()> =
+            RunContext::new(RunConfig::new("run-1"), ()).with_tool_effect_ledger(ledger.clone());
         let first = harness
             .invoke_in_context(&(), ctx, vec![Message::user("go")])
             .await
@@ -6241,8 +6241,8 @@ mod tool_effects_test {
         );
 
         let results = DeferredToolResults::new().approve("call-1");
-        let ctx2: RunContext<()> = RunContext::new(RunConfig::new("run-1"), ())
-            .with_tool_effect_ledger(ledger.clone());
+        let ctx2: RunContext<()> =
+            RunContext::new(RunConfig::new("run-1"), ()).with_tool_effect_ledger(ledger.clone());
         harness
             .resume_deferred(&(), ctx2, first.messages.clone(), results)
             .await
@@ -6259,7 +6259,9 @@ mod tool_effects_test {
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness.register_model(
             "mock",
-            Arc::new(MockModel::with_responses(vec![text_response("all done", 4, 2)])),
+            Arc::new(MockModel::with_responses(vec![text_response(
+                "all done", 4, 2,
+            )])),
         );
         harness.register_tool(Arc::new(FakeTool::new("approve_tool", "approved-result")));
         harness.register_tool(Arc::new(ReplayTool {
@@ -6334,7 +6336,10 @@ mod tool_effects_test {
             Message::Tool(tool) if tool.tool_call_id == "call-b" => Some(message.text()),
             _ => None,
         });
-        assert_eq!(call_b_answer.as_deref(), Some("interrupted before settlement"));
+        assert_eq!(
+            call_b_answer.as_deref(),
+            Some("interrupted before settlement")
+        );
         assert_eq!(
             ledger.get("run-x", "call-b").unwrap().status,
             ToolEffectStatus::Interrupted
