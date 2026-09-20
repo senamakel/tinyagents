@@ -1143,7 +1143,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // express (it falls back to the *last assistant message*, which is
         // one turn too early here), so the final response is set directly.
         if let Some(control) = result.control.clone() {
-            if control.return_direct || control.terminate {
+            if control.return_direct.unwrap_or(false) || control.terminate {
                 run.final_response = Some(ModelResponse::assistant(
                     result.output_for_llm(prepared.options.prefer_markdown),
                 ));

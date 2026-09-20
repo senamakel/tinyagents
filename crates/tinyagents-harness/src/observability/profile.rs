@@ -193,7 +193,7 @@ fn cpu_time_us() -> Option<(u64, u64)> {
             .filter(|value| *value > 0)
             .unwrap_or(100)
     });
-    let to_micros = |ticks| ticks.saturating_mul(1_000_000) / ticks_per_second;
+    let to_micros = |ticks: u64| ticks.saturating_mul(1_000_000) / ticks_per_second;
     Some((to_micros(user_ticks), to_micros(system_ticks)))
 }
 
