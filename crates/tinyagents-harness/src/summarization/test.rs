@@ -423,6 +423,7 @@ mod pairing {
                 .map(|id| ToolCall::new(*id, "lookup", json!({"q": "rust"})))
                 .collect(),
             usage: None,
+            origin: None,
         })
     }
 
@@ -605,6 +606,7 @@ mod pairing {
                 json!({"query": "x".repeat(2000)}),
             )],
             usage: None,
+            origin: None,
         });
         assert!(
             heavy.estimated_char_weight() > 2000,
@@ -640,6 +642,7 @@ mod pairing {
             content: vec![ContentBlock::thinking("z".repeat(120))],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         });
         assert_eq!(msg.estimated_char_weight(), 120);
     }
@@ -665,6 +668,7 @@ mod rendering {
                 content: Vec::new(),
                 tool_calls: vec![ToolCall::new("c1", "get_weather", json!({"city": "Paris"}))],
                 usage: None,
+                origin: None,
             }),
             Message::tool("c1", r#"{"temp_c":21}"#),
         ];
@@ -688,6 +692,7 @@ mod rendering {
             ],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         });
         let rendered = render_message_for_summary(&msg);
         assert!(rendered.contains("weighing options"), "{rendered}");

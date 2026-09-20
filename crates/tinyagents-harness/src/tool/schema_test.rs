@@ -296,3 +296,35 @@ fn cleans_nested_unknown_schema_keyword() {
     assert_eq!(cleaned["not"]["type"], "integer");
     assert!(cleaned["not"].get("minimum").is_none());
 }
+
+#[test]
+fn validate_against_schema_accepts_conforming_values() {
+    let schema = json!({
+        "type": "object",
+        "required": ["approved"],
+        "properties": { "approved": { "type": "boolean" } }
+    });
+    assert!(validate_against_schema(&schema, &json!({ "approved": true })).is_ok());
+    // A null/empty schema accepts anything.
+    assert!(validate_against_schema(&json!(null), &json!("anything")).is_ok());
+    assert!(validate_against_schema(&json!({}), &json!(42)).is_ok());
+}
+
+#[test]
+fn validate_against_schema_rejects_wrong_type_and_missing_required() {
+    let schema = json!({
+        "type": "object",
+        "required": ["approved"],
+        "properties": { "approved": { "type": "boolean" } }
+    });
+    let wrong_type = validate_against_schema(&schema, &json!({ "approved": "yes" })).unwrap_err();
+    assert!(
+        matches!(&wrong_type, TinyAgentsError::Validation(msg) if msg.contains("value.approved")),
+        "got {wrong_type:?}"
+    );
+    let missing = validate_against_schema(&schema, &json!({})).unwrap_err();
+    assert!(
+        matches!(&missing, TinyAgentsError::Validation(msg) if msg.contains("required")),
+        "got {missing:?}"
+    );
+}

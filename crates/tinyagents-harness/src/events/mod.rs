@@ -165,14 +165,16 @@ impl EventSink {
             inner.next_offset += 1;
             let id = crate::ids::EventId::new(format!("{}-evt-{offset}", inner.stream_id));
             let record = EventRecord { id, offset, event };
-            // Most production invocations do not attach an observer. Avoid a
-            // record clone, queue allocation, and serialized drain cycle in
-            // that common path; offsets still advance so a later subscriber
-            // starts at the correct position and never sees earlier events.
+            // The id/offset must still be minted with no listeners — callers
+            // (e.g. `HarnessRunStatus::set_last_event`) rely on the returned
+            // record regardless of whether anyone is watching — but with
+            // nothing registered there is nothing to fan out to, so the
+            // `Arc` clone, enqueue, and drain loop below are pure overhead on
+            // every emit of a run nobody is observing. Skip them.
             if inner.listeners.is_empty() {
                 return record;
             }
-            let listeners = Arc::clone(&inner.listeners);
+            let listeners = inner.listeners.clone();
             inner.pending.push_back((record.clone(), listeners));
             let should_drain = !inner.dispatching;
             if should_drain {

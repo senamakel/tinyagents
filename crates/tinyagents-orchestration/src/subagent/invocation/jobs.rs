@@ -211,6 +211,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
     async fn execute(
         &self,
         _state: &State,
+        _call_id: tinyagents_harness::ids::CallId,
         args: Value,
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
@@ -284,6 +285,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
     async fn execute(
         &self,
         _state: &State,
+        _call_id: tinyagents_harness::ids::CallId,
         args: Value,
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,

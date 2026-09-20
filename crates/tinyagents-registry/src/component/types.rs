@@ -49,6 +49,15 @@ pub enum ComponentKind {
     TaskStore,
     /// An event listener descriptor (name-only for now).
     Listener,
+    /// An executable capability bundle (gap G3): instructions, toolset,
+    /// middleware, model defaults, exposure, and `defer_loading`. Unlike
+    /// every other executable kind above (`Model`, `Tool`, `Graph`,
+    /// `Agent`), the stored value is `Ctx`-generic
+    /// (`tinyagents_harness::capability::Capability<State, Ctx>`), so
+    /// [`crate::CapabilityRegistry::register_capability`] stores it
+    /// type-erased rather than in a `Ctx`-free typed field — see that
+    /// method's doc comment.
+    Capability,
 }
 
 /// Discovery and UI metadata for one registered capability.

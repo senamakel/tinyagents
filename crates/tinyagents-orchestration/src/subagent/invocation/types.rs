@@ -150,6 +150,14 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) child_data: ChildDataPolicy<Ctx>,
     /// JSON Schema describing the tool's model-visible arguments.
     pub(crate) parameters: Value,
+    /// Cached [`tinyagents_harness::tool::ToolDispatch::tool`] declaration, built once from
+    /// `tool_name`/`parameters` on first access rather than allocated fresh
+    /// (a new `Arc` with cloned schema `Value`) on every call — `tool()` is
+    /// invoked several times per admitted call plus once per tool per run for
+    /// `schemas()` (M-4). Safe to cache lazily: the `with_tool_name`/
+    /// `with_parameters` builders consume `self` and are only meant to run
+    /// before the tool is registered, never after.
+    pub(crate) declaration: std::sync::OnceLock<Arc<dyn tinytools::Tool>>,
     /// Shared registry that owns asynchronous child-job state and controls.
     pub(crate) jobs: SubAgentJobRegistry,
 }

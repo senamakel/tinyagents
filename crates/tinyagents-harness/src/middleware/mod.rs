@@ -36,38 +36,62 @@ pub use library::*;
 
 use std::sync::Arc;
 
-use crate::context::RunContext;
+use crate::context::{MiddlewareControl, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
 use tinyinference_llm::tool::{ToolCall, ToolDelta};
 use tinytools::ToolResult;
 
-/// Runs one per-middleware lifecycle hook across the whole stack, bracketing
-/// each call with `MiddlewareStarted`/`MiddlewareCompleted` events and fanning
-/// `on_error` out to every middleware on the first failure (so the originating
-/// error is never masked).
+/// Runs one per-middleware **control-outcome** hook across the whole stack,
+/// bracketing each *actually invoked* call with
+/// `MiddlewareStarted`/`MiddlewareCompleted` events, fanning `on_error` out to
+/// every middleware on the first failure, and resolving the phase's
+/// [`MiddlewareControl`] per the precedence rule documented on
+/// [`Middleware::is_observer`]: the first non-[`MiddlewareControl::Continue`]
+/// outcome wins; every hook after it is skipped unless
+/// [`Middleware::is_observer`] returns `true` for it, in which case it still
+/// runs (for observation) but its own control outcome is discarded. The
+/// winning control (if any) is installed via
+/// [`RunContext::request_control`], exactly as if a hook had called it
+/// directly — this macro is the single place that bridges "hook returned a
+/// control" and "hook called `request_control`" into one mechanism.
 ///
-/// This is factored as a macro rather than an async helper because each hook
-/// takes different arguments and borrows `ctx` mutably across its `await`, which
-/// a closure-based helper cannot express without heap-boxing every call.
-///
-/// Crucially, `MiddlewareCompleted` is emitted on *both* the success and error
-/// paths: a hook that returns `Err` can no longer leave a dangling
-/// `MiddlewareStarted` with no matching `Completed` in the event stream. `$iter`
-/// selects registration order (`.iter()`) or reverse order (`.iter().rev()`);
-/// `$call` is the (un-awaited) hook invocation on `$mw`.
+/// Factored as a macro (not an async helper) for the same reason as before
+/// control outcomes existed: each hook takes different arguments and borrows
+/// `ctx` mutably across its `await`, which a closure-based helper cannot
+/// express without heap-boxing every call. `$iter` selects registration order
+/// (`.iter()`) or reverse order (`.iter().rev()`); `$call` is the (un-awaited)
+/// `_control` hook invocation on `$mw`.
 macro_rules! run_stack_hook {
     ($self:ident, $ctx:ident, $iter:expr, |$mw:ident| $call:expr) => {{
+        let mut winning: Option<MiddlewareControl> = None;
         for $mw in $iter {
+            if winning.is_some() && !$mw.is_observer() {
+                continue;
+            }
             let name = $mw.name().to_string();
             $ctx.emit(AgentEvent::MiddlewareStarted { name: name.clone() });
             let result = $call.await;
-            $ctx.emit(AgentEvent::MiddlewareCompleted { name });
-            if let Err(e) = result {
-                $self.fan_out_on_error($ctx, &e).await;
-                return Err(e);
+            $ctx.emit(AgentEvent::MiddlewareCompleted { name: name.clone() });
+            match result {
+                Ok(control) => {
+                    if winning.is_none() && !matches!(control, MiddlewareControl::Continue) {
+                        winning = Some(control);
+                    }
+                }
+                Err(e) => {
+                    $ctx.emit(AgentEvent::MiddlewareFailed {
+                        name,
+                        error: e.to_string(),
+                    });
+                    $self.fan_out_on_error($ctx, &e).await;
+                    return Err(e);
+                }
             }
+        }
+        if let Some(control) = winning {
+            $ctx.request_control(control);
         }
         Ok(())
     }};
@@ -84,6 +108,23 @@ impl AgentRun {
     /// Returns the final response text, if the run produced a final response.
     pub fn text(&self) -> Option<String> {
         self.final_response.as_ref().map(|r| r.text())
+    }
+
+    /// Deserializes [`Self::structured`] into `T`, when the run produced a
+    /// structured output.
+    ///
+    /// A typed convenience over `run.structured`, mirroring Pydantic AI's
+    /// `result.output` (A3). Returns
+    /// [`TinyAgentsError::StructuredOutput`][crate::error::TinyAgentsError::StructuredOutput]
+    /// when the run produced no structured value, or when the value does not
+    /// deserialize into `T`.
+    pub fn structured_as<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
+        let value = self.structured.clone().ok_or_else(|| {
+            TinyAgentsError::StructuredOutput("run produced no structured output".to_string())
+        })?;
+        serde_json::from_value(value).map_err(|error| {
+            TinyAgentsError::StructuredOutput(format!("deserialization failed: {error}"))
+        })
     }
 }
 
@@ -137,6 +178,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         self.model_middlewares.len()
     }
 
+    /// Returns `true` when a registered [`ModelMiddleware`] already retries
+    /// the model call itself (see [`ModelMiddleware::overrides_retry`]).
+    ///
+    /// The agent loop's base call uses this to skip its own
+    /// [`crate::runtime::RunPolicy::retry`] loop, so `RetryMiddleware` and the
+    /// loop's built-in retry do not multiply attempts together (I-7).
+    pub fn has_retry_override(&self) -> bool {
+        self.model_middlewares.iter().any(|mw| mw.overrides_retry())
+    }
+
+    /// Returns `true` when any registered lifecycle [`Middleware`] asks to
+    /// stop after the turn currently completing (see
+    /// [`Middleware::should_stop_after_turn`]).
+    ///
+    /// Called by the agent loop at the turn boundary — after tool execution,
+    /// before the loop would otherwise continue — so an aggregate stop
+    /// condition (a tally across the whole turn's tool results, not any
+    /// single call) can end the run as cleanly as
+    /// [`crate::context::MiddlewareControl::JumpTo`]`(`[`crate::context::LoopTarget::End`]`)`.
+    pub fn any_should_stop_after_turn(&self, ctx: &RunContext<Ctx>, run: &AgentRun) -> bool {
+        self.middlewares
+            .iter()
+            .any(|mw| mw.should_stop_after_turn(ctx, run))
+    }
+
     /// Returns the number of registered around-agent middleware layers.
     pub fn agent_middleware_len(&self) -> usize {
         self.agent_middlewares.len()
@@ -175,7 +241,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// order.
     pub async fn run_before_agent(&self, ctx: &mut RunContext<Ctx>, state: &State) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_agent(ctx, state))
+            .before_agent_control(ctx, state))
     }
 
     /// Runs every middleware's [`Middleware::after_agent`] in reverse
@@ -187,7 +253,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         run: &mut AgentRun,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_agent(ctx, state, run))
+            .after_agent_control(ctx, state, run))
     }
 
     /// Runs every middleware's [`Middleware::before_model`] in registration
@@ -199,7 +265,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         request: &mut ModelRequest,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_model(ctx, state, request))
+            .before_model_control(ctx, state, request))
     }
 
     /// Runs every middleware's [`Middleware::on_model_delta`] in registration
@@ -237,31 +303,91 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         response: &mut ModelResponse,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_model(ctx, state, response))
+            .after_model_control(ctx, state, response))
     }
 
     /// Runs every middleware's [`Middleware::before_tool`] in registration
     /// order, threading the mutable tool call through each.
+    ///
+    /// Unlike the other stack runners this one recognises the per-call
+    /// signals of A2/A3 — `ApprovalRequired`, `CallDeferred`, `ToolFailed`,
+    /// `ModelRetry` — as *decisions about the call* rather than hook
+    /// failures: they propagate to admission (which defers or answers the
+    /// call) without a `MiddlewareFailed` event or an `on_error` fan-out.
+    /// An `ApprovalRequired` for a call the resume path already approved
+    /// ([`RunContext::is_call_approved`]) is treated as `Continue`, so a
+    /// gate that cannot see the approval does not re-defer the call.
     pub async fn run_before_tool(
         &self,
         ctx: &mut RunContext<Ctx>,
         state: &State,
         call: &mut ToolCall,
     ) -> Result<()> {
-        run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .before_tool(ctx, state, call))
+        let mut winning: Option<MiddlewareControl> = None;
+        for mw in self.middlewares.iter() {
+            if winning.is_some() && !mw.is_observer() {
+                continue;
+            }
+            let name = mw.name().to_string();
+            ctx.emit(AgentEvent::MiddlewareStarted { name: name.clone() });
+            let result = mw.before_tool_control(ctx, state, call).await;
+            ctx.emit(AgentEvent::MiddlewareCompleted { name: name.clone() });
+            match result {
+                Ok(control) => {
+                    if winning.is_none() && !matches!(control, MiddlewareControl::Continue) {
+                        winning = Some(control);
+                    }
+                }
+                Err(TinyAgentsError::ApprovalRequired { .. }) if ctx.is_call_approved(&call.id) => {
+                }
+                Err(
+                    signal @ (TinyAgentsError::ApprovalRequired { .. }
+                    | TinyAgentsError::CallDeferred { .. }
+                    | TinyAgentsError::ToolFailed(_)
+                    | TinyAgentsError::ModelRetry(_)),
+                ) => return Err(signal),
+                Err(e) => {
+                    ctx.emit(AgentEvent::MiddlewareFailed {
+                        name,
+                        error: e.to_string(),
+                    });
+                    self.fan_out_on_error(ctx, &e).await;
+                    return Err(e);
+                }
+            }
+        }
+        if let Some(control) = winning {
+            ctx.request_control(control);
+        }
+        Ok(())
     }
 
     /// Runs every middleware's [`Middleware::on_tool_delta`] in registration
     /// order for one streamed tool-progress delta.
+    ///
+    /// Like [`Self::run_on_model_delta`], and for the same reason (M-12):
+    /// this is **not** bracketed by `MiddlewareStarted`/`MiddlewareCompleted`
+    /// events. It used to be the one delta hook still routed through
+    /// `run_stack_hook!`, so a stack of `N` middlewares produced `2*N`
+    /// bookkeeping events per streamed tool-progress delta — noise a
+    /// `ModelCompleted`-based exporter had to filter, for a hook that (unlike
+    /// `before_tool`/`after_tool`) can fire many times per call. Both delta
+    /// hooks now agree: bracket every non-delta hook, skip both delta hooks.
+    /// A caller that needs to observe delta-level middleware activity should
+    /// instrument the hook implementation itself.
     pub async fn run_on_tool_delta(
         &self,
         ctx: &mut RunContext<Ctx>,
         state: &State,
         delta: &mut ToolDelta,
     ) -> Result<()> {
-        run_stack_hook!(self, ctx, self.middlewares.iter(), |mw| mw
-            .on_tool_delta(ctx, state, delta))
+        for mw in self.middlewares.iter() {
+            if let Err(e) = mw.on_tool_delta(ctx, state, delta).await {
+                self.fan_out_on_error(ctx, &e).await;
+                return Err(e);
+            }
+        }
+        Ok(())
     }
 
     /// Runs every middleware's [`Middleware::after_tool`] in reverse
@@ -274,7 +400,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         result: &mut ToolResult,
     ) -> Result<()> {
         run_stack_hook!(self, ctx, self.middlewares.iter().rev(), |mw| mw
-            .after_tool(ctx, state, invocation, result))
+            .after_tool_control(ctx, state, invocation, result))
     }
 
     /// Runs every middleware's [`Middleware::on_error`] in registration order,

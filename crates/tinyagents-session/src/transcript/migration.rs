@@ -48,7 +48,7 @@ pub struct TranscriptLayoutMigration {
 pub fn migrate_layout_if_needed(workspace_dir: &Path) -> Result<TranscriptLayoutMigration> {
     let marker_path = workspace_dir.join(MIGRATION_MARKER);
     if marker_path.exists() {
-        log::debug!(
+        tracing::debug!(
             "[session-migration] marker present at {} — skipping",
             marker_path.display()
         );
@@ -72,7 +72,7 @@ pub fn migrate_layout_if_needed(workspace_dir: &Path) -> Result<TranscriptLayout
 
     write_marker(&marker_path, &outcome).context("write session-migration marker")?;
 
-    log::info!(
+    tracing::info!(
         "[session-migration] complete: jsonl moved={} skipped={}, md moved={} skipped={}, legacy dirs pruned={}, warnings={}",
         outcome.jsonl_moved,
         outcome.jsonl_skipped,
@@ -141,7 +141,7 @@ fn move_jsonl_files_up(
         match hard_link_then_remove(&path, &dest) {
             Ok(()) => {
                 outcome.jsonl_moved += 1;
-                log::debug!(
+                tracing::debug!(
                     "[session-migration] moved {} → {}",
                     path.display(),
                     dest.display()
@@ -195,7 +195,7 @@ fn migrate_md_directories(
             Ok(created) => {
                 let moved_before = outcome.md_moved;
                 if created {
-                    log::debug!(
+                    tracing::debug!(
                         "[session-migration] reserved markdown destination {}",
                         dest.display()
                     );

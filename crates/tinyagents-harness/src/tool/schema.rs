@@ -485,3 +485,34 @@ impl SchemaCleanr {
         target
     }
 }
+
+/// Validates `value` against `schema`, a JSON-schema subset (`type`,
+/// `required`, `properties`, `additionalProperties`, `items`, `enum`).
+///
+/// This is a *value* validator, unlike [`SchemaCleanr::validate`], which
+/// checks a schema's own shape. It reuses the inference layer's tool-call
+/// argument validator (`tinyinference_llm::tool::ToolSchema::validate_call`)
+/// by wrapping `schema` in a throwaway tool schema and `value` in a matching
+/// call, so a tool's arguments and, say, a graph interrupt's resume value are
+/// held to exactly the same rules. A `null` or empty-object `schema` accepts
+/// every value. Any rejection is reported as
+/// [`TinyAgentsError::Validation`] naming the offending path relative to
+/// `value`.
+pub fn validate_against_schema(schema: &Value, value: &Value) -> Result<()> {
+    const TOOL_NAME: &str = "response";
+    let tool = tinyinference_llm::tool::ToolSchema::new(TOOL_NAME, "", schema.clone());
+    let call = tinyinference_llm::tool::ToolCall::new("resume", TOOL_NAME, value.clone());
+    tool.validate_call(&call).map_err(|err| {
+        // The inference validator prefixes every path with the tool's
+        // argument slot; re-root it on `value` so the message reads as a
+        // plain value-validation error.
+        let message = err
+            .to_string()
+            .replace(&format!("tool `{TOOL_NAME}` arguments"), "value");
+        TinyAgentsError::Validation(message)
+    })
+}
+
+#[cfg(test)]
+#[path = "schema_test.rs"]
+mod test;

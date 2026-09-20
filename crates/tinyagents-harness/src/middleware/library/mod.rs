@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use crate::context::{RunConfig, RunContext};
+use crate::context::{MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use crate::ids::CallId;

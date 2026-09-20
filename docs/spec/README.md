@@ -78,6 +78,7 @@ observability, or test contracts.
   - [Design](../modules/registry/design.md)
   - [Model catalog and local snapshots](../modules/registry/model-catalog.md)
 - [Session runtime module](../modules/runtime/README.md)
+- [Runtime comparison and execution plan](../runtime-comparison/README.md)
 
 Docs should follow the module layout. Do not place standalone specification
 files directly in `docs/` or `docs/modules/`; each high-level topic should have
@@ -147,8 +148,9 @@ crates/
   tinyagents-graph/             # durable typed state graphs
   tinyagents-registry/          # named capabilities and model catalog
   tinyagents-session/           # durable session history and run ledger
+  tinyagents-definition/        # host-owned agent definition vocabulary
   tinyagents-runtime/           # host-neutral stateful harness sessions
-  tinyagents-tracing/           # shared opt-in tracing macros
+  tinyagents-orchestration/     # host-neutral team/workflow composition over graph+harness+session
   tinyagents-integration-tests/ # cross-crate tests and runnable examples
 ```
 

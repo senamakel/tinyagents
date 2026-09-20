@@ -3,7 +3,7 @@
 //! These are the vocabulary of the recursive catalog: a [`ComponentKind`]
 //! ([`Model`](ComponentKind::Model), [`Tool`](ComponentKind::Tool),
 //! [`Graph`](ComponentKind::Graph), [`Agent`](ComponentKind::Agent), …) plus a
-//! [`ComponentId`] name is the stable identifier host code carries, and
+//! [`ComponentId`] name is exactly what a `.rag` reference carries, and
 //! [`ComponentMetadata`] is the durable, serializable description that lets a
 //! capability be discovered, listed, and bound by name long after the process
 //! that registered it has exited.
@@ -49,7 +49,7 @@ impl From<String> for ComponentId {
 
 impl ComponentKind {
     /// All component kinds, in a stable order, for discovery iteration.
-    pub const ALL: [ComponentKind; 11] = [
+    pub const ALL: [ComponentKind; 12] = [
         ComponentKind::Model,
         ComponentKind::Tool,
         ComponentKind::Graph,
@@ -61,6 +61,7 @@ impl ComponentKind {
         ComponentKind::Checkpointer,
         ComponentKind::TaskStore,
         ComponentKind::Listener,
+        ComponentKind::Capability,
     ];
 
     /// Returns the lowercase string name of this kind, matching its serialized
@@ -78,6 +79,7 @@ impl ComponentKind {
             ComponentKind::Checkpointer => "checkpointer",
             ComponentKind::TaskStore => "task_store",
             ComponentKind::Listener => "listener",
+            ComponentKind::Capability => "capability",
         }
     }
 }

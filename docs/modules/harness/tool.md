@@ -4,6 +4,11 @@ The tool feature owns typed capabilities exposed to agents. It defines tool
 metadata, JSON-schema-compatible model-visible inputs, hidden runtime injection,
 validation, execution, retry policy, artifacts, and result formatting.
 
+For composing *which* tools are visible/callable per run — the `ToolSet`
+trait, its `Combined`/`Filtered`/`Prefixed`/`Renamed`/`Prepared`/
+`ApprovalRequired`/`External` adaptors, and how OpenHuman's MCP layer plugs
+into `ExternalToolSet` — see [toolsets.md](./toolsets.md).
+
 ## Source Inspiration
 
 LangChain tool behavior is spread across core tools, v1 tool-node re-exports,
@@ -237,17 +242,30 @@ Provider-supplied tool calls must fail closed:
 - allowlist violations emit events and append repairable tool-result messages
   only when the agent loop policy allows recovery
 
+A hosted run's tool allow-list is fail-closed by default. The resolved
+`AgentDefinition.tools` list is collapsed to `Option<HashSet<String>>` at the
+host boundary: a declared, non-empty list is enforced by plain membership,
+and an empty or absent list means "the definition declared nothing" rather
+than "unrestricted" — under `HostCapabilities::fail_closed_tool_allowlist`
+(default `true`), that denies every registered tool. A host that relied on
+the old fail-open behavior (empty list = every tool) must opt back in
+explicitly via `HostCapabilities::with_legacy_unrestricted_tool_allowlist`.
+Explicit-model (non-hosted) runs have no allow-list concept and are
+unaffected.
+
 ## Unknown-tool recovery
 
 When the model calls a tool that is not registered, the agent loop's behavior is
 governed by `RunPolicy::unknown_tool: UnknownToolPolicy`
 (`crates/tinyagents-harness/src/runtime/types.rs`):
 
-- `UnknownToolPolicy::Fail` (default, historical) — abort the run with
-  `TinyAgentsError::ToolNotFound(name)`.
-- `UnknownToolPolicy::ReturnToolError` — inject a tool-error result (naming the
-  requested tool, echoing its arguments, and listing the registered tools) back
-  into the transcript and continue, letting the model retry with a valid tool.
+- `UnknownToolPolicy::Fail` — abort the run with
+  `TinyAgentsError::ToolNotFound(name)`. No longer the default (see below);
+  still available for callers that want a hard stop.
+- `UnknownToolPolicy::ReturnToolError` (default) — inject a tool-error result
+  (naming the requested tool, echoing its arguments, and listing the
+  registered tools) back into the transcript and continue, letting the model
+  retry with a valid tool.
 - `UnknownToolPolicy::Rewrite { tool_name }` — retarget the unknown call to a
   fixed compatibility tool and retry the lookup once; if that target is also
   unregistered, fall back to `ReturnToolError` behavior.
@@ -283,9 +301,10 @@ Two distinct failures can affect a provider-supplied call's arguments, and they
 are handled separately:
 
 - **Schema-invalid** (well-formed JSON that violates the tool's input schema) is
-  governed by `RunPolicy::invalid_args: InvalidArgsPolicy`. `Fail` (default,
-  historical) aborts the turn; `ReturnToolError` injects a repairable tool-error
-  message (carrying the validation detail and the expected schema) and continues.
+  governed by `RunPolicy::invalid_args: InvalidArgsPolicy`. `ReturnToolError`
+  (the default) injects a repairable tool-error message (carrying the
+  validation detail and the expected schema) and continues; `Fail` aborts the
+  turn and is no longer the default.
   `NormalizeThenReturnToolError` first repairs common object-schema transport
   shapes (a JSON object encoded as a string, including markdown fences, or a
   non-object for an object schema with no required fields), then returns any
@@ -294,12 +313,21 @@ are handled separately:
 - **Unparseable** (malformed JSON the provider could not parse into arguments at
   all) is surfaced by the provider as a `ToolCall` with `invalid: Some(reason)`
   and the raw string preserved in `arguments`. Small local models (Ollama, LM
-  Studio, llama.cpp, vLLM) emit this occasionally. The agent loop **always**
-  recovers here — independent of `InvalidArgsPolicy`, since an unparseable
-  payload is a transport-level defect, not a schema violation — by injecting the
-  parse `reason` back to the model as an error tool result so it can retry. The
-  recovery emits `AgentEvent::InvalidToolArgs { call_id, tool_name, arguments,
-  error, recovery: "tool_error" }` and consumes one tool-call budget slot, so
+  Studio, llama.cpp, vLLM) emit this occasionally. Before giving up, admission
+  first tries `relaxed_json::recover_relaxed_object` on the raw string —
+  conservative, meaning-preserving repairs for the shapes those gateways
+  actually produce (unquoted object keys, redundant wrapping braces, leaked
+  chat-template quote tokens; see that module's doc comment). On success the
+  call's `invalid` flag is cleared, its `arguments` become the repaired
+  object, `AgentEvent::InvalidToolArgs { recovery: "repaired" }` is emitted,
+  and the call proceeds through normal (schema) validation as if the provider
+  had sent it clean. Only when the repair also fails does the agent loop fall
+  back to its **always**-on recovery — independent of `InvalidArgsPolicy`,
+  since an unparseable payload is a transport-level defect, not a schema
+  violation — injecting the parse `reason` back to the model as an error tool
+  result so it can retry. That fallback recovery emits
+  `AgentEvent::InvalidToolArgs { call_id, tool_name, arguments, error,
+  recovery: "tool_error" }` and consumes one tool-call budget slot, so
   `RunLimits::max_tool_calls` bounds the retry loop. Because the call always
   resolves, a malformed argument blob can never become a never-resolving tool
   call that stalls the loop. See the OpenAI provider README for how the wire
@@ -338,24 +366,69 @@ for the exposure/execution hooks and the enforcement builders
 decide whether a `SandboxMode::Required` tool may run. The host attaches that
 descriptor to `RunContext`, commonly from around-agent middleware.
 
-## Results And Artifacts
+## Deferred tool calls: approval and external execution (A2)
+
+A call can leave the loop **without** a result, in three ways:
+
+| Trigger | Where | Lands in |
+|---|---|---|
+| `ToolPolicy.access.approval_required` on the tool's declared policy | admission, after schema validation | `DeferredToolRequests::approvals` |
+| `Err(TinyAgentsError::ApprovalRequired { metadata })` / `Err(TinyAgentsError::CallDeferred { metadata })` from `Tool::execute` **or** from a `before_tool` middleware | execution / admission | `approvals` / `calls`, with `metadata` keyed by call id |
+| `ToolRegistry::register_external(ToolSchema)` (or `AgentHarness::register_external_tool`) — a schema-only tool the harness never runs | admission | `DeferredToolRequests::calls` |
+
+The loop finishes every *other* call in the batch, appends their results,
+emits `AgentEvent::ToolDeferred { call_id, reason }` per deferred call, and
+exits with `AgentRun::deferred = Some(DeferredToolRequests { calls,
+approvals, metadata })`. The assistant's tool-call row stays on the
+transcript; only the deferred ids lack a tool-result row. A deferred call is
+not counted against `max_tool_calls` until it actually runs.
+
+Resolve it with a `DeferredToolResults` and resume:
 
 ```rust
-pub struct ToolResult {
-    pub tool_call_id: ToolCallId,
-    pub name: ToolName,
-    pub content: Vec<ContentBlock>,
-    pub value: Option<serde_json::Value>,
-    pub artifacts: Vec<ArtifactRef>,
-    pub is_error: bool,
-    pub provider: Option<ProviderMetadata>,
-    pub elapsed: Duration,
-}
+let pending = run.deferred.clone().unwrap();
+let results = DeferredToolResults::new()
+    .approve("call-1")                                 // run with the model's args
+    .approve_with_args("call-2", json!({"path": "x"})) // run with edited args
+    .deny("call-3", "operator refused")                // tool-error result, no run
+    .respond("call-4", ToolResult::success("done"));   // host ran an external tool
+assert!(pending.remaining(&results).is_empty());
+let run = harness.resume_deferred(&state, ctx, run.messages, results).await?;
 ```
 
-Large outputs should be stored as artifacts and summarized for model context.
-The full artifact key should be available to application code and events, while
-the model-facing content should stay bounded and redacted.
+`ToolApprovalDecision::{Approve, ApproveWithArgs(Value), Deny { message }}` and
+`DeferredCallResult::{Result(ToolResult), Retry(String), Failed(String)}`
+are the per-call vocabularies; `DeferredToolRequests::remaining(&results)`
+lists what is still unresolved and `approve_all()` builds a blanket
+approval. On resume an approved call is re-admitted through the normal
+pipeline (`before_tool`, validation, host authorization, the wrap onion) with
+`RunContext::is_call_approved(call_id)` set so neither the policy check nor an
+approval middleware defers it again; a denial and a host-supplied result are
+answered through the same fold as a recovery (they emit
+`ToolApproved`/`ToolDenied` plus the usual `ToolStarted`/`ToolCompleted`
+pair, run `after_tool`, and never appear in `executed_tools`).
+
+Two ways to avoid surfacing the pause at all: register a
+`DeferredToolHandler` on the harness (`with_deferred_tool_handler`) and the
+loop resolves the batch inline and keeps going; or give
+`HumanApprovalMiddleware::with_approval_outcome` a callback returning
+`ApprovalOutcome::{Allow, Deny(msg), Defer}` — `Defer` is exactly the
+deferral above, `Deny` answers the model without an interrupt.
+
+A tool that raises `ApprovalRequired` from inside `execute` cannot currently
+see that it was approved: `ToolExecutionContext` now carries the `call_id`
+(B1, below) but no approval flag, so an approved re-execution of such a tool
+defers again and the loop surfaces it rather than spinning. Prefer the policy
+flag or the middleware for approval gates.
+
+## Execution context and rich returns (B1/B2)
+
+What a tool sees on its `ToolExecutionContext` (`call_id`, `store`, typed
+`state::<S>()`, `custom()` events) and what the loop does with a result's
+`follow_up` and `metadata` are documented in
+[tool-context.md](tool-context.md). In one line: follow-up content becomes a
+user message after the batch's last tool row; metadata reaches
+`ToolCompleted` and `AgentRun::tool_metadata` and never the transcript.
 
 ## Safety Metadata
 
@@ -373,3 +446,10 @@ Tools should declare safety metadata:
 
 Middleware can use this metadata to enforce confirmation, sandboxing, allowlist,
 or human-in-the-loop policies.
+
+## Tool-Effect Ledger And Replay (B5)
+
+Crash-safe bookkeeping of tool-call side effects — a durable `started` row
+written before a tool executes, settled once it completes — plus the resume
+logic that decides whether an interrupted call is safe to re-run. See
+[tool-effects.md](tool-effects.md).

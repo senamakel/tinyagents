@@ -239,11 +239,13 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
         call_id: "call-1".into(),
         content: r#"{"a":"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
     accumulator.push(&ModelStreamItem::ToolCallDelta(ToolDelta {
         call_id: "call-1".into(),
         content: r#""b"}"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
     accumulator.push(&ModelStreamItem::UsageDelta(Usage::new(4, 5)));
     accumulator.push(&ModelStreamItem::MessageDelta(MessageDelta {
@@ -279,6 +281,8 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
                 retryable: true,
                 retry_after_ms: None,
                 raw: Some(json!({ "error": "nope" })),
+                partial_message: None,
+                stop_reason: None,
             },
         )])));
     let err = collect_model_stream(failed_stream).await.unwrap_err();
@@ -325,6 +329,7 @@ fn model_profiles_stream_chunks_usage_and_cost_are_additive() {
                 call_id: "tool-1".into(),
                 content: "partial".into(),
                 tool_name: None,
+                ..Default::default()
             }),
         }),
         StreamChunk::Debug("trace".into()),
@@ -450,6 +455,7 @@ fn structured_output_supports_provider_schema_and_tool_fallbacks() {
                 invalid: None,
             }],
             usage: None,
+            origin: None,
         },
         usage: None,
         finish_reason: Some("tool_calls".into()),
@@ -498,6 +504,7 @@ fn model_catalog_loads_seed_and_custom_snapshots() {
             max_input_tokens: Some(1024),
             max_output_tokens: Some(256),
             deprecation_date: None,
+            release_date: None,
             pricing: ModelPricing {
                 input_per_token: Some(0.1),
                 output_per_token: Some(0.2),

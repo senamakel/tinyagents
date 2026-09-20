@@ -88,6 +88,7 @@ pub fn render_request_stdin(request: &ModelRequest, is_new_session: bool) -> Vec
 pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 pub(crate) fn test_set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: every moved environment-mutating test serializes access through
     // `ENV_TEST_LOCK`; no provider work runs concurrently in those tests.
@@ -95,6 +96,7 @@ pub(crate) fn test_set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<s
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 pub(crate) fn test_remove_env(key: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: see `test_set_env`.
     unsafe { std::env::remove_var(key) }
@@ -221,12 +223,13 @@ impl ClaudeCodeProvider {
         model_override: Option<&str>,
         thread_id: String,
     ) -> anyhow::Result<ChatResponse> {
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
+        // Acquire the per-thread mutex *before* the global concurrency
+        // semaphore (M-14). Reversed, N callers on one busy thread each hold
+        // a global permit while blocked on the same thread lock — that is
+        // head-of-line blocking for every *other* thread's turns, which the
+        // semaphore exists to admit. Waiting on the free, per-thread lock
+        // first means a caller only claims a global permit once it can
+        // actually make progress.
         let lock_key = thread_id.clone();
         let thread_lock = {
             let mut locks = self
@@ -239,6 +242,12 @@ impl ClaudeCodeProvider {
                 .clone()
         };
         let _thread_guard = thread_lock.lock().await;
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
         let append_system_prompt = coalesce_system_prompt(messages);
         let result = driver::run_turn(driver::TurnContext {
             bin_path: self.bin_path.clone(),
@@ -332,18 +341,23 @@ fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
     }
     messages
         .iter()
+        // `Message::Custom` is a host-side out-of-band record; never sent to
+        // the provider.
+        .filter(|message| !matches!(message, Message::Custom(_)))
         .map(|message| {
             let role = match message {
                 Message::System(_) => "system",
                 Message::User(_) => "user",
                 Message::Assistant(_) => "assistant",
                 Message::Tool(_) => "tool",
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             let content = match message {
                 Message::System(value) => render_content(&value.content),
                 Message::User(value) => render_content(&value.content),
                 Message::Assistant(value) => render_content(&value.content),
                 Message::Tool(value) => render_content(&value.content),
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             ChatMessage::new(role, content)
         })
@@ -387,6 +401,9 @@ fn render_content(content: &[ContentBlock]) -> String {
             }
             ContentBlock::Thinking { text, .. } => Some(text.clone()),
             ContentBlock::RedactedThinking { .. } => None,
+            ContentBlock::Audio(media) => Some(format!("[OH_AUDIO:{media:?}]")),
+            ContentBlock::Video(media) => Some(format!("[OH_VIDEO:{media:?}]")),
+            ContentBlock::Document(media) => Some(format!("[OH_DOCUMENT:{media:?}]")),
         })
         .collect::<Vec<_>>()
         // Content-block boundaries carry no implicit whitespace. Inserting a
@@ -416,6 +433,7 @@ fn model_response(response: ChatResponse) -> ModelResponse {
             content: response.text.into_iter().map(ContentBlock::Text).collect(),
             tool_calls: Vec::new(),
             usage,
+            origin: None,
         },
         usage,
         finish_reason: Some("stop".into()),

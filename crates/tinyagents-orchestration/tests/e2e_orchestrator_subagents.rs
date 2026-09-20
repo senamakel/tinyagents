@@ -201,6 +201,7 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
                 duration_ms: None,
                 output_bytes: None,
                 error: None,
+                metadata: None,
             });
             let job_id = serde_json::from_str::<Value>(&result.output())?
                 .get("job_id")

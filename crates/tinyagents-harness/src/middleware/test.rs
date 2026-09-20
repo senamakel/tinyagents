@@ -8,7 +8,10 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, RecordingListener};
-use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
+use crate::summarization::{
+    CompactionContext, CompactionDecision, CompactionRecord, CompactionSink, SummarizationPolicy,
+    Summarizer, SummaryRecord, TrimStrategy,
+};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, UserMessage};
 use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole};
 use tinyinference_llm::tool::ToolCall;
@@ -34,6 +37,7 @@ fn response_with_usage(usage: Usage) -> ModelResponse {
             content: vec![ContentBlock::Text("ok".to_string())],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         },
         usage: Some(usage),
         finish_reason: None,
@@ -240,6 +244,36 @@ async fn failing_hook_still_emits_balanced_completed_event() {
     );
 }
 
+/// I-3 regression: `run_stack_hook!` must emit `AgentEvent::MiddlewareFailed`
+/// for a hook that returns `Err`, not just fan `on_error` out privately. The
+/// variant existed but nothing in the stack emitted it before this fix.
+#[tokio::test]
+async fn failing_hook_emits_middleware_failed() {
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(FailingMiddleware));
+
+    let recorder = Arc::new(RecordingListener::new());
+    let mut c = ctx();
+    c.events.subscribe(recorder.clone());
+
+    let mut request = ModelRequest::default();
+    let _ = stack.run_before_model(&mut c, &(), &mut request).await;
+
+    let failed: Vec<AgentEvent> = recorder
+        .events()
+        .into_iter()
+        .map(|r| r.event)
+        .filter(|e| matches!(e, AgentEvent::MiddlewareFailed { .. }))
+        .collect();
+    assert_eq!(
+        failed,
+        vec![AgentEvent::MiddlewareFailed {
+            name: "failing".to_string(),
+            error: TinyAgentsError::Middleware("boom".to_string()).to_string(),
+        }],
+    );
+}
+
 #[tokio::test]
 async fn on_model_delta_hook_emits_no_bracketing_events() {
     // The per-delta hook runs on the streaming hot path, so it must NOT emit
@@ -277,6 +311,47 @@ async fn on_model_delta_hook_emits_no_bracketing_events() {
     assert_eq!(
         bracketing, 0,
         "the delta hook must not bracket middleware with events"
+    );
+}
+
+#[tokio::test]
+async fn on_tool_delta_hook_emits_no_bracketing_events() {
+    // M-12 regression: `run_on_tool_delta` was the one delta hook still
+    // routed through `run_stack_hook!`, so it emitted
+    // `MiddlewareStarted`/`MiddlewareCompleted` on every streamed
+    // tool-progress delta while `run_on_model_delta` (the sibling hook, same
+    // hot-path shape) did not. The two delta hooks must agree.
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(LoggingMiddleware::new()));
+
+    let recorder = Arc::new(RecordingListener::new());
+    let mut c = ctx();
+    c.events.subscribe(recorder.clone());
+
+    let mut delta = tinyinference_llm::tool::ToolDelta {
+        call_id: "call-1".to_string(),
+        content: "partial args".to_string(),
+        tool_name: Some("search".to_string()),
+        ..Default::default()
+    };
+    stack
+        .run_on_tool_delta(&mut c, &(), &mut delta)
+        .await
+        .unwrap();
+
+    let bracketing = recorder
+        .events()
+        .into_iter()
+        .filter(|r| {
+            matches!(
+                r.event,
+                AgentEvent::MiddlewareStarted { .. } | AgentEvent::MiddlewareCompleted { .. }
+            )
+        })
+        .count();
+    assert_eq!(
+        bracketing, 0,
+        "the tool-delta hook must not bracket middleware with events"
     );
 }
 
@@ -1073,6 +1148,7 @@ fn response_text(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.to_string())],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         },
         usage: None,
         finish_reason: None,
@@ -1479,4 +1555,403 @@ async fn agent_run_text_reflects_final_response() {
     assert_eq!(run.text(), None);
     run.final_response = Some(response_with_usage(Usage::new(1, 1)));
     assert_eq!(run.text(), Some("ok".to_string()));
+}
+
+// ── ContextCompressionMiddleware: overflow → compact → retry ──────────────────
+
+/// A model base that fails its first `fail_times` calls with a classified
+/// context-overflow error, then succeeds.
+struct OverflowThenSucceedBase {
+    calls: Arc<Mutex<usize>>,
+    fail_times: usize,
+}
+
+impl ModelBaseCall<(), ()> for OverflowThenSucceedBase {
+    fn call<'a>(
+        &'a self,
+        _ctx: &'a mut RunContext,
+        _state: &'a (),
+        _request: ModelRequest,
+    ) -> BoxModelFuture<'a> {
+        Box::pin(async move {
+            let attempt = {
+                let mut n = self.calls.lock().unwrap();
+                *n += 1;
+                *n
+            };
+            if attempt <= self.fail_times {
+                Err(TinyAgentsError::Model(
+                    "This model's maximum context length is 100 tokens. However, your \
+                     messages resulted in 900 tokens."
+                        .to_string(),
+                ))
+            } else {
+                Ok(response_text("recovered"))
+            }
+        })
+    }
+}
+
+/// A large-enough transcript that `find_cut_point` finds a real cut under a
+/// small `keep_recent_tokens` budget: several long user/assistant turns, no
+/// tool calls (pairing is exercised separately by `summarization::compaction`
+/// tests).
+fn overflow_prone_messages() -> Vec<Message> {
+    let big = "word ".repeat(60);
+    vec![
+        user(&format!("first {big}")),
+        Message::assistant(format!("second {big}")),
+        user(&format!("third {big}")),
+        Message::assistant(format!("fourth {big}")),
+        user(&format!("fifth {big}")),
+    ]
+}
+
+fn small_window_policy() -> SummarizationPolicy {
+    SummarizationPolicy::default()
+        .with_context_window(100)
+        .with_threshold_fraction(0.5)
+}
+
+#[tokio::test]
+async fn context_compression_overflow_retries_once_and_compacts() {
+    let calls = Arc::new(Mutex::new(0));
+    let base = OverflowThenSucceedBase {
+        calls: calls.clone(),
+        fail_times: 1,
+    };
+    let mw = Arc::new(ContextCompressionMiddleware::new(small_window_policy()));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(mw.clone());
+
+    let recorder = Arc::new(RecordingListener::new());
+    let mut c = ctx();
+    c.events.subscribe(recorder.clone());
+
+    let request = ModelRequest {
+        messages: overflow_prone_messages(),
+        ..Default::default()
+    };
+    let response = stack
+        .run_wrapped_model(&mut c, &(), request, &base)
+        .await
+        .unwrap()
+        .into_response();
+
+    assert_eq!(response.text(), "recovered");
+    // One failing call + one successful retry = exactly two base invocations.
+    assert_eq!(*calls.lock().unwrap(), 2);
+
+    let compacted: Vec<AgentEvent> = recorder
+        .events()
+        .into_iter()
+        .map(|r| r.event)
+        .filter(|e| matches!(e, AgentEvent::Compacted { .. }))
+        .collect();
+    assert_eq!(compacted.len(), 1);
+    assert!(matches!(
+        compacted[0],
+        AgentEvent::Compacted {
+            reason: crate::summarization::CompactionReason::Overflow,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn context_compression_overflow_propagates_after_second_failure() {
+    // Fails every call: the retry itself also overflows, so the middleware
+    // must give up after exactly one retry rather than looping.
+    let calls = Arc::new(Mutex::new(0));
+    let base = OverflowThenSucceedBase {
+        calls: calls.clone(),
+        fail_times: usize::MAX,
+    };
+    let mw = Arc::new(ContextCompressionMiddleware::new(small_window_policy()));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(mw.clone());
+
+    let mut c = ctx();
+    let request = ModelRequest {
+        messages: overflow_prone_messages(),
+        ..Default::default()
+    };
+    let result = stack.run_wrapped_model(&mut c, &(), request, &base).await;
+
+    assert!(result.is_err());
+    // Original call + exactly one retry = two base invocations, not more.
+    assert_eq!(*calls.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn context_compression_wrap_model_ignores_unrelated_errors() {
+    // A non-overflow failure must propagate untouched, with no compaction
+    // attempted and no retry.
+    let calls = Arc::new(Mutex::new(0));
+    struct AlwaysFailsBase {
+        calls: Arc<Mutex<usize>>,
+    }
+    impl ModelBaseCall<(), ()> for AlwaysFailsBase {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a mut RunContext,
+            _state: &'a (),
+            _request: ModelRequest,
+        ) -> BoxModelFuture<'a> {
+            Box::pin(async move {
+                *self.calls.lock().unwrap() += 1;
+                Err(TinyAgentsError::Tool("boom".to_string()))
+            })
+        }
+    }
+    let base = AlwaysFailsBase {
+        calls: calls.clone(),
+    };
+    let mw = Arc::new(ContextCompressionMiddleware::new(small_window_policy()));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(mw);
+
+    let mut c = ctx();
+    let request = ModelRequest {
+        messages: overflow_prone_messages(),
+        ..Default::default()
+    };
+    let result = stack.run_wrapped_model(&mut c, &(), request, &base).await;
+
+    assert!(matches!(result, Err(TinyAgentsError::Tool(_))));
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn context_compression_before_compaction_decline_leaves_transcript_untouched() {
+    let calls = Arc::new(Mutex::new(0));
+    let base = OverflowThenSucceedBase {
+        calls: calls.clone(),
+        fail_times: 1,
+    };
+    let mw = Arc::new(
+        ContextCompressionMiddleware::new(small_window_policy())
+            .with_before_compaction(|_ctx: &CompactionContext| CompactionDecision::Decline),
+    );
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(mw);
+
+    let mut c = ctx();
+    let request = ModelRequest {
+        messages: overflow_prone_messages(),
+        ..Default::default()
+    };
+    let result = stack.run_wrapped_model(&mut c, &(), request, &base).await;
+
+    // Declined: no retry happens, the original overflow error propagates.
+    assert!(result.is_err());
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn context_compression_threshold_decline_leaves_transcript_untouched() {
+    let policy = SummarizationPolicy {
+        keep_last: 1,
+        ..SummarizationPolicy::default()
+    }
+    .with_context_window(100)
+    .with_threshold_fraction(0.5);
+    let mw = Arc::new(
+        ContextCompressionMiddleware::new(policy)
+            .with_before_compaction(|_ctx: &CompactionContext| CompactionDecision::Decline),
+    );
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+
+    let mut c = ctx();
+    let big = "a".repeat(200);
+    let before = vec![
+        user(&format!("{big}-1")),
+        user(&format!("{big}-2")),
+        user(&format!("{big}-3")),
+    ];
+    let mut request = ModelRequest {
+        messages: before.clone(),
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request)
+        .await
+        .unwrap();
+
+    assert_eq!(request.messages, before);
+    assert!(mw.records().is_empty());
+}
+
+/// An in-memory [`CompactionSink`] that records every persisted
+/// [`CompactionRecord`], for asserting the durable-persistence contract
+/// without depending on `tinyagents-session`.
+#[derive(Default)]
+struct RecordingCompactionSink {
+    records: Mutex<Vec<CompactionRecord>>,
+}
+
+impl CompactionSink for RecordingCompactionSink {
+    fn persist(&self, record: &CompactionRecord) -> Result<()> {
+        self.records.lock().unwrap().push(record.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn context_compression_persists_compaction_when_sink_is_attached() {
+    let policy = SummarizationPolicy {
+        keep_last: 1,
+        ..SummarizationPolicy::default()
+    }
+    .with_context_window(100)
+    .with_threshold_fraction(0.5);
+    let mw = Arc::new(ContextCompressionMiddleware::new(policy));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+
+    let sink = Arc::new(RecordingCompactionSink::default());
+    let mut c = ctx().with_compaction_sink(sink.clone());
+
+    let big = "a".repeat(200);
+    let mut request = ModelRequest {
+        messages: vec![
+            user(&format!("{big}-1")),
+            user(&format!("{big}-2")),
+            user(&format!("{big}-3")),
+        ],
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request)
+        .await
+        .unwrap();
+
+    let persisted = sink.records.lock().unwrap();
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(
+        persisted[0].reason,
+        crate::summarization::CompactionReason::Threshold
+    );
+    assert_eq!(persisted[0].first_kept_index, 2);
+    assert!(persisted[0].tokens_before > 0);
+}
+
+#[tokio::test]
+async fn context_compression_no_sink_means_no_persistence_attempt() {
+    // No sink attached: compaction still runs and emits `Compacted`, it just
+    // has nowhere to persist to. This is mostly a "doesn't panic" check.
+    let policy = SummarizationPolicy {
+        keep_last: 1,
+        ..SummarizationPolicy::default()
+    }
+    .with_context_window(100)
+    .with_threshold_fraction(0.5);
+    let mw = Arc::new(ContextCompressionMiddleware::new(policy));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw);
+
+    let recorder = Arc::new(RecordingListener::new());
+    let mut c = ctx();
+    c.events.subscribe(recorder.clone());
+    assert!(c.compaction_sink.is_none());
+
+    let big = "a".repeat(200);
+    let mut request = ModelRequest {
+        messages: vec![
+            user(&format!("{big}-1")),
+            user(&format!("{big}-2")),
+            user(&format!("{big}-3")),
+        ],
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request)
+        .await
+        .unwrap();
+
+    let compacted = recorder
+        .events()
+        .into_iter()
+        .filter(|r| matches!(r.event, AgentEvent::Compacted { .. }))
+        .count();
+    assert_eq!(compacted, 1);
+}
+
+#[tokio::test]
+async fn context_compression_iterative_summary_threads_previous_summary() {
+    // Two successive threshold-triggered compactions on the same middleware
+    // instance: the second must see the first's summary as
+    // `SummaryRequest::previous_summary`.
+    let requests: Arc<Mutex<Vec<crate::summarization::SummaryRequest>>> =
+        Arc::new(Mutex::new(Vec::new()));
+
+    struct RecordingSummarizer {
+        requests: Arc<Mutex<Vec<crate::summarization::SummaryRequest>>>,
+    }
+
+    #[async_trait]
+    impl Summarizer for RecordingSummarizer {
+        async fn summarize(&self, messages: &[Message]) -> Result<SummaryRecord> {
+            self.summarize_request(&crate::summarization::SummaryRequest::new(
+                messages.to_vec(),
+            ))
+            .await
+        }
+
+        async fn summarize_request(
+            &self,
+            request: &crate::summarization::SummaryRequest,
+        ) -> Result<SummaryRecord> {
+            self.requests.lock().unwrap().push(request.clone());
+            crate::summarization::ConcatSummarizer
+                .summarize(&request.messages)
+                .await
+        }
+    }
+
+    let policy = SummarizationPolicy {
+        keep_last: 1,
+        ..SummarizationPolicy::default()
+    }
+    .with_context_window(100)
+    .with_threshold_fraction(0.5);
+    let mw = Arc::new(ContextCompressionMiddleware::with_summarizer(
+        policy,
+        Box::new(RecordingSummarizer {
+            requests: requests.clone(),
+        }),
+    ));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+
+    let mut c = ctx();
+    let big = "a".repeat(200);
+
+    let mut request = ModelRequest {
+        messages: vec![
+            user(&format!("{big}-1")),
+            user(&format!("{big}-2")),
+            user(&format!("{big}-3")),
+        ],
+        ..Default::default()
+    };
+    stack
+        .run_before_model(&mut c, &(), &mut request)
+        .await
+        .unwrap();
+
+    // Grow the (already-compacted) transcript back over threshold and compact
+    // again.
+    request.messages.push(user(&format!("{big}-4")));
+    request.messages.push(user(&format!("{big}-5")));
+    stack
+        .run_before_model(&mut c, &(), &mut request)
+        .await
+        .unwrap();
+
+    let seen = requests.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].previous_summary, None);
+    assert!(seen[1].previous_summary.is_some());
 }
