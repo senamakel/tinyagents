@@ -2,7 +2,7 @@
 
 `tinyagents_harness::tool::toolset` gives tool visibility a value-level
 composition model instead of leaving it entirely to middleware ordering. See
-`docs/runtime-comparison/pydantic-ai.md` §3.4/§4 and `docs/sdk-gaps.md` §9 for
+`docs/runtime-comparison/pydantic-ai.md` §3.4/§4 and `docs/sdk-gaps/tools.md` §9 for
 the design lessons and acceptance criteria this closes.
 
 ## `ToolSet<State, Ctx>`
@@ -44,7 +44,7 @@ below.
 | `ExternalToolSet` | `tool::toolset::external` | Schema-only tools the *host* executes — see below. |
 
 Every adaptor is a plain value: constructible, inspectable, and testable on
-its own, which is the concrete answer to `docs/sdk-gaps.md` §9's "why was
+its own, which is the concrete answer to `docs/sdk-gaps/tools.md` §9's "why was
 this tool hidden" requirement. Each adaptor that changes or withholds a tool
 records a `ToolExposureExplanation` (`FilteredOut`, `Renamed { from, to }`,
 `Prefixed { from, to }`, `Prepared`, `ApprovalRequired`, `Deferred`, `Hidden`)
