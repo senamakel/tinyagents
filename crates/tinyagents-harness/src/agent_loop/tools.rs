@@ -1144,7 +1144,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // express (it falls back to the *last assistant message*, which is
         // one turn too early here), so the final response is set directly.
         if let Some(control) = result.control.clone() {
-            if control.return_direct || control.terminate {
+            // `return_direct` is now a per-call override (`Option<bool>`):
+            // `None` means "no opinion", so it falls back to the tool's own
+            // static `Tool::return_direct` default rather than being treated
+            // as `false`.
+            let return_direct = control.return_direct.unwrap_or_else(|| {
+                self.tools
+                    .dispatch(&prepared.tool_name)
+                    .map(|dispatch| dispatch.tool().return_direct())
+                    .unwrap_or(false)
+            });
+            if return_direct || control.terminate {
                 run.final_response = Some(ModelResponse::assistant(
                     result.output_for_llm(prepared.options.prefer_markdown),
                 ));
