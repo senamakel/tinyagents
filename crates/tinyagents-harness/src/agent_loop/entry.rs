@@ -22,6 +22,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentBaseCall<State, Ctx>
         status: &'a mut HarnessRunStatus,
     ) -> BoxAgentFuture<'a> {
         Box::pin(async move {
+            ctx.streaming = request.streaming;
             self.harness
                 .run_loop(state, ctx, run, status, request.input, request.streaming)
                 .await

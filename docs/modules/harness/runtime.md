@@ -86,7 +86,7 @@ input messages
 Detailed lifecycle:
 
 1. Create `RunConfig` and `RunContext`.
-2. Load short-term memory for `thread_id` if configured.
+2. Host middleware loads short-term memory for `thread_id` when configured.
 3. Normalize input into messages.
 4. Apply prompt templates and dynamic context.
 5. Select model.
@@ -109,7 +109,7 @@ Detailed lifecycle:
 17. Append tool messages.
 18. Repeat until no tool calls remain.
 19. Validate structured output if configured.
-20. Persist short-term memory.
+20. Host middleware persists short-term memory.
 21. Emit final event and return `AgentRun`.
 
 Hard limits:
@@ -260,8 +260,15 @@ impl AgentMiddleware<AppState, AppContext> for MemoryMiddleware {
         next: AgentHandler<'_, AppState, AppContext>) -> Result<()> {
         request.input.splice(0..0, self.load(ctx).await?);
         let result = next.run(ctx, state, request, run).await;
-        self.save(ctx, run).await?;
-        result
+        let save_result = self.save(ctx, run).await;
+        match (result, save_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(run_error), Ok(())) => Err(run_error),
+            (Ok(()), Err(save_error)) => Err(save_error),
+            (Err(run_error), Err(save_error)) => Err(TinyAgentsError::Memory(
+                format!("agent run failed: {run_error}; memory persistence failed: {save_error}"),
+            )),
+        }
     }
 }
 ```
