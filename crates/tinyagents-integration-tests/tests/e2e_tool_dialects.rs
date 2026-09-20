@@ -16,7 +16,7 @@ use tinyagents_harness::config::ToolDispatcher;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::{AgentEvent, RecordingListener};
 use tinyagents_harness::middleware::Middleware;
-use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::runtime::{AgentHarness, EndStrategy, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
@@ -118,7 +118,11 @@ async fn a_native_model_narrating_a_call_in_any_grammar_dispatches_it() {
         "<tool_call>{\"name\":\"functions.lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
     ] {
         let listener = Arc::new(RecordingListener::new());
-        let harness = harness_with(Arc::new(narrating_model(text)), &listener);
+        let mut harness = harness_with(Arc::new(narrating_model(text)), &listener);
+        harness.with_policy(RunPolicy {
+            text_dialect_recovery: tinyagents_harness::runtime::TextDialectRecovery::On,
+            ..RunPolicy::default()
+        });
         let run = harness
             .invoke_default(&(), vec![Message::user("go")])
             .await
@@ -960,6 +964,7 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
         }))
         .with_policy(RunPolicy {
             dropped_tool_call_nudges: 1,
+            end_strategy: EndStrategy::Exhaustive,
             default_response_format: Some(ResponseFormat::auto(
                 "answer",
                 json!({"type": "object"}),

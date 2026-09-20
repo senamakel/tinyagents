@@ -283,3 +283,26 @@ fn provider_failed_frame_carries_partial_message_and_stop_reason() {
         vec![ContentBlock::Text("partial".into())]
     );
 }
+
+#[test]
+fn provider_extension_frames_retain_the_completed_content_block() {
+    let extension = json!({"type": "future_block", "opaque": true});
+    let partial = reduce_frames(&[
+        AssistantFrame::BlockStart {
+            index: 0,
+            kind: BlockKind::ProviderExtension {
+                block_type: "future_block".into(),
+            },
+        },
+        AssistantFrame::BlockEnd {
+            index: 0,
+            block: ContentBlock::ProviderExtension(extension.clone()),
+        },
+    ]);
+
+    assert_eq!(
+        partial.content,
+        vec![ContentBlock::ProviderExtension(extension)]
+    );
+    assert!(partial.open_blocks.is_empty());
+}

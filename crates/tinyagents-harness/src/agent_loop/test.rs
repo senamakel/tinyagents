@@ -5726,6 +5726,7 @@ async fn resolved_profile_schema_transform_is_applied_to_tool_schemas() {
 
     let model = Arc::new(
         ScriptedModel::replies(vec!["done"]).with_profile(ModelProfile {
+            tool_calling: true,
             schema_transform: Some(SchemaTransform::StripDefs),
             ..ModelProfile::default()
         }),

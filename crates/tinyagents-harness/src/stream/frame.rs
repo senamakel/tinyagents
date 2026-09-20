@@ -240,6 +240,9 @@ pub fn encode_frames(items: &[ModelStreamItem]) -> Vec<AssistantFrame> {
 enum OpenBlock {
     Text(String),
     Thinking(String),
+    ProviderExtension {
+        block_type: String,
+    },
     ToolCall {
         id: Option<String>,
         name: Option<String>,
@@ -317,6 +320,9 @@ pub fn reduce_frames(frames: &[AssistantFrame]) -> PartialAssistantMessage {
                 let block = match kind {
                     BlockKind::Text => OpenBlock::Text(String::new()),
                     BlockKind::Thinking => OpenBlock::Thinking(String::new()),
+                    BlockKind::ProviderExtension { block_type } => OpenBlock::ProviderExtension {
+                        block_type: block_type.clone(),
+                    },
                     BlockKind::ToolCall { id, name } => OpenBlock::ToolCall {
                         id: Some(id.clone()),
                         name: Some(name.clone()),
@@ -410,6 +416,9 @@ pub fn reduce_frames(frames: &[AssistantFrame]) -> PartialAssistantMessage {
         .map(|(index, block)| {
             let text = match block {
                 OpenBlock::Text(text) | OpenBlock::Thinking(text) => text,
+                OpenBlock::ProviderExtension { block_type } => {
+                    format!("provider extension: {block_type}")
+                }
                 OpenBlock::ToolCall { json_so_far, .. } => json_so_far,
             };
             (index, text)

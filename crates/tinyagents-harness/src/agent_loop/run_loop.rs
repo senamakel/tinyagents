@@ -917,8 +917,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // side-effecting call.
             let tools_available_this_turn =
                 offered_tool_count > 0 && request.tool_choice != ToolChoice::None;
-            let dialect =
-                super::dialect::RunDialect::resolve(self.policy.tool_dialect, &request.tools);
+            let dialect = super::dialect::RunDialect::resolve(
+                self.policy.tool_dialect,
+                &request.tools,
+                binding.model.profile().map(|profile| profile.tool_calling),
+            );
             let forced_text_dialect = dialect.is_text();
             let recovery = if tools_available_this_turn {
                 super::dialect::TextRecovery {

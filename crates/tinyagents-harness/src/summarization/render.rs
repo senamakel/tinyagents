@@ -77,6 +77,9 @@ fn render_content(content: &[ContentBlock]) -> Vec<String> {
                 "<image mime=\"{}\" />",
                 image.mime_type.as_deref().unwrap_or("unknown")
             )),
+            ContentBlock::Audio(_) => Some("<audio />".to_string()),
+            ContentBlock::Video(_) => Some("<video />".to_string()),
+            ContentBlock::Document(_) => Some("<document />".to_string()),
             ContentBlock::Thinking { text, .. } if text.trim().is_empty() => None,
             ContentBlock::Thinking { text, .. } => {
                 Some(format!("<reasoning>{}</reasoning>", elide(text)))
@@ -86,9 +89,6 @@ fn render_content(content: &[ContentBlock]) -> Vec<String> {
                 "<provider_extension>{}</provider_extension>",
                 elide(&value.to_string())
             )),
-            ContentBlock::Audio(_) => Some("<audio />".to_string()),
-            ContentBlock::Video(_) => Some("<video />".to_string()),
-            ContentBlock::Document(_) => Some("<document />".to_string()),
         })
         .collect()
 }
