@@ -234,14 +234,17 @@ where
         &self,
         node_id: &NodeId,
         handler: &Arc<NodeHandler<State, Update>>,
-        state: &State,
+        state: &Arc<State>,
         ctx: NodeContext,
         step: usize,
         policy: &NodePolicy<State, Update>,
     ) -> Result<NodeResult<Update>> {
         let mut attempt = 0usize;
         loop {
-            let fut = handler(state.clone(), ctx.clone());
+            // M2: every attempt shares this step's `Arc<State>` via a cheap
+            // `Arc::clone` rather than re-cloning `State` itself — a retried
+            // activation no longer pays a fresh `State` clone per attempt.
+            let fut = handler(Arc::clone(state), ctx.clone());
             match self
                 .run_node_future(node_id, fut, policy, &ctx.idle_clock)
                 .await
@@ -266,7 +269,7 @@ where
                     // retryable at all: give `on_error` a last chance to
                     // recover the node's result before the error escalates.
                     if let Some(on_error) = policy.on_error.as_ref()
-                        && let Some(command) = on_error(state, &error)
+                        && let Some(command) = on_error(state.as_ref(), &error)
                     {
                         return Ok(NodeResult::Command(command));
                     }
