@@ -4535,22 +4535,25 @@ async fn parallel_fanout_with_retries_clones_state_at_most_once_per_step() {
                 ])))
             },
         )
-        .add_node_shared("worker", move |_s: Arc<CountingState>, c: NodeContext| {
+        .add_node_shared("worker", {
             let attempts = attempts.clone();
-            async move {
-                let arg = c
-                    .send_arg
-                    .clone()
-                    .expect("worker scheduled via Send must carry its arg")
-                    .as_i64()
-                    .unwrap();
-                if arg == 1 {
-                    let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
-                    if n < 3 {
-                        return Err(TinyAgentsError::Model(format!("transient blip {n}")));
+            move |_s: Arc<CountingState>, c: NodeContext| {
+                let attempts = attempts.clone();
+                async move {
+                    let arg = c
+                        .send_arg
+                        .clone()
+                        .expect("worker scheduled via Send must carry its arg")
+                        .as_i64()
+                        .unwrap();
+                    if arg == 1 {
+                        let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                        if n < 3 {
+                            return Err(TinyAgentsError::Model(format!("transient blip {n}")));
+                        }
                     }
+                    Ok(NodeResult::Update(arg))
                 }
-                Ok(NodeResult::Update(arg))
             }
         })
         .with_node_policy(
