@@ -32,7 +32,7 @@ pub enum NodeResult<Update> {
 /// pointing at the *same* target node — and each scheduled invocation receives
 /// its own `arg`. Distinct from a plain `goto`, which simply activates a node
 /// against the shared state with no per-activation input.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Send {
     /// The node to schedule.
     pub node: NodeId,
@@ -59,7 +59,7 @@ impl Send {
 /// `Checkpoint::completed_tasks` (see [`crate::Checkpoint::completed_routes`])
 /// so it survives a resume instead of being re-resolved via
 /// static/conditional edges only.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RouteTarget {
     /// Activate the node against the shared committed state.
     Node(NodeId),
@@ -138,4 +138,18 @@ pub struct Interrupt {
     /// checkpoint JSON without this field decoding.
     #[serde(default)]
     pub task_id: Option<TaskId>,
+    /// Optional JSON schema the resume value answering this interrupt must
+    /// satisfy (a subset: `type`, `required`, `properties`,
+    /// `additionalProperties`, `items`, `enum` — see
+    /// [`tinyagents_harness::tool::validate_against_schema`]).
+    ///
+    /// Enforced *fail-closed* by `CompiledGraph::resume`/`resume_from`:
+    /// the value a `Command::resume`/`Command::resume_tasks` would deliver
+    /// to this interrupt's task is validated before the resumed run starts,
+    /// and a mismatch returns [`crate::TinyAgentsError::Validation`] with
+    /// the thread's checkpoint left untouched. `None` (the default, and what
+    /// legacy checkpoint JSON without this field decodes to) accepts any
+    /// value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 }

@@ -7,22 +7,18 @@ use serde_json::json;
 use tinyagents_harness::ids::NodeId;
 
 fn checkpoint(thread: &str, id: &str, parent: Option<&str>, step: usize) -> Checkpoint<i32> {
-    Checkpoint {
-        thread_id: thread.to_string(),
-        checkpoint_id: id.to_string(),
-        run_id: None,
-        parent_checkpoint_id: parent.map(|s| s.to_string()),
-        namespace: vec![],
-        state: step as i32,
-        next_nodes: vec![NodeId::from("n")],
-        completed_tasks: vec![],
-        completed_routes: vec![],
-        pending_writes: vec![],
-        interrupts: vec![],
-        pending_activations: None,
-        barrier_arrivals: vec![],
-        metadata: json!({ "source": "loop", "step": step }),
-    }
+    Checkpoint::new(
+        step as i32,
+        vec![PendingActivation {
+            node: NodeId::from("n"),
+            send_arg: None,
+            task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+        }],
+    )
+    .with_thread_id(thread.to_string())
+    .with_checkpoint_id(id.to_string())
+    .with_parent_checkpoint_id(parent.map(|s| s.to_string()))
+    .with_metadata(json!({ "source": "loop", "step": step }))
 }
 
 #[tokio::test]
@@ -70,42 +66,48 @@ fn legacy_checkpoint_json_without_new_fields_still_loads() {
         "interrupts": [],
         "metadata": { "source": "loop", "step": 1 }
     });
-    let cp: Checkpoint<i32> = serde_json::from_value(legacy).unwrap();
+    let mut cp: Checkpoint<i32> = serde_json::from_value(legacy).unwrap();
     assert_eq!(cp.state, 7);
+    // Un-normalized: decodes as a v1 record with the legacy fields intact and
+    // `tasks`/`completed` still empty.
+    assert_eq!(cp.version, 1);
     assert_eq!(cp.next_nodes.len(), 2);
+    assert!(cp.tasks.is_empty());
     assert!(cp.pending_activations.is_none());
     assert!(cp.barrier_arrivals.is_empty());
+
+    // `normalize()` folds the legacy fields into the v2 shape and clears them.
+    cp.normalize();
+    assert_eq!(cp.version, CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(cp.tasks.len(), 2);
+    assert_eq!(cp.tasks[0].node, NodeId::from("a"));
+    assert!(cp.next_nodes.is_empty());
 }
 
 #[test]
 fn pending_activation_send_arg_roundtrips() {
-    let cp = Checkpoint {
-        thread_id: "t".into(),
-        checkpoint_id: "c1".into(),
-        run_id: None,
-        parent_checkpoint_id: None,
-        namespace: vec![],
-        state: 1i32,
-        next_nodes: vec![NodeId::from("w")],
-        completed_tasks: vec![],
-        completed_routes: vec![],
-        pending_writes: vec![],
-        interrupts: vec![],
-        pending_activations: Some(vec![super::PendingActivation {
+    let cp = Checkpoint::new(
+        1i32,
+        vec![super::PendingActivation {
             node: NodeId::from("w"),
-            send_arg: Some(json!({ "item": 42 })),
+            send_arg: Some(std::sync::Arc::new(json!({ "item": 42 }))),
             task_id: tinyagents_harness::ids::TaskId::from("1:0:w"),
-        }]),
-        barrier_arrivals: vec![super::BarrierArrivals {
-            node: NodeId::from("join"),
-            arrived: vec![NodeId::from("p1")],
         }],
-        metadata: json!({ "source": "loop", "step": 1 }),
-    };
+    )
+    .with_thread_id("t")
+    .with_checkpoint_id("c1")
+    .with_barrier_arrivals(vec![super::BarrierArrivals {
+        node: NodeId::from("join"),
+        arrived: vec![NodeId::from("p1")],
+    }])
+    .with_metadata(json!({ "source": "loop", "step": 1 }));
     let round: Checkpoint<i32> =
         serde_json::from_str(&serde_json::to_string(&cp).unwrap()).unwrap();
-    let pa = round.pending_activations.unwrap();
-    assert_eq!(pa[0].send_arg, Some(json!({ "item": 42 })));
+    assert_eq!(round.version, super::CHECKPOINT_FORMAT_VERSION);
+    assert_eq!(
+        round.tasks[0].send_arg,
+        Some(std::sync::Arc::new(json!({ "item": 42 })))
+    );
     assert_eq!(round.barrier_arrivals[0].arrived, vec![NodeId::from("p1")]);
 }
 
@@ -383,7 +385,7 @@ async fn prune_keeps_a_window_per_namespace() {
 mod file_backend {
     use super::checkpoint;
     use crate::Checkpoint;
-    use crate::checkpoint::{CheckpointConfig, Checkpointer, FileCheckpointer};
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, FileCheckpointer, PendingActivation};
     use std::path::PathBuf;
 
     /// A unique-per-test temp dir derived from the test name + pid (no clock).
@@ -409,6 +411,127 @@ mod file_backend {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// The on-disk shape a pre-v2 build wrote: no `version`/`created_at`/
+    /// `tasks`/`completed` fields at all, just the v1
+    /// `next_nodes`/`completed_tasks`/`completed_routes`/`pending_activations`
+    /// quartet. Hand-written (not produced by this build) so the test proves
+    /// the *wire format*, not just today's `Checkpoint::normalize` logic
+    /// agreeing with itself.
+    fn v1_fixture_line(thread: &str, id: &str, parent: Option<&str>, step: usize) -> String {
+        serde_json::json!({
+            "thread_id": thread,
+            "checkpoint_id": id,
+            "run_id": null,
+            "parent_checkpoint_id": parent,
+            "namespace": [],
+            "state": step as i64,
+            "next_nodes": ["b"],
+            "completed_tasks": ["a"],
+            "completed_routes": [[]],
+            "pending_writes": [],
+            "interrupts": [],
+            "pending_activations": null,
+            "barrier_arrivals": [],
+            "metadata": { "source": "loop", "step": step },
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn v1_fixture_decodes_to_normalized_v2_and_resumes() {
+        let tmp = TempDir::new("v1-fixture");
+        std::fs::create_dir_all(tmp.path()).unwrap();
+        // Write the fixture line directly — bypassing `put`, which (this
+        // build) only ever writes v2 — to prove the *decode* path, not just
+        // `Checkpoint::normalize` called directly on a value built in Rust.
+        std::fs::write(
+            tmp.path().join("v1thread.jsonl"),
+            format!("{}\n", v1_fixture_line("v1thread", "c1", None, 1)),
+        )
+        .unwrap();
+
+        let cp = FileCheckpointer::<i32>::new(tmp.path());
+        let loaded = cp.get("v1thread", None).await.unwrap().unwrap();
+        assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(
+            loaded
+                .tasks
+                .iter()
+                .map(|t| t.node.to_string())
+                .collect::<Vec<_>>(),
+            vec!["b".to_string()],
+            "tasks derived from the v1 next_nodes field"
+        );
+        assert_eq!(
+            loaded
+                .completed
+                .iter()
+                .map(|c| c.node.to_string())
+                .collect::<Vec<_>>(),
+            vec!["a".to_string()],
+            "completed derived from the v1 completed_tasks/completed_routes pair"
+        );
+        assert!(
+            loaded.next_nodes.is_empty(),
+            "legacy fields cleared by normalize"
+        );
+        assert!(loaded.completed_tasks.is_empty());
+
+        // get_scoped, list, state_history, and get_thread all go through the
+        // same normalize-on-decode path.
+        let scoped = cp.get_scoped("v1thread", None, &[]).await.unwrap().unwrap();
+        assert_eq!(scoped.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        let listed = cp.list("v1thread").await.unwrap();
+        assert_eq!(
+            listed[0].next_nodes,
+            vec![tinyagents_harness::ids::NodeId::from("b")]
+        );
+        let history = cp.state_history("v1thread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].checkpoint.version,
+            crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+        );
+        let thread = cp.get_thread("v1thread").await.unwrap();
+        assert_eq!(
+            thread[0].version,
+            crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_v1_and_v2_thread_lists_and_walks_state_history() {
+        let tmp = TempDir::new("mixed-v1-v2");
+        std::fs::create_dir_all(tmp.path()).unwrap();
+        // c1: hand-written v1 fixture. c2: written through `put`, which is
+        // always v2. Same thread, same file.
+        std::fs::write(
+            tmp.path().join("mixedthread.jsonl"),
+            format!("{}\n", v1_fixture_line("mixedthread", "c1", None, 1)),
+        )
+        .unwrap();
+        let cp = FileCheckpointer::<i32>::new(tmp.path());
+        cp.put(checkpoint("mixedthread", "c2", Some("c1"), 2))
+            .await
+            .unwrap();
+
+        let list = cp.list("mixedthread").await.unwrap();
+        assert_eq!(list.len(), 2, "both the v1 and v2 record are listed");
+        assert_eq!(list[0].checkpoint_id, "c1");
+        assert_eq!(list[1].checkpoint_id, "c2");
+
+        let history = cp.state_history("mixedthread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 2, "the walk crosses the v1/v2 boundary");
+        assert_eq!(history[0].checkpoint.checkpoint_id, "c2");
+        assert_eq!(history[1].checkpoint.checkpoint_id, "c1");
+        // Both normalize to v2 regardless of which format they were stored in.
+        assert!(
+            history
+                .iter()
+                .all(|t| t.checkpoint.version == crate::checkpoint::CHECKPOINT_FORMAT_VERSION)
+        );
     }
 
     #[tokio::test]
@@ -591,22 +714,18 @@ mod file_backend {
         parent: Option<&str>,
         step: usize,
     ) -> Checkpoint<CountedState> {
-        Checkpoint {
-            thread_id: thread.to_string(),
-            checkpoint_id: id.to_string(),
-            run_id: None,
-            parent_checkpoint_id: parent.map(|s| s.to_string()),
-            namespace: vec![],
-            state: CountedState(step as i32),
-            next_nodes: vec![tinyagents_harness::ids::NodeId::from("n")],
-            completed_tasks: vec![],
-            completed_routes: vec![],
-            pending_writes: vec![],
-            interrupts: vec![],
-            pending_activations: None,
-            barrier_arrivals: vec![],
-            metadata: serde_json::json!({ "source": "loop", "step": step }),
-        }
+        Checkpoint::new(
+            CountedState(step as i32),
+            vec![PendingActivation {
+                node: tinyagents_harness::ids::NodeId::from("n"),
+                send_arg: None,
+                task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+            }],
+        )
+        .with_thread_id(thread.to_string())
+        .with_checkpoint_id(id.to_string())
+        .with_parent_checkpoint_id(parent.map(|s| s.to_string()))
+        .with_metadata(serde_json::json!({ "source": "loop", "step": step }))
     }
 
     #[tokio::test]
@@ -650,6 +769,168 @@ mod file_backend {
 mod sqlite_backend {
     use super::checkpoint;
     use crate::checkpoint::{CheckpointConfig, Checkpointer, SqliteCheckpointer};
+
+    /// Inserts a v1-shaped row directly (bypassing `insert_checkpoint_row`,
+    /// which — this build — only ever writes v2), with `format_version`
+    /// defaulting to `1` and the JSON `record` blob carrying none of the v2
+    /// fields, exactly what a pre-v2 build's `INSERT` produced. Proves the
+    /// wire format decodes and normalizes, not just `Checkpoint::normalize`
+    /// agreeing with itself.
+    fn insert_v1_row(conn: &rusqlite::Connection, thread: &str, id: &str, parent: Option<&str>) {
+        let record = serde_json::json!({
+            "thread_id": thread,
+            "checkpoint_id": id,
+            "run_id": null,
+            "parent_checkpoint_id": parent,
+            "namespace": [],
+            "state": 1,
+            "next_nodes": ["b"],
+            "completed_tasks": ["a"],
+            "completed_routes": [[]],
+            "pending_writes": [],
+            "interrupts": [],
+            "pending_activations": null,
+            "barrier_arrivals": [],
+            "metadata": { "source": "loop", "step": 1 },
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO checkpoints (
+                thread_id, checkpoint_id, parent_checkpoint_id, run_id,
+                namespace, next_nodes, source, step, has_interrupts, record
+            ) VALUES (?1, ?2, ?3, NULL, '[]', '[\"b\"]', 'loop', 1, 0, ?4)",
+            rusqlite::params![thread, id, parent, record],
+        )
+        .expect("insert v1 row");
+    }
+
+    #[tokio::test]
+    async fn v1_row_decodes_to_normalized_v2_and_resumes() {
+        // `insert_v1_row` needs direct SQL access, so this uses a file-backed
+        // database (opened once to run the schema/migration, then written to
+        // directly, then reopened through the checkpointer) rather than
+        // `in_memory`, whose connection is private to one handle.
+        let tmp = std::env::temp_dir().join(format!(
+            "tinyagents-ckpt-sqlite-v1-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let cp = SqliteCheckpointer::<i32>::open(&tmp).unwrap();
+        {
+            let raw = rusqlite::Connection::open(&tmp).unwrap();
+            insert_v1_row(&raw, "v1thread", "c1", None);
+        }
+
+        let loaded = cp.get("v1thread", None).await.unwrap().unwrap();
+        assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+        assert_eq!(
+            loaded
+                .tasks
+                .iter()
+                .map(|t| t.node.to_string())
+                .collect::<Vec<_>>(),
+            vec!["b".to_string()]
+        );
+        assert_eq!(
+            loaded
+                .completed
+                .iter()
+                .map(|c| c.node.to_string())
+                .collect::<Vec<_>>(),
+            vec!["a".to_string()]
+        );
+        assert!(
+            loaded.next_nodes.is_empty(),
+            "legacy fields cleared by normalize"
+        );
+
+        let history = cp.state_history("v1thread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            history[0].checkpoint.version,
+            crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn mixed_v1_and_v2_thread_lists_and_walks_state_history() {
+        let tmp = std::env::temp_dir().join(format!(
+            "tinyagents-ckpt-sqlite-mixed-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let cp = SqliteCheckpointer::<i32>::open(&tmp).unwrap();
+        {
+            let raw = rusqlite::Connection::open(&tmp).unwrap();
+            insert_v1_row(&raw, "mixedthread", "c1", None);
+        }
+        cp.put(checkpoint("mixedthread", "c2", Some("c1"), 2))
+            .await
+            .unwrap();
+
+        let list = cp.list("mixedthread").await.unwrap();
+        assert_eq!(list.len(), 2, "both the v1 and v2 record are listed");
+
+        let history = cp.state_history("mixedthread", &[], None).await.unwrap();
+        assert_eq!(history.len(), 2, "the walk crosses the v1/v2 boundary");
+        assert!(
+            history
+                .iter()
+                .all(|t| t.checkpoint.version == crate::checkpoint::CHECKPOINT_FORMAT_VERSION)
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn opening_a_pre_v2_database_migrates_the_schema_in_place() {
+        // A database whose `checkpoints` table predates the `format_version`/
+        // `created_at` columns — the shape a build before this migration
+        // existed would have created.
+        let tmp = std::env::temp_dir().join(format!(
+            "tinyagents-ckpt-sqlite-migrate-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let raw = rusqlite::Connection::open(&tmp).unwrap();
+            raw.execute_batch(
+                "CREATE TABLE checkpoints (
+                    seq                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id            TEXT    NOT NULL,
+                    checkpoint_id        TEXT    NOT NULL,
+                    parent_checkpoint_id TEXT,
+                    run_id               TEXT,
+                    namespace            TEXT    NOT NULL,
+                    next_nodes           TEXT    NOT NULL,
+                    source               TEXT    NOT NULL,
+                    step                 INTEGER NOT NULL,
+                    has_interrupts       INTEGER NOT NULL,
+                    record               TEXT    NOT NULL
+                );",
+            )
+            .unwrap();
+            insert_v1_row(&raw, "premigrate", "c1", None);
+        }
+
+        // Opening through the checkpointer must not error, and must add both
+        // missing columns.
+        let cp = SqliteCheckpointer::<i32>::open(&tmp).unwrap();
+        assert!(cp.has_checkpoints_column("format_version").unwrap());
+        assert!(cp.has_checkpoints_column("created_at").unwrap());
+        let loaded = cp.get("premigrate", None).await.unwrap().unwrap();
+        assert_eq!(loaded.version, crate::checkpoint::CHECKPOINT_FORMAT_VERSION);
+
+        // New writes populate the migrated columns going forward.
+        cp.put(checkpoint("premigrate", "c2", Some("c1"), 2))
+            .await
+            .unwrap();
+        assert!(cp.get("premigrate", Some("c2")).await.unwrap().is_some());
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 
     #[tokio::test]
     async fn put_get_list_roundtrip_in_memory() {
@@ -920,22 +1201,18 @@ mod sqlite_backend {
         parent: Option<&str>,
         step: usize,
     ) -> crate::Checkpoint<CountingState> {
-        crate::Checkpoint {
-            thread_id: "t".to_string(),
-            checkpoint_id: id.to_string(),
-            run_id: None,
-            parent_checkpoint_id: parent.map(|s| s.to_string()),
-            namespace: vec![],
-            state: CountingState(step as i32),
-            next_nodes: vec![tinyagents_harness::ids::NodeId::from("n")],
-            completed_tasks: vec![],
-            completed_routes: vec![],
-            pending_writes: vec![],
-            interrupts: vec![],
-            pending_activations: None,
-            barrier_arrivals: vec![],
-            metadata: serde_json::json!({ "source": "loop", "step": step }),
-        }
+        crate::Checkpoint::new(
+            CountingState(step as i32),
+            vec![crate::PendingActivation {
+                node: tinyagents_harness::ids::NodeId::from("n"),
+                send_arg: None,
+                task_id: tinyagents_harness::ids::TaskId::from(String::new()),
+            }],
+        )
+        .with_thread_id("t".to_string())
+        .with_checkpoint_id(id.to_string())
+        .with_parent_checkpoint_id(parent.map(|s| s.to_string()))
+        .with_metadata(serde_json::json!({ "source": "loop", "step": step }))
     }
 
     #[tokio::test]
@@ -1026,4 +1303,60 @@ mod sqlite_backend {
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].channel, "out");
     }
+}
+
+#[test]
+fn replay_memo_writes_are_distinguished_from_completion_markers() {
+    use tinyagents_harness::ids::TaskId;
+
+    let marker = PendingWrite::completion_marker("n", "task-1");
+    assert!(!marker.is_task_replay());
+    assert!(!marker.is_durable_task());
+    assert!(!marker.is_interrupt_after());
+
+    let memo = PendingWrite::durable_task("n", "task-1", 1, "call-api", json!({ "id": 7 }));
+    assert!(memo.is_task_replay());
+    assert!(memo.is_durable_task());
+    assert!(
+        !memo.is_control_plane(),
+        "memos are append-once data writes"
+    );
+    assert_eq!(memo.durable_task_key(), Some("call-api"));
+    assert_eq!(
+        memo.channel,
+        format!("{DURABLE_TASK_CHANNEL_PREFIX}call-api")
+    );
+    assert_eq!(memo.task_id, TaskId::from("task-1"));
+
+    let deferred = PendingWrite::interrupt_after("n", "task-1", json!({ "update": 1, "goto": [] }));
+    assert!(deferred.is_task_replay());
+    assert!(deferred.is_interrupt_after());
+    assert!(
+        deferred.is_control_plane(),
+        "one deferred result per task, upserted"
+    );
+    assert_eq!(deferred.idx, WRITES_IDX_INTERRUPT_AFTER);
+    assert_eq!(deferred.channel, INTERRUPT_AFTER_CHANNEL);
+
+    // Merge semantics follow from the idx classes: a second memo under a
+    // fresh idx appends, a re-put deferred result replaces.
+    let mut stored = vec![marker.clone(), memo.clone(), deferred.clone()];
+    let second_memo = PendingWrite::durable_task("n", "task-1", 2, "other", json!(2));
+    let replaced = PendingWrite::interrupt_after("n", "task-1", json!({ "update": 9, "goto": [] }));
+    let changed = merge_writes(&mut stored, &[memo.clone(), second_memo, replaced.clone()]);
+    assert_eq!(changed, 2);
+    assert_eq!(stored.len(), 4);
+    assert_eq!(
+        stored
+            .iter()
+            .find(|w| w.is_interrupt_after())
+            .unwrap()
+            .payload,
+        replaced.payload
+    );
+
+    // Round-trips through JSON with the reserved channel/idx intact.
+    let decoded: PendingWrite =
+        serde_json::from_value(serde_json::to_value(&deferred).unwrap()).unwrap();
+    assert_eq!(decoded, deferred);
 }

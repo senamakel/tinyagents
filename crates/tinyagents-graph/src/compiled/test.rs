@@ -817,12 +817,12 @@ async fn update_state_preserves_interrupt_provenance_for_a_later_resume() {
     // completion), scheduling `y` into the pending set alongside `lo`.
     graph.update_state("t-i2", 0, None).await.unwrap();
     let mid = cp.get("t-i2", None).await.unwrap().unwrap();
+    let mid_next_nodes: Vec<NodeId> = mid.tasks.iter().map(|t| t.node.clone()).collect();
     assert!(
-        mid.next_nodes.iter().any(|n| n.as_str() == "lo")
-            && mid.next_nodes.iter().any(|n| n.as_str() == "y"),
+        mid_next_nodes.iter().any(|n| n.as_str() == "lo")
+            && mid_next_nodes.iter().any(|n| n.as_str() == "y"),
         "both lo (still interrupted) and y (hi's deferred successor) must \
-         be pending, got {:?}",
-        mid.next_nodes
+         be pending, got {mid_next_nodes:?}"
     );
 
     let resume_value = json!("only-for-lo");
@@ -1784,7 +1784,11 @@ async fn higher_index_completed_sibling_not_rerun_after_failure_then_retry() {
         .unwrap()
         .expect("a resumable failure-boundary checkpoint must be persisted");
     assert_eq!(
-        checkpoint.completed_tasks,
+        checkpoint
+            .completed
+            .iter()
+            .map(|c| c.node.clone())
+            .collect::<Vec<_>>(),
         vec![NodeId::from("hi")],
         "hi's completion must be recorded so retry does not re-run it"
     );
@@ -1796,6 +1800,143 @@ async fn higher_index_completed_sibling_not_rerun_after_failure_then_retry() {
         "hi must not be re-run by retry"
     );
     assert_eq!(done.state.value, 22, "20 (hi) + 2 (lo, on retry)");
+}
+
+/// Sequential-mode cousin of the parallel C1 sibling-drop bug: in the
+/// default sequential step runner, `run_sequential` stops invoking further
+/// branches at the first interrupt, so a not-yet-started sibling of the
+/// interrupting branch never even appears in that step's raw results.
+/// Before the `fold_step` fix, such a sibling silently vanished from the
+/// checkpoint's pending set (`Checkpoint::tasks`) instead of being carried
+/// over, so it never ran on resume. This was pinned by a probe
+/// (`drain_test::probe_sequential_stall_keeps_unstarted_siblings_pending`)
+/// that has since been converted into this real assertion.
+#[tokio::test]
+async fn sequential_stall_keeps_unstarted_sibling_pending() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let c_calls = Arc::new(AtomicUsize::new(0));
+    let c_calls_for_node = c_calls.clone();
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("a", |s, _c: NodeContext| async move {
+            Ok(NodeResult::Update(s))
+        })
+        .add_node("b", |_s, c: NodeContext| async move {
+            match c.resume {
+                Some(_) => Ok(NodeResult::Update(10)),
+                None => Ok(NodeResult::Interrupt(Interrupt::new("b", json!({})))),
+            }
+        })
+        .add_node("c", move |s, _c: NodeContext| {
+            let calls = c_calls_for_node.clone();
+            async move {
+                calls.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(NodeResult::Update(s + 1))
+            }
+        })
+        .set_entry("a")
+        .add_edge("a", "b")
+        .add_edge("a", "c")
+        .set_finish("b")
+        .set_finish("c")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let paused = graph.run_with_thread("seq-sibling", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+    // `c` never ran: `b` (index 0) interrupted before `run_sequential` ever
+    // started `c` (index 1).
+    assert_eq!(c_calls.load(AtomicOrdering::SeqCst), 0);
+
+    let snapshot = graph
+        .get_state("seq-sibling", None)
+        .await
+        .unwrap()
+        .expect("an interrupted thread has a resumable checkpoint");
+    let mut pending: Vec<String> = snapshot.next_nodes.iter().map(|n| n.to_string()).collect();
+    pending.sort();
+    assert_eq!(
+        pending,
+        vec!["b".to_string(), "c".to_string()],
+        "the unstarted sibling `c` must be carried into the checkpoint's pending set \
+         alongside the interrupted `b`, not dropped"
+    );
+
+    let done = graph
+        .resume("seq-sibling", Command::resume(json!(null)))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+    assert_eq!(
+        c_calls.load(AtomicOrdering::SeqCst),
+        1,
+        "c must run exactly once, on resume"
+    );
+    assert_eq!(
+        done.state, 1,
+        "overwrite reducer: c (index 1) applied last, overwriting b's 10"
+    );
+}
+
+/// Equivalence regression for the fix above: an interrupted-then-resumed
+/// sequential run must reach the exact same final state as an uninterrupted
+/// run of the same graph, and every node must run exactly once either way.
+#[tokio::test]
+async fn sequential_interrupted_then_resumed_matches_uninterrupted_run() {
+    fn build(
+        cp: Arc<InMemoryCheckpointer<i32>>,
+        interrupt_once: Arc<AtomicBool>,
+    ) -> CompiledGraph<i32, i32> {
+        GraphBuilder::<i32, i32>::overwrite()
+            .add_node("a", |s, _c: NodeContext| async move {
+                Ok(NodeResult::Update(s + 1))
+            })
+            .add_node("b", move |s, c: NodeContext| {
+                let interrupt_once = interrupt_once.clone();
+                async move {
+                    if c.resume.is_none() && !interrupt_once.swap(true, AtomicOrdering::SeqCst) {
+                        return Ok(NodeResult::Interrupt(Interrupt::new("b", json!({}))));
+                    }
+                    Ok(NodeResult::Update(s + 10))
+                }
+            })
+            .add_node("c", |s, _c: NodeContext| async move {
+                Ok(NodeResult::Update(s + 100))
+            })
+            .set_entry("a")
+            .add_edge("a", "b")
+            .add_edge("a", "c")
+            .set_finish("b")
+            .set_finish("c")
+            .compile()
+            .unwrap()
+            .with_checkpointer(cp)
+    }
+
+    // Baseline: no interrupt ever fires (the flag starts pre-tripped), so
+    // this is an ordinary uninterrupted sequential run.
+    let baseline_cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let baseline = build(baseline_cp, Arc::new(AtomicBool::new(true)));
+    let baseline_run = baseline.run_with_thread("baseline", 0).await.unwrap();
+    assert!(!baseline_run.is_interrupted());
+
+    // Interrupted variant: `b` interrupts on its first (non-resume) call,
+    // stranding unstarted sibling `c`; resuming must reach the same state.
+    let interrupted_cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let interrupted = build(interrupted_cp, Arc::new(AtomicBool::new(false)));
+    let paused = interrupted.run_with_thread("interrupted", 0).await.unwrap();
+    assert!(paused.is_interrupted());
+    let done = interrupted
+        .resume("interrupted", Command::resume(json!(null)))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+
+    assert_eq!(
+        done.state, baseline_run.state,
+        "an interrupted-then-resumed sequential run must reach the same final \
+         state as an uninterrupted run"
+    );
 }
 
 #[tokio::test]
@@ -2969,7 +3110,7 @@ impl Checkpointer<i32> for FailNonTerminalCheckpointer {
         &self,
         checkpoint: crate::checkpoint::Checkpoint<i32>,
     ) -> tinyagents_harness::error::Result<tinyagents_harness::ids::CheckpointId> {
-        if !checkpoint.next_nodes.is_empty() {
+        if !checkpoint.tasks.is_empty() {
             return Err(tinyagents_harness::error::TinyAgentsError::Checkpoint(
                 "injected background write failure".to_string(),
             ));
@@ -3267,24 +3408,15 @@ async fn attributed_update_does_not_fire_an_unsatisfied_barrier() {
         .await
         .unwrap();
     let written = cp.get("t-barrier-update", None).await.unwrap().unwrap();
+    let written_next_nodes: Vec<NodeId> = written.tasks.iter().map(|t| t.node.clone()).collect();
     assert!(
-        !written.next_nodes.iter().any(|n| n.as_str() == "merge"),
+        !written_next_nodes.iter().any(|n| n.as_str() == "merge"),
         "an unsatisfied barrier must not be scheduled by an attributed write"
     );
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "c"),
+        written_next_nodes.iter().any(|n| n.as_str() == "c"),
         "the still-pending barrier predecessor must stay scheduled"
     );
-    // Resume prefers `pending_activations` over `next_nodes`, so the two must
-    // never disagree: a node named by only one of them would be silently
-    // dropped (or scheduled without its `Send` arg).
-    if let Some(pending) = &written.pending_activations {
-        assert_eq!(
-            pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
-            written.next_nodes,
-            "pending activations and next nodes must describe the same schedule"
-        );
-    }
 
     let done = graph.retry("t-barrier-update").await.unwrap();
     assert!(
@@ -3373,18 +3505,18 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
     let before = cp.get("t-fork-update", None).await.unwrap().unwrap();
     assert_eq!(
         before
-            .next_nodes
+            .tasks
             .iter()
-            .map(|n| n.to_string())
+            .map(|t| t.node.to_string())
             .collect::<Vec<_>>(),
         vec!["c".to_string()],
         "precondition: only the interrupted branch is pending, b's routing is deferred"
     );
     assert_eq!(
         before
-            .completed_tasks
+            .completed
             .iter()
-            .map(|n| n.to_string())
+            .map(|c| c.node.to_string())
             .collect::<Vec<_>>(),
         vec!["b".to_string()],
         "precondition: b completed this step but its routing was not yet resolved"
@@ -3395,30 +3527,19 @@ async fn attributed_update_keeps_other_pending_branches_scheduled() {
         .await
         .unwrap();
     let written = cp.get("t-fork-update", None).await.unwrap().unwrap();
+    let written_next_nodes: Vec<NodeId> = written.tasks.iter().map(|t| t.node.clone()).collect();
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "x"),
-        "b's deferred successor x must now be scheduled, got {:?}",
-        written.next_nodes
+        written_next_nodes.iter().any(|n| n.as_str() == "x"),
+        "b's deferred successor x must now be scheduled, got {written_next_nodes:?}"
     );
     assert!(
-        written.next_nodes.iter().any(|n| n.as_str() == "c"),
-        "the untouched pending branch must stay scheduled, got {:?}",
-        written.next_nodes
+        written_next_nodes.iter().any(|n| n.as_str() == "c"),
+        "the untouched pending branch must stay scheduled, got {written_next_nodes:?}"
     );
     assert!(
-        !written.next_nodes.iter().any(|n| n.as_str() == "b"),
-        "the attributed node itself is completed, not pending: {:?}",
-        written.next_nodes
+        !written_next_nodes.iter().any(|n| n.as_str() == "b"),
+        "the attributed node itself is completed, not pending: {written_next_nodes:?}"
     );
-    // Resume prefers `pending_activations` over `next_nodes`, so the two must
-    // never disagree.
-    if let Some(pending) = &written.pending_activations {
-        assert_eq!(
-            pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
-            written.next_nodes,
-            "pending activations and next nodes must describe the same schedule"
-        );
-    }
 
     let done = graph.retry("t-fork-update").await.unwrap();
     assert!(
@@ -3463,9 +3584,9 @@ async fn attributed_update_to_sink_node_keeps_other_pending_branches() {
     let written = cp.get("t-fork-sink", None).await.unwrap().unwrap();
     assert_eq!(
         written
-            .next_nodes
+            .tasks
             .iter()
-            .map(|n| n.to_string())
+            .map(|t| t.node.to_string())
             .collect::<Vec<_>>(),
         vec!["x".to_string()],
         "the sibling branch must survive an attributed write to a sink node"
@@ -3548,7 +3669,7 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
     );
 
     let before = cp.get("t-send-update", None).await.unwrap().unwrap();
-    let before_pending = before.pending_activations.clone().unwrap_or_default();
+    let before_pending = before.tasks.clone();
     assert_eq!(
         before_pending
             .iter()
@@ -3556,14 +3677,13 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
             .filter_map(|a| a.send_arg.as_ref().and_then(|v| v.as_i64()))
             .collect::<Vec<_>>(),
         vec![1],
-        "only the genuinely-interrupted arg-1 worker is pending, got {:?}",
-        before_pending
+        "only the genuinely-interrupted arg-1 worker is pending, got {before_pending:?}"
     );
     assert_eq!(
         before
-            .completed_tasks
+            .completed
             .iter()
-            .filter(|n| n.as_str() == "worker")
+            .filter(|c| c.node.as_str() == "worker")
             .count(),
         2,
         "the two completed workers are recorded as completed, not pending"
@@ -3574,10 +3694,7 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
         .await
         .unwrap();
     let written = cp.get("t-send-update", None).await.unwrap().unwrap();
-    let pending = written
-        .pending_activations
-        .clone()
-        .expect("an attributed write must persist the merged activations");
+    let pending = written.tasks.clone();
     let args: Vec<i64> = pending
         .iter()
         .filter(|a| a.node.as_str() == "worker")
@@ -3597,11 +3714,6 @@ async fn attributed_update_preserves_pending_send_args_of_other_branches() {
     assert!(
         pending.iter().any(|a| a.node.as_str() == "tail"),
         "the attributed node's successor is scheduled alongside it"
-    );
-    assert_eq!(
-        pending.iter().map(|a| a.node.clone()).collect::<Vec<_>>(),
-        written.next_nodes,
-        "pending activations and next nodes must describe the same schedule"
     );
 }
 
@@ -4059,13 +4171,11 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
     assert!(paused.is_interrupted());
 
     // Round-trip the checkpoint through JSON, stripping every `task_id` key
-    // to simulate a pre-R5 record.
+    // to simulate a pre-R5 record (checkpoint format v2's `tasks` field is
+    // where a task id lives today — see `Checkpoint::tasks`).
     let mut raw =
         serde_json::to_value(cp.get("t-legacy-task-id", None).await.unwrap().unwrap()).unwrap();
-    if let Some(activations) = raw
-        .get_mut("pending_activations")
-        .and_then(|v| v.as_array_mut())
-    {
+    if let Some(activations) = raw.get_mut("tasks").and_then(|v| v.as_array_mut()) {
         for activation in activations {
             activation.as_object_mut().unwrap().remove("task_id");
         }
@@ -4077,12 +4187,7 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
     }
     let legacy: Checkpoint<i32> = serde_json::from_value(raw)
         .expect("a pre-R5 checkpoint with no task_id keys at all must still decode");
-    assert!(
-        legacy.pending_activations.as_ref().unwrap()[0]
-            .task_id
-            .as_str()
-            .is_empty()
-    );
+    assert!(legacy.tasks[0].task_id.as_str().is_empty());
     assert!(legacy.interrupts[0].task_id.is_none());
     cp.put(legacy).await.unwrap();
 
@@ -4092,6 +4197,105 @@ async fn legacy_checkpoint_json_without_task_id_fields_still_resumes() {
         .unwrap();
     assert!(!done.is_interrupted());
     assert_eq!(done.state, 1);
+}
+
+#[tokio::test]
+async fn resume_from_a_checkpoint_format_v1_json_record() {
+    // A genuine checkpoint format v1 record — as a build before `version`/
+    // `tasks`/`completed` existed would have written: no `version` key at
+    // all, pending work in `next_nodes`, nothing in `pending_activations`.
+    // `InMemoryCheckpointer::get`/`put` normalize on every decode path (see
+    // `Checkpoint::normalize`), so a hand-built v1 record put straight into
+    // the store must resume exactly like a v2 one.
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let graph = GraphBuilder::<i32, i32>::overwrite()
+        .add_node("gate", |s: i32, c: NodeContext| async move {
+            match c.resume {
+                Some(_) => Ok(NodeResult::Update(s + 1)),
+                None => Ok(NodeResult::Interrupt(Interrupt::new("gate", json!({})))),
+            }
+        })
+        .set_entry("gate")
+        .set_finish("gate")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let v1_json = json!({
+        "thread_id": "t-v1-record",
+        "checkpoint_id": "c1",
+        "run_id": null,
+        "parent_checkpoint_id": null,
+        "namespace": [],
+        "state": 0,
+        "next_nodes": ["gate"],
+        "completed_tasks": [],
+        "completed_routes": [],
+        "pending_writes": [],
+        "interrupts": [],
+        "pending_activations": null,
+        "barrier_arrivals": [],
+        "metadata": { "source": "loop", "step": 1, "interrupted_nodes": ["gate"] },
+    });
+    let v1: Checkpoint<i32> = serde_json::from_value(v1_json).unwrap();
+    assert_eq!(v1.version, 1, "precondition: this is a genuine v1 record");
+    cp.put(v1).await.unwrap();
+
+    // The store normalized it on `get` before this handed it back — confirm
+    // that directly before exercising resume through it.
+    let normalized = cp.get("t-v1-record", None).await.unwrap().unwrap();
+    assert_eq!(
+        normalized.version,
+        crate::checkpoint::CHECKPOINT_FORMAT_VERSION
+    );
+    assert_eq!(normalized.tasks.len(), 1);
+    assert_eq!(normalized.tasks[0].node, NodeId::from("gate"));
+
+    let done = graph
+        .resume("t-v1-record", Command::resume(json!("go")))
+        .await
+        .unwrap();
+    assert!(!done.is_interrupted());
+    assert_eq!(done.state, 1, "resumed and ran gate to completion");
+}
+
+#[tokio::test]
+async fn update_state_and_fork_state_write_checkpoint_format_v2() {
+    let cp = Arc::new(InMemoryCheckpointer::<i32>::new());
+    let graph = chain_graph(cp.clone());
+    graph.run_with_thread("t-v2-writes", 0).await.unwrap();
+
+    let config = graph
+        .update_state("t-v2-writes", 5, None)
+        .await
+        .expect("update_state");
+    let written = cp
+        .get(&config.thread_id, config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        written.version,
+        crate::checkpoint::CHECKPOINT_FORMAT_VERSION,
+        "update_state writes checkpoint format v2"
+    );
+    assert!(written.next_nodes.is_empty(), "v1 fields left unpopulated");
+
+    let fork_config = graph
+        .fork_state("t-v2-writes", None, "t-v2-forked")
+        .await
+        .expect("fork_state");
+    let forked = cp
+        .get(&fork_config.thread_id, fork_config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        forked.version,
+        crate::checkpoint::CHECKPOINT_FORMAT_VERSION,
+        "fork_state writes checkpoint format v2"
+    );
+    assert!(forked.next_nodes.is_empty(), "v1 fields left unpopulated");
 }
 
 // ── I4: panic safety, cooperative cancellation, and the run-drop guard ──────
@@ -4267,4 +4471,178 @@ async fn dropping_the_run_future_marks_status_cancelled_not_running() {
         "the drop guard must not leave the run stuck at Running"
     );
     assert_eq!(status.status, ExecutionStatus::Cancelled);
+}
+
+// ── M2: hot-path state cloning ────────────────────────────────────────────
+//
+// `docs/runtime-comparison/code-review-graph.md` M2: before this fix, every
+// node-handler invocation — each attempt of a retried task, and each branch
+// of a parallel `Send` fan-out — cloned the whole `State` value at the call
+// site (`compiled/step.rs`'s `handler(state.clone(), ctx.clone())`). A
+// 4-way fan-out with 3 retries on one branch is 4 + 3 = 7 invocations, so at
+// least 7 `State::clone()` calls for that one superstep alone. The fix
+// clones `State` at most once per superstep (into an `Arc<State>`); every
+// attempt/branch after that shares the `Arc` via a cheap `Arc::clone`
+// instead. These tests instrument `State::clone()` itself to prove the
+// bound, using `add_node_shared` (M2's zero-clone handler entry point) so
+// the count reflects the executor's own cloning rather than the
+// `add_node`/`Arc<State>` compatibility adapter's per-invocation clone.
+
+/// A state value that counts every `Clone::clone()` call made on it, via a
+/// shared atomic counter, so a test can assert exactly how many times the
+/// executor cloned the whole state during a run.
+#[derive(Debug)]
+struct CountingState {
+    clones: Arc<AtomicUsize>,
+    value: i64,
+}
+
+impl Clone for CountingState {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, AtomicOrdering::SeqCst);
+        Self {
+            clones: self.clones.clone(),
+            value: self.value,
+        }
+    }
+}
+
+/// A 4-way parallel `Send` fan-out, with 3 retries on the `arg == 1` branch
+/// before it succeeds, clones `State` at most once per superstep (M2): one
+/// clone for the `dispatch` step, one for the fan-out step — regardless of
+/// the fan-out width or the retried branch's attempt count. Before the fix
+/// this was at least 7 clones (4 branches + 3 extra attempts) for the
+/// fan-out step alone.
+#[tokio::test]
+async fn parallel_fanout_with_retries_clones_state_at_most_once_per_step() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let graph = GraphBuilder::<CountingState, i64>::new()
+        .with_parallel(true)
+        .set_reducer(ClosureStateReducer::new(|mut s: CountingState, u: i64| {
+            s.value += u;
+            Ok(s)
+        }))
+        .add_node_shared(
+            "dispatch",
+            |_s: Arc<CountingState>, _c: NodeContext| async move {
+                Ok(NodeResult::Command(Command::send([
+                    Send::new("worker", json!(1)),
+                    Send::new("worker", json!(2)),
+                    Send::new("worker", json!(3)),
+                    Send::new("worker", json!(4)),
+                ])))
+            },
+        )
+        .add_node_shared("worker", {
+            let attempts = attempts.clone();
+            move |_s: Arc<CountingState>, c: NodeContext| {
+                let attempts = attempts.clone();
+                async move {
+                    let arg = c
+                        .send_arg
+                        .clone()
+                        .expect("worker scheduled via Send must carry its arg")
+                        .as_i64()
+                        .unwrap();
+                    if arg == 1 {
+                        let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                        if n < 3 {
+                            return Err(TinyAgentsError::Model(format!("transient blip {n}")));
+                        }
+                    }
+                    Ok(NodeResult::Update(arg))
+                }
+            }
+        })
+        .with_node_policy(
+            "worker",
+            crate::builder::NodePolicy {
+                retry: Some(
+                    RetryPolicy::default()
+                        .with_max_attempts(5)
+                        .with_backoff_sleep(false),
+                ),
+                ..crate::builder::NodePolicy::default()
+            },
+        )
+        .set_entry("dispatch")
+        .mark_command_routing("dispatch")
+        .set_finish("worker")
+        .compile()
+        .unwrap();
+
+    let state = CountingState {
+        clones: clones.clone(),
+        value: 0,
+    };
+    let run = graph.run(state).await.unwrap();
+    assert_eq!(run.state.value, 1 + 2 + 3 + 4, "every branch's arg applied");
+    assert_eq!(
+        attempts.load(AtomicOrdering::SeqCst),
+        4,
+        "3 failed attempts + 1 success for the arg==1 branch"
+    );
+
+    let total_clones = clones.load(AtomicOrdering::SeqCst);
+    assert!(
+        total_clones <= 2,
+        "expected at most one `State` clone per superstep (2 steps: dispatch, \
+         then the 4-way fan-out with 3 retries), got {total_clones}"
+    );
+}
+
+/// The sequential (non-parallel) counterpart: a single node retried 3 times
+/// before it succeeds clones `State` at most once for its one superstep —
+/// the per-attempt clone the M2 finding describes is gone regardless of
+/// concurrency mode.
+#[tokio::test]
+async fn sequential_retries_clone_state_at_most_once_per_step() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let graph = GraphBuilder::<CountingState, i64>::new()
+        .set_reducer(ClosureStateReducer::new(|mut s: CountingState, u: i64| {
+            s.value += u;
+            Ok(s)
+        }))
+        .add_node_shared("flaky", {
+            let attempts = attempts.clone();
+            move |_s: Arc<CountingState>, _c: NodeContext| {
+                let attempts = attempts.clone();
+                async move {
+                    let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                    if n < 3 {
+                        Err(TinyAgentsError::Model(format!("transient blip {n}")))
+                    } else {
+                        Ok(NodeResult::Update(1))
+                    }
+                }
+            }
+        })
+        .set_entry("flaky")
+        .set_finish("flaky")
+        .compile()
+        .unwrap()
+        .with_node_retry(
+            RetryPolicy::default()
+                .with_max_attempts(5)
+                .with_backoff_sleep(false),
+        );
+
+    let state = CountingState {
+        clones: clones.clone(),
+        value: 0,
+    };
+    let run = graph.run(state).await.unwrap();
+    assert_eq!(run.state.value, 1);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 4);
+
+    let total_clones = clones.load(AtomicOrdering::SeqCst);
+    assert!(
+        total_clones <= 2,
+        "expected at most one `State` clone for this one superstep's 4 \
+         attempts, got {total_clones}"
+    );
 }

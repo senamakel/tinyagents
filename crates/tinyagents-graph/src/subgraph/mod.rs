@@ -190,12 +190,10 @@ where
     else {
         return Ok(None);
     };
-    let has_pending = checkpoint
-        .pending_activations
-        .as_ref()
-        .map(|p| !p.is_empty())
-        .unwrap_or(false)
-        || !checkpoint.next_nodes.is_empty();
+    // `checkpoint` was already normalized on read (every backend's decode
+    // path calls `Checkpoint::normalize`), so `tasks` is the single source
+    // of truth regardless of the stored record's original format version.
+    let has_pending = !checkpoint.tasks.is_empty();
     if !has_pending {
         return Ok(None);
     }

@@ -60,6 +60,10 @@ fn ctx_for_task(id: &str, task_id: &str, siblings: usize) -> NodeContext {
         agent_binding: None,
         task_id: tinyagents_harness::ids::TaskId::from(task_id),
         siblings,
+        channel_versions: Default::default(),
+        versions_seen: Default::default(),
+        idle_clock: Default::default(),
+        durable_writes: Default::default(),
     }
 }
 

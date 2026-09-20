@@ -223,14 +223,15 @@ host-owned `State` type `build_graph` is generic over:
   `TinyAgentsError::Compile` (defense in depth: `Blueprint` is `Deserialize`,
   so a stored/tampered blueprint can reference a node the language compiler
   never checked).
-- node-level `timeout` lowers onto `GraphBuilder::with_node_timeout` and
-  node-level `retry` onto `CompiledGraph::with_node_retry` — but only
-  **graph-wide**: this builder has no per-node timeout/retry policy API, only
-  a graph-wide one applied to every node. `build_graph` therefore requires
-  every node that declares a `timeout` (or a `retry`) to declare the *same*
-  one, and fails closed with `TinyAgentsError::Compile` naming the
-  disagreeing nodes instead of silently picking one (first-registered,
-  last-registered, …) or dropping the rest. `retry { key value … }` accepts
+- node-level `timeout` and `retry` lower onto a per-node `NodePolicy`
+  installed via `GraphBuilder::with_node_policy` (`.with_timeout`/
+  `.with_retry`), independent of every other node's — two nodes are free to
+  declare different values in the same graph. (Before the per-node
+  `NodePolicy` API landed, this builder only had a graph-wide
+  `GraphBuilder::with_node_timeout`/`CompiledGraph::with_node_retry`, so
+  `build_graph` required every node that declared one to declare the *same*
+  value and failed closed on disagreement; that restriction is gone.)
+  `retry { key value … }` accepts
   `max_attempts`, `initial_backoff_ms`, `max_backoff_ms`, `multiplier`,
   `jitter`, `backoff_sleep`, `max_retry_after_ms` (the
   `tinyagents_harness::retry::RetryPolicy` fields); an unsupported key or a
@@ -311,5 +312,6 @@ See `crates/tinyagents-graph/src/language.rs` (and its `test` submodule) for
 the exact lowering and one test per lowered feature, e.g.
 `build_graph_lowers_graph_level_joins_to_waiting_edges`,
 `build_graph_lowers_uniform_node_retry_and_recovers_transient_failure`,
-`build_graph_rejects_disagreeing_per_node_timeouts`,
+`build_graph_lowers_independent_per_node_timeouts`,
+`build_graph_lowers_independent_per_node_retry`,
 `build_graph_lowers_options_to_interrupt_marker_and_metadata`.

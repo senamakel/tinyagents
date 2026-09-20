@@ -146,7 +146,7 @@ where
             && (base.metadata.get("interrupted_nodes").is_some()
                 || base.metadata.get("failed_node").is_some())
         {
-            base.completed_tasks.clone()
+            base.completed.iter().map(|c| c.node.clone()).collect()
         } else {
             Vec::new()
         };
@@ -160,26 +160,16 @@ where
         // carried-forward completions' successors, merged into the base
         // checkpoint's still-pending work.
         //
-        // `next_nodes` and `pending_activations` are derived from one merged
-        // activation list so they can never disagree — resume prefers the
-        // activations, so a node named by only one of them would be silently
-        // dropped (or re-scheduled without its `Send` arg).
-        let mut merged: Vec<Activation> = match &base.pending_activations {
-            Some(pending) if !pending.is_empty() => pending
-                .iter()
-                .map(Activation::from)
-                .filter(|activation| Some(&activation.node) != as_node.as_ref())
-                .collect(),
-            // Checkpoints written before `pending_activations` existed only
-            // carry the node-id projection.
-            _ => base
-                .next_nodes
-                .iter()
-                .filter(|pending| Some(*pending) != as_node.as_ref())
-                .cloned()
-                .map(Activation::node)
-                .collect(),
-        };
+        // `base` was already normalized on read (every backend's decode path
+        // calls `Checkpoint::normalize`), so `base.tasks` is always the
+        // single source of truth here regardless of which format version the
+        // stored record was written in.
+        let mut merged: Vec<Activation> = base
+            .tasks
+            .iter()
+            .map(Activation::from)
+            .filter(|activation| Some(&activation.node) != as_node.as_ref())
+            .collect();
         let mut seen: HashSet<NodeId> = merged
             .iter()
             .filter(|activation| activation.send_arg.is_none())
@@ -211,7 +201,7 @@ where
                 // `Send` activations may legitimately repeat a node (each
                 // carries its own arg); plain ones are deduplicated so a
                 // successor already pending is not scheduled twice.
-                let send_arg = target.send_arg().cloned();
+                let send_arg = target.send_arg().cloned().map(Arc::new);
                 if send_arg.is_some() || seen.insert(tnode.clone()) {
                     merged.push(Activation {
                         node: tnode,
@@ -228,17 +218,47 @@ where
         if let Some(node) = &as_node {
             route_into_merged(node)?;
         }
-        let next_nodes = activation_nodes(&merged);
-        let pending_activations = if merged.is_empty() {
-            None
-        } else {
-            Some(merged.iter().map(PendingActivation::from).collect())
-        };
+        let tasks: Vec<PendingActivation> = merged.iter().map(PendingActivation::from).collect();
         // This write resolves every carried-forward completion's routing
         // (above), so none of them are still "owed" afterward; only the
         // attributed node (if any) is freshly completed by this write.
-        let completed_tasks: Vec<NodeId> = as_node.iter().cloned().collect();
+        let completed: Vec<crate::checkpoint::CompletedTask> = as_node
+            .iter()
+            .cloned()
+            .map(|node| crate::checkpoint::CompletedTask::new(TaskId::from(String::new()), node))
+            .collect();
         let barrier_arrivals = barriers_to_persisted(&arrivals);
+        // Per-task replay memos (`durable_task` writes, a deferred
+        // `interrupt_after` result) and executor-interrupt acknowledgements
+        // belong to the tasks that are still pending after this write, so
+        // carry exactly those forward; a task this write completed (or
+        // dropped) takes its memos with it.
+        let still_pending: HashSet<&str> = tasks
+            .iter()
+            .map(|t| t.task_id.as_str())
+            .filter(|id| !id.is_empty())
+            .collect();
+        let pending_writes: Vec<crate::checkpoint::PendingWrite> = base
+            .pending_writes
+            .iter()
+            .filter(|w| w.is_task_replay() && still_pending.contains(w.task_id.as_str()))
+            .cloned()
+            .collect();
+        let carried_acks: Vec<String> = base
+            .metadata
+            .get("acknowledged_interrupts")
+            .and_then(serde_json::Value::as_array)
+            .map(|acks| {
+                acks.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|key| {
+                        key.split_once(':')
+                            .is_some_and(|(_, task)| still_pending.contains(task))
+                    })
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // I2: carry the base checkpoint's interrupt provenance through this
         // manual write unless `as_node` names the node that actually
@@ -285,23 +305,35 @@ where
                     .collect::<Vec<_>>()
             );
         }
-        let checkpoint = Checkpoint {
-            thread_id: thread_id.to_string(),
-            checkpoint_id,
-            run_id: None,
-            parent_checkpoint_id: Some(parent_id),
-            namespace: self.namespace.clone(),
-            state: new_state,
-            next_nodes,
-            completed_tasks,
-            completed_routes: Vec::new(),
-            pending_writes: Vec::new(),
-            interrupts,
-            pending_activations,
-            barrier_arrivals,
-            metadata,
-        };
+        if !carried_acks.is_empty() {
+            metadata["acknowledged_interrupts"] = serde_json::json!(carried_acks);
+        }
+        // I5/R3: the same `channel_bookkeeping` dispatch point the executor
+        // boundary uses (`compiled::boundary::channel_checkpoint_fields`),
+        // so a manual write can never disagree with a normal superstep
+        // boundary about what it persists here (the "one write path"
+        // contract). `versions_seen` (per-node) carries over from the base
+        // checkpoint unchanged — a manual write does not run any node.
+        let (channel_versions, channel_deltas) =
+            crate::channel::channel_bookkeeping(&new_state, parent_step as u64 + 1);
+        let checkpoint = Checkpoint::new(new_state, tasks)
+            .with_thread_id(thread_id.to_string())
+            .with_checkpoint_id(checkpoint_id)
+            .with_parent_checkpoint_id(Some(parent_id))
+            .with_namespace(self.namespace.clone())
+            .with_completed(completed)
+            .with_pending_writes(pending_writes)
+            .with_interrupts(interrupts)
+            .with_barrier_arrivals(barrier_arrivals)
+            .with_channel_versions(channel_versions)
+            .with_channel_deltas(channel_deltas)
+            .with_versions_seen(base.versions_seen.clone())
+            .with_metadata(metadata);
+        let writes = checkpoint.pending_writes.clone();
         let id = checkpointer.put(checkpoint).await?;
+        if !writes.is_empty() {
+            checkpointer.put_writes(&config, &writes).await?;
+        }
         self.emit_unscoped(GraphEvent::CheckpointSaved {
             checkpoint_id: id,
             step: Some(parent_step + 1),
@@ -357,22 +389,25 @@ where
         let step = source.to_metadata().step;
         let checkpoint_id = next_checkpoint_id();
         let config = self.config_for(target_thread, Some(&checkpoint_id));
-        let forked = Checkpoint {
-            thread_id: target_thread.to_string(),
-            checkpoint_id,
-            run_id: None,
-            parent_checkpoint_id: None,
-            namespace: source.namespace.clone(),
-            state: source.state.clone(),
-            next_nodes: source.next_nodes.clone(),
-            completed_tasks: source.completed_tasks.clone(),
-            completed_routes: source.completed_routes.clone(),
-            pending_writes: source.pending_writes.clone(),
-            interrupts: source.interrupts.clone(),
-            pending_activations: source.pending_activations.clone(),
-            barrier_arrivals: source.barrier_arrivals.clone(),
-            metadata: serde_json::json!({ "source": "fork", "step": step }),
-        };
+        // `source` was already normalized on read, so `.tasks`/`.completed`
+        // are the single source of truth regardless of the stored record's
+        // original format version.
+        // A fork copies the source checkpoint verbatim rather than writing —
+        // its channel bookkeeping is copied unchanged too, not bumped
+        // through `channel_bookkeeping` (there is no new write to account
+        // for).
+        let forked = Checkpoint::new(source.state.clone(), source.tasks.clone())
+            .with_thread_id(target_thread.to_string())
+            .with_checkpoint_id(checkpoint_id)
+            .with_namespace(source.namespace.clone())
+            .with_completed(source.completed.clone())
+            .with_pending_writes(source.pending_writes.clone())
+            .with_interrupts(source.interrupts.clone())
+            .with_barrier_arrivals(source.barrier_arrivals.clone())
+            .with_channel_versions(source.channel_versions.clone())
+            .with_channel_deltas(source.channel_deltas.clone())
+            .with_versions_seen(source.versions_seen.clone())
+            .with_metadata(serde_json::json!({ "source": "fork", "step": step }));
         let id = checkpointer.put(forked).await?;
         self.emit_unscoped(GraphEvent::CheckpointSaved {
             checkpoint_id: id,

@@ -215,6 +215,7 @@ where
                 node: NodeId::from(node::PLAN),
                 payload: serde_json::json!({ "reason": "steering paused the run" }),
                 task_id: None,
+                response_schema: None,
             }));
         }
         SteeringOutcome::Continue => {}
@@ -643,6 +644,7 @@ where
             node: NodeId::from(node.as_str()),
             payload: serde_json::json!({ "message": message }),
             task_id: None,
+            response_schema: None,
         })),
     }
 }

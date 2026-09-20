@@ -55,6 +55,13 @@ pub(super) struct RunCtx<'a, State, Update> {
     /// Keyed by task id, falling back to node id (I1/R5); see
     /// [`super::executor::RunSeed::resume_map`].
     pub(super) resume_map: HashMap<String, serde_json::Value>,
+    /// Per-node snapshot of the channel versions as of the last time each
+    /// node ran (I5/R3), keyed by node id string. Loaded from the resumed
+    /// checkpoint's [`crate::checkpoint::Checkpoint::versions_seen`]
+    /// (`ResumeSeed::initial_versions_seen`); updated in [`Self::node_context`]
+    /// and persisted back onto every boundary checkpoint this run writes
+    /// (`compiled::boundary`).
+    pub(super) versions_seen: HashMap<String, std::collections::BTreeMap<String, u64>>,
     pub(super) visited: Vec<NodeId>,
     pub(super) all_child_runs: Vec<ChildRun>,
     pub(super) steps: usize,
@@ -70,14 +77,56 @@ pub(super) struct RunCtx<'a, State, Update> {
     /// consuming it) to keep carrying it forward across a step that
     /// interrupts or fails more than once in a row.
     pub(super) carried_completed: Option<Vec<(NodeId, Vec<RouteTarget>)>>,
+    /// Deferred activations (a node whose [`NodePolicy::defer`] is set) held
+    /// back from the frontier while a non-deferred activation was also
+    /// ready, per [`super::boundary::CompiledGraph::apply_defer`]. Released
+    /// (all at once) the first time a boundary's routed frontier would
+    /// otherwise be empty — i.e. once nothing *else* is left to run.
+    ///
+    /// Not persisted in any checkpoint: a run resumed mid-way through a
+    /// deferred hold starts this back at empty, so a held deferred
+    /// activation does not survive a crash/resume. Real durability for
+    /// deferred scheduling is future work.
+    pub(super) deferred_pending: Vec<Activation>,
     /// Optional cooperative-cancellation token for this run (I4 part 2), from
     /// [`super::RunOptions::cancellation`]. Checked at every superstep
     /// boundary and raced against the step's in-flight node handlers by
     /// [`super::executor::CompiledGraph::run_step_with_cancel`].
     pub(super) cancellation: Option<tinyagents_harness::CancellationToken>,
+    /// Optional graceful-drain signal for this run, from
+    /// [`super::RunOptions::drain`]. Polled only between supersteps
+    /// (`execute_run`'s loop top): the step in flight always finishes.
+    pub(super) drain: Option<super::DrainSignal>,
+    /// Per-task replay memos loaded from the resumed checkpoint's write
+    /// ledger, keyed by task id: the task's
+    /// [`NodeContext::durable_task`] memo writes (pre-seeded onto its
+    /// `NodeContext` by [`Self::node_context`]) and, for an
+    /// `interrupt_after` pause, its deferred-result write (consumed by
+    /// [`Self::task_plan`]). Empty for a fresh run.
+    pub(super) task_writes: HashMap<String, Vec<crate::checkpoint::PendingWrite>>,
+    /// Executor-injected interrupts (`interrupt_before`/`interrupt_after`)
+    /// the resumed checkpoint recorded, as `"<phase>:<task_id>"` keys: a
+    /// task listed here has already paused at that phase and must not be
+    /// paused there again when it re-runs. Empty for a fresh run.
+    pub(super) acknowledged_interrupts: HashSet<String>,
     /// Guards against the run future being dropped before it reaches a
     /// normal terminal state (I4 part 3) — see [`RunDropGuard`].
     pub(super) drop_guard: RunDropGuard,
+}
+
+/// What the step runner must do for one activation beyond invoking its
+/// handler, resolved up front by [`RunCtx::task_plan`] so a branch future
+/// borrows nothing from the run context.
+pub(super) struct TaskPlan {
+    /// Pause before running the handler (`interrupt_before`, not yet
+    /// acknowledged for this task).
+    pub(super) inject_before: bool,
+    /// Pause after the handler completes, holding its result back
+    /// (`interrupt_after`, not yet acknowledged for this task).
+    pub(super) inject_after: bool,
+    /// The deferred result persisted by an earlier `interrupt_after` pause
+    /// of this task, to replay instead of running the handler.
+    pub(super) replay_after: Option<serde_json::Value>,
 }
 
 /// Drop guard (I4 part 3) that guarantees a run's terminal status is
@@ -216,10 +265,20 @@ pub(super) struct ResumeSeed {
     /// [`super::boundary`]'s checkpoint builders), so per-node visit counts
     /// accumulate across a resume instead of resetting.
     pub(super) initial_node_visits: HashMap<NodeId, usize>,
+    /// The loaded checkpoint's persisted `versions_seen` (I5/R3), so
+    /// per-node "have I already seen this channel change" bookkeeping
+    /// survives a resume instead of resetting.
+    pub(super) initial_versions_seen: HashMap<String, std::collections::BTreeMap<String, u64>>,
     /// Nodes (with their persisted goto, R1) carried forward from a
     /// mid-step (interrupt/failure) checkpoint whose completed siblings
     /// were never routed — see [`RunCtx::carried_completed`].
     pub(super) carried_completed: Option<Vec<(NodeId, Vec<RouteTarget>)>>,
+    /// Per-task replay memos from the loaded checkpoint's write ledger —
+    /// see [`RunCtx::task_writes`].
+    pub(super) task_writes: HashMap<String, Vec<crate::checkpoint::PendingWrite>>,
+    /// Executor-injected interrupts the loaded checkpoint recorded — see
+    /// [`RunCtx::acknowledged_interrupts`].
+    pub(super) acknowledged_interrupts: HashSet<String>,
 }
 
 impl<'a, State, Update> RunCtx<'a, State, Update>
@@ -239,6 +298,46 @@ where
         self.cancellation
             .as_ref()
             .is_some_and(tinyagents_harness::CancellationToken::is_cancelled)
+    }
+
+    /// Whether this run's graceful-drain signal (if any) has been raised.
+    pub(super) fn is_drain_requested(&self) -> bool {
+        self.drain
+            .as_ref()
+            .is_some_and(super::DrainSignal::is_requested)
+    }
+
+    /// The `acknowledged_interrupts` key for `phase` of `task_id`.
+    pub(super) fn interrupt_ack_key(phase: &str, task_id: &TaskId) -> String {
+        format!("{phase}:{}", task_id.as_str())
+    }
+
+    /// Resolves the executor-level interrupt handling for `activation`:
+    /// whether to pause before/after its handler (`interrupt_before` /
+    /// `interrupt_after` selectors, minus the phases this task already
+    /// acknowledged in the resumed checkpoint) and whether a deferred
+    /// `interrupt_after` result is waiting to be replayed instead of
+    /// running the handler at all.
+    pub(super) fn task_plan(&self, activation: &Activation) -> TaskPlan {
+        let node = &activation.node;
+        let acked = |phase: &str| {
+            self.acknowledged_interrupts
+                .contains(&Self::interrupt_ack_key(phase, &activation.task_id))
+        };
+        let after_acked = acked("after");
+        let replay_after = if after_acked {
+            self.task_writes
+                .get(activation.task_id.as_str())
+                .and_then(|writes| writes.iter().find(|w| w.is_interrupt_after()))
+                .map(|w| w.payload.clone())
+        } else {
+            None
+        };
+        TaskPlan {
+            inject_before: self.graph.interrupt_before.contains(node) && !acked("before"),
+            inject_after: self.graph.interrupt_after.contains(node) && !after_acked,
+            replay_after,
+        }
     }
 
     /// Disarms this run's [`RunDropGuard`] — called at the top of every
@@ -276,13 +375,20 @@ where
         initial_parent: Option<String>,
         binding: Option<crate::subagent_node::AgentInvocationBinding>,
         resume_seed: ResumeSeed,
-        cancellation: Option<tinyagents_harness::CancellationToken>,
+        options: super::RunOptions,
     ) -> Result<Self> {
         let ResumeSeed {
             initial_steps,
             initial_node_visits,
+            initial_versions_seen,
             carried_completed,
+            task_writes,
+            acknowledged_interrupts,
         } = resume_seed;
+        let super::RunOptions {
+            cancellation,
+            drain,
+        } = options;
         let started_at = SystemTime::now();
         let started_instant = std::time::Instant::now();
         // Graph-call depth (the stack) is tracked separately from node-loop
@@ -346,13 +452,18 @@ where
             barrier_arrivals: initial_barriers,
             async_writes: AsyncCheckpointWrites::default(),
             resume_map,
+            versions_seen: initial_versions_seen,
             visited: Vec::new(),
             all_child_runs: Vec::new(),
             steps: initial_steps,
             last_checkpoint: None,
             parent_checkpoint: initial_parent,
             carried_completed,
+            deferred_pending: Vec::new(),
             cancellation,
+            drain,
+            task_writes,
+            acknowledged_interrupts,
             drop_guard,
         };
         ctx.emit(GraphEvent::RunStarted {
@@ -396,12 +507,42 @@ where
         step: usize,
         fork: Option<ForkId>,
         siblings: usize,
+        state: &State,
     ) -> NodeContext {
         let node_id = &activation.node;
         let resume = self
             .resume_map
             .remove(activation.task_id.as_str())
             .or_else(|| self.resume_map.remove(node_id.as_str()));
+        // I5/R3: the channel versions this node's invocation observes are
+        // whatever the committed `state` reports right now (downcast to
+        // `ChannelState` when the graph uses the channel model; a plain
+        // whole-state graph reports nothing here — `changed_since_last_run`
+        // is only meaningful for a channel graph). This node's own
+        // last-observed snapshot (`versions_seen`) is recorded *before*
+        // being overwritten with the current one, so
+        // `NodeContext::changed_since_last_run` can compare "what I saw last
+        // time" against "what is current".
+        let current_versions = (state as &dyn std::any::Any)
+            .downcast_ref::<crate::channel::ChannelState>()
+            .map(|cs| cs.channel_versions().clone())
+            .unwrap_or_default();
+        let key = node_id.to_string();
+        let seen_before = self.versions_seen.get(&key).cloned().unwrap_or_default();
+        self.versions_seen.insert(key, current_versions.clone());
+        // Pre-seed the task's `durable_task` memos from the resumed
+        // checkpoint so a re-run hits instead of repeating the side effect.
+        let durable_writes: Vec<crate::checkpoint::PendingWrite> = self
+            .task_writes
+            .get(activation.task_id.as_str())
+            .map(|writes| {
+                writes
+                    .iter()
+                    .filter(|w| w.is_durable_task())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
         NodeContext {
             graph_id: self.graph.graph_id.clone(),
             node_id: node_id.clone(),
@@ -417,6 +558,10 @@ where
             agent_binding: self.binding.clone(),
             task_id: activation.task_id.clone(),
             siblings,
+            channel_versions: current_versions,
+            versions_seen: seen_before,
+            idle_clock: crate::builder::IdleClock::default(),
+            durable_writes: Arc::new(std::sync::Mutex::new(durable_writes)),
         }
     }
 }

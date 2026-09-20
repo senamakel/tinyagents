@@ -11,12 +11,14 @@
 //! See `types` for the builder data types. `compile` validates the topology
 //! and freezes it into an immutable [`crate::CompiledGraph`].
 
+mod policy;
 mod types;
 
-pub(crate) use types::{Branch, BuilderNode, NodeMeta};
+pub use policy::{CacheKeyFn, NodeCachePolicy, NodePolicy, OnErrorFn};
+pub(crate) use types::{Branch, BuilderNode, NodeMeta, UpdateCodec};
 pub use types::{
-    END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
-    RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeContext, NodeFuture, NodeHandler,
+    Route, RouterFn, START,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -89,7 +91,39 @@ where
             max_concurrency: None,
             node_timeout: None,
             node_meta: HashMap::new(),
+            node_policies: HashMap::new(),
+            node_defaults: None,
+            interrupt_before: HashSet::new(),
+            interrupt_after: HashSet::new(),
+            update_codec: None,
         }
+    }
+
+    /// Attaches a per-node execution [`NodePolicy`] (retry, timeouts, cache,
+    /// `on_error`, `defer`) to `node`, replacing any policy previously set
+    /// for it. At run time each field falls back to the
+    /// [`Self::set_node_defaults`] policy, then to the legacy graph-wide
+    /// `with_node_timeout`/`with_node_retry` settings — see
+    /// [`NodePolicy`]'s module docs for the exact precedence.
+    pub fn with_node_policy(
+        mut self,
+        node: impl Into<NodeId>,
+        policy: NodePolicy<State, Update>,
+    ) -> Self {
+        let node = node.into();
+        // Keep the export-only marker in sync with the runtime flag.
+        if policy.defer {
+            self.node_meta.entry(node.clone()).or_default().deferred = true;
+        }
+        self.node_policies.insert(node, policy);
+        self
+    }
+
+    /// Sets the graph-wide default [`NodePolicy`] every node falls back to,
+    /// field by field, when it has no per-node override.
+    pub fn set_node_defaults(mut self, policy: NodePolicy<State, Update>) -> Self {
+        self.node_defaults = Some(policy);
+        self
     }
 
     /// Applies a bundle of [`GraphDefaults`] in one call. Only the `Some` fields
@@ -174,10 +208,73 @@ where
         self
     }
 
+    /// Registers a named [`crate::Reducer<serde_json::Value>`] closure in the
+    /// process-wide [`crate::channel::ReducerRegistry`], returning the
+    /// builder for chaining.
+    ///
+    /// This is what makes a [`crate::BinaryAggregate`] channel serializable:
+    /// `BinaryAggregate::named(name)` looks the closure back up by name (see
+    /// its docs), and a channel built that way persists only `name` in its
+    /// [`crate::Channel::config`] — decoding a checkpoint later, in this or
+    /// another process, requires the same name to have been registered
+    /// first. The built-ins `"append"`, `"last"`, `"sum"`, `"max"`, `"min"`,
+    /// and `"set_union"` are always available with no registration.
+    ///
+    /// The registry is global rather than scoped to this builder because
+    /// checkpoint decode has no builder in scope at all — see
+    /// `crate::channel::registry`'s module docs.
+    pub fn register_reducer(
+        self,
+        name: impl Into<String>,
+        f: impl Fn(serde_json::Value, serde_json::Value) -> Result<serde_json::Value>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        crate::channel::ReducerRegistry::register(name, f);
+        self
+    }
+
     /// Adds an async node returning a [`NodeResult`].
+    ///
+    /// This is a thin by-value adapter over [`Self::add_node_shared`] (M2 in
+    /// `docs/runtime-comparison/code-review-graph.md`): internally every
+    /// handler receives the step's state as an `Arc<State>`, and this
+    /// adapter clones out of it once per invocation so the handler closure
+    /// keeps taking an owned `State` exactly as before — every existing
+    /// caller of `add_node` compiles unchanged. A handler that does not need
+    /// to mutate or move its own copy of `State` should prefer
+    /// [`Self::add_node_shared`] instead, which hands it the `Arc<State>`
+    /// directly and clones nothing.
     pub fn add_node<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
     where
         F: Fn(State, NodeContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
+    {
+        self.nodes.insert(
+            id.into(),
+            BuilderNode {
+                handler: Arc::new(move |state: Arc<State>, ctx| {
+                    Box::pin(handler((*state).clone(), ctx))
+                }),
+            },
+        );
+        self
+    }
+
+    /// Adds an async node that receives the step's committed state directly
+    /// as an `Arc<State>`, returning a [`NodeResult`].
+    ///
+    /// The zero-clone counterpart to [`Self::add_node`] (M2): a superstep
+    /// clones `State` at most once (building the `Arc` the executor threads
+    /// through that step), and every branch/attempt of a handler added this
+    /// way shares that allocation via a cheap `Arc::clone` — no per-attempt,
+    /// per-branch `State` clone at all. Prefer this over [`Self::add_node`]
+    /// for a large `State` (e.g. a message-history-carrying value) or a node
+    /// that only reads its state.
+    pub fn add_node_shared<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
+    where
+        F: Fn(Arc<State>, NodeContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
     {
         self.nodes.insert(
@@ -435,15 +532,74 @@ where
         self
     }
 
-    /// Marks `node` as an interrupt point for the export.
-    pub fn mark_interrupt(mut self, node: impl Into<NodeId>) -> Self {
-        self.node_meta.entry(node.into()).or_default().interrupt = true;
+    /// Marks `node` as an interrupt point: an alias for
+    /// [`Self::interrupt_before`] (the run pauses before `node` executes)
+    /// that also sets the export-facing interrupt marker
+    /// (`NodeInfo::interrupt`). Earlier versions set only the marker; the
+    /// runtime pause is now real.
+    pub fn mark_interrupt(self, node: impl Into<NodeId>) -> Self {
+        self.interrupt_before([node])
+    }
+
+    /// Pauses the run *before* each of `nodes` executes.
+    ///
+    /// When the executor is about to invoke a listed node, it instead
+    /// records an [`Interrupt`](crate::Interrupt) for that activation with
+    /// payload `{"phase": "before"}` (stamped with the task id) and persists
+    /// an interrupt-boundary checkpoint, without calling the handler. The
+    /// handler runs exactly once overall: `resume` re-schedules the paused
+    /// activation and runs it normally, delivering any `Command::resume`
+    /// value on [`NodeContext::resume`]. Requires a checkpointer and a
+    /// thread, like any interrupt. Nodes are validated at [`Self::compile`];
+    /// the export marks them as interrupt points.
+    pub fn interrupt_before(mut self, nodes: impl IntoIterator<Item = impl Into<NodeId>>) -> Self {
+        for node in nodes {
+            let node = node.into();
+            self.node_meta.entry(node.clone()).or_default().interrupt = true;
+            self.interrupt_before.insert(node);
+        }
         self
     }
 
-    /// Marks `node` as a deferred join for the export.
+    /// Pauses the run *after* each of `nodes` has run, before its result is
+    /// applied.
+    ///
+    /// The handler runs to completion; its `Update`/`Command` is then held
+    /// back from committed state — serialized as a deferred-result write
+    /// (`PendingWrite::interrupt_after`) in the interrupt-boundary
+    /// checkpoint — and an [`Interrupt`](crate::Interrupt) with payload
+    /// `{"phase": "after"}` is returned. The paused run's state (and the
+    /// checkpoint's) therefore does *not* yet include the node's write. On
+    /// `resume`, the executor replays the stored result — applying the
+    /// update through the reducer and honouring the node's `goto` — without
+    /// invoking the handler again, so the handler still runs exactly once.
+    /// A node that itself returns `NodeResult::Interrupt` is not paused a
+    /// second time. Requires `Update: Serialize + DeserializeOwned` (the
+    /// codec for the deferred write), plus a checkpointer and a thread.
+    pub fn interrupt_after(mut self, nodes: impl IntoIterator<Item = impl Into<NodeId>>) -> Self
+    where
+        Update: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        if self.update_codec.is_none() {
+            self.update_codec = Some(UpdateCodec::serde());
+        }
+        for node in nodes {
+            let node = node.into();
+            self.node_meta.entry(node.clone()).or_default().interrupt = true;
+            self.interrupt_after.insert(node);
+        }
+        self
+    }
+
+    /// Marks `node` as a deferred join: it is surfaced as deferred in the
+    /// export *and* scheduled with [`NodePolicy::defer`] semantics — it
+    /// only runs once nothing else is left in the frontier. Equivalent to
+    /// `with_node_policy(node, NodePolicy { defer: true, ..existing })`,
+    /// merging with any policy already set for the node.
     pub fn mark_deferred(mut self, node: impl Into<NodeId>) -> Self {
-        self.node_meta.entry(node.into()).or_default().deferred = true;
+        let node = node.into();
+        self.node_meta.entry(node.clone()).or_default().deferred = true;
+        self.node_policies.entry(node).or_default().defer = true;
         self
     }
 
@@ -531,6 +687,11 @@ where
             }
         }
 
+        // interrupt selectors must name real nodes
+        for node in self.interrupt_before.iter().chain(&self.interrupt_after) {
+            self.require_node(node)?;
+        }
+
         // command-routing nodes must not also have static/conditional edges
         for node in &self.command_nodes {
             self.require_node(node)?;
@@ -557,6 +718,11 @@ where
             node_timeout,
             node_meta,
             barrier_reliefs,
+            node_policies,
+            node_defaults,
+            interrupt_before,
+            interrupt_after,
+            update_codec,
         } = self;
 
         Ok(CompiledGraph::from_parts(
@@ -575,7 +741,9 @@ where
             node_timeout,
             node_meta,
             barrier_reliefs,
-        ))
+        )
+        .with_node_policies(node_policies, node_defaults)
+        .with_interrupt_selectors(interrupt_before, interrupt_after, update_codec))
     }
 
     fn require_node(&self, id: &NodeId) -> Result<()> {

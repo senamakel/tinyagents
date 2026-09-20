@@ -59,8 +59,9 @@ where
                 if tnode.as_str() == END {
                     continue;
                 }
-                self.emit(
+                self.emit_task(
                     run_id,
+                    Some(&activation.task_id),
                     GraphEvent::RouteSelected {
                         node: node_id.clone(),
                         target: tnode.clone(),
@@ -78,7 +79,7 @@ where
                 }
                 // `Send` activations may repeat the same node (each carries its
                 // own arg); plain activations are deduplicated by node.
-                let send_arg = target.send_arg().cloned();
+                let send_arg = target.send_arg().cloned().map(Arc::new);
                 if send_arg.is_some() {
                     next.push(Activation {
                         node: tnode,

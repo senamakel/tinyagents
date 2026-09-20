@@ -49,6 +49,16 @@ pub enum GraphEvent {
         /// The run that was cancelled.
         run_id: RunId,
     },
+    /// The run stopped gracefully at a superstep boundary because its
+    /// [`crate::DrainSignal`] was raised: the step in flight finished and
+    /// committed, and the next step's activations were checkpointed instead
+    /// of run (see [`crate::GraphExecution::drained`]).
+    RunDrained {
+        /// The run that drained.
+        run_id: RunId,
+        /// The superstep count at which it stopped (the last completed step).
+        steps: usize,
+    },
     /// A superstep started with the given active node set.
     StepStarted {
         /// 1-based step number.
@@ -79,17 +89,21 @@ pub enum GraphEvent {
     },
     /// A task finished, successfully or not (the [`StreamMode::Tasks`]
     /// counterpart of [`GraphEvent::NodeCompleted`]/[`GraphEvent::NodeFailed`],
-    /// emitted alongside them at the same boundary).
+    /// emitted alongside them at the same boundary). Also the cache-aware
+    /// signal for nodes with an opt-in [`crate::NodeCachePolicy`] (see
+    /// [`crate::CompiledGraph::with_cached_node`]): `cached: true` means the
+    /// handler was skipped and a stored `Update` was replayed in its place,
+    /// substituting for the handler's normal `NodeStarted`/`NodeCompleted`
+    /// pair; `cached: false` means the handler ran (and, on success, its
+    /// result was written back to the [`crate::cache::TaskCache`] when one is
+    /// attached).
     TaskCompleted {
         /// Target node.
         node: NodeId,
         /// Step number.
         step: usize,
-        /// Whether this result was served from a task cache rather than
-        /// executed. Always `false` today — per-node task caching
-        /// (`docs/runtime-comparison/feature-gaps.md` D2) is not yet
-        /// implemented; the field exists so [`StreamMode::Tasks`] consumers
-        /// do not need a breaking change once it lands.
+        /// Whether this task's result came from the cache rather than
+        /// executing the handler.
         cached: bool,
     },
     /// A node handler began executing.
@@ -209,6 +223,7 @@ impl GraphEvent {
             GraphEvent::RunCompleted { .. } => "run.completed",
             GraphEvent::RunFailed { .. } => "run.failed",
             GraphEvent::RunCancelled { .. } => "run.cancelled",
+            GraphEvent::RunDrained { .. } => "run.drained",
             GraphEvent::StepStarted { .. } => "step.started",
             GraphEvent::StepCompleted { .. } => "step.completed",
             GraphEvent::TaskScheduled { .. } => "task.scheduled",
@@ -247,7 +262,9 @@ impl GraphEvent {
             | GraphEvent::NodeRetryScheduled { step, .. }
             | GraphEvent::StateUpdated { step, .. }
             | GraphEvent::ContextForked { step, .. } => Some(*step),
-            GraphEvent::RunCompleted { steps, .. } => Some(*steps),
+            GraphEvent::RunCompleted { steps, .. } | GraphEvent::RunDrained { steps, .. } => {
+                Some(*steps)
+            }
             _ => None,
         }
     }

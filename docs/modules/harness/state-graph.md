@@ -99,7 +99,7 @@ Every node routes explicitly (`mark_command_routing` on all four nodes) via
 | `JumpTo(Model)` | routes to `plan` (closing any unanswered tool calls first) |
 | `JumpTo(Tools)` | routes to `tools` if there are pending calls, else `settle` |
 | `JumpTo(End)` / `StopWithFinal` | routes to `settle` with `finished = true` |
-| `Interrupt { node, message }` | `NodeResult::Interrupt` — a real, checkpointable `crate::Interrupt` through `compile_loop`/`LoopIter` (`mark_interrupt` on `plan`/`model`/`tools`); through `GraphLoopDriver` this instead surfaces as `TinyAgentsError::Interrupted`, matching `run_loop`'s own behavior for this control |
+| `Interrupt { node, message }` | `NodeResult::Interrupt` — a real, checkpointable `crate::Interrupt` returned directly by the `plan`/`model`/`tools` node bodies through `compile_loop`/`LoopIter` (these nodes are marked as interrupt points for the export only — via the `NodeMeta` flag directly, not `GraphBuilder::mark_interrupt`, which now aliases the real `interrupt_before` pause and would double-pause every activation); through `GraphLoopDriver` this instead surfaces as `TinyAgentsError::Interrupted`, matching `run_loop`'s own behavior for this control |
 
 A steering pause (`SteeringOutcome::Pause`, checked in `plan_node`) also
 produces a `NodeResult::Interrupt`, distinguished from a middleware interrupt

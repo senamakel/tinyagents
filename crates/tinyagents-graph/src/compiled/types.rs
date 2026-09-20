@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use crate::builder::START;
-use crate::builder::{BarrierRelief, Branch, BuilderNode, NodeMeta};
+use crate::builder::{BarrierRelief, Branch, BuilderNode, NodeMeta, NodePolicy, UpdateCodec};
 use crate::checkpoint::{CheckpointConfig, CheckpointMetadata, Checkpointer, DurabilityMode};
 use crate::command::Interrupt;
 use crate::observability::{GraphEventJournal, GraphStatusStore};
@@ -97,6 +97,31 @@ pub struct CompiledGraph<State, Update> {
     /// its stream, and note in [`crate::stream::GraphEventEnvelope`] why a
     /// shared counter is not needed across that boundary.
     pub(crate) sequence: Arc<AtomicU64>,
+    /// Per-node execution policies; see [`NodePolicy`]. Resolved per
+    /// activation against `node_defaults` and the legacy graph-wide
+    /// `node_retry`/`node_timeout` fields by [`NodePolicy::resolve`].
+    pub(crate) node_policies: Arc<HashMap<NodeId, NodePolicy<State, Update>>>,
+    /// Graph-wide default execution policy (`GraphBuilder::set_node_defaults`).
+    pub(crate) node_defaults: Option<Arc<NodePolicy<State, Update>>>,
+    /// Backend for opt-in per-node result caching; see
+    /// [`CompiledGraph::with_task_cache`]. `None` (default) disables caching
+    /// entirely, even for nodes with a [`NodeCachePolicy`] installed via
+    /// [`CompiledGraph::with_cached_node`].
+    pub(crate) task_cache: Option<Arc<dyn crate::cache::TaskCache>>,
+    /// Per-node cache policy plus the type-erased `Update` codec installed by
+    /// [`CompiledGraph::with_cached_node`] (the entry point that supplies the
+    /// `Serialize + DeserializeOwned` bound this struct itself is free of).
+    pub(crate) cached_nodes: Arc<HashMap<NodeId, crate::cache::CachedNode<State, Update>>>,
+    /// Nodes the executor pauses before running
+    /// ([`crate::GraphBuilder::interrupt_before`]).
+    pub(crate) interrupt_before: Arc<HashSet<NodeId>>,
+    /// Nodes the executor pauses after running, holding their result back
+    /// from committed state until resume
+    /// ([`crate::GraphBuilder::interrupt_after`]).
+    pub(crate) interrupt_after: Arc<HashSet<NodeId>>,
+    /// The `Update` codec that persists/replays an `interrupt_after` node's
+    /// deferred result; `None` when no node uses `interrupt_after`.
+    pub(crate) update_codec: Option<UpdateCodec<Update>>,
 }
 
 impl<State, Update> std::fmt::Debug for CompiledGraph<State, Update> {
@@ -142,6 +167,13 @@ impl<State, Update> Clone for CompiledGraph<State, Update> {
             durability: self.durability,
             node_retry: self.node_retry.clone(),
             sequence: self.sequence.clone(),
+            node_policies: self.node_policies.clone(),
+            node_defaults: self.node_defaults.clone(),
+            task_cache: self.task_cache.clone(),
+            cached_nodes: self.cached_nodes.clone(),
+            interrupt_before: self.interrupt_before.clone(),
+            interrupt_after: self.interrupt_after.clone(),
+            update_codec: self.update_codec.clone(),
         }
     }
 }
@@ -295,6 +327,14 @@ pub struct GraphExecution<State> {
     pub status: GraphRunStatus,
     /// The latest persisted checkpoint id, if checkpointing was enabled.
     pub checkpoint_id: Option<CheckpointId>,
+    /// `true` when the run stopped at a superstep boundary because its
+    /// [`RunOptions::drain`] signal was raised (see [`DrainSignal`]): the
+    /// step in flight finished, its boundary was committed, and the next
+    /// step's activations were checkpointed instead of run. `status` is
+    /// then [`tinyagents_harness::ids::ExecutionStatus::Drained`], and the
+    /// thread continues with [`CompiledGraph::resume`]/[`CompiledGraph::retry`].
+    /// `false` on every other outcome.
+    pub drained: bool,
 }
 
 /// One external input used to seed a graph run.
@@ -388,28 +428,118 @@ pub struct StateSnapshot<State> {
     pub pending_interrupts: Vec<Interrupt>,
 }
 
-/// Per-run options threaded through [`CompiledGraph::run_with_options`] and
+/// The shared flag behind a [`DrainHandle`]/[`DrainSignal`] pair.
+///
+/// A plain latching `AtomicBool`: the executor only ever *polls* it at
+/// superstep boundaries (drain never interrupts a step in flight, so there
+/// is nothing to wake), which keeps the pair as cheap as a
+/// [`tinyagents_harness::CancellationToken`] clone.
+#[derive(Debug, Default)]
+struct DrainState {
+    requested: std::sync::atomic::AtomicBool,
+}
+
+/// The requesting side of a graceful-drain pair (see [`DrainSignal::new`]).
+///
+/// Held by whoever decides the run should stop — a shutdown hook, a
+/// supervisor, a node handler that detects it should yield — and signalled
+/// with [`DrainHandle::drain`]. Cheap to clone; every clone signals the same
+/// [`DrainSignal`]. Draining is latching: once requested it cannot be undone.
+#[derive(Clone, Debug)]
+pub struct DrainHandle {
+    state: Arc<DrainState>,
+}
+
+impl DrainHandle {
+    /// Requests a graceful drain: the run finishes the superstep currently in
+    /// flight (every handler is awaited to completion, the reducer and
+    /// boundary checkpoint run as normal) and then stops instead of starting
+    /// the next one. Idempotent.
+    pub fn drain(&self) {
+        self.state
+            .requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether a drain has been requested through any clone of this handle.
+    pub fn is_requested(&self) -> bool {
+        self.state
+            .requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The watched side of a graceful-drain pair, handed to the executor via
+/// [`RunOptions::drain`] (see [`DrainSignal::new`]).
+///
+/// The deliberate contrast with [`RunOptions::cancellation`]: a cancellation
+/// is raced against the in-flight step and abandons it, so nothing from that
+/// step is trusted to have run; a drain is *only* checked between supersteps,
+/// so the in-flight step always completes and commits before the run stops.
+/// The stop is then reported as [`GraphExecution::drained`] (`true`), status
+/// [`tinyagents_harness::ids::ExecutionStatus::Drained`], and
+/// [`crate::GraphEvent::RunDrained`], with a resumable checkpoint naming the
+/// next step's activations persisted on a checkpointed thread.
+#[derive(Clone, Debug)]
+pub struct DrainSignal {
+    state: Arc<DrainState>,
+}
+
+impl DrainSignal {
+    /// Creates a connected `(DrainHandle, DrainSignal)` pair.
+    pub fn new() -> (DrainHandle, DrainSignal) {
+        let state = Arc::new(DrainState::default());
+        (
+            DrainHandle {
+                state: state.clone(),
+            },
+            DrainSignal { state },
+        )
+    }
+
+    /// Whether the paired [`DrainHandle`] has requested a drain.
+    pub fn is_requested(&self) -> bool {
+        self.state
+            .requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Per-run options threaded through [`CompiledGraph::run_with_options`],
+/// [`CompiledGraph::run_with_thread_options`], and
 /// [`CompiledGraph::resume_with_options`] (I4 part 2).
 ///
-/// Kept to a single field for now — a [`tinyagents_harness::CancellationToken`]
-/// requesting cooperative cancellation of the run — rather than growing a
-/// combinatorial `run_with_cancel`/`run_with_cancel_and_thread`/... family of
-/// entry points. The executor checks the token at every superstep boundary
-/// (before starting a new step) and races it against that step's in-flight
-/// node-handler futures, so a long-running node cannot indefinitely block a
-/// cancellation request. On cancellation the run's status becomes
-/// [`tinyagents_harness::ids::ExecutionStatus::Cancelled`] and, on a
-/// checkpointed thread, a resumable checkpoint is persisted naming the
-/// still-pending activations, so the run can be continued later with
+/// A small options bag rather than a combinatorial
+/// `run_with_cancel`/`run_with_cancel_and_thread`/... family of entry points.
+/// Two stop signals are carried, differing in how they treat the step in
+/// flight:
+///
+/// - `cancellation` — a [`tinyagents_harness::CancellationToken`] requesting
+///   cooperative cancellation. The executor checks it at every superstep
+///   boundary (before starting a new step) *and* races it against that step's
+///   in-flight node-handler futures, so a long-running node cannot
+///   indefinitely block a cancellation request. On cancellation the run's
+///   status becomes [`tinyagents_harness::ids::ExecutionStatus::Cancelled`]
+///   and, on a checkpointed thread, a resumable checkpoint is persisted
+///   naming the still-pending activations.
+/// - `drain` — a [`DrainSignal`] requesting a *graceful* stop. It is checked
+///   only between supersteps: the step in flight always finishes and commits
+///   its boundary, then the next step's activations are checkpointed instead
+///   of run. The run reports [`GraphExecution::drained`] with status
+///   [`tinyagents_harness::ids::ExecutionStatus::Drained`].
+///
+/// Either way the run can be continued later with
 /// [`CompiledGraph::resume`]/[`CompiledGraph::retry`].
 #[derive(Clone, Debug, Default)]
 pub struct RunOptions {
     /// Optional cooperative-cancellation token for this run.
     pub cancellation: Option<tinyagents_harness::CancellationToken>,
+    /// Optional graceful-drain signal for this run.
+    pub drain: Option<DrainSignal>,
 }
 
 impl RunOptions {
-    /// Builds empty run options (no cancellation token, no other tuning).
+    /// Builds empty run options (no cancellation token, no drain signal).
     pub fn new() -> Self {
         Self::default()
     }
@@ -418,7 +548,28 @@ impl RunOptions {
     pub fn with_cancellation(token: tinyagents_harness::CancellationToken) -> Self {
         Self {
             cancellation: Some(token),
+            drain: None,
         }
+    }
+
+    /// Builds run options carrying `signal` for a graceful drain.
+    pub fn with_drain(signal: DrainSignal) -> Self {
+        Self {
+            cancellation: None,
+            drain: Some(signal),
+        }
+    }
+
+    /// Sets the graceful-drain signal, keeping any cancellation token.
+    pub fn drain(mut self, signal: DrainSignal) -> Self {
+        self.drain = Some(signal);
+        self
+    }
+
+    /// Sets the cancellation token, keeping any drain signal.
+    pub fn cancellation(mut self, token: tinyagents_harness::CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
     }
 }
 

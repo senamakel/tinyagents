@@ -373,3 +373,597 @@ fn single_update_repeat_write_is_last_wins() {
         .unwrap();
     assert_eq!(merged.get("v"), Some(&json!(2)));
 }
+
+// --- Serializable channels + ReducerRegistry (I5/R3) ---
+
+#[test]
+fn channel_config_round_trips_for_every_built_in_kind() {
+    let set = ChannelSet::new()
+        .with_channel("last", LastValue)
+        .with_channel("topic", Topic)
+        .with_channel("delta", Delta)
+        .with_channel("messages", Messages)
+        .with_channel("barrier", Barrier::new(2))
+        .with_channel("named", NamedBarrier::new(["a", "b"]))
+        .with_channel("agg", BinaryAggregate::named("sum").unwrap());
+    let json = serde_json::to_value(&set).unwrap();
+    let decoded: ChannelSet = serde_json::from_value(json).unwrap();
+    assert!(decoded.contains("last"));
+    assert!(decoded.contains("topic"));
+    assert!(decoded.contains("delta"));
+    assert!(decoded.contains("messages"));
+    assert!(decoded.contains("barrier"));
+    assert!(decoded.contains("named"));
+    assert!(decoded.contains("agg"));
+    // A decoded barrier keeps its `expected` readiness threshold.
+    assert!(decoded.allows_concurrent("barrier").unwrap());
+}
+
+#[test]
+fn binary_aggregate_named_unknown_reducer_errors() {
+    let err = BinaryAggregate::named("does-not-exist-anywhere").unwrap_err();
+    assert!(matches!(err, TinyAgentsError::Checkpoint(_)));
+    assert!(err.to_string().contains("unknown reducer"));
+}
+
+#[test]
+fn decoding_binary_aggregate_without_reducer_name_errors() {
+    // A `BinaryAggregate::new` closure carries no name, so its config is
+    // `{"reducer": null}` — decoding must fail rather than silently drop the
+    // merge rule.
+    let set = ChannelSet::new().with_channel(
+        "agg",
+        BinaryAggregate::new(|a: Value, b: Value| {
+            Ok(json!(a.as_i64().unwrap() + b.as_i64().unwrap()))
+        }),
+    );
+    let json = serde_json::to_value(&set).unwrap();
+    let decoded: std::result::Result<ChannelSet, serde_json::Error> = serde_json::from_value(json);
+    assert!(decoded.is_err());
+}
+
+#[test]
+fn named_binary_aggregate_round_trips_and_merges_after_decode() {
+    crate::ReducerRegistry::register("channel-test-double", |current: Value, incoming: Value| {
+        Ok(json!(
+            current.as_i64().unwrap_or(1) * incoming.as_i64().unwrap()
+        ))
+    });
+    let set = ChannelSet::new().with_channel(
+        "product",
+        BinaryAggregate::named("channel-test-double").unwrap(),
+    );
+    let json = serde_json::to_value(&set).unwrap();
+    let mut decoded: ChannelSet = serde_json::from_value(json).unwrap();
+    decoded.apply_update("product", json!(3)).unwrap();
+    decoded.apply_update("product", json!(4)).unwrap();
+    assert_eq!(decoded.get("product"), Some(&json!(12)));
+}
+
+#[test]
+fn register_reducer_is_reachable_through_the_graph_builder() {
+    let _graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .register_reducer("channel-test-via-builder", |_a: Value, b: Value| Ok(b))
+        .add_node("noop", |_s: ChannelState, _c: NodeContext| async move {
+            Ok(NodeResult::Update(ChannelUpdate::new()))
+        })
+        .set_entry("noop")
+        .set_finish("noop")
+        .compile()
+        .unwrap();
+    // Registered globally, so `named` can find it without the builder.
+    assert!(BinaryAggregate::named("channel-test-via-builder").is_ok());
+}
+
+#[tokio::test]
+async fn channel_state_graph_round_trips_through_file_checkpointer() {
+    use crate::checkpoint::{Checkpointer, FileCheckpointer};
+    use crate::command::{Command, Interrupt};
+    use std::sync::Arc;
+
+    fn graph() -> crate::compiled::CompiledGraph<ChannelState, ChannelUpdate> {
+        GraphBuilder::<ChannelState, ChannelUpdate>::new()
+            .set_reducer(ChannelState::new())
+            .add_node("collect", |_s: ChannelState, c: NodeContext| async move {
+                match c.resume {
+                    Some(value) => {
+                        let bump = value.get("bump").and_then(Value::as_i64).unwrap_or(0);
+                        Ok(NodeResult::Update(
+                            ChannelUpdate::new()
+                                .set("total", bump)
+                                .set("log", "collected")
+                                .at_step(c.step),
+                        ))
+                    }
+                    None => Ok(NodeResult::Interrupt(Interrupt::new(
+                        "collect",
+                        json!({ "ask": "bump?" }),
+                    ))),
+                }
+            })
+            .set_entry("collect")
+            .set_finish("collect")
+            .compile()
+            .unwrap()
+    }
+
+    let initial = ChannelState::new()
+        .with_channel("total", BinaryAggregate::named("sum").unwrap())
+        .with_channel("log", Topic);
+
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let cp: Arc<dyn Checkpointer<ChannelState>> =
+            Arc::new(FileCheckpointer::<ChannelState>::new(dir.path()));
+        let g = graph().with_checkpointer(cp);
+        let paused = g.run_with_thread("ch-thread", initial).await.unwrap();
+        assert!(paused.is_interrupted());
+    }
+    // Fresh checkpointer over the same directory, simulating a process
+    // restart: the `binary_aggregate` channel must decode using the (still
+    // process-wide registered) `"sum"` reducer and the resumed run must
+    // merge through it correctly.
+    {
+        let cp: Arc<dyn Checkpointer<ChannelState>> =
+            Arc::new(FileCheckpointer::<ChannelState>::new(dir.path()));
+        let g = graph().with_checkpointer(cp);
+        let exec = g
+            .resume("ch-thread", Command::resume(json!({ "bump": 7 })))
+            .await
+            .unwrap();
+        assert_eq!(exec.state.get("total"), Some(&json!(7)));
+        assert_eq!(exec.state.get("log"), Some(&json!(["collected"])));
+    }
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn channel_state_graph_round_trips_through_sqlite_checkpointer() {
+    use crate::checkpoint::{Checkpointer, SqliteCheckpointer};
+    use crate::command::{Command, Interrupt};
+    use std::sync::Arc;
+
+    fn graph() -> crate::compiled::CompiledGraph<ChannelState, ChannelUpdate> {
+        GraphBuilder::<ChannelState, ChannelUpdate>::new()
+            .set_reducer(ChannelState::new())
+            .add_node("collect", |_s: ChannelState, c: NodeContext| async move {
+                match c.resume {
+                    Some(value) => {
+                        let bump = value.get("bump").and_then(Value::as_i64).unwrap_or(0);
+                        Ok(NodeResult::Update(
+                            ChannelUpdate::new().set("total", bump).at_step(c.step),
+                        ))
+                    }
+                    None => Ok(NodeResult::Interrupt(Interrupt::new(
+                        "collect",
+                        json!({ "ask": "bump?" }),
+                    ))),
+                }
+            })
+            .set_entry("collect")
+            .set_finish("collect")
+            .compile()
+            .unwrap()
+    }
+
+    let initial = ChannelState::new().with_channel("total", BinaryAggregate::named("sum").unwrap());
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("checkpoints.sqlite");
+    {
+        let cp: Arc<dyn Checkpointer<ChannelState>> =
+            Arc::new(SqliteCheckpointer::<ChannelState>::open(&db_path).unwrap());
+        let g = graph().with_checkpointer(cp);
+        let paused = g
+            .run_with_thread("ch-thread-sqlite", initial)
+            .await
+            .unwrap();
+        assert!(paused.is_interrupted());
+    }
+    {
+        let cp: Arc<dyn Checkpointer<ChannelState>> =
+            Arc::new(SqliteCheckpointer::<ChannelState>::open(&db_path).unwrap());
+        let g = graph().with_checkpointer(cp);
+        let exec = g
+            .resume("ch-thread-sqlite", Command::resume(json!({ "bump": 9 })))
+            .await
+            .unwrap();
+        assert_eq!(exec.state.get("total"), Some(&json!(9)));
+    }
+}
+
+// --- Channel versions (I5/R3) ---
+
+#[test]
+fn channel_versions_bump_once_per_distinct_channel_per_update() {
+    let state = ChannelState::new()
+        .with_channel("a", LastValue)
+        .with_channel("b", LastValue);
+    let state = state
+        .merge(
+            ChannelUpdate::new()
+                .set("a", 1)
+                .set("a", 2) // same update, same channel: still one bump.
+                .set("b", 1)
+                .at_step(1),
+        )
+        .unwrap();
+    assert_eq!(state.channel_versions().get("a"), Some(&1));
+    assert_eq!(state.channel_versions().get("b"), Some(&1));
+
+    let state = state
+        .merge(ChannelUpdate::new().set("a", 3).at_step(2))
+        .unwrap();
+    assert_eq!(state.channel_versions().get("a"), Some(&2));
+    // `b` was not touched this step, so its version does not move.
+    assert_eq!(state.channel_versions().get("b"), Some(&1));
+}
+
+#[tokio::test]
+async fn node_context_changed_since_last_run_tracks_channel_writes() {
+    use std::sync::{Arc, Mutex};
+
+    let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let observed_a = observed.clone();
+    let observed_b = observed.clone();
+
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("write", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new().set("v", 1).at_step(c.step),
+            ))
+        })
+        .add_node("observe_a", move |_s: ChannelState, c: NodeContext| {
+            let observed_a = observed_a.clone();
+            async move {
+                observed_a
+                    .lock()
+                    .unwrap()
+                    .push(c.changed_since_last_run("v"));
+                Ok(NodeResult::Update(ChannelUpdate::new()))
+            }
+        })
+        .add_node("observe_b", move |_s: ChannelState, c: NodeContext| {
+            let observed_b = observed_b.clone();
+            async move {
+                observed_b
+                    .lock()
+                    .unwrap()
+                    .push(c.changed_since_last_run("v"));
+                Ok(NodeResult::Update(ChannelUpdate::new()))
+            }
+        })
+        .add_edge("write", "observe_a")
+        .add_edge("observe_a", "observe_b")
+        .add_edge("observe_b", "observe_a")
+        .set_entry("write")
+        .set_finish("observe_a")
+        .with_recursion_limit(4)
+        .compile()
+        .unwrap();
+
+    let initial = ChannelState::new().with_channel("v", LastValue);
+    let _ = graph.run(initial).await;
+    // `observe_a`'s first-ever run sees `v` as changed (it has never seen
+    // it), then its second run (after `observe_b`, which made no writes)
+    // sees no further change.
+    let seen_a = observed.lock().unwrap().clone();
+    assert_eq!(seen_a.first(), Some(&true));
+}
+
+// --- Delta-channel history + Overwrite (I5/R3) ---
+
+#[test]
+fn overwrite_bypasses_merge_and_rebases_baseline() {
+    let state = ChannelState::new().with_channel("log", Topic);
+    let state = state
+        .merge(ChannelUpdate::new().set("log", "a").at_step(1))
+        .unwrap();
+    assert_eq!(state.get("log"), Some(&json!(["a"])));
+
+    // Overwrite replaces the value outright...
+    let state = state
+        .merge(
+            ChannelUpdate::new()
+                .overwrite("log", json!(["reset"]))
+                .at_step(2),
+        )
+        .unwrap();
+    assert_eq!(state.get("log"), Some(&json!(["reset"])));
+
+    // ...and subsequent merges build on the new baseline, not the old one.
+    let state = state
+        .merge(ChannelUpdate::new().set("log", "b").at_step(3))
+        .unwrap();
+    assert_eq!(state.get("log"), Some(&json!(["reset", "b"])));
+}
+
+#[test]
+fn delta_tracked_channel_accumulates_step_deltas_and_overwrite_rebases_them() {
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 1000);
+    let state = ChannelState::new();
+    let state = ChannelState { set, ..state };
+    let state = state
+        .merge(ChannelUpdate::new().set("log", "a").at_step(1))
+        .unwrap();
+    assert_eq!(state.step_deltas().get("log"), Some(&vec![json!("a")]));
+
+    let state = state
+        .merge(ChannelUpdate::new().set("log", "b").at_step(2))
+        .unwrap();
+    // Deltas are per-step only: step 2's entry does not include step 1's.
+    assert_eq!(state.step_deltas().get("log"), Some(&vec![json!("b")]));
+
+    let state = state
+        .merge(
+            ChannelUpdate::new()
+                .overwrite("log", json!(["reset"]))
+                .at_step(3),
+        )
+        .unwrap();
+    // The overwrite rebases the delta baseline: only the overwrite's own
+    // value is recorded for this step.
+    assert_eq!(
+        state.step_deltas().get("log"),
+        Some(&vec![json!(["reset"])])
+    );
+}
+
+#[tokio::test]
+async fn delta_history_replays_from_checkpoints() {
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 1000);
+    let base = ChannelState {
+        set,
+        ..ChannelState::new()
+    };
+
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .add_edge("append", "append")
+        .set_entry("append")
+        .set_finish("append")
+        .with_recursion_limit(3)
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    // `with_recursion_limit(3)` plus the self-edge lets `append` run three
+    // supersteps before the limit trips.
+    let _ = graph.run_with_thread("delta-thread", base).await;
+
+    let config = CheckpointConfig::latest("delta-thread");
+    let history = cp.delta_history(&config, "log").await.unwrap();
+    assert_eq!(
+        history,
+        vec![json!("item-1"), json!("item-2"), json!("item-3")]
+    );
+}
+
+/// A long-running delta-tracked append channel's *per-checkpoint* byte size
+/// must grow ~linearly with step count (each checkpoint carries only its own
+/// step's delta, not a cumulative history) — comparing the whole checkpoint
+/// record's serialized size at step 100 vs step 200 bounds the ratio well
+/// under the quadratic blowup a cumulative (or naive full-replay) design
+/// would produce.
+#[tokio::test]
+async fn delta_channel_checkpoint_bytes_grow_linearly_over_two_hundred_steps() {
+    use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 100_000); // no periodic full-snapshot marker in range.
+    let base = ChannelState {
+        set,
+        ..ChannelState::new()
+    };
+
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .add_edge("append", "append")
+        .set_entry("append")
+        .set_finish("append")
+        .with_recursion_limit(205)
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let _ = graph.run_with_thread("linear-thread", base).await;
+
+    let metas = cp.list("linear-thread").await.unwrap();
+    let id_at = |step: usize| -> String {
+        metas
+            .iter()
+            .find(|m| m.step == step)
+            .unwrap_or_else(|| panic!("no checkpoint at step {step}"))
+            .checkpoint_id
+            .clone()
+    };
+    async fn bytes_at(cp: &Arc<dyn Checkpointer<ChannelState>>, id: &str) -> usize {
+        let checkpoint = cp
+            .get("linear-thread", Some(id))
+            .await
+            .unwrap()
+            .expect("checkpoint exists");
+        serde_json::to_vec(&checkpoint).unwrap().len()
+    }
+    let bytes_at_100 = bytes_at(&cp, &id_at(100)).await;
+    let bytes_at_200 = bytes_at(&cp, &id_at(200)).await;
+
+    let ratio = bytes_at_200 as f64 / bytes_at_100 as f64;
+    assert!(
+        ratio < 2.5,
+        "checkpoint bytes should grow ~linearly (step100={bytes_at_100}, step200={bytes_at_200}, ratio={ratio})"
+    );
+}
+
+// --- `update_state`/`fork_state` share the delta/version write path ---
+
+#[tokio::test]
+async fn update_state_after_delta_writes_round_trips() {
+    use crate::checkpoint::{CheckpointConfig, Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let set = ChannelSet::new()
+        .with_channel("log", Topic)
+        .with_delta("log", 1000);
+    let base = ChannelState {
+        set,
+        ..ChannelState::new()
+    };
+
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .set_entry("append")
+        .set_finish("append")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let exec = graph.run_with_thread("update-thread", base).await.unwrap();
+    assert_eq!(exec.state.get("log"), Some(&json!(["item-1"])));
+
+    // A manual write layers on top through the same channel write path.
+    let config = graph
+        .update_state(
+            "update-thread",
+            ChannelUpdate::new().set("log", "manual"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let checkpoint = cp
+        .get(&config.thread_id, config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .expect("checkpoint exists");
+    assert_eq!(
+        checkpoint.state.get("log"),
+        Some(&json!(["item-1", "manual"]))
+    );
+    // The manual write's own delta is recorded, honoring the same
+    // per-checkpoint delta-tracking contract a normal boundary uses.
+    assert_eq!(
+        checkpoint.channel_deltas.get("log"),
+        Some(&vec![json!("manual")])
+    );
+
+    // The delta history across the whole lineage includes both the normal
+    // boundary's write and the manual one, in order.
+    let history_config = CheckpointConfig::latest("update-thread");
+    let history = cp.delta_history(&history_config, "log").await.unwrap();
+    assert_eq!(history, vec![json!("item-1"), json!("manual")]);
+}
+
+#[tokio::test]
+async fn update_state_overwrite_resets_baseline_for_subsequent_appends() {
+    use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let base = ChannelState::new().with_channel("log", Topic);
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("noop", |_s: ChannelState, _c: NodeContext| async move {
+            Ok(NodeResult::Update(ChannelUpdate::new().set("log", "a")))
+        })
+        .set_entry("noop")
+        .set_finish("noop")
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    graph.run_with_thread("reset-thread", base).await.unwrap();
+    graph
+        .update_state(
+            "reset-thread",
+            ChannelUpdate::new().overwrite("log", json!(["reset"])),
+            None,
+        )
+        .await
+        .unwrap();
+    let config = graph
+        .update_state("reset-thread", ChannelUpdate::new().set("log", "b"), None)
+        .await
+        .unwrap();
+
+    let checkpoint = cp
+        .get(&config.thread_id, config.checkpoint_id.as_deref())
+        .await
+        .unwrap()
+        .expect("checkpoint exists");
+    assert_eq!(checkpoint.state.get("log"), Some(&json!(["reset", "b"])));
+}
+
+#[tokio::test]
+async fn state_history_reconstruction_equals_live_state_at_every_step() {
+    use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
+    use std::sync::Arc;
+
+    let base = ChannelState::new().with_channel("log", Topic);
+    let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(InMemoryCheckpointer::new());
+    let graph = GraphBuilder::<ChannelState, ChannelUpdate>::new()
+        .set_reducer(ChannelState::new())
+        .add_node("append", |_s: ChannelState, c: NodeContext| async move {
+            Ok(NodeResult::Update(
+                ChannelUpdate::new()
+                    .set("log", format!("item-{}", c.step))
+                    .at_step(c.step),
+            ))
+        })
+        .add_edge("append", "append")
+        .set_entry("append")
+        .set_finish("append")
+        .with_recursion_limit(6)
+        .compile()
+        .unwrap()
+        .with_checkpointer(cp.clone());
+
+    let _ = graph.run_with_thread("history-thread", base).await;
+
+    let history = cp.state_history("history-thread", &[], None).await.unwrap();
+    for tuple in &history {
+        let step = tuple.checkpoint.to_metadata().step;
+        let expected: Vec<Value> = (1..=step).map(|n| json!(format!("item-{n}"))).collect();
+        assert_eq!(
+            tuple.checkpoint.state.get("log"),
+            Some(&Value::Array(expected)),
+            "checkpoint state at step {step} did not match the expected live sequence"
+        );
+    }
+    assert!(!history.is_empty());
+}

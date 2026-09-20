@@ -8,7 +8,7 @@
 //! Each function panics with a descriptive message on the first violation, so
 //! call them from a `#[tokio::test]` / `#[test]`.
 
-use crate::checkpoint::{Checkpoint, Checkpointer};
+use crate::checkpoint::{Checkpoint, Checkpointer, PendingActivation};
 use crate::orchestration::{
     OrchestrationTaskFilter, OrchestrationTaskKind, OrchestrationTaskResult,
     OrchestrationTaskStatus, TaskStore,
@@ -21,22 +21,18 @@ fn contract_checkpoint(
     parent: Option<&str>,
     step: usize,
 ) -> Checkpoint<i32> {
-    Checkpoint {
-        thread_id: thread.to_string(),
-        checkpoint_id: id.to_string(),
-        run_id: None,
-        parent_checkpoint_id: parent.map(str::to_string),
-        namespace: vec![],
-        state: step as i32,
-        next_nodes: vec![NodeId::from("n")],
-        completed_tasks: vec![],
-        completed_routes: vec![],
-        pending_writes: vec![],
-        interrupts: vec![],
-        pending_activations: None,
-        barrier_arrivals: vec![],
-        metadata: serde_json::json!({ "source": "loop", "step": step }),
-    }
+    Checkpoint::new(
+        step as i32,
+        vec![PendingActivation {
+            node: NodeId::from("n"),
+            send_arg: None,
+            task_id: TaskId::from(String::new()),
+        }],
+    )
+    .with_thread_id(thread.to_string())
+    .with_checkpoint_id(id.to_string())
+    .with_parent_checkpoint_id(parent.map(str::to_string))
+    .with_metadata(serde_json::json!({ "source": "loop", "step": step }))
 }
 
 /// Runs the [`Checkpointer`] contract against `cp`.

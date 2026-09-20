@@ -74,7 +74,10 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// commit, not a process crash) instead of the slower `FULL` default, and an
 /// explicit `busy_timeout` so a writer contending with another connection
 /// waits rather than failing immediately with `SQLITE_BUSY`.
-fn prepare_connection(conn: &Connection) -> Result<()> {
+///
+/// Shared with [`crate::cache::SqliteTaskCache`], which opens its own
+/// connection with the same pragmas.
+pub(crate) fn prepare_connection(conn: &Connection) -> Result<()> {
     conn.busy_timeout(BUSY_TIMEOUT)
         .map_err(|e| sqlite_err("set busy_timeout", e))?;
     conn.execute_batch(
@@ -120,6 +123,7 @@ impl<State> SqliteCheckpointer<State> {
         prepare_connection(&conn)?;
         conn.execute_batch(SCHEMA)
             .map_err(|e| sqlite_err("create schema", e))?;
+        migrate_checkpoint_format_columns(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             _marker: PhantomData,
@@ -160,6 +164,26 @@ impl<State> SqliteCheckpointer<State> {
         let conn = lock_conn(&self.conn)?;
         conn.query_row("PRAGMA synchronous", [], |row| row.get(0))
             .map_err(|e| sqlite_err("read synchronous pragma", e))
+    }
+
+    /// Test-only: whether `checkpoints` currently has a column named `column`
+    /// — used to assert [`migrate_checkpoint_format_columns`] actually ran
+    /// against a database opened from a pre-v2 schema.
+    #[cfg(test)]
+    pub(crate) fn has_checkpoints_column(&self, column: &str) -> Result<bool> {
+        let conn = lock_conn(&self.conn)?;
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(checkpoints)")
+            .map_err(|e| sqlite_err("inspect checkpoints schema", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| sqlite_err("query checkpoints schema", e))?;
+        for row in rows {
+            if row.map_err(|e| sqlite_err("read schema column", e))? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -206,7 +230,9 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     source               TEXT    NOT NULL,
     step                 INTEGER NOT NULL,
     has_interrupts       INTEGER NOT NULL,
-    record               TEXT    NOT NULL
+    record               TEXT    NOT NULL,
+    format_version       INTEGER NOT NULL DEFAULT 1,
+    created_at           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_thread ON checkpoints (thread_id, seq);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_lookup ON checkpoints (thread_id, checkpoint_id);
@@ -283,6 +309,47 @@ chain(seq, checkpoint_id, parent_checkpoint_id, record, depth) AS (
 SELECT record FROM chain ORDER BY depth ASC LIMIT ?3;
 ";
 
+/// Adds the checkpoint format v2 columns (`format_version`, `created_at`) to
+/// an existing `checkpoints` table that predates them, guarded by
+/// `PRAGMA table_info` so it is a no-op on a database that already has them
+/// (a fresh database gets them for free from [`SCHEMA`] once that DDL is
+/// updated to declare them directly — this migration exists for a database
+/// opened by an older build, whose `checkpoints` table was created without
+/// these columns).
+///
+/// `format_version` defaults to `1`: an existing row predates this migration
+/// by construction, so it was written by a build that only ever produced
+/// checkpoint format v1 records. `created_at` defaults to `0`, the same
+/// visibly-unset sentinel [`Checkpoint::created_at`] uses for a v1 record
+/// decoded from JSON with no `created_at` field.
+fn migrate_checkpoint_format_columns(conn: &Connection) -> Result<()> {
+    let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(checkpoints)")
+            .map_err(|e| sqlite_err("inspect checkpoints schema", e))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| sqlite_err("query checkpoints schema", e))?;
+        for row in rows {
+            existing.insert(row.map_err(|e| sqlite_err("read schema column", e))?);
+        }
+    }
+    if !existing.contains("format_version") {
+        conn.execute_batch(
+            "ALTER TABLE checkpoints ADD COLUMN format_version INTEGER NOT NULL DEFAULT 1;",
+        )
+        .map_err(|e| sqlite_err("add format_version column", e))?;
+    }
+    if !existing.contains("created_at") {
+        conn.execute_batch(
+            "ALTER TABLE checkpoints ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;",
+        )
+        .map_err(|e| sqlite_err("add created_at column", e))?;
+    }
+    Ok(())
+}
+
 /// The projected listing columns read from one `checkpoints` row.
 struct MetaRow {
     thread_id: String,
@@ -330,14 +397,20 @@ fn insert_checkpoint_row<State: Serialize>(
     let meta = checkpoint.to_metadata();
     let namespace = serde_json::to_string(&checkpoint.namespace)
         .map_err(|e| sqlite_err("encode namespace", e))?;
-    let next_nodes = serde_json::to_string(&checkpoint.next_nodes)
-        .map_err(|e| sqlite_err("encode next_nodes", e))?;
+    // Projected from `to_metadata()`'s v2-or-derived-from-v1 resolution
+    // (`Checkpoint::effective_tasks`), not `checkpoint.next_nodes` directly —
+    // a v2 checkpoint (every write this crate performs) leaves that legacy
+    // field empty, so reading it here would silently persist an empty
+    // `next_nodes` listing column for every checkpoint going forward.
+    let next_nodes =
+        serde_json::to_string(&meta.next_nodes).map_err(|e| sqlite_err("encode next_nodes", e))?;
     let record = serde_json::to_string(checkpoint).map_err(|e| sqlite_err("encode record", e))?;
     conn.execute(
         "INSERT INTO checkpoints (
             thread_id, checkpoint_id, parent_checkpoint_id, run_id,
-            namespace, next_nodes, source, step, has_interrupts, record
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            namespace, next_nodes, source, step, has_interrupts, record,
+            format_version, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             checkpoint.thread_id,
             checkpoint.checkpoint_id,
@@ -349,6 +422,8 @@ fn insert_checkpoint_row<State: Serialize>(
             meta.step as i64,
             i64::from(meta.has_interrupts),
             record,
+            checkpoint.version as i64,
+            checkpoint.created_at as i64,
         ],
     )
     .map_err(|e| sqlite_err("insert checkpoint", e))?;
@@ -510,9 +585,10 @@ where
             };
             match record {
                 Some(json) => {
-                    Ok(Some(serde_json::from_str(&json).map_err(|e| {
-                        decode_json_err("sqlite checkpointer", "record", e)
-                    })?))
+                    let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                    checkpoint.normalize();
+                    Ok(Some(checkpoint))
                 }
                 None => Ok(None),
             }
@@ -561,9 +637,10 @@ where
             };
             match record {
                 Some(json) => {
-                    Ok(Some(serde_json::from_str(&json).map_err(|e| {
-                        decode_json_err("sqlite checkpointer", "record", e)
-                    })?))
+                    let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                    checkpoint.normalize();
+                    Ok(Some(checkpoint))
                 }
                 None => Ok(None),
             }
@@ -626,10 +703,10 @@ where
             let mut records: Vec<Checkpoint<State>> = Vec::new();
             for row in rows {
                 let json = row.map_err(|e| sqlite_err("read record row", e))?;
-                records.push(
-                    serde_json::from_str(&json)
-                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?,
-                );
+                let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                    .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                checkpoint.normalize();
+                records.push(checkpoint);
             }
             if records.is_empty() {
                 return Ok(Vec::new());
@@ -728,10 +805,10 @@ where
             let mut out = Vec::new();
             for row in rows {
                 let json = row.map_err(|e| sqlite_err("read record row", e))?;
-                out.push(
-                    serde_json::from_str(&json)
-                        .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?,
-                );
+                let mut checkpoint: Checkpoint<State> = serde_json::from_str(&json)
+                    .map_err(|e| decode_json_err("sqlite checkpointer", "record", e))?;
+                checkpoint.normalize();
+                out.push(checkpoint);
             }
             Ok(out)
         })

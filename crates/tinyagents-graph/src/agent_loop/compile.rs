@@ -32,8 +32,9 @@ use super::types::{LoopState, LoopUpdate, node};
 /// to `plan` from `tools`, or straight to `settle` from `model`/`tools`), so a
 /// fixed edge table cannot express the routing — see `runtime::apply_control`
 /// for the full mapping from [`tinyagents_harness::context::MiddlewareControl`]
-/// to a `goto`. `plan`, `model`, and `tools` are also marked
-/// `mark_interrupt`: a steering pause (from `plan`) or a
+/// to a `goto`. `plan`, `model`, and `tools` are also marked as interrupt
+/// points for the export (see this function's body, below): a steering
+/// pause (from `plan`) or a
 /// [`tinyagents_harness::context::MiddlewareControl::Interrupt`] (from any of
 /// the three) surfaces as a real [`crate::Interrupt`], checkpointed by the
 /// graph executor exactly like any other durable interrupt — this is how
@@ -73,7 +74,7 @@ where
     State: Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
 {
-    let builder = GraphBuilder::<LoopState, LoopUpdate>::overwrite()
+    let mut builder = GraphBuilder::<LoopState, LoopUpdate>::overwrite()
         .with_name("tinyagents.agent_loop")
         .add_node(node::PLAN, {
             let rt = rt.clone();
@@ -145,10 +146,26 @@ where
         .mark_command_routing(node::PLAN)
         .mark_command_routing(node::MODEL)
         .mark_command_routing(node::TOOLS)
-        .mark_command_routing(node::SETTLE)
-        .mark_interrupt(node::PLAN)
-        .mark_interrupt(node::MODEL)
-        .mark_interrupt(node::TOOLS);
+        .mark_command_routing(node::SETTLE);
+
+    // `plan`/`model`/`tools` each already return a real, node-emitted
+    // `NodeResult::Interrupt` when they need to pause (a steering pause from
+    // `plan`, a `MiddlewareControl::Interrupt` from any of the three — see
+    // the module doc above); that alone is a genuine, checkpointed executor
+    // pause, with no help from `GraphBuilder::mark_interrupt` needed.
+    // `mark_interrupt` is *not* used here because — unlike when this graph
+    // was first written — it is no longer a behavior-free export marker: it
+    // now aliases `GraphBuilder::interrupt_before`, which would make the
+    // executor pause *every* activation of these nodes on its own, before
+    // the node (and its middleware) ever runs, double-pausing on top of the
+    // node's own interrupt and desyncing resume's interrupt-acknowledgement
+    // bookkeeping across turns. Setting the `NodeMeta` interrupt marker
+    // directly (`pub(crate)`, reachable from this sibling module) restores
+    // the original export-only annotation without opting into that runtime
+    // pause.
+    for node in [node::PLAN, node::MODEL, node::TOOLS] {
+        builder.node_meta.entry(node.into()).or_default().interrupt = true;
+    }
 
     builder.compile()
 }

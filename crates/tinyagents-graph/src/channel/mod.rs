@@ -36,16 +36,19 @@
 //! ephemeral clearing) — so existing whole-state habits keep working and
 //! conflict detection is strictly opt-in.
 
+mod registry;
 mod types;
 
+pub use registry::ReducerRegistry;
 pub use types::{
-    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, Delta, Ephemeral,
-    LastValue, Messages, NamedBarrier, Topic, Untracked,
+    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
+    Delta, Ephemeral, LastValue, Messages, NamedBarrier, Topic, Untracked,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::reducer::StateReducer;
@@ -249,6 +252,10 @@ impl Channel for Barrier {
         Ok(Value::Array(list))
     }
 
+    fn config(&self) -> Value {
+        serde_json::json!({ "expected": self.expected })
+    }
+
     fn allows_concurrent(&self) -> bool {
         true
     }
@@ -301,6 +308,10 @@ impl Channel for NamedBarrier {
         Ok(Value::Object(map))
     }
 
+    fn config(&self) -> Value {
+        serde_json::json!({ "expected": self.expected })
+    }
+
     fn allows_concurrent(&self) -> bool {
         true
     }
@@ -320,21 +331,50 @@ impl Channel for NamedBarrier {
 impl BinaryAggregate {
     /// Creates an aggregate channel from a binary fold closure. The first write
     /// becomes the value directly; later writes are `fold(current, incoming)`.
+    ///
+    /// Unnamed: [`Channel::config`] carries no reducer name, so a channel
+    /// built this way merges correctly at runtime but cannot round-trip
+    /// through a durable checkpointer. Use [`BinaryAggregate::named`] (backed
+    /// by [`ReducerRegistry`]) for a channel that must survive a checkpoint
+    /// decode.
     pub fn new<F>(fold: F) -> Self
     where
         F: Fn(Value, Value) -> Result<Value> + Send + Sync + 'static,
     {
         Self {
             fold: Arc::new(fold),
+            reducer_name: None,
         }
     }
 
-    /// Builds an aggregate channel from a [`crate::Reducer<Value>`].
+    /// Builds an aggregate channel from a [`crate::Reducer<Value>`]. Also
+    /// unnamed — see [`BinaryAggregate::new`].
     pub fn from_reducer<R>(reducer: R) -> Self
     where
         R: crate::Reducer<Value> + 'static,
     {
         Self::new(move |current, incoming| reducer.reduce(current, incoming))
+    }
+
+    /// Builds an aggregate channel from the reducer registered under `name`
+    /// in the process-wide [`ReducerRegistry`] (register it first with
+    /// [`crate::GraphBuilder::register_reducer`], or use one of the built-ins
+    /// — `"append"`, `"last"`, `"sum"`, `"max"`, `"min"`, `"set_union"`).
+    ///
+    /// Unlike [`BinaryAggregate::new`], this channel's [`Channel::config`]
+    /// persists `name`, so it round-trips through a durable checkpointer:
+    /// decoding looks `name` back up in the registry (present in the
+    /// resuming process — the same call site that ran this graph before must
+    /// have registered it) and fails with
+    /// `TinyAgentsError::Checkpoint("unknown reducer ...")` if it is not
+    /// there.
+    pub fn named(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        let fold = ReducerRegistry::require(&name)?;
+        Ok(Self {
+            fold,
+            reducer_name: Some(name),
+        })
     }
 }
 
@@ -350,12 +390,66 @@ impl Channel for BinaryAggregate {
         }
     }
 
+    fn config(&self) -> Value {
+        ReducerRegistry::config_for(self.reducer_name.as_deref())
+    }
+
     fn allows_concurrent(&self) -> bool {
         true
     }
 
     fn clone_box(&self) -> Box<dyn Channel> {
         Box::new(self.clone())
+    }
+}
+
+/// Reconstructs a boxed [`Channel`] from its persisted `{kind, config}` pair
+/// (the counterpart of [`Channel::config`]), used by [`ChannelSet`]'s
+/// [`serde::Deserialize`] impl to hydrate a checkpoint's channel schema with
+/// no external context — see `channel/registry.rs`'s module docs for why
+/// `binary_aggregate` alone needs the process-wide [`ReducerRegistry`] to do
+/// this.
+fn channel_from_config(kind: &str, config: &Value) -> Result<Box<dyn Channel>> {
+    match kind {
+        "last_value" => Ok(Box::new(LastValue)),
+        "topic" => Ok(Box::new(Topic)),
+        "delta" => Ok(Box::new(Delta)),
+        "messages" => Ok(Box::new(Messages)),
+        "ephemeral" => Ok(Box::new(Ephemeral)),
+        "untracked" => Ok(Box::new(Untracked)),
+        "barrier" => {
+            let expected = config.get("expected").and_then(Value::as_u64).unwrap_or(0) as usize;
+            Ok(Box::new(Barrier::new(expected)))
+        }
+        "named_barrier" => {
+            let expected: Vec<String> = config
+                .get("expected")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(Box::new(NamedBarrier::new(expected)))
+        }
+        "binary_aggregate" => {
+            let name = config
+                .get("reducer")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    TinyAgentsError::Checkpoint(
+                        "binary_aggregate channel requires a named reducer to decode; build it \
+                     with `BinaryAggregate::named` so its config persists a reducer name"
+                            .to_string(),
+                    )
+                })?;
+            Ok(Box::new(BinaryAggregate::named(name)?))
+        }
+        other => Err(TinyAgentsError::Checkpoint(format!(
+            "unknown channel kind `{other}`"
+        ))),
     }
 }
 
@@ -380,6 +474,27 @@ impl ChannelSet {
     /// Registers `channel` under `name`.
     pub fn add_channel(&mut self, name: impl Into<String>, channel: impl Channel + 'static) {
         self.channels.insert(name.into(), Box::new(channel));
+    }
+
+    /// Marks an already-registered append-style channel (typically [`Topic`]
+    /// or a `"append"`/`"set_union"` [`BinaryAggregate`]) for delta-history
+    /// tracking: every write to `name` also records the raw incoming value
+    /// into [`ChannelState::step_deltas`] for that step, which the
+    /// checkpoint-construction call sites persist into
+    /// [`crate::checkpoint::Checkpoint::channel_deltas`]. Every
+    /// `snapshot_every` writes (minimum `1`) an additional full-value
+    /// snapshot marker (`{"$snapshot": <value>}`) is recorded alongside the
+    /// delta, so a consumer walking the history can fast-forward without
+    /// replaying every write from genesis.
+    ///
+    /// Returns the set for chaining. A no-op marker on a channel name that
+    /// is never registered with [`ChannelSet::with_channel`]/
+    /// [`ChannelSet::add_channel`] has no effect (there is nothing to track
+    /// writes for).
+    pub fn with_delta(mut self, name: impl Into<String>, snapshot_every: u32) -> Self {
+        self.delta_channels
+            .insert(name.into(), snapshot_every.max(1));
+        self
     }
 
     /// Returns the current value of `name`, if any has been written.
@@ -430,6 +545,35 @@ impl ChannelSet {
         Ok(())
     }
 
+    /// The single dispatch point for one channel write, folding an ordinary
+    /// [`ChannelWrite::Merge`] through [`ChannelSet::apply_update`] or
+    /// replacing the value outright for a [`ChannelWrite::Overwrite`] (which
+    /// bypasses the channel's merge rule and becomes the new baseline for
+    /// any merge/delta tracking that follows). Returns the channel's value
+    /// after the write.
+    ///
+    /// This is the one write path every channel-graph write funnels through
+    /// — a normal executor superstep boundary
+    /// ([`ChannelState::merge`]/[`crate::channel::ChannelUpdate`]),
+    /// `CompiledGraph::update_state`, and `CompiledGraph::fork_state`'s copy
+    /// — so replay and a manual update can never disagree about what a
+    /// write means (I5/R3; see `docs/modules/graph/state-channels.md`).
+    pub fn apply_channel_write(&mut self, name: &str, write: &ChannelWrite) -> Result<Value> {
+        match write {
+            ChannelWrite::Merge(value) => {
+                self.apply_update(name, value.clone())?;
+                Ok(self.values.get(name).cloned().unwrap_or(Value::Null))
+            }
+            ChannelWrite::Overwrite(value) => {
+                // Validate the channel exists (same contract as `apply_update`)
+                // before mutating.
+                self.channel(name)?;
+                self.values.insert(name.to_string(), value.clone());
+                Ok(value.clone())
+            }
+        }
+    }
+
     /// Returns the tracked channel values as an ordered map, excluding
     /// [`Untracked`] channels. This is the durable/inspectable state view.
     pub fn snapshot(&self) -> BTreeMap<String, Value> {
@@ -467,6 +611,77 @@ impl ChannelSet {
     }
 }
 
+/// One channel's wire representation: `{ kind, config, value }` (the
+/// counterpart of [`Channel::config`]/[`channel_from_config`]).
+#[derive(Serialize, Deserialize)]
+struct ChannelEntry {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    config: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
+}
+
+/// [`ChannelSet`]'s full wire representation: its channel schema/values plus
+/// the [`ChannelSet::with_delta`] registrations, so a decoded set round-trips
+/// which channels are delta-tracked (not just their current values).
+#[derive(Serialize, Deserialize)]
+struct ChannelSetWire {
+    channels: BTreeMap<String, ChannelEntry>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    delta: HashMap<String, u32>,
+}
+
+impl serde::Serialize for ChannelSet {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let channels: BTreeMap<String, ChannelEntry> = self
+            .channels
+            .iter()
+            .map(|(name, channel)| {
+                (
+                    name.clone(),
+                    ChannelEntry {
+                        kind: channel.kind().to_string(),
+                        config: channel.config(),
+                        value: self.values.get(name).cloned(),
+                    },
+                )
+            })
+            .collect();
+        ChannelSetWire {
+            channels,
+            delta: self.delta_channels.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChannelSet {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let wire = ChannelSetWire::deserialize(deserializer)?;
+        let mut channels: HashMap<String, Box<dyn Channel>> = HashMap::new();
+        let mut values: HashMap<String, Value> = HashMap::new();
+        for (name, entry) in wire.channels {
+            let channel = channel_from_config(&entry.kind, &entry.config)
+                .map_err(serde::de::Error::custom)?;
+            channels.insert(name.clone(), channel);
+            if let Some(value) = entry.value {
+                values.insert(name, value);
+            }
+        }
+        Ok(ChannelSet {
+            channels,
+            values,
+            delta_channels: wire.delta,
+        })
+    }
+}
+
 // --- ChannelUpdate ---
 
 impl ChannelUpdate {
@@ -475,9 +690,19 @@ impl ChannelUpdate {
         Self::default()
     }
 
-    /// Adds a `(name, value)` write, returning the update for chaining.
+    /// Adds a `(name, value)` merged write, returning the update for
+    /// chaining.
     pub fn set(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.writes.push((name.into(), value.into()));
+        self.writes
+            .push((name.into(), ChannelWrite::Merge(value.into())));
+        self
+    }
+
+    /// Adds a `(name, value)` write that bypasses the channel's merge rule
+    /// and replaces its value outright (see [`ChannelWrite::Overwrite`]).
+    pub fn overwrite(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.writes
+            .push((name.into(), ChannelWrite::Overwrite(value.into())));
         self
     }
 
@@ -511,6 +736,13 @@ impl ChannelState {
         channel: impl Channel + 'static,
     ) -> Self {
         self.set.add_channel(name, channel);
+        self
+    }
+
+    /// Marks an already-registered channel for delta-history tracking; see
+    /// [`ChannelSet::with_delta`].
+    pub fn with_delta(mut self, name: impl Into<String>, snapshot_every: u32) -> Self {
+        self.set = self.set.with_delta(name, snapshot_every);
         self
     }
 
@@ -548,12 +780,14 @@ impl ChannelState {
             Some(step) if step != self.current_step => {
                 self.current_step = step;
                 self.step_writes.clear();
+                self.step_deltas.clear();
                 self.set.clear_ephemeral();
             }
             Some(_) => {}
             None => {
                 // Unstamped updates are independent: no cross-update detection.
                 self.step_writes.clear();
+                self.step_deltas.clear();
             }
         }
 
@@ -579,13 +813,87 @@ impl ChannelState {
         }
 
         let touched: HashSet<String> = distinct.iter().map(|n| n.to_string()).collect();
-        for name in touched {
-            *self.step_writes.entry(name).or_insert(0) += 1;
+        for name in &touched {
+            *self.step_writes.entry(name.clone()).or_insert(0) += 1;
+            // Channel versions (I5/R3): bumped once per distinct channel
+            // name touched by this update, regardless of write kind
+            // (Merge/Overwrite) — see the module docs on
+            // `Checkpoint::channel_versions`.
+            *self.channel_versions.entry(name.clone()).or_insert(0) += 1;
         }
-        for (name, value) in update.writes {
-            self.set.apply_update(&name, value)?;
+        // `apply_channel_write` (on `ChannelSet`) is the single write-path
+        // dispatch point every channel-graph write funnels through — see its
+        // docs. This loop is that path's boundary-fold caller; `update_state`
+        // and `fork_state` reach the same dispatch point through
+        // `compiled::channel_bookkeeping`/direct `ChannelSet` access so
+        // replay and a manual write cannot diverge.
+        for (name, write) in update.writes {
+            let is_overwrite = write.is_overwrite();
+            let value = write.value().clone();
+            self.set.apply_channel_write(&name, &write)?;
+            if let Some(&snapshot_every) = self.set.delta_channels.get(&name) {
+                let entry = self.step_deltas.entry(name.clone()).or_default();
+                if is_overwrite {
+                    // Overwrite rebases the delta/append history: prior
+                    // accumulated deltas for this channel no longer describe
+                    // the current baseline.
+                    entry.clear();
+                }
+                entry.push(value);
+                let version = self.channel_versions.get(&name).copied().unwrap_or(0);
+                if snapshot_every > 0 && version % u64::from(snapshot_every) == 0 {
+                    let full = self.set.get(&name).cloned().unwrap_or(Value::Null);
+                    entry.push(serde_json::json!({ "$snapshot": full }));
+                }
+            }
         }
         Ok(self)
+    }
+
+    /// Cumulative per-channel version counters (I5/R3). See
+    /// [`crate::checkpoint::Checkpoint::channel_versions`].
+    pub fn channel_versions(&self) -> &BTreeMap<String, u64> {
+        &self.channel_versions
+    }
+
+    /// This step's accumulated raw write values for every
+    /// [`ChannelSet::with_delta`]-tracked channel, reset when the stamped
+    /// step advances. See [`crate::checkpoint::Checkpoint::channel_deltas`].
+    pub fn step_deltas(&self) -> &BTreeMap<String, Vec<Value>> {
+        &self.step_deltas
+    }
+}
+
+/// Extracts `(channel_versions, channel_deltas)` to embed into a freshly
+/// built [`crate::checkpoint::Checkpoint`], downcasting `state` to
+/// [`ChannelState`] when the graph uses the channel model.
+///
+/// For any other `State` type (a plain whole-state graph) a single
+/// `"state"` channel is reported at `fallback_version`, with no deltas — see
+/// the module docs on [`crate::checkpoint::Checkpoint::channel_versions`].
+///
+/// Shared by every checkpoint-construction call site (the executor's normal/
+/// failure/cancel boundaries in `compiled::boundary`, and
+/// `compiled::state_api`'s `update_state`) so a normal superstep boundary
+/// and a manual write can never disagree about what they persist here (the
+/// "one write path" contract — I5/R3).
+pub fn channel_bookkeeping<State: 'static>(
+    state: &State,
+    fallback_version: u64,
+) -> (
+    BTreeMap<String, u64>,
+    BTreeMap<String, Vec<serde_json::Value>>,
+) {
+    match (state as &dyn std::any::Any).downcast_ref::<ChannelState>() {
+        Some(channel_state) => (
+            channel_state.channel_versions().clone(),
+            channel_state.step_deltas().clone(),
+        ),
+        None => {
+            let mut versions = BTreeMap::new();
+            versions.insert("state".to_string(), fallback_version);
+            (versions, BTreeMap::new())
+        }
     }
 }
 

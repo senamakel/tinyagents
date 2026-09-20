@@ -55,6 +55,15 @@
 //! - Because branches run on cloned snapshots and never share mutable state,
 //!   concurrency is data-race free; the reducer alone resolves conflicting
 //!   writes (deterministically, by index).
+//! - Sequential steps have their own cousin of C1: [`step::StepRunner::run_sequential`]
+//!   stops invoking further branches at the first error/interrupt, so those
+//!   not-yet-started siblings never appear in that step's raw results at
+//!   all. [`step::StepRunner::fold_step`] now folds them into `stalled`
+//!   anyway (by original active-set index), so a failure/interrupt boundary
+//!   records them as pending tasks (`Checkpoint::tasks`) alongside the
+//!   branch that stopped the step, instead of silently dropping them from
+//!   the checkpoint — a resumed/retried sequential run reaches the same
+//!   final state as an uninterrupted one.
 //!
 //! ## Network resilience and resumable failures
 //!
@@ -91,18 +100,19 @@ mod step;
 mod types;
 
 pub use types::{
-    CompiledGraph, GraphExecution, GraphInput, ResumeTarget, RunOptions, StateSnapshot,
+    CompiledGraph, DrainHandle, DrainSignal, GraphExecution, GraphInput, ResumeTarget, RunOptions,
+    StateSnapshot,
 };
 
 pub(crate) use types::AsyncCheckpointWrites;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::builder::{
-    BarrierRelief, Branch, BuilderNode, END, ForkId, NodeContext, NodeFuture, NodeHandler,
-    NodeMeta, START,
+    BarrierRelief, Branch, BuilderNode, END, ForkId, IdleClock, NodeContext, NodeFuture,
+    NodeHandler, NodeMeta, NodePolicy, START, UpdateCodec,
 };
 use crate::checkpoint::{
     BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointTuple, Checkpointer, DurabilityMode,
@@ -145,7 +155,10 @@ fn snapshot_from_tuple<State>(tuple: CheckpointTuple<State>) -> StateSnapshot<St
         ..
     } = tuple;
     let metadata = checkpoint.to_metadata();
-    let next_nodes = checkpoint.next_nodes.clone();
+    // `checkpoint` was normalized on read, so `.tasks` is the single source
+    // of truth here regardless of the stored record's original format
+    // version.
+    let next_nodes: Vec<NodeId> = checkpoint.tasks.iter().map(|t| t.node.clone()).collect();
     StateSnapshot {
         values: checkpoint.state,
         tasks: next_nodes.clone(),
@@ -180,7 +193,9 @@ struct StepFailure {
 #[derive(Clone)]
 struct Activation {
     node: NodeId,
-    send_arg: Option<serde_json::Value>,
+    /// `Arc`-wrapped (M2): a `Send` fan-out of the same node, and every
+    /// retry attempt of one activation, share this allocation.
+    send_arg: Option<Arc<serde_json::Value>>,
     task_id: TaskId,
 }
 
@@ -339,7 +354,53 @@ impl<State, Update> CompiledGraph<State, Update> {
             durability: crate::checkpoint::DurabilityMode::default(),
             node_retry: None,
             sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            node_policies: Arc::new(HashMap::new()),
+            node_defaults: None,
+            task_cache: None,
+            cached_nodes: Arc::new(HashMap::new()),
+            interrupt_before: Arc::new(HashSet::new()),
+            interrupt_after: Arc::new(HashSet::new()),
+            update_codec: None,
         }
+    }
+
+    /// Installs the `interrupt_before`/`interrupt_after` node selectors and
+    /// the `Update` codec the latter persists deferred results with (called
+    /// from `GraphBuilder::compile`).
+    pub(crate) fn with_interrupt_selectors(
+        mut self,
+        interrupt_before: HashSet<NodeId>,
+        interrupt_after: HashSet<NodeId>,
+        update_codec: Option<UpdateCodec<Update>>,
+    ) -> Self {
+        self.interrupt_before = Arc::new(interrupt_before);
+        self.interrupt_after = Arc::new(interrupt_after);
+        self.update_codec = update_codec;
+        self
+    }
+
+    /// Installs the per-node policies and graph-wide default policy the
+    /// builder accumulated (called from `GraphBuilder::compile`).
+    pub(crate) fn with_node_policies(
+        mut self,
+        node_policies: HashMap<NodeId, NodePolicy<State, Update>>,
+        node_defaults: Option<NodePolicy<State, Update>>,
+    ) -> Self {
+        self.node_policies = Arc::new(node_policies);
+        self.node_defaults = node_defaults.map(Arc::new);
+        self
+    }
+
+    /// Resolves the effective [`NodePolicy`] for `node`: per-node field →
+    /// `set_node_defaults` field → legacy graph-wide `node_retry` /
+    /// `node_timeout`.
+    pub(crate) fn effective_policy(&self, node: &NodeId) -> NodePolicy<State, Update> {
+        NodePolicy::resolve(
+            self.node_policies.get(node),
+            self.node_defaults.as_deref(),
+            self.node_retry.as_ref(),
+            self.node_timeout,
+        )
     }
 
     /// The graph id.
@@ -409,6 +470,55 @@ impl<State, Update> CompiledGraph<State, Update> {
     /// default) the first node error aborts the run immediately.
     pub fn with_node_retry(mut self, policy: tinyagents_harness::retry::RetryPolicy) -> Self {
         self.node_retry = Some(policy);
+        self
+    }
+
+    /// Attaches the [`TaskCache`](crate::cache::TaskCache) backend used by
+    /// any node configured through [`Self::with_cached_node`].
+    ///
+    /// Without a task cache, [`NodeCachePolicy`](crate::NodeCachePolicy)
+    /// entries installed by `with_cached_node` are inert: the executor never
+    /// looks anything up or stores anything, and every node runs exactly as
+    /// it would with no cache configured at all.
+    pub fn with_task_cache(mut self, cache: Arc<dyn crate::cache::TaskCache>) -> Self {
+        self.task_cache = Some(cache);
+        self
+    }
+
+    /// Opts `node` into result caching under `policy`.
+    ///
+    /// A cache hit (an unexpired entry under `policy.key`'s computed hash)
+    /// skips the node's handler entirely and replays the stored `Update`,
+    /// emitting [`GraphEvent::TaskCompleted`](crate::stream::GraphEvent::TaskCompleted)
+    /// with `cached: true` in place of the handler's normal
+    /// `NodeStarted`/`NodeCompleted` pair. A miss runs the handler as usual
+    /// and, on success, stores the resulting `Update` and emits
+    /// `TaskCompleted { cached: false, .. }`.
+    ///
+    /// Actually persisting a cached value needs `Update: Serialize +
+    /// DeserializeOwned`; that bound lives on this method rather than on
+    /// [`CompiledGraph`] itself, so a graph with no cached nodes at all never
+    /// has to satisfy it. This method has no effect until a backend is also
+    /// installed via [`Self::with_task_cache`].
+    pub fn with_cached_node(
+        mut self,
+        node: impl Into<NodeId>,
+        policy: crate::builder::NodeCachePolicy<State>,
+    ) -> Self
+    where
+        Update: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    {
+        let mut cached_nodes = (*self.cached_nodes).clone();
+        cached_nodes.insert(
+            node.into(),
+            crate::cache::CachedNode {
+                key: policy.key,
+                ttl: policy.ttl,
+                encode: Arc::new(|update: &Update| serde_json::to_value(update)),
+                decode: Arc::new(|value: serde_json::Value| serde_json::from_value(value)),
+            },
+        );
+        self.cached_nodes = Arc::new(cached_nodes);
         self
     }
 
@@ -498,8 +608,18 @@ impl<State, Update> CompiledGraph<State, Update> {
     /// Wraps `event` in a [`crate::stream::GraphEventEnvelope`] stamped with
     /// `run_id`, this graph instance's checkpoint namespace, and the next
     /// value of its [`CompiledGraph::sequence`] counter, then delivers it to
-    /// the configured sink (a no-op without one).
+    /// the configured sink (a no-op without one). The envelope's `task_id` is
+    /// `None` — use [`Self::emit_task`] for an event that belongs to one
+    /// task/activation.
     fn emit(&self, run_id: &RunId, event: GraphEvent) {
+        self.emit_task(run_id, None, event);
+    }
+
+    /// [`Self::emit`] for an event that belongs to one task/activation:
+    /// stamps the envelope's `task_id` with `task_id` so a multi-task stream
+    /// (e.g. a parallel superstep) can be correlated back to the activation
+    /// that produced each event.
+    pub(crate) fn emit_task(&self, run_id: &RunId, task_id: Option<&TaskId>, event: GraphEvent) {
         let Some(sink) = &self.event_sink else {
             return;
         };
@@ -511,8 +631,9 @@ impl<State, Update> CompiledGraph<State, Update> {
             GraphEvent::RunCompleted { .. }
                 | GraphEvent::RunFailed { .. }
                 | GraphEvent::RunCancelled { .. }
+                | GraphEvent::RunDrained { .. }
         );
-        let envelope = self.envelope(run_id, event);
+        let envelope = self.envelope_task(run_id, task_id, event);
         sink.emit(envelope);
         if terminal {
             sink.flush();
@@ -523,14 +644,25 @@ impl<State, Update> CompiledGraph<State, Update> {
     /// delivering it — the shared stamping logic behind [`Self::emit`] and
     /// the async-checkpoint-write path in `boundary.rs`, which must build an
     /// envelope on the calling thread (to keep `seq` ordered) before handing
-    /// the write off to a spawned task.
+    /// the write off to a spawned task. `task_id` is `None`; use
+    /// [`Self::envelope_task`] to stamp one.
     pub(crate) fn envelope(&self, run_id: &RunId, event: GraphEvent) -> GraphEventEnvelope {
+        self.envelope_task(run_id, None, event)
+    }
+
+    /// [`Self::envelope`] that also stamps the envelope's `task_id`.
+    pub(crate) fn envelope_task(
+        &self,
+        run_id: &RunId,
+        task_id: Option<&TaskId>,
+        event: GraphEvent,
+    ) -> GraphEventEnvelope {
         let seq = self
             .sequence
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         GraphEventEnvelope {
             run_id: run_id.clone(),
-            task_id: None,
+            task_id: task_id.cloned(),
             ns: self.namespace.clone(),
             seq,
             event,
@@ -558,6 +690,14 @@ impl<State, Update> CompiledGraph<State, Update> {
 }
 
 #[cfg(test)]
+mod drain_test;
+#[cfg(test)]
+mod durable_task_test;
+#[cfg(test)]
 mod durable_test;
+#[cfg(test)]
+mod interrupt_selectors_test;
+#[cfg(test)]
+mod policy_test;
 #[cfg(test)]
 mod test;

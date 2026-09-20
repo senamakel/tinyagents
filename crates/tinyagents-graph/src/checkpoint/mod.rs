@@ -21,10 +21,13 @@ mod types;
 pub use file::FileCheckpointer;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteCheckpointer;
+#[cfg(feature = "sqlite")]
+pub(crate) use sqlite::prepare_connection;
 pub use types::{
-    BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSource,
-    CheckpointTuple, DurabilityMode, PendingActivation, PendingWrite, WRITES_IDX_ERROR,
-    WRITES_IDX_INTERRUPT, WRITES_IDX_RESUME, merge_writes,
+    BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
+    CheckpointSource, CheckpointTuple, CompletedTask, DURABLE_TASK_CHANNEL_PREFIX, DurabilityMode,
+    INTERRUPT_AFTER_CHANNEL, PendingActivation, PendingWrite, WRITES_IDX_ERROR,
+    WRITES_IDX_INTERRUPT, WRITES_IDX_INTERRUPT_AFTER, WRITES_IDX_RESUME, merge_writes,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -447,6 +450,41 @@ where
         Ok(out)
     }
 
+    /// Replays a [`crate::channel::ChannelSet::with_delta`]-tracked
+    /// channel's per-step write history for `config.thread_id`/
+    /// `config.namespace` (I5/R3).
+    ///
+    /// The default implementation walks [`Checkpointer::state_history`]
+    /// (newest-first, so it is reversed to oldest-first here) and
+    /// concatenates each checkpoint's own
+    /// [`Checkpoint::channel_deltas`] entry for `channel`, in lineage
+    /// order — every checkpoint carries only *its own step's* writes to a
+    /// delta-tracked channel (not a cumulative history), which is what
+    /// keeps a single checkpoint's size bounded regardless of how long the
+    /// channel's append history grows. A checkpoint with no recorded delta
+    /// for `channel` (predates delta tracking, or `channel` was not
+    /// delta-tracked when it was written) contributes nothing.
+    ///
+    /// A backend may override this with a cheaper single-pass read; the
+    /// observable result must remain identical.
+    async fn delta_history(
+        &self,
+        config: &CheckpointConfig,
+        channel: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut tuples = self
+            .state_history(&config.thread_id, &config.namespace, None)
+            .await?;
+        tuples.reverse();
+        let mut out = Vec::new();
+        for tuple in &tuples {
+            if let Some(deltas) = tuple.checkpoint.channel_deltas.get(channel) {
+                out.extend(deltas.iter().cloned());
+            }
+        }
+        Ok(out)
+    }
+
     // ---- Thread operations -------------------------------------------------
     //
     // Three storage-specific primitives (`list_threads`, `delete_thread`,
@@ -705,7 +743,10 @@ where
             Some(id) => list.iter().rfind(|c| c.checkpoint_id == id),
             None => list.last(),
         };
-        Ok(found.cloned())
+        Ok(found.cloned().map(|mut c| {
+            c.normalize();
+            c
+        }))
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
@@ -720,7 +761,11 @@ where
         // Single-pass bulk read: clone the thread's records in insertion
         // order, instead of the default's one `get` per listed id.
         let map = self.inner.lock().map_err(|_| lock_err())?;
-        Ok(map.get(thread_id).cloned().unwrap_or_default())
+        let mut records = map.get(thread_id).cloned().unwrap_or_default();
+        for record in &mut records {
+            record.normalize();
+        }
+        Ok(records)
     }
 
     async fn list_threads(&self) -> Result<Vec<String>> {

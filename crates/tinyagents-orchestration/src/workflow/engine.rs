@@ -196,18 +196,48 @@ pub struct WorkflowEngine<S, E> {
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
     lease_for: Duration,
-    /// Monotonic sequence counter for [`tinyagents_graph::GraphEventEnvelope::seq`].
-    sequence: std::sync::atomic::AtomicU64,
+    /// Monotonic sequence counter for [`tinyagents_graph::GraphEventEnvelope::seq`],
+    /// shared (via this `Arc`) across a [`Clone`] so a run's sequence stays
+    /// continuous no matter which clone emits.
+    sequence: Arc<std::sync::atomic::AtomicU64>,
+    /// Dispatches [`Self::drive`] to the lowered [`super::lower`] graph
+    /// runner instead of the legacy scheduler loop. Only present (and only
+    /// settable, via [`Self::with_graph_execution`]) when the
+    /// `graph-workflows` feature is enabled; defaults to `true` under that
+    /// feature so an embedder that turns the feature on gets the graph path
+    /// without further opt-in, matching `WorkflowEngineOptions.use_graph`'s
+    /// documented default.
+    #[cfg(feature = "graph-workflows")]
+    use_graph: bool,
+}
+
+/// Manual `Clone` (rather than `#[derive(Clone)]`, which would add spurious
+/// `S: Clone` / `E: Clone` bounds even though only the `Arc<S>`/`Arc<E>`
+/// handles are ever cloned) — needed so [`WorkflowEngine::drive_via_graph`]
+/// can hand an `Arc<WorkflowEngine<S, E>>` to the lowered graph's node
+/// closures (see `super::lower`).
+impl<S, E> Clone for WorkflowEngine<S, E> {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            executor: self.executor.clone(),
+            event_sink: self.event_sink.clone(),
+            lease_for: self.lease_for,
+            sequence: self.sequence.clone(),
+            #[cfg(feature = "graph-workflows")]
+            use_graph: self.use_graph,
+        }
+    }
 }
 
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
 
-struct PersistRequest {
-    phase_states: Value,
-    child_run_ids: Vec<String>,
-    status: WorkflowRunStatus,
-    summary: Option<String>,
-    terminal: bool,
+pub(crate) struct PersistRequest {
+    pub(crate) phase_states: Value,
+    pub(crate) child_run_ids: Vec<String>,
+    pub(crate) status: WorkflowRunStatus,
+    pub(crate) summary: Option<String>,
+    pub(crate) terminal: bool,
 }
 
 pub(crate) struct PhaseRegistration<S: WorkflowStore> {
@@ -353,7 +383,9 @@ where
             executor,
             event_sink: None,
             lease_for: WORKFLOW_LEASE,
-            sequence: std::sync::atomic::AtomicU64::new(0),
+            sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(feature = "graph-workflows")]
+            use_graph: true,
         }
     }
 
@@ -370,6 +402,16 @@ where
         self
     }
 
+    /// Opts a specific engine instance into (`true`) or out of (`false`) the
+    /// lowered graph path, overriding [`Self::new`]'s feature-gated default
+    /// (`true`). Only available when the `graph-workflows` feature is
+    /// enabled — see [`Self::drive`].
+    #[cfg(feature = "graph-workflows")]
+    pub fn with_graph_execution(mut self, enabled: bool) -> Self {
+        self.use_graph = enabled;
+        self
+    }
+
     /// Runs one blocking `WorkflowStore` call on the blocking-task pool
     /// instead of on the calling tokio worker thread.
     ///
@@ -378,7 +420,7 @@ where
     /// directly from `async fn`s. Every such call in this file is routed
     /// through here so the DB round-trip never occupies a worker thread that
     /// other, unrelated async tasks on this runtime need to make progress.
-    async fn store_op<T, F>(&self, f: F) -> Result<T, OrchestrationError>
+    pub(crate) async fn store_op<T, F>(&self, f: F) -> Result<T, OrchestrationError>
     where
         T: Send + 'static,
         F: FnOnce(&S) -> Result<T, OrchestrationError> + Send + 'static,
@@ -415,7 +457,32 @@ where
 
     /// Drive a run to a terminal state. Completed phases are never executed
     /// again, so a host may safely call this after process restart or resume.
+    ///
+    /// Dispatches to the lowered [`super::lower`] graph runner
+    /// ([`Self::drive_via_graph`]) when the `graph-workflows` feature is
+    /// enabled and [`Self::with_graph_execution`] has not turned it off
+    /// (the feature's default), else runs the legacy one-phase-at-a-time
+    /// scheduler loop ([`Self::drive_legacy`]) unchanged.
     pub async fn drive(
+        &self,
+        run_id: &str,
+        definition: &WorkflowDefinition,
+        cancel: CancellationToken,
+    ) -> Result<(), OrchestrationError> {
+        #[cfg(feature = "graph-workflows")]
+        {
+            if self.use_graph {
+                return self.drive_via_graph(run_id, definition, cancel).await;
+            }
+        }
+        self.drive_legacy(run_id, definition, cancel).await
+    }
+
+    /// The legacy scheduler: a `while` loop that picks exactly one runnable
+    /// phase per iteration ([`next_runnable_phase`]) and runs it to
+    /// completion before picking the next. Unchanged by the `graph-workflows`
+    /// feature; see [`Self::drive_via_graph`] for the lowered alternative.
+    async fn drive_legacy(
         &self,
         run_id: &str,
         definition: &WorkflowDefinition,
@@ -627,7 +694,106 @@ where
         }
     }
 
-    async fn run_phase(
+    /// The `graph-workflows` path: lowers `definition` to a
+    /// [`tinyagents_graph::CompiledGraph`] (see [`super::lower`]) and runs
+    /// it to completion instead of `drive_legacy`'s hand-written `while`
+    /// loop.
+    ///
+    /// The driver-lease claim and crash recovery prologue are identical to
+    /// [`Self::drive_legacy`]'s (deliberately duplicated rather than shared,
+    /// to keep this addition purely additive and the legacy path
+    /// byte-for-byte unchanged). Once claimed, every phase transition —
+    /// marking a phase running, persisting its completion/failure,
+    /// registering children, renewing the lease, handling cancellation —
+    /// happens exactly as it does today, inside [`Self::run_phase`], reused
+    /// unchanged by the lowered graph's per-phase nodes. The lowered
+    /// graph's own nodes durably persist and emit every terminal outcome
+    /// themselves (see `super::lower::lower_workflow`'s doc), so a
+    /// successful `graph.run(..)` here almost never itself needs to decide
+    /// anything further; the `Err` arm below is a defensive net for a
+    /// genuine infrastructure failure (e.g. a hit recursion limit) that no
+    /// node had a chance to handle.
+    #[cfg(feature = "graph-workflows")]
+    async fn drive_via_graph(
+        &self,
+        run_id: &str,
+        definition: &WorkflowDefinition,
+        cancel: CancellationToken,
+    ) -> Result<(), OrchestrationError> {
+        let owner = uuid::Uuid::new_v4().to_string();
+        let claim = {
+            let claim_run_id = run_id.to_owned();
+            let claim_owner = owner.clone();
+            let lease_for = self.lease_for;
+            self.store_op(move |store| store.claim(&claim_run_id, &claim_owner, lease_for))
+                .await?
+        };
+        let mut run = match claim {
+            WorkflowLeaseClaim::Acquired(run) => run,
+            WorkflowLeaseClaim::Busy(_) => return Ok(()),
+            WorkflowLeaseClaim::Missing => {
+                return Err(OrchestrationError(format!(
+                    "workflow run {run_id} vanished before start"
+                )));
+            }
+        };
+        if run.phase_states.as_object().is_some_and(|phases| {
+            phases
+                .values()
+                .any(|phase| phase.get("status").and_then(Value::as_str) == Some("running"))
+        }) {
+            let mut phase_states = run.phase_states.clone();
+            reset_running_phases(
+                &mut phase_states,
+                "workflow owner expired; phase will retry after lease takeover",
+            );
+            run = self
+                .persist(
+                    &run,
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: run.child_run_ids.clone(),
+                        status: WorkflowRunStatus::Running,
+                        summary: None,
+                        terminal: false,
+                    },
+                    &owner,
+                )
+                .await?;
+        }
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunStarted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+            },
+        );
+
+        let total_spawned = run.child_run_ids.len() as u32;
+        let engine = Arc::new(self.clone());
+        let graph = super::lower::lower_workflow(
+            engine,
+            Arc::new(definition.clone()),
+            run_id.to_owned(),
+            owner,
+            cancel,
+        )?;
+        let initial = super::lower::SchedulerState { run, total_spawned };
+        if let Err(error) = graph.run(initial).await {
+            self.finish_failed(run_id, error.to_string());
+            return Err(OrchestrationError::from(error));
+        }
+        Ok(())
+    }
+
+    /// Runs exactly one phase to completion (or an interrupt/failure
+    /// boundary), including its own agent fan-out, durable persistence, and
+    /// child-lease heartbeat. `pub(crate)` so [`super::lower::lower_workflow`]
+    /// can reuse it unchanged as the lowered graph's per-phase node body —
+    /// see that module's doc for why reuse (rather than a second,
+    /// graph-specific implementation) is what keeps the graph path's
+    /// durability/cancellation/registration semantics identical to this
+    /// (legacy) scheduler's.
+    pub(crate) async fn run_phase(
         &self,
         run: &WorkflowRun,
         definition: &WorkflowDefinition,
@@ -888,7 +1054,7 @@ where
         Ok((updated, 0))
     }
 
-    async fn persist(
+    pub(crate) async fn persist(
         &self,
         run: &WorkflowRun,
         request: PersistRequest,
@@ -916,7 +1082,7 @@ where
             })
     }
 
-    fn emit(&self, run_id: &str, event: tinyagents_graph::GraphEvent) {
+    pub(crate) fn emit(&self, run_id: &str, event: tinyagents_graph::GraphEvent) {
         if let Some(sink) = &self.event_sink {
             let seq = self
                 .sequence
@@ -931,7 +1097,7 @@ where
         }
     }
 
-    fn finish_completed(&self, run_id: &str, steps: usize) {
+    pub(crate) fn finish_completed(&self, run_id: &str, steps: usize) {
         self.emit(
             run_id,
             tinyagents_graph::GraphEvent::RunCompleted {
@@ -942,7 +1108,7 @@ where
         self.flush_terminal_events();
     }
 
-    fn finish_failed(&self, run_id: &str, error: String) {
+    pub(crate) fn finish_failed(&self, run_id: &str, error: String) {
         self.emit(
             run_id,
             tinyagents_graph::GraphEvent::RunFailed {
@@ -953,7 +1119,7 @@ where
         self.flush_terminal_events();
     }
 
-    fn finish_cancelled(&self, run_id: &str) {
+    pub(crate) fn finish_cancelled(&self, run_id: &str) {
         // GraphEvent has no cancellation variant. Its terminal error event is
         // the truthful durable signal for a cooperatively aborted run; callers
         // distinguish cancellation from failure in the workflow ledger status.
@@ -968,7 +1134,7 @@ where
 
     /// A lifecycle hand-off or lease takeover has fenced this driver. It must
     /// not manufacture a terminal graph event for the replacement owner.
-    async fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
+    pub(crate) async fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
         let run_id = run_id.to_owned();
         let owner = owner.to_owned();
         self.store_op(move |store| store.load(&run_id))
@@ -981,7 +1147,7 @@ where
     /// Returns true after emitting the terminal event already committed by a
     /// newer lifecycle owner. This is the stale-driver escape hatch: it never
     /// writes, so a stop/resume hand-off cannot be overwritten by its loser.
-    async fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
+    pub(crate) async fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
         let owned_run_id = run_id.to_owned();
         let Ok(Some(current)) = self.store_op(move |store| store.load(&owned_run_id)).await else {
             return false;

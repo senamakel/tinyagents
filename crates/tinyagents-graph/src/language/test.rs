@@ -13,9 +13,10 @@ struct EchoFactory;
 impl NodeFactory<S> for EchoFactory {
     fn make(&self, spec: &NodeSpec) -> Result<BoxedNode<S>> {
         let name = spec.name.clone();
-        Ok(Arc::new(move |mut state: S, _ctx: crate::NodeContext| {
+        Ok(Arc::new(move |state: Arc<S>, _ctx: crate::NodeContext| {
             let name = name.clone();
             Box::pin(async move {
+                let mut state = (*state).clone();
                 state.trail.push(name);
                 Ok(crate::NodeResult::Update(state))
             }) as crate::NodeFuture<S>
@@ -222,35 +223,61 @@ fn build_graph_rejects_duplicate_io_field_names() {
     }
 }
 
-#[test]
-fn build_graph_lowers_uniform_node_timeout() {
+#[tokio::test]
+async fn build_graph_lowers_both_timeout_literal_forms() {
+    // `timeout` accepts a `"<number><unit>"` string (`"30s"`) or a bare
+    // number of seconds (`30`) — both parse and lower onto the node's own
+    // `NodePolicy` without error, and a graph builds and runs normally with
+    // every node using a comfortably long timeout.
     let bp = blueprint(
         "graph g { start a node a { kind model timeout \"30s\" next b } \
          node b { kind model timeout 30 next END } }",
     );
 
-    let graph = build_graph::<S, _>(&bp, &EchoFactory).expect("uniform timeout is lowered");
-    let topology = graph.topology();
-    assert_eq!(topology.policy.node_timeout_ms, Some(30_000));
+    let graph =
+        build_graph::<S, _>(&bp, &EchoFactory).expect("both timeout literal forms are lowered");
+    let run = graph.run(S::default()).await.expect("graph runs to end");
+    assert_eq!(run.state.trail, vec!["a".to_string(), "b".to_string()]);
 }
 
-#[test]
-fn build_graph_rejects_disagreeing_per_node_timeouts() {
+#[tokio::test]
+async fn build_graph_lowers_independent_per_node_timeouts() {
+    // `a` declares a short timeout but never sleeps (trivially satisfies
+    // it); `b` declares a much longer one and sleeps just under it. Two
+    // nodes disagreeing on `timeout` used to be a compile-time rejection
+    // (no per-node timeout API); each node now gets its own `NodePolicy`, so
+    // this builds and `b`'s generous timeout — not `a`'s tiny one — governs
+    // `b`'s attempt.
     let bp = blueprint(
-        "graph g { start a node a { kind model timeout 10 next b } \
-         node b { kind model timeout 20 next END } }",
+        "graph g { start a node a { kind model timeout \"5ms\" next b } \
+         node b { kind model timeout \"200ms\" next END } }",
     );
 
-    let err = build_graph::<S, _>(&bp, &EchoFactory).unwrap_err();
-    match err {
-        TinyAgentsError::Compile(message) => {
-            assert!(
-                message.contains("per-node timeout not supported yet"),
-                "got: {message}"
-            );
+    struct SleepFactory;
+    impl NodeFactory<S> for SleepFactory {
+        fn make(&self, spec: &NodeSpec) -> Result<BoxedNode<S>> {
+            let name = spec.name.clone();
+            Ok(Arc::new(move |state: Arc<S>, _ctx: crate::NodeContext| {
+                let name = name.clone();
+                Box::pin(async move {
+                    if name == "b" {
+                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    }
+                    let mut state = (*state).clone();
+                    state.trail.push(name);
+                    Ok(crate::NodeResult::Update(state))
+                }) as crate::NodeFuture<S>
+            }))
         }
-        other => panic!("expected Compile, got {other:?}"),
     }
+
+    let graph = build_graph::<S, _>(&bp, &SleepFactory)
+        .expect("per-node timeouts are independent, not required to agree");
+    let run = graph
+        .run(S::default())
+        .await
+        .expect("b's own 200ms timeout comfortably covers its 30ms sleep");
+    assert_eq!(run.state.trail, vec!["a".to_string(), "b".to_string()]);
 }
 
 #[test]
@@ -268,23 +295,66 @@ fn build_graph_rejects_an_unsupported_retry_key() {
     }
 }
 
-#[test]
-fn build_graph_rejects_disagreeing_per_node_retry() {
+#[tokio::test]
+async fn build_graph_lowers_independent_per_node_retry() {
+    // `a` needs exactly 2 attempts and declares `max_attempts 2` (just
+    // enough); `b` needs 4 attempts and declares `max_attempts 6`. Two
+    // nodes disagreeing on `retry` used to be a compile-time rejection (no
+    // per-node retry API); each node now gets its own `NodePolicy`, so this
+    // builds, and if `b` were incorrectly bound to `a`'s smaller cap instead
+    // of its own, `b` would exhaust its attempts and the run would fail.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     let bp = blueprint(
         "graph g { start a node a { kind model retry { max_attempts 2 } next b } \
-         node b { kind model retry { max_attempts 5 } next END } }",
+         node b { kind model retry { max_attempts 6 } next END } }",
     );
 
-    let err = build_graph::<S, _>(&bp, &EchoFactory).unwrap_err();
-    match err {
-        TinyAgentsError::Compile(message) => {
-            assert!(
-                message.contains("per-node retry not supported yet"),
-                "got: {message}"
-            );
-        }
-        other => panic!("expected Compile, got {other:?}"),
+    struct FlakyFactory {
+        a_attempts: Arc<AtomicUsize>,
+        b_attempts: Arc<AtomicUsize>,
     }
+
+    impl NodeFactory<S> for FlakyFactory {
+        fn make(&self, spec: &NodeSpec) -> Result<BoxedNode<S>> {
+            let name = spec.name.clone();
+            let counter = if spec.name == "a" {
+                self.a_attempts.clone()
+            } else {
+                self.b_attempts.clone()
+            };
+            // `a` succeeds on its 2nd attempt (1 failure); `b` succeeds on
+            // its 4th (3 failures) — only possible under `b`'s own,
+            // larger `max_attempts`.
+            let needed_failures = if spec.name == "a" { 1 } else { 3 };
+            Ok(Arc::new(move |state: Arc<S>, _ctx: crate::NodeContext| {
+                let name = name.clone();
+                let counter = counter.clone();
+                Box::pin(async move {
+                    let n = counter.fetch_add(1, Ordering::SeqCst);
+                    if n < needed_failures {
+                        Err(TinyAgentsError::Model(format!("transient blip {n}")))
+                    } else {
+                        let mut state = (*state).clone();
+                        state.trail.push(name);
+                        Ok(crate::NodeResult::Update(state))
+                    }
+                }) as crate::NodeFuture<S>
+            }))
+        }
+    }
+
+    let factory = FlakyFactory {
+        a_attempts: Arc::new(AtomicUsize::new(0)),
+        b_attempts: Arc::new(AtomicUsize::new(0)),
+    };
+    let graph = build_graph::<S, _>(&bp, &factory)
+        .expect("per-node retry policies are independent, not required to agree");
+    let run = graph
+        .run(S::default())
+        .await
+        .expect("b's own max_attempts=6 covers the 4 attempts it needs");
+    assert_eq!(run.state.trail, vec!["a".to_string(), "b".to_string()]);
 }
 
 #[tokio::test]
@@ -302,13 +372,14 @@ async fn build_graph_lowers_uniform_node_retry_and_recovers_transient_failure() 
     impl NodeFactory<S> for FlakyFactory {
         fn make(&self, _spec: &NodeSpec) -> Result<BoxedNode<S>> {
             let attempts = self.attempts.clone();
-            Ok(Arc::new(move |mut state: S, _ctx: crate::NodeContext| {
+            Ok(Arc::new(move |state: Arc<S>, _ctx: crate::NodeContext| {
                 let attempts = attempts.clone();
                 Box::pin(async move {
                     let n = attempts.fetch_add(1, Ordering::SeqCst);
                     if n < 2 {
                         Err(TinyAgentsError::Model(format!("transient blip {n}")))
                     } else {
+                        let mut state = (*state).clone();
                         state.trail.push("flaky".to_string());
                         Ok(crate::NodeResult::Update(state))
                     }

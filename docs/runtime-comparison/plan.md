@@ -13,11 +13,10 @@ abstraction. Every item is one PR unless marked (multi-PR). Finding ids
 
 ## Execution log
 
-Status as of this pass, based on grepping `crates/` in this worktree (and,
-for Phase 4, the nested `worktrees/phase-4` branch checkout) for the concrete
-types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
-`git log --oneline --merges` confirms phase-3, -5, -6 and -7 were merged into
-`runtime-comparison`; phase-4 was not.
+Status as of this pass, based on grepping `crates/` in this worktree for the
+concrete types/functions each gap in [`feature-gaps.md`](feature-gaps.md)
+promises. `git log --oneline --merges` confirms phase-3, -4, -5, -6 and -7
+were all merged into `runtime-comparison`.
 
 ### (a) What shipped per phase
 
@@ -35,15 +34,14 @@ types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
   `ModelStreamItem`/`AssistantFrame` events (C1) shipped. The frame
   codec/reducer (C2) shipped and is journaled, but `ToolProgress`/
   `on_tool_delta` still has no real mid-execution caller (see (b)).
-  `GraphEventEnvelope{run_id, ns, seq}`, `StreamMode::{Tasks, Checkpoints}`
-  and `StreamProjection` (C3) shipped; `task_id` on envelopes is still `None`.
-  The OTel sink (C4) is OpenHuman and out of scope.
-- **Phase 4** (durability v2) — built but not merged. Checkpoint v2
-  (`Checkpoint::version`, `channel_versions`, delta-channel history), the
-  `NodePolicy`/`TaskCacheKey` pair, `interrupt_before`/`interrupt_after` +
-  `DrainSignal`, and `durable_task` all exist and are exercised by tests on
-  the `phase-4` branch, but that branch has no `Merge phase-4` commit into
-  `runtime-comparison` — none of it is present in this worktree's `crates/`.
+  `GraphEventEnvelope{run_id, task_id, ns, seq}`, `StreamMode::{Tasks,
+  Checkpoints}` and `StreamProjection` (C3) shipped; `task_id` is `Some(..)`
+  on every per-task event. The OTel sink (C4) is OpenHuman and out of scope.
+- **Phase 4** (durability v2) — landed (merged into `runtime-comparison`).
+  Checkpoint v2 (`Checkpoint::version`, `channel_versions`, delta-channel
+  history), the `NodePolicy`/`TaskCacheKey` pair, `interrupt_before`/
+  `interrupt_after` + `DrainSignal`, and `durable_task` all exist and are
+  exercised by tests in this worktree's `crates/`.
 - **Phase 5** (sessions, context, loop-as-graph) — landed (this worktree's
   `HEAD` merges phase-5). `EntryTree` (id/parent, branches, labels, fork)
   (E1), compaction (`find_cut_point`, `OverflowClassifier`, `CompactionRecord`)
@@ -83,11 +81,11 @@ types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
   `LoopDriver`. `compile_loop`/`LoopIter` are the real `CompiledGraph` path
   and have interrupt → checkpoint → resume tests (`loop_as_graph.rs`).
 - **`channels` in `.rag` remain inert**: `build_graph` now lowers joins,
-  `join_sources`, per-node `timeout`/`retry` (graph-wide when all nodes
-  agree), validated `sends`/route tables, and exports `options`/`metadata`;
-  `channel <name> <reducer>` is still parsed but not applied because generic
-  `State` gives no reducer binding point — documented in
-  `docs/modules/expressive-language/implementation-status.md`.
+  `join_sources`, per-node `timeout`/`retry` (independently per node, via
+  `NodePolicy`), validated `sends`/route tables, and exports
+  `options`/`metadata`; `channel <name> <reducer>` is still parsed but not
+  applied because generic `State` gives no reducer binding point —
+  documented in `docs/modules/expressive-language/implementation-status.md`.
 - **Lease renewal loop**: exists at the orchestration layer only.
   `WorkflowEngine` has a real heartbeat that renews a short lease while a
   child run is in flight (`crates/tinyagents-orchestration/src/workflow/

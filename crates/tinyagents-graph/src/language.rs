@@ -22,22 +22,25 @@
 //! - graph-level `joins` and node-level `join_sources` lower onto
 //!   [`GraphBuilder::add_waiting_edge`] — the same barrier/fan-in primitive
 //!   hand-written graphs use.
-//! - node-level `timeout` and `retry` lower onto
-//!   [`GraphBuilder::with_node_timeout`] / [`CompiledGraph::with_node_retry`]
-//!   — but only *graph-wide*: this builder has no per-node timeout/retry
-//!   policy API, so `build_graph` requires every node that declares one to
-//!   declare the *same* one, and fails closed (`TinyAgentsError::Compile`)
-//!   when two nodes disagree, naming both. See
-//!   `docs/modules/expressive-language/implementation-status.md` for why.
+//! - node-level `timeout` and `retry` lower onto a per-node
+//!   [`NodePolicy`] installed via [`GraphBuilder::with_node_policy`], so each
+//!   node's declared timeout/retry is independent — unlike the earlier
+//!   graph-wide-only lowering (`GraphBuilder::with_node_timeout` /
+//!   `CompiledGraph::with_node_retry`), two nodes are free to disagree. See
+//!   `docs/modules/expressive-language/implementation-status.md`.
 //!
 //! Everything else that was previously silently dropped (Phase 1c made these
 //! hard-reject instead) is now either genuinely structural (validated against
 //! the built topology, e.g. `sends`/`join_sources` targets must be declared
 //! nodes) or attached as inert, behavior-free export metadata via
-//! [`GraphBuilder::with_node_metadata`]/[`GraphBuilder::mark_interrupt`] —
-//! visible to `crate::export`, never silently dropped, but not enforced at
-//! run time because the generic `State`/`Update` types give `build_graph` no
-//! way to apply a declared literal write or input/output projection without
+//! [`GraphBuilder::with_node_metadata`] (`options` instead sets the
+//! `NodeMeta` interrupt flag directly rather than going through
+//! `GraphBuilder::mark_interrupt`, which now aliases the real
+//! `GraphBuilder::interrupt_before` pause — see the `options` handling
+//! below for why that would be a behavior change, not metadata) — visible
+//! to `crate::export`, never silently dropped, but not enforced at run time
+//! because the generic `State`/`Update` types give `build_graph` no way to
+//! apply a declared literal write or input/output projection without
 //! the caller committing to a concrete state shape (see
 //! `crate::channel::ChannelState` for the opt-in typed alternative).
 //! `channels`/`defaults` remain exactly as documented before this change:
@@ -52,7 +55,7 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::retry::RetryPolicy;
 use tinyagents_language::{Blueprint, IoFieldSpec, Literal, NodeSpec, Routing};
 
-use crate::{CompiledGraph, GraphBuilder, NodeHandler};
+use crate::{CompiledGraph, GraphBuilder, NodeHandler, NodePolicy};
 
 /// A durable node handler materialized from a declarative node specification.
 pub type BoxedNode<State> = Arc<NodeHandler<State, State>>;
@@ -136,41 +139,16 @@ fn parse_duration_literal(raw: &str) -> std::result::Result<Duration, String> {
     Ok(Duration::from_secs_f64(seconds))
 }
 
-/// Computes the single graph-wide node timeout implied by every node's
-/// declared `timeout`, or `None` if no node declares one.
-///
-/// This builder has no per-node timeout policy
-/// (`GraphBuilder::with_node_timeout` applies to every node), so when two or
-/// more nodes declare *different* timeouts there is no faithful lowering:
-/// this returns `TinyAgentsError::Compile` naming every disagreeing node
-/// instead of silently picking one (last-registered, first-registered, …) or
-/// silently dropping the rest.
-fn uniform_node_timeout(blueprint: &Blueprint) -> Result<Option<Duration>> {
-    let mut declared: Vec<(&str, Duration)> = Vec::new();
-    for spec in &blueprint.nodes {
-        let Some(raw) = &spec.timeout else { continue };
-        let duration = parse_duration_literal(raw).map_err(|message| {
-            TinyAgentsError::Compile(format!("node `{}` `timeout`: {message}", spec.name))
-        })?;
-        declared.push((spec.name.as_str(), duration));
-    }
-    let Some((_, first)) = declared.first().copied() else {
+/// Parses `spec`'s declared `timeout` (if any) into a [`Duration`], for
+/// lowering onto that node's own [`NodePolicy::timeout`].
+fn node_timeout(spec: &NodeSpec) -> Result<Option<Duration>> {
+    let Some(raw) = &spec.timeout else {
         return Ok(None);
     };
-    let disagreeing: Vec<String> = declared
-        .iter()
-        .filter(|(_, d)| *d != first)
-        .map(|(name, d)| format!("`{name}`={d:?}"))
-        .collect();
-    if !disagreeing.is_empty() {
-        return Err(TinyAgentsError::Compile(format!(
-            "per-node timeout not supported yet: node `{}`={:?} disagrees with {}",
-            declared[0].0,
-            first,
-            disagreeing.join(", ")
-        )));
-    }
-    Ok(Some(first))
+    let duration = parse_duration_literal(raw).map_err(|message| {
+        TinyAgentsError::Compile(format!("node `{}` `timeout`: {message}", spec.name))
+    })?;
+    Ok(Some(duration))
 }
 
 /// Reads one `retry { key value … }` entry into the matching [`RetryPolicy`]
@@ -229,42 +207,17 @@ max_retry_after_ms)"
     Ok(())
 }
 
-/// Computes the single graph-wide [`RetryPolicy`] implied by every node's
-/// declared `retry { … }`, or `None` if no node declares one.
-///
-/// Like [`uniform_node_timeout`], this builder has no per-node retry API
-/// (`CompiledGraph::with_node_retry` applies to every node), so two nodes
-/// declaring different policies is a `TinyAgentsError::Compile` rather than a
-/// silent pick.
-fn uniform_node_retry(blueprint: &Blueprint) -> Result<Option<RetryPolicy>> {
-    let mut declared: Vec<(&str, RetryPolicy)> = Vec::new();
-    for spec in &blueprint.nodes {
-        if spec.retry.is_empty() {
-            continue;
-        }
-        let mut policy = RetryPolicy::default();
-        for (key, value) in &spec.retry {
-            apply_retry_entry(spec.name.as_str(), &mut policy, key.as_str(), value)?;
-        }
-        declared.push((spec.name.as_str(), policy));
-    }
-    let Some((first_name, first)) = declared.first().cloned() else {
+/// Parses `spec`'s declared `retry { … }` (if any) into a [`RetryPolicy`],
+/// for lowering onto that node's own [`NodePolicy::retry`].
+fn node_retry(spec: &NodeSpec) -> Result<Option<RetryPolicy>> {
+    if spec.retry.is_empty() {
         return Ok(None);
-    };
-    let disagreeing: Vec<&str> = declared
-        .iter()
-        .skip(1)
-        .filter(|(_, p)| *p != first)
-        .map(|(name, _)| *name)
-        .collect();
-    if !disagreeing.is_empty() {
-        return Err(TinyAgentsError::Compile(format!(
-            "per-node retry not supported yet: node `{first_name}` declares a different \
-`retry` policy than {}",
-            disagreeing.join(", ")
-        )));
     }
-    Ok(Some(first))
+    let mut policy = RetryPolicy::default();
+    for (key, value) in &spec.retry {
+        apply_retry_entry(spec.name.as_str(), &mut policy, key.as_str(), value)?;
+    }
+    Ok(Some(policy))
 }
 
 /// Wires a blueprint into a durable whole-state graph.
@@ -272,8 +225,7 @@ fn uniform_node_retry(blueprint: &Blueprint) -> Result<Option<RetryPolicy>> {
 /// # Errors
 ///
 /// Returns [`TinyAgentsError::Compile`] when a declared field cannot be
-/// faithfully lowered — an unknown `retry`/timeout-unit value, two nodes
-/// disagreeing on the graph-wide `timeout`/`retry` policy, a duplicate
+/// faithfully lowered — an unknown `retry`/timeout-unit value, a duplicate
 /// `input`/`output` field name, or a `sends`/`join_sources` target that is
 /// not a declared node — before returning a compiled graph with a policy
 /// nobody actually enforces. Also propagates factory errors and graph
@@ -303,9 +255,29 @@ where
 
     for spec in &blueprint.nodes {
         let handler = factory.make(spec)?;
-        builder = builder.add_node(spec.name.as_str(), move |state, ctx| {
+        // `BoxedNode` is already `Arc<NodeHandler<State, State>>` (M2's
+        // `Arc<State>`-taking internal handler shape), so wiring it in via
+        // `add_node_shared` forwards the factory's handler directly with no
+        // extra clone.
+        builder = builder.add_node_shared(spec.name.as_str(), move |state, ctx| {
             (handler.clone())(state, ctx)
         });
+
+        // `timeout`/`retry`: lowered onto this node's own [`NodePolicy`],
+        // independent of every other node's — see the module docs.
+        let timeout = node_timeout(spec)?;
+        let retry = node_retry(spec)?;
+        if timeout.is_some() || retry.is_some() {
+            let mut policy = NodePolicy::default();
+            if let Some(timeout) = timeout {
+                policy = policy.with_timeout(timeout);
+            }
+            if let Some(retry) = retry {
+                policy = policy.with_retry(retry);
+            }
+            builder = builder.with_node_policy(spec.name.as_str(), policy);
+        }
+
         builder = match &spec.routing {
             Routing::Next(target) => builder.add_edge(spec.name.as_str(), target.as_str()),
             Routing::Conditional(routes) => {
@@ -390,13 +362,24 @@ where
         }
 
         // `options`: choices presented by an `interrupt`-kind node. Marks the
-        // node as an interrupt point for `crate::export` (the same marker
-        // `GraphBuilder::mark_interrupt` provides for hand-built graphs) and
-        // records the choices themselves as metadata.
+        // node as an interrupt point for `crate::export` — the `NodeMeta`
+        // flag directly, *not* `GraphBuilder::mark_interrupt`, which now
+        // aliases `GraphBuilder::interrupt_before` (a real executor pause
+        // before every activation). This node's opaque, `NodeFactory`-built
+        // handler decides for itself whether/when to return
+        // `NodeResult::Interrupt` presenting the choices (there is no
+        // generic way to force that from here — see the module doc); this
+        // is export metadata only, so it must not additionally force an
+        // unconditional pause the handler never asked for. Also records the
+        // choices themselves as metadata.
         if !spec.options.is_empty() {
-            builder = builder
-                .mark_interrupt(spec.name.as_str())
-                .with_node_metadata(spec.name.as_str(), "options", spec.options.join(","));
+            builder
+                .node_meta
+                .entry(spec.name.as_str().into())
+                .or_default()
+                .interrupt = true;
+            builder =
+                builder.with_node_metadata(spec.name.as_str(), "options", spec.options.join(","));
         }
 
         // `metadata`: free-form `key value` annotations. A direct, lossless
@@ -432,22 +415,7 @@ where
         }
     }
 
-    // Per-node `timeout`, applied graph-wide (or rejected on disagreement —
-    // see `uniform_node_timeout`).
-    if let Some(timeout) = uniform_node_timeout(blueprint)? {
-        builder = builder.with_node_timeout(timeout);
-    }
-
     let graph = builder.compile()?;
-
-    // Per-node `retry`, applied graph-wide (or rejected on disagreement —
-    // see `uniform_node_retry`). Applied post-compile since
-    // `CompiledGraph::with_node_retry` (unlike the timeout knob) lives on the
-    // frozen graph, not the builder.
-    let graph = match uniform_node_retry(blueprint)? {
-        Some(policy) => graph.with_node_retry(policy),
-        None => graph,
-    };
 
     Ok(graph)
 }

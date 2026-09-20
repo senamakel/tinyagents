@@ -39,6 +39,11 @@ Superstep lifecycle:
    within the same still-in-progress superstep is never re-run just because
    an interrupt/failure boundary was hit — see step 6.
 4. Run active tasks under concurrency, timeout, retry, and cancellation policy.
+   `State` is cloned at most once per superstep here (into an `Arc<State>`,
+   `code-review-graph.md` M2): every active task and every retry attempt of
+   one task shares that `Arc` via a cheap `Arc::clone` instead of a fresh
+   `State` clone per attempt/branch — see
+   [nodes.md](nodes.md#actual-handler-signature-and-state-cloning-m2).
 5. Collect writes, commands, sends, interrupts, and errors — every result,
    not only the ones before the first stalled (errored/interrupted) branch
    (`crates/tinyagents-graph/src/compiled/step.rs::fold_step`).
@@ -67,7 +72,52 @@ Superstep lifecycle:
 
 Checkpointing mid-node should be avoided. Async Rust stack suspension is not a
 stable persistence primitive; rerunning a node from the beginning is easier to
-reason about and matches interrupt semantics.
+reason about and matches interrupt semantics. A side effect a node performs
+*before* it pauses or fails can be made re-run-safe with
+`NodeContext::durable_task(key, fut)`, which memoises the sub-step's output
+per `(task_id, key)` in the checkpoint write ledger (see
+[builder.md](builder.md#nodecontextdurable_task)).
+
+## Stopping a run: cancellation and graceful drain
+
+Two run-level stop signals travel in `RunOptions` (accepted by
+`run_with_options`, `run_with_thread_options`, and `resume_with_options`);
+they differ only in what happens to the superstep in flight.
+
+```rust
+pub struct RunOptions {
+    pub cancellation: Option<tinyagents_harness::CancellationToken>,
+    pub drain: Option<tinyagents_graph::DrainSignal>,
+}
+
+let (handle, signal) = DrainSignal::new();
+let run = graph
+    .run_with_thread_options("thread-1", state, RunOptions::with_drain(signal))
+    .await?;
+// elsewhere, e.g. a shutdown hook or a node handler: handle.drain();
+```
+
+| | cancellation | drain |
+|---|---|---|
+| checked | before every superstep **and** raced against the step's handlers | before every superstep only |
+| step in flight | abandoned (nothing from it is trusted to have applied) | runs to completion; reducer and boundary checkpoint commit as normal |
+| checkpoint | pending = the whole active set | pending = the *next* step's activations, metadata `"drained": true` |
+| status / event | `ExecutionStatus::Cancelled`, `GraphEvent::RunCancelled` | `ExecutionStatus::Drained`, `GraphEvent::RunDrained { run_id, steps }` |
+| result | `Ok(GraphExecution)`, `drained: false` | `Ok(GraphExecution)`, `drained: true` |
+
+A drain is the graceful counterpart to cancellation: raise it from a shutdown
+hook (or from inside a node via a cloned `DrainHandle`) and the run finishes
+the work it has started, persists a checkpoint naming exactly what it did not
+start, and returns. `GraphExecution::drained` is `true` only on that path and
+`false` on every other outcome (completed, interrupted, failed, cancelled);
+`GraphRunStatus::is_terminal()` treats `Drained` like `Cancelled` — the run
+id will not advance on its own. `resume`/`retry` continue the thread from the
+drained checkpoint like any other pending-tasks checkpoint, reaching the same
+final state an undrained run would. A drain raised before the first step
+persists the entry activation and runs nothing; without a thread id the run
+still stops with `Drained` but has no checkpoint to persist against. The
+`Drop` guard and cancellation details are in
+[fault-tolerance.md](fault-tolerance.md#cooperative-cancellation).
 
 ## Parallelization
 

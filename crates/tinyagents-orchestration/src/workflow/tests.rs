@@ -942,3 +942,178 @@ async fn phase_registration_register_is_idempotent_and_survives_concurrent_regis
         );
     }
 }
+
+// Unit B (Phase 4): tests for the `WorkflowDefinition` -> `CompiledGraph`
+// lowering itself, gated behind `graph-workflows` since `lowered_topology`
+// and the graph execution path only exist under that feature. Every test
+// above this point already runs against *both* paths: under the feature,
+// `WorkflowEngine::new` defaults `use_graph` to `true` (see
+// `WorkflowEngine::with_graph_execution`'s doc), so `cargo test --features
+// graph-workflows` exercises this whole suite via the lowered graph, and a
+// plain `cargo test` exercises it via the legacy scheduler — that is the
+// "run the suite twice, once per path" the module's design doc calls for.
+#[cfg(feature = "graph-workflows")]
+mod lowering_tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    /// `lowered_topology` (a pure, never-executed structural export — see
+    /// `workflow::lower`'s module doc) must reflect exactly the phases and
+    /// `depends_on` edges of the definition it was built from: one node per
+    /// phase, a waiting edge per dependency, the sole root phase as entry,
+    /// and every leaf phase (nothing depends on it) as a finish node.
+    #[test]
+    fn topology_export_equals_the_definition() {
+        let def = definition();
+        let topology = lowered_topology(&def).expect("topology lowering");
+
+        let node_ids: BTreeSet<String> =
+            topology.nodes.iter().map(|node| node.id.clone()).collect();
+        assert_eq!(
+            node_ids,
+            BTreeSet::from([
+                "plan".to_owned(),
+                "research".to_owned(),
+                "synthesize".to_owned()
+            ]),
+            "one graph node per phase in the definition"
+        );
+        assert_eq!(
+            topology.entry.as_deref(),
+            Some("plan"),
+            "the sole phase with no `depends_on` is the entry"
+        );
+        let waiting: std::collections::HashMap<String, Vec<String>> = topology
+            .waiting_edges
+            .iter()
+            .map(|edge| (edge.target.clone(), edge.predecessors.clone()))
+            .collect();
+        assert_eq!(
+            waiting.get("research").map(Vec::as_slice),
+            Some(["plan".to_owned()].as_slice()),
+            "research's depends_on becomes a waiting edge from plan"
+        );
+        assert_eq!(
+            waiting.get("synthesize").map(Vec::as_slice),
+            Some(["research".to_owned()].as_slice()),
+            "synthesize's depends_on becomes a waiting edge from research"
+        );
+        assert_eq!(
+            topology.finish_nodes,
+            vec!["synthesize".to_owned()],
+            "only the phase nothing else depends on is a finish node"
+        );
+    }
+
+    /// A phase's agents are fanned out through `run_phase`'s existing
+    /// `tinyagents_graph::parallel::map_reduce` call (see `workflow::lower`'s
+    /// module doc for why the lowering reuses it rather than a graph-level
+    /// `Send`), unchanged by the lowering: the executor must still see
+    /// exactly one call per `agent_ids` entry.
+    #[tokio::test]
+    async fn fan_out_count_matches_phase_agent_ids() {
+        let (store, executor, engine) = engine();
+        let def = definition();
+        engine
+            .initialise("run-fanout".into(), &def, json!({"question": "q"}), None)
+            .unwrap();
+        engine
+            .drive("run-fanout", &def, CancellationToken::new())
+            .await
+            .unwrap();
+
+        let run = store.load("run-fanout").unwrap().unwrap();
+        assert_eq!(run.status, WorkflowRunStatus::Completed);
+
+        let calls = executor.calls.lock();
+        for phase in &def.phases {
+            let fanned = calls.iter().filter(|call| call.phase == phase.name).count();
+            assert_eq!(
+                fanned,
+                phase.agent_ids.len(),
+                "phase `{}` must fan out to exactly {} agent(s), saw {fanned}",
+                phase.name,
+                phase.agent_ids.len()
+            );
+        }
+    }
+
+    /// The lowered graph's `dispatch` router picks phases in `depends_on`
+    /// order via `next_runnable_phase` (see `workflow::lower`'s module doc):
+    /// every call for a dependency phase must be observed before any call
+    /// for a phase that depends on it.
+    #[tokio::test]
+    async fn dependency_ordering_is_respected() {
+        let (store, executor, engine) = engine();
+        let def = definition();
+        engine
+            .initialise("run-order".into(), &def, json!({"question": "q"}), None)
+            .unwrap();
+        engine
+            .drive("run-order", &def, CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            store.load("run-order").unwrap().unwrap().status,
+            WorkflowRunStatus::Completed
+        );
+
+        let calls = executor.calls.lock();
+        let first_index_of = |phase: &str| calls.iter().position(|call| call.phase == phase);
+        let plan = first_index_of("plan").expect("plan ran");
+        let research = first_index_of("research").expect("research ran");
+        let synthesize = first_index_of("synthesize").expect("synthesize ran");
+        assert!(plan < research, "plan must run before research");
+        assert!(research < synthesize, "research must run before synthesize");
+    }
+
+    /// Resuming a `drive` call cancelled mid-run must not re-run a phase
+    /// that already completed durably, and the eventual completed run must
+    /// match an uninterrupted run's shape — the graph-path counterpart of
+    /// `cancellation_and_resume_do_not_repeat_completed_phases` above,
+    /// written directly against the lowering rather than relying on the
+    /// feature's default `use_graph` to redirect that shared test.
+    #[tokio::test]
+    async fn resume_after_interrupt_skips_completed_phases() {
+        let (store, executor, engine) = engine();
+        let engine = engine.with_graph_execution(true);
+        let def = definition();
+        engine
+            .initialise("run-resume".into(), &def, json!({"question": "q"}), None)
+            .unwrap();
+
+        // Cancelled from the start: `dispatch` observes it before any phase
+        // node runs, so nothing executes this pass.
+        let pre_cancelled = CancellationToken::new();
+        pre_cancelled.cancel();
+        engine
+            .drive("run-resume", &def, pre_cancelled)
+            .await
+            .unwrap();
+        let interrupted = store.load("run-resume").unwrap().unwrap();
+        assert_eq!(interrupted.status, WorkflowRunStatus::Interrupted);
+        assert!(
+            executor.calls.lock().is_empty(),
+            "no phase ran before the cancellation was observed"
+        );
+
+        // Resume with a fresh token: the whole workflow must still complete,
+        // and each phase's agents must have been called exactly once.
+        engine
+            .drive("run-resume", &def, CancellationToken::new())
+            .await
+            .unwrap();
+        let done = store.load("run-resume").unwrap().unwrap();
+        assert_eq!(done.status, WorkflowRunStatus::Completed);
+        let calls = executor.calls.lock();
+        for phase in &def.phases {
+            assert_eq!(
+                calls.iter().filter(|call| call.phase == phase.name).count(),
+                phase.agent_ids.len(),
+                "phase `{}` must run exactly once across the interrupt + resume",
+                phase.name
+            );
+        }
+    }
+}
