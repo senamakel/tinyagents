@@ -343,7 +343,7 @@ output, and no permission model; TinyAgents has all of those and should not impo
   `src/core/{session-manager,agent-session}.ts`, `src/experimental/`
 - GitHub API: repo metadata, releases, commits, contributors (fetched 2026-09-19)
 - TinyAgents: `ta:docs/spec/README.md`, `ta:docs/modules/harness/README.md`, `ta:docs/modules/graph/README.md`,
-  `ta:docs/sdk-gaps.md`, `ta:ROADMAP.md`, `ta:crates/*/src/lib.rs`,
+  `ta:docs/sdk-gaps/README.md`, `ta:ROADMAP.md`, `ta:crates/*/src/lib.rs`,
   `ta:crates/tinyagents-harness/src/{agent_loop,steering,run_queue,summarization,middleware,events,stream,cache,cost}/`,
   `ta:crates/tinyagents-session/src/transcript/`, `ta:crates/tinyagents-registry/src/catalog.rs`,
   `ta:crates/tinyagents-graph/src/checkpoint/types.rs`
