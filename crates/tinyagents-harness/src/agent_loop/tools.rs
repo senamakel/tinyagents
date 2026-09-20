@@ -1812,29 +1812,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// removed since the interrupted run) is treated as [`ToolReplay::Never`]
     /// — fail closed rather than blindly re-run an unknown effect.
     ///
+    /// Only ledger rows still in [`crate::tool::ToolEffectStatus::Started`]
+    /// are candidates: a call deferred mid-execution
+    /// (`ApprovalRequired`/`CallDeferred`) is settled as
+    /// [`crate::tool::ToolEffectStatus::Deferred`] by `defer_started_tool_call`
+    /// the moment it pauses, so [`crate::tool::ToolEffectLedger::unresolved`]
+    /// — which lists only `started` rows — never surfaces it here; a `Deferred`
+    /// row is exactly what [`AgentHarness::resume_deferred`] settles to
+    /// `Completed`/`Failed` once its answer runs.
+    ///
+    /// `excluded` is a second, defense-in-depth guard against the same
+    /// mistake: any call id in it is skipped even if its ledger row is
+    /// (unexpectedly) still `started` — e.g. the `Deferred` settle write
+    /// above failed and was only logged (settle writes are best-effort, see
+    /// [`Self::record_tool_effect_settled`]). [`AgentHarness::resume_deferred`]
+    /// passes the ids `results` is about to answer; any other caller — a host
+    /// reconciling a genuine crash, where no `results` exists at all — passes
+    /// an empty set.
+    ///
     /// Returns the messages synthesized for `Never`-classified calls (already
     /// appended to `messages` as well), so a caller that journals messages
     /// separately from the in-memory transcript knows what changed. Returns
     /// an empty `Vec` immediately, without any ledger I/O, when `ctx` has no
     /// [`crate::tool::ToolEffectLedger`] attached or the transcript has no
     /// pending tool calls.
-    ///
-    /// This is deliberately not wired into
-    /// [`crate::agent_loop::AgentHarness::resume_deferred`]: that entry point
-    /// exists (A2), but its `results` answers exactly the calls this
-    /// reconciler would otherwise treat as unresolved (a call `results` is
-    /// about to run mid-execution-deferred it — see
-    /// [`resume_deferred`][crate::agent_loop::AgentHarness::resume_deferred]'s
-    /// doc comment), so calling it there would pre-empt a live approval with
-    /// a synthesized crash answer. A host resuming a run from durable state
-    /// after a genuine crash — where no `results` exists for the pending
-    /// call at all — calls this explicitly, before re-entering the agent
-    /// loop with the recovered `messages`.
     pub async fn reconcile_tool_effects(
         &self,
         ctx: &RunContext<Ctx>,
         run_id: &str,
         messages: &mut Vec<Message>,
+        excluded: &std::collections::HashSet<CallId>,
     ) -> Result<Vec<Message>> {
         let mut synthesized = Vec::new();
         let Some(ledger) = ctx.tool_effect_ledger.clone() else {
