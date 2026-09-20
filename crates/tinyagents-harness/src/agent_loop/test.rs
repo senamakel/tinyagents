@@ -18,8 +18,9 @@ use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventSink};
 use crate::limits::RunLimits;
 use crate::middleware::{
-    AgentRun, Middleware, MiddlewareModelOutcome, MiddlewareToolOutcome, ModelHandler,
-    ModelMiddleware, ToolHandler, ToolInvocationIdentity, ToolMiddleware,
+    AgentHandler, AgentMiddleware, AgentRequest, AgentRun, Middleware, MiddlewareModelOutcome,
+    MiddlewareToolOutcome, ModelHandler, ModelMiddleware, ToolHandler, ToolInvocationIdentity,
+    ToolMiddleware,
 };
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
@@ -690,7 +691,72 @@ impl ModelMiddleware<()> for ShortCircuitModelWrap {
     }
 }
 
+/// Host-owned memory policy expressed entirely as around-agent middleware.
+struct HostMemoryMiddleware {
+    finalized: Arc<Mutex<Vec<(bool, usize)>>>,
+}
+
+#[async_trait]
+impl AgentMiddleware<()> for HostMemoryMiddleware {
+    fn name(&self) -> &str {
+        "host_memory"
+    }
+
+    async fn wrap_agent(
+        &self,
+        ctx: &mut RunContext<()>,
+        state: &(),
+        mut request: AgentRequest,
+        run: &mut AgentRun,
+        next: AgentHandler<'_, (), ()>,
+    ) -> Result<()> {
+        request
+            .input
+            .insert(0, Message::system("remembered by the host"));
+        let outcome = next.run(ctx, state, request, run).await;
+        self.finalized
+            .lock()
+            .unwrap()
+            .push((outcome.is_ok(), run.messages.len()));
+        outcome
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn agent_middleware_owns_context_and_observes_failed_partial_runs() {
+    let finalized = Arc::new(Mutex::new(Vec::new()));
+    let middleware = Arc::new(HostMemoryMiddleware {
+        finalized: finalized.clone(),
+    });
+
+    let mut successful: AgentHarness<()> = AgentHarness::new();
+    successful.register_model("mock", Arc::new(MockModel::constant("done")));
+    successful.push_agent_middleware(middleware.clone());
+    let run = successful
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .unwrap();
+    assert_eq!(run.messages[0].text(), "remembered by the host");
+
+    let mut failing: AgentHarness<()> = AgentHarness::new();
+    failing.register_model(
+        "mock",
+        Arc::new(FailingModel {
+            attempts: Mutex::new(0),
+        }),
+    );
+    failing.push_agent_middleware(middleware);
+    assert!(
+        failing
+            .invoke_default(&(), vec![Message::user("fail")])
+            .await
+            .is_err()
+    );
+
+    assert_eq!(&*finalized.lock().unwrap(), &[(true, 3), (false, 2)]);
+}
 
 #[tokio::test]
 async fn wrap_middleware_fires_around_model_and_tool_calls() {

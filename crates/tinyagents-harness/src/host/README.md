@@ -11,7 +11,7 @@ whether a tool call is permitted, which model a role should use, or what a
 connected integration means — those are product decisions, and this module is
 where the runtime asks for each of them instead of assuming an answer. It is
 the same extension-trait pattern the crate already uses for `ChatModel`,
-`Tool`, and `ChatHistory`, applied to the host boundary rather than the
+`Tool`, and middleware, applied to the host boundary rather than the
 provider boundary.
 
 ## Required vs. optional capabilities

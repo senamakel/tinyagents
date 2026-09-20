@@ -16,11 +16,12 @@ OpenHuman domains**, several of which (Composio, `SecurityPolicy`,
 `memory_store`) must never be dependencies of a redistributed crate.
 
 The enabling fact is that this crate is **already generic over a host-supplied
-state type** and already ships **18 extension traits** on that pattern
-(`ChatModel`, `Tool`, `ChatHistory`, `Store`, `AppendStore`, `Summarizer`,
-`EmbeddingModel`, `VectorStore`, `ResponseCache`, `WorkspaceIsolation`,
+state type** and already ships extension traits on that pattern
+(`ChatModel`, `Tool`, `Store`, `AppendStore`, `Summarizer`,
+`EmbeddingModel`, `VectorStore`, `ResponseCache`, `AgentMiddleware`,
 `HarnessEventJournal`, `HarnessStatusStore`, `EventListener`, `Middleware`,
-`ModelMiddleware`, `ToolMiddleware`, `ModelBaseCall`, `ToolBaseCall`):
+`ModelMiddleware`, `ToolMiddleware`, `AgentBaseCall`, `ModelBaseCall`,
+`ToolBaseCall`):
 
 ```rust
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> { … }

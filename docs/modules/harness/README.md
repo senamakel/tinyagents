@@ -1,8 +1,8 @@
 # Harness Module Specification
 
 The harness is the orchestration layer around LLM calls. It owns model
-registration, tool registration, prompt assembly, middleware, memory, event
-streaming, tracing, retries, limits, summarization, caching, usage accounting,
+registration, tool registration, prompt assembly, middleware, event streaming,
+tracing, retries, limits, summarization, caching, usage accounting,
 pricing, sub-agent/orchestrator steering, and test support.
 
 The harness should be usable in three modes:
@@ -78,7 +78,7 @@ tests for every adapter.
 ## Responsibilities
 
 - Normalize user input into structured messages.
-- Build model requests from messages, prompts, tools, memory, and config.
+- Build model requests from messages, prompts, tools, host-provided context, and config.
 - Track context-window pressure and choose trimming or summarization policies.
 - Preserve provider prompt/KV-cache stability by making stable prompt prefixes
   explicit and keeping volatile context out of those prefixes by default.
@@ -95,7 +95,7 @@ tests for every adapter.
 - Apply middleware before and after model calls, tool calls, retries, and errors.
 - Enforce model-call limits, tool-call limits, timeouts, and retry policy.
 - Emit typed events for tracing, streaming, and tests.
-- Persist short-term thread memory when configured.
+- Expose middleware hooks for hosts to load and persist short-term thread memory when configured.
 - Expose durable stores through runtime context.
 - Store run data, messages, events, tool artifacts, and application records
   through pluggable backends.
@@ -159,7 +159,6 @@ crates/tinyagents-harness/src/
   events.rs
   graph_runtime.rs
   limits.rs
-  memory.rs
   message.rs
   middleware.rs
   model.rs
@@ -200,7 +199,6 @@ Feature ownership:
 - `graph_runtime`: explicit state graphs, node commands, reducers,
   checkpointing, HITL, run records, and graph execution blueprints.
 - `limits`: model-call, tool-call, concurrency, timeout, and recursion policy.
-- `memory`: short-term thread memory and long-term stores.
 - `message`: structured messages, content blocks, tool call correlation.
 - `middleware`: before/after/wrap hooks and middleware stack ordering.
 - `model`: provider-neutral model traits, requests, responses, streams.
@@ -215,12 +213,10 @@ Feature ownership:
 - `stream`: token streams, tool progress streams, event streams, adapters.
 - `summarization`: context summaries, message compaction, summary provenance.
 - `structured`: typed response formats and validation.
-- `store`: JSONL, file, MongoDB, in-memory, and other persistence backends.
+- `store`: persistence contracts supplied by hosts.
 - `testkit`: fakes, recorders, deterministic ids, trajectory assertions.
 - `tool`: tool traits, schemas, validation, execution, result formatting.
 - `usage`: token accounting, cached token tracking, context-window estimates.
-- `workspace`: per-agent filesystem/sandbox isolation, allowed-root descriptors,
-  and fail-closed path enforcement for tools that touch real files.
 
 ### Host-authorized invocations and tool timeouts
 
@@ -228,8 +224,8 @@ Split into a focused doc: how a host capability bundle is bound to one
 invocation, and how per-tool timeouts are resolved. See
 [hosting.md](hosting.md).
 
-Continued specification: [runtime.md](runtime.md) (tool registry, agent loop,
-middleware, memory/stores) and
+Continued specifications: [runtime.md](runtime.md) (tool registry, agent loop,
+middleware, host-owned state, and stores), [store.md](store.md) (host persistence), and
 [observability-overview.md](observability-overview.md) (structured output,
 events/streaming, errors, testkit, milestones).
 
@@ -244,7 +240,6 @@ Feature details:
 - [Tool feature](tool.md)
 - [Tool exposure, discovery, and schema budgets](tool-discovery.md)
 - [Tool dialects](tool-dialect.md)
-- [Workspace isolation feature](workspace.md)
 - [Middleware feature](middleware.md)
 - [Sub-agent and orchestrator steering](subagent-steering.md)
 - [Structured output feature](structured-output.md)
@@ -269,8 +264,6 @@ pub struct AgentHarness<State, Ctx = ()> {
     embeddings: EmbeddingRegistry<Ctx>,
     tools: ToolRegistry<State, Ctx>,
     middleware: MiddlewareStack<State, Ctx>,
-    memory: Option<Arc<dyn ShortTermMemory<State>>>,
-    stores: StoreRegistry,
     policy: RunPolicy,
 }
 
@@ -463,5 +456,5 @@ and durable state when configured.
 ---
 
 Continues in [`runtime.md`](runtime.md) (tool registry, agent loop,
-middleware, memory/stores) and [`observability-overview.md`](observability-overview.md)
+middleware, host-owned state, and stores) and [`observability-overview.md`](observability-overview.md)
 (structured output, events/streaming, errors, testkit, milestones).
