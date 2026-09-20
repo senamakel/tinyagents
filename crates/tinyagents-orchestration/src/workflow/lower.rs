@@ -115,8 +115,9 @@ where
         let owner = owner.clone();
         let cancel = cancel.clone();
         let phase = phase.clone();
+        let node_id = phase.name.clone();
         builder = builder
-            .add_node(phase.name.clone(), move |state: SchedulerState, _ctx: NodeContext| {
+            .add_node(node_id.clone(), move |state: SchedulerState, _ctx: NodeContext| {
                 let engine = engine.clone();
                 let definition = definition.clone();
                 let run_id = run_id.clone();
@@ -127,7 +128,7 @@ where
                     run_phase_node(engine, definition, run_id, owner, cancel, phase, state).await
                 }
             })
-            .mark_command_routing(phase.name.clone());
+            .mark_command_routing(node_id);
     }
 
     let phase_count = definition.phases.len();
