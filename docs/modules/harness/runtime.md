@@ -261,7 +261,8 @@ impl AgentMiddleware<AppState, AppContext> for MemoryMiddleware {
         next: AgentHandler<'_, AppState, AppContext>) -> Result<()> {
         request.input.splice(0..0, self.load(ctx).await?);
         let result = next.run(ctx, state, request, run).await;
-        match (next.run(ctx, state, request, run).await, self.save(ctx, run).await) {
+        let save_result = self.save(ctx, run).await;
+        match (result, save_result) {
             (Ok(()), Ok(())) => Ok(()),
             (Ok(()), Err(save_error)) => Err(save_error),
             (Err(run_error), Ok(())) => Err(run_error),
@@ -273,6 +274,10 @@ impl AgentMiddleware<AppState, AppContext> for MemoryMiddleware {
     }
 }
 ```
+
+`record_persistence_failure` is host-defined telemetry (for example, an event
+or log). It must not replace a typed agent error: callers need the failure from
+the run to decide whether to retry, repair, or report it.
 
 The storage layer should be a separate harness feature:
 
