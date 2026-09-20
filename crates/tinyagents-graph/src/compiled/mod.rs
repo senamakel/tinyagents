@@ -55,6 +55,15 @@
 //! - Because branches run on cloned snapshots and never share mutable state,
 //!   concurrency is data-race free; the reducer alone resolves conflicting
 //!   writes (deterministically, by index).
+//! - Sequential steps have their own cousin of C1: [`step::StepRunner::run_sequential`]
+//!   stops invoking further branches at the first error/interrupt, so those
+//!   not-yet-started siblings never appear in that step's raw results at
+//!   all. [`step::StepRunner::fold_step`] now folds them into `stalled`
+//!   anyway (by original active-set index), so a failure/interrupt boundary
+//!   records them as pending tasks (`Checkpoint::tasks`) alongside the
+//!   branch that stopped the step, instead of silently dropping them from
+//!   the checkpoint — a resumed/retried sequential run reaches the same
+//!   final state as an uninterrupted one.
 //!
 //! ## Network resilience and resumable failures
 //!
