@@ -101,7 +101,7 @@ ordering the same way it does for Anthropic. The OpenAI Responses API has no
 true incremental SSE path in this crate yet (`stream()` simulates one with a
 single unary call replayed as `Started`/one `MessageDelta`/`Completed`), so
 there are no block boundaries to derive there (tracked in
-`docs/sdk-gaps.md` §3). `ModelStreamItem::{Failed, ProviderFailed}` —
+`docs/sdk-gaps/streaming.md` §3). `ModelStreamItem::{Failed, ProviderFailed}` —
 specifically `ProviderError` — now carries `partial_message:
 Option<AssistantMessage>` and `stop_reason: Option<String>` on both
 adapters, so a mid-stream failure does not discard whatever content had
@@ -126,6 +126,6 @@ reduces to a consistent result.
 `AgentEvent::ToolProgress` still have no real caller — that hook models
 progress from a *running* tool, and `tinytools::Tool` has no
 progress-callback surface for a tool to report through yet (a `tinytools`
-change, not a harness one; see `docs/sdk-gaps.md` §3). The typed
+change, not a harness one; see `docs/sdk-gaps/streaming.md` §3). The typed
 `HarnessStreamItem` enum, `StreamMode::{tools, usage, cost, events, final}`,
 and stream replay from event stores are still design-only.
