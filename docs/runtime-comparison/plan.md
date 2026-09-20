@@ -11,6 +11,120 @@ abstraction. Every item is one PR unless marked (multi-PR). Finding ids
 [`code-review-workspace.md`](code-review-workspace.md); gap ids (`A1`,
 `D3`) refer to [`feature-gaps.md`](feature-gaps.md).
 
+## Execution log
+
+Status as of this pass, based on grepping `crates/` in this worktree (and,
+for Phase 4, the nested `worktrees/phase-4` branch checkout) for the concrete
+types/functions each gap in [`feature-gaps.md`](feature-gaps.md) promises.
+`git log --oneline --merges` confirms phase-3, -5, -6 and -7 were merged into
+`runtime-comparison`; phase-4 was not.
+
+### (a) What shipped per phase
+
+- **Phase 0/1** (hygiene, correctness): not re-verified by this pass — these
+  are process/lint/bugfix items, not gap-table symbols, so they are out of
+  scope for the symbol grep this log is based on.
+- **Phase 2** (loop control, HITL) — landed. `MiddlewareControl::{JumpTo,
+  StopWithFinal, Interrupt}` (A1), `DeferredToolRequests`/`DeferredToolResults`
+  (A2), the `ModelRetry`/`AgentEvent::OutputRetry` validation loop (A3),
+  `RunQueue` wired into `run_loop.rs` with a real consumer (A4),
+  `StructuredStrategy::{ProviderSchema, ToolCall, Prompted, ToolCallUnion}` +
+  `EndStrategy` (A6), and `ToolExecutionContext`/rich `ToolContent` parity
+  (B1, B2) are all shipped and merged.
+- **Phase 3** (streaming/events) — partially landed. Block-indexed
+  `ModelStreamItem`/`AssistantFrame` events (C1) shipped. The frame
+  codec/reducer (C2) shipped and is journaled, but `ToolProgress`/
+  `on_tool_delta` still has no real mid-execution caller (see (b)).
+  `GraphEventEnvelope{run_id, ns, seq}` (C3) shipped, but `task_id` is `None`
+  today and `StreamMode::{Tasks, Checkpoints}` were not added. The OTel sink
+  (C4) is OpenHuman and out of scope.
+- **Phase 4** (durability v2) — built but not merged. Checkpoint v2
+  (`Checkpoint::version`, `channel_versions`, delta-channel history), the
+  `NodePolicy`/`TaskCacheKey` pair, `interrupt_before`/`interrupt_after` +
+  `DrainSignal`, and `durable_task` all exist and are exercised by tests on
+  the `phase-4` branch, but that branch has no `Merge phase-4` commit into
+  `runtime-comparison` — none of it is present in this worktree's `crates/`.
+- **Phase 5** (sessions, context, loop-as-graph) — landed (this worktree's
+  `HEAD` merges phase-5). `EntryTree` (id/parent, branches, labels, fork)
+  (E1), compaction (`find_cut_point`, `OverflowClassifier`, `CompactionRecord`)
+  (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
+  ledger with idempotency keys (B5), and `Message::Custom` (E5) all shipped.
+  The loop-as-graph piece (A5) landed only partially — see (b).
+- **Phase 6** (tool ecosystem) — landed. The `ToolSet` trait plus
+  `Combined`/`Filtered`/`Prefixed`/`Renamed`/`Prepared`/`ApprovalRequired`/
+  `ExternalToolSet` (B3), transcript-carried tool add/remove (B6), and the
+  `Capability` bundle (`instructions`/`toolset`/`middleware`/`model_defaults`/
+  `exposure`/`defer_loading`) (G3) all shipped. The MCP client crate (B4) and
+  provider-executed tool content parts (B7) are OpenHuman, out of scope.
+- **Phase 7** (models, providers, evals) — landed partially. `ModelProfile`
+  behaviour fields including `thinking_tags` (F1), the models.dev catalog
+  generator (`crates/tinyagents-registry/src/bin/catalog_gen.rs`) (F2), and
+  backend conformance suites for both session and graph stores (G4) shipped.
+  `ContentBlock::{Audio, Video, Document}` (F3) shipped, but SSRF-guarded URL
+  download stayed OpenHuman. Deferred/background model responses (F5) and
+  request/response escape hatches (`on_payload`/`on_response`) (F6) were not
+  built. `SchemaDrivenModel` (G2) shipped, but `deny_network_models()` was
+  not found anywhere. The evals crate (G1) and semantic store search (D6)
+  are OpenHuman, out of scope.
+
+### (b) Narrowed or descoped from the original plan
+
+- **R-3 (unify the four retry/fallback engines)**: partial. `RetryMiddleware`
+  call ids are correlated with the loop's own ids, but loop retry,
+  `RetryMiddleware`, `ModelFallbackMiddleware`, and the output-validation
+  `ModelRetry` loop remain four separate mechanisms, not one engine.
+- **`Turn` object** (H-R1, "built once per turn, cache the tools
+  fingerprint"): skipped. No `struct Turn` exists anywhere in `crates/`;
+  each phase still re-derives what it needs from `RunContext` directly.
+- **`GraphLoopDriver` is not itself checkpointable**: by design, per its own
+  doc comment in `crates/tinyagents-graph/src/agent_loop/mod.rs` — it drives
+  the same phase node bodies as `compile_loop`/`LoopIter` but "is not itself
+  a resumable `CompiledGraph` checkpoint"; a host wanting graph-level
+  checkpoint/resume across the loop's own interrupts has to drive it inside
+  a real `CompiledGraph` node instead.
+- **`channels` in `.rag` remain inert**: `docs/modules/expressive-language/
+  implementation-status.md` documents that a `channel <name> <reducer>`
+  declaration is parsed but not applied to the runtime state merge — a
+  non-`overwrite` reducer is silently not honoured. Full `.rag` lowering
+  (channels, joins, sends, route tables) stayed a Phase 5 item that did not
+  ship.
+- **Lease renewal loop**: exists at the orchestration layer only.
+  `WorkflowEngine` has a real heartbeat that renews a short lease while a
+  child run is in flight (`crates/tinyagents-orchestration/src/workflow/
+  tests.rs::heartbeat_renews_a_short_lease_while_a_child_is_running`), but
+  the compiled-graph executor's per-thread lease (`ThreadLockMap` +
+  `Checkpointer::try_claim`) is claim-once with a fixed TTL and release-at-
+  end — no periodic renewal during a long-running graph execution.
+- **`ToolProgress` still unwired**: `docs/sdk-gaps/streaming.md` states
+  verbatim that "`run_on_tool_delta`/`ToolProgress` still have no real
+  caller; that needs a tinytools progress seam" — confirmed by grep: no
+  caller of `on_tool_delta` exists in `crates/tinyagents-harness/src/
+  agent_loop/`.
+
+### (c) OpenHuman hand-off list
+
+Marked `OpenHuman` in `feature-gaps.md` by product decision, not omission:
+
+- **B4 — generic MCP client**: OpenHuman already owns `mcp/` server config,
+  transport and auth UI; a runtime-owned client would duplicate that surface.
+- **B7 — provider-executed tool content parts**: which provider-side tools
+  (web search, code exec) are enabled is a product/provider-integration
+  decision, not a runtime primitive.
+- **C4 — OTel GenAI semconv sink**: the Langfuse exporter already covers
+  app-side observability; OTel export is an operational/hosting concern.
+- **D6 — semantic search on the namespaced store**: embedding/backend choice
+  is a memory-product decision that belongs in OpenHuman's `memory/`.
+- **E4 — `sanitize_history()`**: sanitizing untrusted client-supplied history
+  is a trust-boundary concern owned by whichever host terminates the client
+  connection.
+- **F4 — `CredentialStore`/generalised OAuth**: keychain storage and login UI
+  are host/product surface, not runtime.
+- **G1 — evals crate**: datasets and judged evaluation belong to the
+  product's prompt-eval workflow, not the runtime library.
+- **F3 (media-downloader sub-part) — SSRF-guarded URL download**: fetching
+  arbitrary client-supplied URLs is a trust-boundary/network-policy decision
+  for the host terminating the request, not the runtime's content-block type.
+
 ## Phase 0: hygiene and truth in docs (1 week, parallelisable)
 
 Cheap, independent, and they stop the next phases from being reviewed
