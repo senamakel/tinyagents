@@ -175,9 +175,10 @@ mod test {
     impl NodeFactory<S> for EchoFactory {
         fn make(&self, spec: &NodeSpec) -> Result<BoxedNode<S>> {
             let name = spec.name.clone();
-            Ok(Arc::new(move |mut state: S, _ctx: crate::NodeContext| {
+            Ok(Arc::new(move |state: Arc<S>, _ctx: crate::NodeContext| {
                 let name = name.clone();
                 Box::pin(async move {
+                    let mut state = (*state).clone();
                     state.trail.push(name);
                     Ok(crate::NodeResult::Update(state))
                 }) as crate::NodeFuture<S>
