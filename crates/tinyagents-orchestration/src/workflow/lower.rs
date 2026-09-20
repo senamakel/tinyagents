@@ -317,28 +317,33 @@ where
 
 /// A `run_phase`/`persist` call failed for infrastructure reasons (not an
 /// ordinary phase outcome). Mirrors `drive_legacy`'s own
-/// `owner_lost`/`emit_recorded_terminal` escape hatches: a stop/resume
-/// hand-off or a lease takeover must not manufacture a stale terminal event
-/// for a driver that has already been fenced.
+/// `owner_lost`/`emit_recorded_terminal` escape hatches exactly: a
+/// stop/resume hand-off or a lease takeover must not manufacture a stale
+/// terminal event *or* a hard error for a driver that has already been
+/// fenced — that case stops the loop silently (`Ok`, no `goto`), matching
+/// `drive_legacy`'s `return Ok(())`. Only a genuine, unfenced infrastructure
+/// failure emits `finish_failed` and propagates as an `Err`, matching
+/// `drive_legacy`'s `return Err(error)`.
 async fn settle_infra_error<S, E>(
     engine: &Arc<WorkflowEngine<S, E>>,
     run_id: &str,
     owner: &str,
     state: SchedulerState,
     error: OrchestrationError,
-) -> TinyAgentsError
+) -> tinyagents_graph::Result<NodeResult<SchedulerState>>
 where
     S: WorkflowStore + 'static,
     E: WorkflowExecutor + 'static,
 {
-    if !(engine.owner_lost(run_id, owner).await
+    if engine.owner_lost(run_id, owner).await
         || engine
             .emit_recorded_terminal(run_id, state.total_spawned as usize)
-            .await)
+            .await
     {
-        engine.finish_failed(run_id, error.to_string());
+        return Ok(NodeResult::Update(state));
     }
-    TinyAgentsError::Graph(error.to_string())
+    engine.finish_failed(run_id, error.to_string());
+    Err(TinyAgentsError::Graph(error.to_string()))
 }
 
 /// A pure, never-executed structural export: one node per phase, with
