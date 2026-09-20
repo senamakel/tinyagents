@@ -207,6 +207,24 @@ pub struct WorkflowEngine<S, E> {
     use_graph: bool,
 }
 
+/// Manual `Clone` (rather than `#[derive(Clone)]`, which would add spurious
+/// `S: Clone` / `E: Clone` bounds even though only the `Arc<S>`/`Arc<E>`
+/// handles are ever cloned) — needed so [`WorkflowEngine::drive_via_graph`]
+/// can hand an `Arc<WorkflowEngine<S, E>>` to the lowered graph's node
+/// closures (see `super::lower`).
+impl<S, E> Clone for WorkflowEngine<S, E> {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            executor: self.executor.clone(),
+            event_sink: self.event_sink.clone(),
+            lease_for: self.lease_for,
+            #[cfg(feature = "graph-workflows")]
+            use_graph: self.use_graph,
+        }
+    }
+}
+
 const WORKFLOW_LEASE: Duration = Duration::from_secs(10 * 60);
 
 pub(crate) struct PersistRequest {
