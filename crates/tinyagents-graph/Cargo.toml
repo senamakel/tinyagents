@@ -15,15 +15,16 @@ rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.2", default-features = false }
-tinyagents-tracing = { path = "../tinyagents-tracing", version = "2.1.2", default-features = false }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.3.0" }
 tokio = { version = "1", default-features = false, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs"] }
+tracing = { workspace = true }
 
 [features]
 default = []
 sqlite = ["dep:rusqlite"]
-tracing = ["tinyagents-harness/tracing", "tinyagents-tracing/tracing"]
+# Instrumentation is always available through the direct `tracing` dependency.
+tracing = ["tinyagents-harness/tracing"]
 
 [dev-dependencies]
 tempfile = "3"
