@@ -63,7 +63,7 @@ Legend: Yes / Partial / No. File paths are what I checked.
 | Checkpoint namespaces for subgraphs | Yes (`ns|ns`, `node:task_id`) | Yes — `CheckpointConfig.namespace: Vec<String>` | |
 | `get_state`, `get_state_history`, `update_state(as_node)`, fork | Yes | Yes — `compiled/state_api.rs` (`bulk_update_state`, `fork_state` extra) | |
 | Checkpointer `prune`, `copy_thread`, `delete_for_runs` | Yes (checkpoint 4.1) | Yes — `checkpoint/mod.rs` (`prune`, `copy_thread`, `delete_by_run`) | |
-| Checkpoint backends | Memory, SQLite, Postgres, Redis, Mongo… | Memory, File, SQLite — `checkpoint/{file,sqlite}.rs` | `docs/sdk-gaps.md` §5: rusqlite version coupling. |
+| Checkpoint backends | Memory, SQLite, Postgres, Redis, Mongo… | Memory, File, SQLite — `checkpoint/{file,sqlite}.rs` | `docs/sdk-gaps/durability.md` §5: rusqlite version coupling. |
 | Per-node `RetryPolicy` (list, `retry_on`) | Yes | Partial — graph-wide `with_node_retry` in `compiled/mod.rs`; no per-node | |
 | Per-node `CachePolicy` + `BaseCache` (task-level cache) | Yes | No in graph; harness has `ResponseCache`/`CachePolicy` for model calls (`harness/src/cache/`) | |
 | `defer=True` | Yes | Partial — `builder/mod.rs::mark_deferred` is export-only; real join is `add_waiting_edge` + `add_barrier_relief` | Waiting edges ≈ `NamedBarrierValue`; "run when nothing else is left" semantics absent. |
@@ -78,7 +78,7 @@ Legend: Yes / Partial / No. File paths are what I checked.
 | Double texting / multitask strategies | Platform only | Partial — `run_queue/` lanes (steer/follow-up), `thread_locks.rs` | Neither library has it in OSS; TinyAgents' queue is closer than LangGraph OSS. |
 | Thread TTL, cron, background runs | Platform only | Partial — store TTL yes; `orchestration/` detached tasks + `JsonlTaskStore`; no cron | OpenHuman has `cron/`. |
 | `create_agent` factory | Yes | Yes — `harness/src/runtime/mod.rs::AgentHarness` | |
-| Middleware node hooks returning state updates / `jump_to` | Yes | No — `middleware/types.rs` hooks return `Result<()>`; `MiddlewareModelOutcome` has one variant | `sdk-gaps.md` §13 already lists it. |
+| Middleware node hooks returning state updates / `jump_to` | Yes | No — `middleware/types.rs` hooks return `Result<()>`; `MiddlewareModelOutcome` has one variant | `sdk-gaps/orchestration.md` §13 already lists it. |
 | Middleware `wrap_model_call`/`wrap_tool_call` nesting | Yes | Yes — `ModelMiddleware::wrap_model`, `ToolMiddleware::wrap_tool` | Same onion order. |
 | Middleware extends state schema / contributes tools / stream transformers | Yes | No | Tools are registered on the harness, not by middleware. |
 | Dynamic prompt | Yes | Yes — `DynamicPromptMiddleware` | |
@@ -92,8 +92,8 @@ Legend: Yes / Partial / No. File paths are what I checked.
 | Shell / file-search middleware | Yes | No in harness (`tools/` has `time.rs` only); `workspace/` gives roots | OpenHuman owns tools. |
 | `ToolRuntime` injection (state, store, stream_writer, tool_call_id) | Yes | Partial — `ToolExecutionContext` (run/thread/depth/events/cancel/workspace); no state/store/tool_call_id | `tool/injected.rs` exists for hidden args. |
 | Tool returns `Command` (state update + routing) | Yes | No — `ToolResult{content,is_error}` (vendor `tinytools`) | |
-| `return_direct`, `ToolMessage.artifact` | Yes | No / Partial — no early-exit flag; `artifacts/` + `handoff.rs` offload large results instead | `sdk-gaps.md` §13 "early-exit tools". |
-| `ToolNode.handle_tool_errors` matrix | Yes | Partial — tool errors are recoverable results; unknown tool aborts (`sdk-gaps.md` §2) | |
+| `return_direct`, `ToolMessage.artifact` | Yes | No / Partial — no early-exit flag; `artifacts/` + `handoff.rs` offload large results instead | `sdk-gaps/orchestration.md` §13 "early-exit tools". |
+| `ToolNode.handle_tool_errors` matrix | Yes | Partial — tool errors are recoverable results; unknown tool aborts (`sdk-gaps/tools.md` §2) | |
 | Structured output strategies | Tool/Provider/Auto, unions, `handle_errors` | Yes — `structured/types.rs::StructuredStrategy`, `StructuredOutcome`, `repair.rs` | No union-to-many-tools; no auto-select from profile. |
 | Standard content blocks | Yes | Yes — vendor `tinyinference/src/message/types.rs::ContentBlock` (Text/Json/Image/Thinking/Redacted…) | No citations/server_tool_call blocks. |
 | `init_chat_model`, model profiles | Yes | Yes — `model_registry/`, `ModelProfile` | |
@@ -119,7 +119,7 @@ class ModelCallLimitMiddleware(AgentMiddleware):
             return {"jump_to": "end", "messages": [AIMessage("limit reached")]}
 ```
 Why: this is what makes limits, HITL, budget stops, early-exit tools and fallback re-routing
-composable without side channels. `docs/sdk-gaps.md` §13 already asks for it.
+composable without side channels. `docs/sdk-gaps/orchestration.md` §13 already asks for it.
 Mapping: add a `MiddlewareControl` enum returned from `before_model`/`after_model`/`before_tool`/
 `after_tool` (`Continue | JumpTo(LoopTarget) | StopWith(AgentRun) | Interrupt(Interrupt)`), let
 `MiddlewareModelOutcome`/`MiddlewareToolOutcome` (already `#[non_exhaustive]`) gain `Command`
@@ -171,7 +171,7 @@ What: `stream(version="v2")` yields `StreamPart{type, ns: tuple, data}` for
 `values|updates|messages|custom|checkpoints|tasks|debug`; `subgraphs=True` fills `ns` with
 `("node:task_id", ...)`; `stream_events(version="v3")` gives `ProtocolEvent{seq, method, params}`
 with projections (`stream.messages`, `stream.tool_calls`, `stream.subagents`).
-Why: UIs need one cursor over nested runs. `sdk-gaps.md` §3/§6 ask for the same (reasoning/tool-arg
+Why: UIs need one cursor over nested runs. `sdk-gaps/streaming.md` §3/§6 ask for the same (reasoning/tool-arg
 deltas, late-attach replay).
 Mapping: TinyAgents already has `GraphEvent` + `GraphObservation` journal; add `ns: Vec<String>`
 and `seq` to the envelope, add `TaskStarted/TaskResult` and `CheckpointSaved` projections as
@@ -247,7 +247,7 @@ v3) because the first had no namespace or sequence. TinyAgents should add `ns`/`
 **Middleware composition.** LangChain's split of node hooks (return state, may jump) vs wrap hooks
 (onion) is the same as TinyAgents', but LangChain lets middleware own state keys, tools and stream
 transformers, which is what made summarization/todo/HITL/PII shippable as single classes. TinyAgents'
-hooks that only return `Result<()>` push that logic into the loop or host adapters (`sdk-gaps.md`
+hooks that only return `Result<()>` push that logic into the loop or host adapters (`sdk-gaps/orchestration.md`
 §13). LangChain's weakness: `state_schema` merging across middleware is untyped `TypedDict`
 unioning; TinyAgents can do better with a typed `MiddlewareState` extension slot on `RunContext`.
 
@@ -277,7 +277,7 @@ artifact_offload,tool_result_artifacts}`. Those are the OpenHuman analogues of D
 | 3.2 durable HITL request/decision protocol | **Runtime** for the interrupt/resume/decision types; **OpenHuman** for the approval UI and `security/approval` policy | Mirrors LangChain: middleware in library, policy in app. |
 | 3.3 per-node retry/cache/timeout/error handler | **Runtime (graph crate)** | Pure scheduler policy. |
 | 3.4 delta checkpoint history / `Overwrite` | **Runtime (graph crate)** | Checkpoint format. |
-| 3.5 unified stream parts, tasks/checkpoints modes | **Runtime** | Contract UIs depend on; OpenHuman keeps only format adapters (`sdk-gaps.md` §6). |
+| 3.5 unified stream parts, tasks/checkpoints modes | **Runtime** | Contract UIs depend on; OpenHuman keeps only format adapters (`sdk-gaps/streaming.md` §6). |
 | 3.6 `ToolRuntime` parity, `return_direct`, artifact | **Runtime** (`ToolExecutionContext`, vendor `tinytools`) | Tool contract. |
 | 3.7 semantic store search | **Runtime** (trait + in-memory impl); backend choice in OpenHuman `memory/` | |
 | 3.8 `interrupt_before/after`, `response_schema`, drain | **Runtime** | |
@@ -311,7 +311,7 @@ artifact_offload,tool_result_artifacts}`. Those are the OpenHuman analogues of D
 - Testing/eval: https://docs.langchain.com/oss/python/langchain/test/unit-testing ; https://docs.langchain.com/oss/python/langchain/test/evals
 - Multi-agent: https://docs.langchain.com/oss/python/langchain/multi-agent (+ `subagents`, `handoffs`, `router`) ; https://docs.langchain.com/oss/python/migrate/langgraph-supervisor ; https://github.com/langchain-ai/langgraph-supervisor-py ; https://github.com/langchain-ai/langgraph-swarm-py ; https://docs.langchain.com/oss/python/langgraph/use-subgraphs ; https://docs.langchain.com/oss/python/langgraph/graph-api
 - Deep Agents: https://github.com/langchain-ai/deepagents (libs/deepagents/deepagents/graph.py, middleware/, backends/, ARCHITECTURE.md) ; https://docs.langchain.com/oss/python/deepagents/human-in-the-loop ; PyPI `deepagents`, `deepagents-code`, `deepagents-acp`, `deepagents-talon`
-- TinyAgents files checked: `docs/spec/README.md`, `docs/sdk-gaps.md`, `ROADMAP.md`, `docs/modules/{harness,graph}/README.md`, `docs/modules/graph/interrupts.md`, `crates/tinyagents-{harness,graph}/src/lib.rs`, `graph/src/{command,checkpoint,stream,builder,channel,compiled}/`, `harness/src/{middleware,tool,structured,store/namespaced,cache,artifacts,handoff.rs,steering}`, `vendor/tinytools/crates/tinytools/src/result/types.rs`, `vendor/tinyinference/crates/tinyinference/src/message/types.rs`
+- TinyAgents files checked: `docs/spec/README.md`, `docs/sdk-gaps/README.md`, `ROADMAP.md`, `docs/modules/{harness,graph}/README.md`, `docs/modules/graph/interrupts.md`, `crates/tinyagents-{harness,graph}/src/lib.rs`, `graph/src/{command,checkpoint,stream,builder,channel,compiled}/`, `harness/src/{middleware,tool,structured,store/namespaced,cache,artifacts,handoff.rs,steering}`, `vendor/tinytools/crates/tinytools/src/result/types.rs`, `vendor/tinyinference/crates/tinyinference/src/message/types.rs`
 
 Unverified (flagged by the research agents): exact version that introduced `Overwrite` and
 `interrupt(response_schema=)`; whether "enqueue" is the server's default multitask strategy;
