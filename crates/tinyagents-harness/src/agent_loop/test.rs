@@ -5980,7 +5980,7 @@ mod tool_effects_test {
         ];
 
         let synthesized = harness
-            .reconcile_tool_effects(&ctx, "run-1", &mut messages)
+            .reconcile_tool_effects(&ctx, "run-1", &mut messages, &Default::default())
             .await
             .unwrap();
 
@@ -6041,7 +6041,7 @@ mod tool_effects_test {
         ];
 
         let synthesized = harness
-            .reconcile_tool_effects(&ctx, "run-1", &mut messages)
+            .reconcile_tool_effects(&ctx, "run-1", &mut messages, &Default::default())
             .await
             .unwrap();
 
