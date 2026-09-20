@@ -360,6 +360,8 @@ where
             executor,
             event_sink: None,
             lease_for: WORKFLOW_LEASE,
+            #[cfg(feature = "graph-workflows")]
+            use_graph: true,
         }
     }
 
