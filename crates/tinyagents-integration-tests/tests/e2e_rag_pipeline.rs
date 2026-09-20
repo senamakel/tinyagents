@@ -90,11 +90,12 @@ impl NodeFactory<RagState> for RagFactory {
         let routing = spec.routing.clone();
 
         Ok(Arc::new(
-            move |mut state: RagState, _ctx: NodeContext| -> NodeFuture<RagState> {
+            move |state: Arc<RagState>, _ctx: NodeContext| -> NodeFuture<RagState> {
                 let name = name.clone();
                 let kind = kind.clone();
                 let routing = routing.clone();
                 Box::pin(async move {
+                    let mut state = (*state).clone();
                     state.trail.push(name.clone());
 
                     let result = match (kind.as_str(), &routing) {
