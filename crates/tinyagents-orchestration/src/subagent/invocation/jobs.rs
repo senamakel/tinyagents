@@ -83,12 +83,34 @@ impl SubAgentJobRegistry {
             .map(|entry| entry.job.clone())
     }
 
+    /// Returns a job snapshot for trusted host-side supervision.
+    ///
+    /// Model-visible tools must use the run-scoped dispatch path instead.
+    pub fn get(&self, job_id: &str) -> Option<SubAgentJob> {
+        self.read()
+            .get(&SubAgentJobId(job_id.to_owned()))
+            .map(|entry| entry.job.clone())
+    }
+
     /// Returns this run's jobs in stable id order.
     fn list_owned(&self, owner: u64) -> Vec<SubAgentJob> {
         let mut jobs = self
             .read()
             .values()
             .filter(|entry| entry.owner == owner)
+            .map(|entry| entry.job.clone())
+            .collect::<Vec<_>>();
+        jobs.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        jobs
+    }
+
+    /// Returns every job for trusted host-side supervision.
+    ///
+    /// Model-visible tools must use the run-scoped dispatch path instead.
+    pub fn list(&self) -> Vec<SubAgentJob> {
+        let mut jobs = self
+            .read()
+            .values()
             .map(|entry| entry.job.clone())
             .collect::<Vec<_>>();
         jobs.sort_by(|left, right| left.id.0.cmp(&right.id.0));
