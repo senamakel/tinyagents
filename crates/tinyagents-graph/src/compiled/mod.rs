@@ -193,7 +193,9 @@ struct StepFailure {
 #[derive(Clone)]
 struct Activation {
     node: NodeId,
-    send_arg: Option<serde_json::Value>,
+    /// `Arc`-wrapped (M2): a `Send` fan-out of the same node, and every
+    /// retry attempt of one activation, share this allocation.
+    send_arg: Option<Arc<serde_json::Value>>,
     task_id: TaskId,
 }
 
