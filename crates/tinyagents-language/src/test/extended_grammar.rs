@@ -351,7 +351,7 @@ fn bind_blueprint_rejects_unregistered_secondary_model_on_subagent_and_repl_agen
 #[test]
 fn steering_block_on_subagent_node_parses() {
     // The reference doc's own worked example
-    // (docs/modules/expressive-language/reference.md, `subagent` section) must
+    // (docs/modules/expressive-language/reference-nodes.md, `subagent` section) must
     // parse: it previously failed with "unknown node item `steering`" even
     // though `steering` is documented as a supported `subagent` field and
     // README.md's grammar declares `steering_decl = "steering" object`.

@@ -188,7 +188,7 @@ pub struct NodeDecl {
 /// or a human may send to this `subagent` node, plus a delivery policy.
 ///
 /// Parsing accepts the shape documented in
-/// `docs/modules/expressive-language/reference.md`, but lowering it into a
+/// `docs/modules/expressive-language/reference-nodes.md`, but lowering it into a
 /// runtime `harness::steering` policy is not yet implemented: that policy is a
 /// single flat allowlist of
 /// [`SteeringCommandKind`](tinyagents_harness::steering::SteeringCommandKind)s with
