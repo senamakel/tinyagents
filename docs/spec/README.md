@@ -53,6 +53,7 @@ observability, or test contracts.
   - [Streaming](../modules/harness/streaming.md)
   - [Store](../modules/harness/store.md)
   - [Observability and events](../modules/harness/observability.md)
+  - [Performance and capacity testing](../modules/harness/performance.md)
   - [Testkit](../modules/harness/testkit.md)
 - [Graph module](../modules/graph/README.md)
   - [Package and core types](../modules/graph/package.md)

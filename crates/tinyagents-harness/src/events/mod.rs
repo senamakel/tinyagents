@@ -108,7 +108,7 @@ impl EventSink {
             inner: Arc::new(Mutex::new(EventSinkInner {
                 stream_id: stream_id.into(),
                 next_offset: 0,
-                listeners: Vec::new(),
+                listeners: Arc::new(Vec::new()),
                 pending: std::collections::VecDeque::new(),
                 dispatching: false,
             })),
@@ -119,7 +119,7 @@ impl EventSink {
     /// [`AgentEvent`] emitted through this sink (or any of its clones).
     pub fn subscribe(&self, listener: Arc<dyn EventListener>) {
         let mut inner = lock_recovering(&self.inner);
-        inner.listeners.push(listener);
+        Arc::make_mut(&mut inner.listeners).push(listener);
     }
 
     /// Removes a previously subscribed listener.
@@ -130,9 +130,7 @@ impl EventSink {
     pub fn unsubscribe(&self, listener: &Arc<dyn EventListener>) -> bool {
         let mut inner = lock_recovering(&self.inner);
         let before = inner.listeners.len();
-        inner
-            .listeners
-            .retain(|candidate| !Arc::ptr_eq(candidate, listener));
+        Arc::make_mut(&mut inner.listeners).retain(|candidate| !Arc::ptr_eq(candidate, listener));
         inner.listeners.len() != before
     }
 
@@ -167,7 +165,14 @@ impl EventSink {
             inner.next_offset += 1;
             let id = crate::ids::EventId::new(format!("{}-evt-{offset}", inner.stream_id));
             let record = EventRecord { id, offset, event };
-            let listeners = inner.listeners.clone();
+            // Most production invocations do not attach an observer. Avoid a
+            // record clone, queue allocation, and serialized drain cycle in
+            // that common path; offsets still advance so a later subscriber
+            // starts at the correct position and never sees earlier events.
+            if inner.listeners.is_empty() {
+                return record;
+            }
+            let listeners = Arc::clone(&inner.listeners);
             inner.pending.push_back((record.clone(), listeners));
             let should_drain = !inner.dispatching;
             if should_drain {
@@ -188,7 +193,7 @@ impl EventSink {
                     }
                 };
                 let (queued, listeners) = next;
-                for listener in &listeners {
+                for listener in listeners.iter() {
                     listener.on_event(&queued);
                 }
             }

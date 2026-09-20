@@ -256,6 +256,7 @@ Feature details:
 - [Streaming feature](streaming.md)
 - [Store feature](store.md)
 - [Observability and events](observability.md)
+- [Performance and capacity testing](performance.md)
 - [Testkit feature](testkit.md)
 - [Host authorization and tool timeouts](hosting.md)
 - [LangChain feature parity map](langchain-parity.md)

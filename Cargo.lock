@@ -1492,6 +1492,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures",
+ "libc",
  "log",
  "regex",
  "reqwest",
