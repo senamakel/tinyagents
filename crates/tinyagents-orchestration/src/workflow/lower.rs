@@ -342,7 +342,9 @@ where
     {
         return Ok(NodeResult::Update(state));
     }
-    engine.finish_failed(run_id, error.to_string());
+    // A genuine, unfenced infrastructure failure: propagate it and let
+    // `WorkflowEngine::drive_via_graph`'s single catch-all emit
+    // `finish_failed` exactly once, rather than emitting it here too.
     Err(TinyAgentsError::Graph(error.to_string()))
 }
 
