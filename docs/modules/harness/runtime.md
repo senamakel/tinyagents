@@ -140,11 +140,15 @@ A per-call ceiling (`RunLimits::max_model_call_ms`) firing raises
 against the fallback chain (the model wedged, not the run), while `Timeout`
 is terminal (the run itself is out of wall-clock budget).
 
-Step 12's text-dialect recovery (parsing `<tool_call>` markup out of an
-assistant's visible text when the provider returned no native tool calls) is
-gated by `RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On |
-Auto`, default `Auto`): it only runs when the resolved model's profile does
-not report native tool calling, and it always skips markup that appears only
+Step 12's text-dialect recovery (parsing `<tool_call>`-style markup out of
+an assistant's visible text through the `tinytools-agent` grammars, both on
+the streamed deltas and on the terminal response) always runs under a forced
+text dialect (`RunPolicy::tool_dialect` of `Xml` / `Pformat`, or `Auto`
+falling back to Xml for a model without native tool calling) — there, parsing
+text is the protocol. Under a native dialect it is gated by
+`RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On | Auto`,
+default `Auto`): it only runs when the resolved model's profile does not
+report native tool calling, and it always skips markup that appears only
 inside a fenced code block. A model that quotes the syntax while explaining
 it (or answers under a model that *does* support native tool calling) is
 never executed as a real call.

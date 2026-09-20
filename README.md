@@ -48,6 +48,9 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   identity, description, declared model/tools/delegates, and a read-only
   catalogue seam. Authorization, prompt construction, and execution stay with
   the host and harness.
+- **`tinyagents-runtime`** — host-neutral stateful turns over the harness and
+  append-only transcript seam; hosts retain policy, prompt composition,
+  authorization, and durable-dialect conversion.
 - **`tinyagents-orchestration`** — host-neutral composition of durable
   multi-agent work (teams and workflows) over the graph, harness, and session
   layers; depends one-way on those crates and stays host-free.
@@ -162,6 +165,20 @@ a testkit for exercising the loop without a live provider. An agent can be
 wrapped as a tool and handed to another agent (`SubAgent` /
 `SubAgentSession` / `SubAgentTool`), which is how multi-agent orchestration
 is composed — plain function composition, not a distinct execution mode.
+
+## Session runtime
+
+`tinyagents-runtime` owns mutable model history for one host-owned
+conversation, a stable prompt prefix, a frozen tool declaration snapshot, and
+the sequencing around one append-only transcript commit. A host supplies the
+driver, its lossless transcript codec, and lifecycle hooks. On a driver error,
+the runtime can commit recoverable logical history with an interrupted,
+display-only partial in the same history operation; model-context replay omits
+that partial. A codec can also derive `TurnUsage` from its explicit host
+context after the driver runs; that usage is attached to the same atomic
+append's final assistant row for both success and recoverable partials. A
+post-commit hook observes durable successes but cannot change their result.
+See [the runtime module](docs/modules/runtime/README.md).
 
 ## Registry
 

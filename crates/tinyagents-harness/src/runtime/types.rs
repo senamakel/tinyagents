@@ -17,6 +17,7 @@
 //! `crate::runtime` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
+pub use crate::config::ToolDispatcher;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -247,6 +248,36 @@ pub struct RunPolicy {
     /// rely on empty finals; opt in to turn a silent blank success into a typed
     /// error the caller can re-prompt on.
     pub error_on_empty_response: bool,
+    /// How tools are spoken to the model: through the provider's native
+    /// channel, or through one of the text protocols owned by
+    /// `tinytools-agent`.
+    ///
+    /// [`ToolDispatcher::Auto`] (the default) sends tool schemas on the wire
+    /// and lets the provider adapter decide — the OpenAI-compatible adapter
+    /// switches to the JSON-in-tag protocol by itself for a profile without
+    /// native tool calling. [`ToolDispatcher::Xml`] and
+    /// [`ToolDispatcher::Pformat`] force a text protocol regardless of
+    /// provider: the schemas are rendered into the system prompt, nothing goes
+    /// on the wire as `tools`, and the answer is parsed here. P-Format is the
+    /// cheapest on tokens and the most demanding on the model, which is why
+    /// it is opt-in only.
+    ///
+    /// Under a forced text dialect the answer is always read through every
+    /// text grammar — parsing text *is* the protocol. Under a native dialect
+    /// the same read is the fallback for a model that narrated a call as
+    /// text, gated by [`RunPolicy::text_dialect_recovery`].
+    pub tool_dialect: ToolDispatcher,
+    /// Maximum consecutive re-prompts when a model signals a tool call it did
+    /// not make: `finish_reason == "tool_calls"` with no structured call and
+    /// no text-recoverable one.
+    ///
+    /// Some routers rewrite finish reasons, and some models emit the
+    /// intention without the call. Treating that as the final answer ends the
+    /// turn on an empty promise; re-prompting once with "issue the actual
+    /// tool call now" recovers it far more often than not. Each re-prompt is a
+    /// model call and counts against `limits.max_model_calls`. Defaults to
+    /// `3`; `0` disables it.
+    pub dropped_tool_call_nudges: u32,
     /// Number of automatic retries when a model call returns a *truncated
     /// empty* completion — `finish_reason == "length"` with no visible text, no
     /// tool calls, and no structured output.
@@ -281,8 +312,12 @@ pub struct RunPolicy {
     /// which is never looser than the projected one.
     pub tool_schemas: Option<crate::tool::SchemaPreparation>,
     /// Whether the loop parses `<tool_call>`-style text-dialect markup out of
-    /// an assistant's visible text when the provider returned no native tool
-    /// calls.
+    /// an assistant's visible text under a native tool dialect (see
+    /// [`RunPolicy::tool_dialect`]). A forced text dialect
+    /// ([`ToolDispatcher::Xml`] / [`ToolDispatcher::Pformat`], or
+    /// [`ToolDispatcher::Auto`] falling back to Xml for a model without
+    /// native tool calling) always parses the answer regardless of this
+    /// policy, since the model can only answer in text.
     ///
     /// Defaults to [`TextDialectRecovery::Auto`], which only attempts
     /// recovery when the resolved model's
@@ -491,6 +526,8 @@ impl Default for RunPolicy {
             },
             // Opt-in: preserve the historical blank-final behavior by default.
             error_on_empty_response: false,
+            tool_dialect: ToolDispatcher::Auto,
+            dropped_tool_call_nudges: 3,
             // On by default: a truncated-empty completion is useless to every
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.

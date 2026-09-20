@@ -18,6 +18,8 @@ serde_json = { workspace = true }
 tinyagents-graph = { path = "../tinyagents-graph", version = "2.1.2", default-features = false }
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.2", default-features = false }
 tinyagents-session = { path = "../tinyagents-session", version = "2.1.2", default-features = false }
+tinyagents-runtime = { path = "../tinyagents-runtime", version = "2.1.2", default-features = false }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 uuid = { workspace = true }
 
@@ -36,7 +38,7 @@ graph-workflows = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true

@@ -142,8 +142,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
-        streaming: bool,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let streaming = shape.streaming;
         let policy = self.effective_cache_policy(request);
         // The identity of the model that is actually about to be called — known
         // only *after* resolution, which is why the key cannot be finalized by
@@ -269,7 +270,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         };
 
         let response = self
-            .invoke_model_resolving(state, ctx, effective_request, call_id, binding, streaming)
+            .invoke_model_resolving(state, ctx, effective_request, call_id, binding, shape)
             .await?;
 
         if let Some((cache, key)) = decision.as_ref() {
@@ -518,8 +519,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
-        streaming: bool,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let streaming = shape.streaming;
         let mut current_name = binding.resolved.name.clone();
         let mut model = binding.model;
         let mut resolved = binding.resolved;
@@ -568,6 +570,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         request,
                         call_id,
                         &mut deltas_emitted,
+                        shape,
                     );
                     Self::with_call_budget(remaining, run_id.as_str(), "model call", bound, fut)
                         .await
@@ -885,6 +888,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// `deltas_emitted` is incremented for every delta actually handed to
     /// consumers, so the retry path can tell whether a failed attempt already
     /// published output that now has to be discarded.
+    // `deltas_emitted` must stay an out-parameter: on the error path the
+    // retry logic reads how much output already reached consumers, which a
+    // return value could not carry alongside the error.
+    #[allow(clippy::too_many_arguments)]
     async fn invoke_model_streaming_once(
         &self,
         state: &State,
@@ -893,9 +900,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         deltas_emitted: &mut usize,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let recovery = &shape.recovery;
         let mut stream = model.stream(state, request.clone()).await?;
         let mut accumulator = StreamAccumulator::new();
+        // Tool-call markup a model narrates as text is held back from live
+        // consumers and turned into calls on the terminal response instead.
+        // Runs for every provider: native models narrate calls often enough.
+        let mut text_scrubber = recovery.scrubber(call_id);
         // A terminal `Completed` response usually has richer provider metadata
         // than deltas (message id, usage, tool calls, and route information),
         // but its text is still the raw provider payload.  Keep the text and
@@ -938,6 +951,67 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     None => break,
                 },
             };
+
+            // Scrub tool-call markup from visible text before anything else
+            // sees it; a delta the scrubber empties carries nothing to emit.
+            if let (Some(scrubber), ModelStreamItem::MessageDelta(delta)) =
+                (text_scrubber.as_mut(), &mut item)
+                && !delta.text.is_empty()
+            {
+                delta.text = scrubber.feed(&delta.text);
+                if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none()
+                {
+                    continue;
+                }
+            }
+            if let (Some(scrubber), ModelStreamItem::Completed(_)) = (text_scrubber.as_mut(), &item)
+            {
+                let tail = scrubber.flush();
+                if !tail.is_empty() {
+                    // The held-back remainder is ordinary text after all.
+                    // Route it through the same delta middleware pipeline as
+                    // every other streamed delta (below): a naive direct
+                    // emit skipped `run_on_model_delta` and host progress, so
+                    // redaction/policy/transformation middleware could not
+                    // inspect or suppress this tail and consumers saw it
+                    // behave differently from every other delta.
+                    let mut model_delta = ModelDelta {
+                        call_id: call_id.as_str().to_string(),
+                        content: tail,
+                        reasoning: String::new(),
+                        tool_call: None,
+                    };
+                    self.middleware
+                        .run_on_model_delta(ctx, state, &mut model_delta)
+                        .await?;
+                    // Unconditional, not gated on the post-middleware content:
+                    // the pre-middleware tail here is always non-empty (the
+                    // surrounding `if` already checked it), matching the
+                    // ordinary delta path below, which ORs the *pre*-middleware
+                    // text against the post-middleware one. Gating on
+                    // `model_delta.content` alone meant a middleware that
+                    // suppressed the whole tail to `""` left
+                    // `saw_streamed_content` false, which skipped terminal
+                    // reconciliation and let the provider's raw (unscrubbed)
+                    // `Completed` content silently restore the exact text the
+                    // middleware had just suppressed.
+                    saw_streamed_content = true;
+                    streamed_text.push_str(&model_delta.content);
+                    ctx.emit(AgentEvent::ModelDelta {
+                        run_id: ctx.config.run_id.clone(),
+                        call_id: call_id.clone(),
+                        delta: MessageDelta::text(model_delta.content.clone()),
+                    });
+                    crate::runtime::emit_host_progress::<State, Ctx>(
+                        ctx,
+                        crate::host::ProgressEvent::Token {
+                            run: ctx.run_id().clone(),
+                            text: model_delta.content,
+                        },
+                    );
+                    *deltas_emitted += 1;
+                }
+            }
 
             // Surface incremental message/tool-call fragments through events and
             // the `on_model_delta` middleware hook before merging them.
@@ -1034,8 +1108,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 *deltas_emitted += 1;
             }
 
+            // Reconcile even when nothing ordinary streamed: a response that
+            // is *purely* text-dialect tool-call markup suppresses every
+            // delta (so `saw_streamed_content` stays false) but still needs
+            // its raw `<tool_call>`-style text replaced — otherwise that raw
+            // markup survives in the terminal response's content block
+            // alongside the structured calls the scrubber recovered below,
+            // and gets persisted into the transcript to be replayed back to
+            // the model next turn.
+            let scrubber_recovered_calls = text_scrubber
+                .as_ref()
+                .is_some_and(super::dialect::DeltaScrubber::has_calls);
             if let ModelStreamItem::Completed(response) = &mut item
-                && saw_streamed_content
+                && (saw_streamed_content || scrubber_recovered_calls)
             {
                 // Deltas represent only text/thinking, so preserve terminal
                 // blocks that cannot be streamed as a `ModelDelta` (JSON,
@@ -1104,6 +1189,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     )
                 }));
                 response.message.content = content;
+            }
+            if let ModelStreamItem::Completed(response) = &mut item
+                && text_scrubber
+                    .as_ref()
+                    .is_some_and(super::dialect::DeltaScrubber::has_calls)
+                && let Some(scrubber) = text_scrubber.take()
+            {
+                // The streamed text held complete tool-call blocks, scrubbed
+                // from the reconciled text above, so this is the only place
+                // they can be dispatched from. Appended, not assigned: a
+                // provider can legitimately return a native structured call
+                // *and* narrate a second one as text in the same turn, and
+                // gating this on `tool_calls.is_empty()` used to silently
+                // drop the narrated one whenever a native call was present.
+                response.message.tool_calls.extend(scrubber.into_calls());
             }
             if let ModelStreamItem::Completed(response) = &mut item
                 && saw_tool_delta
@@ -1219,7 +1319,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) resolved: ResolvedModel,
     pub(super) model: Arc<dyn ChatModel<State>>,
     pub(super) required_capabilities: Option<tinyinference_llm::model::CapabilitySet>,
-    pub(super) streaming: bool,
+    pub(super) shape: super::dialect::CallShape,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
@@ -1314,14 +1414,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
             super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
             let binding = self.rebind(ctx, &request).await?;
             self.harness
-                .invoke_model_with_retry(
-                    state,
-                    ctx,
-                    &request,
-                    &self.call_id,
-                    binding,
-                    self.streaming,
-                )
+                .invoke_model_with_retry(state, ctx, &request, &self.call_id, binding, &self.shape)
                 .await
         })
     }

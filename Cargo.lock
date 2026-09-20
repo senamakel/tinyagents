@@ -1562,7 +1562,9 @@ dependencies = [
  "tempfile",
  "tinyagents-graph",
  "tinyagents-harness",
+ "tinyagents-runtime",
  "tinyagents-session",
+ "tinyinference-llm",
  "tokio",
  "uuid",
 ]
@@ -1579,6 +1581,23 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-harness",
  "tinyagents-language",
+ "tinyinference-llm",
+ "tinytools",
+ "tokio",
+]
+
+[[package]]
+name = "tinyagents-runtime"
+version = "2.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tinyagents-harness",
+ "tinyagents-session",
  "tinyinference-llm",
  "tinytools",
  "tokio",
@@ -1639,9 +1658,9 @@ dependencies = [
  "sha2",
  "thiserror",
  "tinyinference-core",
+ "tinytools-agent",
  "tokio",
  "tracing",
- "url",
 ]
 
 [[package]]
@@ -1656,7 +1675,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1666,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",

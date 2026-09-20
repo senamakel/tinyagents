@@ -853,6 +853,26 @@ fn team_members_and_tasks_list_back() {
     assert_eq!(teams.count, 1);
 }
 
+#[test]
+fn team_list_count_is_total_before_pagination() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+    seed_team(workspace_dir, "team-1");
+    seed_team(workspace_dir, "team-2");
+
+    let teams = list_agent_teams(
+        workspace_dir,
+        &AgentTeamListRequest {
+            limit: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(teams.teams.len(), 1);
+    assert_eq!(teams.count, 2);
+}
+
 fn seed_run(workspace_dir: &Path, id: &str, status: AgentRunStatus) {
     upsert_agent_run(
         workspace_dir,
