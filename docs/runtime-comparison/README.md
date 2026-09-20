@@ -113,7 +113,7 @@ release lists, and source checkouts of LangGraph, LangChain, deepagents,
 pydantic-ai, and pi) and against this repository's source, not its docs.
 Every "TinyAgents lacks X" claim was verified by grep before being recorded;
 every code finding carries a `file:line` and a failure scenario. Existing
-backlog documents (`docs/sdk-gaps.md`, `docs/audit.md`) were read first so
+backlog documents (`docs/sdk-gaps/README.md`, `docs/audit.md`) were read first so
 findings are not duplicated, and their "resolved"/"missing" markers were
 re-checked (several are stale; see
 [`code-review-harness.md`](code-review-harness.md) §1).
