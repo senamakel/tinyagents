@@ -978,7 +978,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 required_capabilities: request.required_capabilities.clone(),
                 shape: super::dialect::CallShape {
                     streaming,
-                    recovery,
+                    recovery: recovery.clone(),
                 },
             };
             // Snapshot the request messages for observability before `request`
@@ -1016,13 +1016,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // not already supply structured calls. Gated by
             // `RunPolicy::text_dialect_recovery` (computed above, before the
             // resolved model moved into the wrap onion).
-            recover_text_dialect_calls(
-                ctx,
-                &mut response,
-                &call_id,
-                request_has_tools,
-                text_dialect_recovery_enabled,
-            );
+            if text_dialect_recovery_enabled && request_has_tools {
+                super::dialect::recover_text_calls(
+                    &mut response,
+                    &call_id,
+                    recovery.offered.as_ref(),
+                    recovery.registry.as_deref(),
+                );
+            }
 
             // Account for the completed provider response before fallible
             // response middleware. A middleware rejection must not erase
