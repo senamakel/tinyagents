@@ -64,10 +64,12 @@ fn spawned_job_id(result: &tinytools::ToolResult) -> String {
         .to_owned()
 }
 
-async fn wait_for_terminal(jobs: &SubAgentJobRegistry, job_id: &str) -> SubAgentJob {
+async fn wait_for_terminal(jobs: &SubAgentJobRegistry, job_id: &str, owner: u64) -> SubAgentJob {
     tokio::time::timeout(std::time::Duration::from_secs(1), async {
         loop {
-            let job = jobs.get(job_id).expect("spawned job is registered");
+            let job = jobs
+                .get_owned(job_id, owner)
+                .expect("spawned job is registered");
             if job.status.is_terminal() {
                 return job;
             }
@@ -96,24 +98,18 @@ fn child_data_policy_is_an_explicit_typed_transform() {
 #[tokio::test]
 async fn job_host_tools_query_and_message_a_live_child() {
     let jobs = SubAgentJobRegistry::new();
-    let (job_id, steering) = jobs.create("worker");
-    let message_tool = SubAgentMessageTool::new(jobs.clone());
-    let result = message_tool
-        .execute(json!({"job_id": job_id.as_str(), "message": "new evidence"}))
-        .await
+    let owner = 42;
+    let (job_id, steering) = jobs.create("worker", owner);
+    jobs.send_message_owned(job_id.as_str(), owner, "new evidence")
         .expect("message is queued");
-    assert!(result.output().contains("message_queued"));
     assert_eq!(steering.pending(), 1);
 
-    let query_tool = SubAgentJobsTool::new(jobs.clone());
-    let result = query_tool
-        .execute(json!({"job_id": job_id.as_str()}))
-        .await
-        .expect("job is queryable");
-    let snapshot: SubAgentJob =
-        serde_json::from_str(&result.output()).expect("query output is a job snapshot");
+    let snapshot = jobs
+        .get_owned(job_id.as_str(), owner)
+        .expect("job is queryable by its owner");
     assert_eq!(snapshot.id, job_id);
     assert_eq!(snapshot.status, SubAgentJobStatus::Queued);
+    assert!(jobs.get_owned(job_id.as_str(), owner + 1).is_none());
 }
 
 #[tokio::test]
@@ -150,12 +146,12 @@ async fn subagent_tool_returns_job_id_before_child_completion() {
     let job_id = spawned_job_id(&result);
     started.notified().await;
     assert_eq!(
-        jobs.get(&job_id).unwrap().status,
+        jobs.get_owned(&job_id, parent.instance_id()).unwrap().status,
         SubAgentJobStatus::Running
     );
 
     release.notify_one();
-    let job = wait_for_terminal(&jobs, &job_id).await;
+    let job = wait_for_terminal(&jobs, &job_id, parent.instance_id()).await;
     assert_eq!(job.output.as_deref(), Some("finished later"));
 }
 
@@ -204,7 +200,7 @@ async fn typed_tool_dispatch_runs_child_with_non_default_parent_data() {
         .unwrap();
     assert!(!result.is_error);
     let job_id = spawned_job_id(&result);
-    let job = wait_for_terminal(&jobs, &job_id).await;
+    let job = wait_for_terminal(&jobs, &job_id, parent.instance_id()).await;
     assert_eq!(job.status, SubAgentJobStatus::Completed);
     assert_eq!(job.output.as_deref(), Some("child answer"));
     assert_eq!(
@@ -282,7 +278,7 @@ async fn typed_tool_dispatch_inherits_parent_cancellation() {
         )
         .await
         .expect("asynchronous spawn returns its job id");
-    let job = wait_for_terminal(&jobs, &spawned_job_id(&result)).await;
+    let job = wait_for_terminal(&jobs, &spawned_job_id(&result), parent.instance_id()).await;
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
 }
 

@@ -76,7 +76,7 @@ impl SubAgentJobRegistry {
     }
 
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
-    fn get_owned(&self, job_id: &str, owner: u64) -> Option<SubAgentJob> {
+    pub(crate) fn get_owned(&self, job_id: &str, owner: u64) -> Option<SubAgentJob> {
         self.read()
             .get(&SubAgentJobId(job_id.to_owned()))
             .filter(|entry| entry.owner == owner)
@@ -97,7 +97,7 @@ impl SubAgentJobRegistry {
 
     /// Queues a user message for delivery at the running child's next safe
     /// steering checkpoint.
-    fn send_message_owned(
+    pub(crate) fn send_message_owned(
         &self,
         job_id: &str,
         owner: u64,
