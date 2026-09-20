@@ -168,24 +168,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// an incomplete `results` fails with [`TinyAgentsError::Validation`]
     /// naming the unresolved ids before anything runs.
     ///
-    /// Equivalent to `invoke_in_context(state, ctx.with_deferred_results(results), messages)`.
+    /// Equivalent to `invoke_in_context(state, ctx.with_deferred_results(results), messages)`,
+    /// preceded by a [`AgentHarness::reconcile_tool_effects`] pass scoped to
+    /// exclude the calls `results` is about to answer.
     ///
-    /// Deliberately does **not** call
-    /// [`AgentHarness::reconcile_tool_effects`] first: that reconciler
-    /// classifies *every* unanswered call on the last assistant turn with an
-    /// unresolved [`crate::tool::ToolEffectLedger`] row as a crash artifact
-    /// and, for the default [`tinytools::ToolReplay::Never`], synthesizes an
-    /// "interrupted" answer for it instead of letting it run — but a call
-    /// this run's own `execution_deferral` filed (mid-execution
-    /// `ApprovalRequired`/`CallDeferred`, which leaves exactly the same
-    /// `started`/unanswered shape) is not a crash: it is precisely the call
-    /// `results` is here to resolve. Calling the reconciler unconditionally
-    /// here would silently pre-empt that answer for every default-policy
-    /// tool, before `results` ever got a chance to run it. Reconciling a
-    /// genuine crash (no live `results` for the pending call at all) remains
-    /// a host's explicit, separate call to
-    /// [`AgentHarness::reconcile_tool_effects`] before it reaches for
-    /// `resume_deferred`.
+    /// A call this run's own `execution_deferral` filed (mid-execution
+    /// `ApprovalRequired`/`CallDeferred`) is settled in the tool-effect
+    /// ledger as [`crate::tool::ToolEffectStatus::Deferred`] the moment it
+    /// pauses — not left `started` — so [`AgentHarness::reconcile_tool_effects`]
+    /// (which only reconciles rows still `started`) does not treat it as a
+    /// crash artifact on its own. The `excluded` set passed here is
+    /// defense-in-depth on top of that: even if a call's row is unexpectedly
+    /// still `started` (the `Deferred` settle write is best-effort and only
+    /// logs on failure), excluding every id `results` answers guarantees this
+    /// call never receives a synthesized "interrupted" answer that would
+    /// pre-empt `results`'s real one.
+    ///
+    /// A genuinely crashed **sibling** call in the same batch — one with no
+    /// entry in `results` and a ledger row still `started` because the
+    /// process died before it could pause or settle — is not excluded, and
+    /// is reconciled normally (re-executed or answered "interrupted before
+    /// settlement" per its [`tinytools::ToolReplay`] policy) before the loop
+    /// resumes.
+    ///
+    /// Reconciling a genuine crash with no live `results` at all (a host
+    /// resuming from durable state after a real process crash, with no
+    /// deferral in flight) remains a host's explicit, separate call to
+    /// [`AgentHarness::reconcile_tool_effects`] — this method's own
+    /// reconcile pass only ever excludes ids `results` names, so it is a
+    /// strict addition, never a replacement, for that path.
     pub async fn resume_deferred(
         &self,
         state: &State,
@@ -193,6 +204,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: Vec<Message>,
         results: crate::tool::DeferredToolResults,
     ) -> Result<AgentRun> {
+        let mut messages = messages;
+        if ctx.tool_effect_ledger.is_some() {
+            let run_id = ctx.run_id().as_str().to_string();
+            let excluded: std::collections::HashSet<crate::ids::CallId> = results
+                .approvals
+                .keys()
+                .chain(results.calls.keys())
+                .cloned()
+                .collect();
+            self.reconcile_tool_effects(&ctx, &run_id, &mut messages, &excluded)
+                .await?;
+        }
         self.invoke_in_context(state, ctx.with_deferred_results(results), messages)
             .await
     }
