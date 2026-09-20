@@ -96,6 +96,7 @@ pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
+pub mod workspace;
 
 /// Re-exported vendor crates. Downstream consumers should reach these
 /// dependencies' types through these re-exports (e.g.
