@@ -1003,20 +1003,55 @@ where
         let ttl_ms = ttl.as_millis() as u64;
         tokio::task::spawn_blocking(move || -> Result<bool> {
             fs::create_dir_all(&base_dir).map_err(|e| io_err("create base dir", e))?;
+            // Serialize the read/check/write sequence across processes. The
+            // checkpoint files already use atomic replacement for durability,
+            // but replacement alone cannot make this ownership decision
+            // atomic: two claimants could both observe an absent lease.
+            let lock_path = path.with_file_name(format!(
+                "{}.lock",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("lease")
+            ));
+            let mut acquired = false;
+            for _ in 0..1_000 {
+                match OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&lock_path)
+                {
+                    Ok(_) => {
+                        acquired = true;
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    Err(error) => return Err(io_err("create lease lock", error)),
+                }
+            }
+            if !acquired {
+                return Err(TinyAgentsError::Graph(
+                    "timed out waiting for lease lock".to_string(),
+                ));
+            }
             let now = tinyagents_harness::ids::now_ms();
-            if let Some(existing) = read_lease(&path)?
+            let result = if let Some(existing) = read_lease(&path)?
                 && existing.owner != owner
                 && existing.expires_at_ms > now
             {
-                return Ok(false);
-            }
-            let record = LeaseRecord {
-                owner,
-                expires_at_ms: now.saturating_add(ttl_ms),
+                Ok(false)
+            } else {
+                let record = LeaseRecord {
+                    owner,
+                    expires_at_ms: now.saturating_add(ttl_ms),
+                };
+                let bytes = serde_json::to_vec(&record).map_err(|e| io_err("encode lease", e))?;
+                write_atomic(&path, &bytes)?;
+                Ok(true)
             };
-            let bytes = serde_json::to_vec(&record).map_err(|e| io_err("encode lease", e))?;
-            write_atomic(&path, &bytes)?;
-            Ok(true)
+            let _ = fs::remove_file(lock_path);
+            result
         })
         .await
         .map_err(|e| io_err("join blocking try_claim task", e))?

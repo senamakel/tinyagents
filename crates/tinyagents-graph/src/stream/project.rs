@@ -248,25 +248,25 @@ impl StreamProjection {
         });
     }
 
-    /// Returns every item across all three views with `cursor > since`, each
+    /// Returns every item across all three views with `cursor >= since`, each
     /// still tagged with its view, in cursor order — what a late-attaching
     /// consumer replays instead of re-reading the full projection.
     pub fn since(&self, since: u64) -> Vec<ProjectedSince> {
         let mut items: Vec<ProjectedSince> = self
             .messages
             .iter()
-            .filter(|item| item.cursor > since)
+            .filter(|item| item.cursor >= since)
             .map(|item| ProjectedSince::Message(item.clone()))
             .chain(
                 self.tool_calls
                     .iter()
-                    .filter(|item| item.cursor > since)
+                    .filter(|item| item.cursor >= since)
                     .map(|item| ProjectedSince::ToolCall(item.clone())),
             )
             .chain(
                 self.subagents
                     .iter()
-                    .filter(|item| item.cursor > since)
+                    .filter(|item| item.cursor >= since)
                     .map(|item| ProjectedSince::Subagent(item.clone())),
             )
             .collect();
