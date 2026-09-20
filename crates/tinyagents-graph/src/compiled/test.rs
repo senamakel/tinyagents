@@ -4604,26 +4604,29 @@ async fn sequential_retries_clone_state_at_most_once_per_step() {
             s.value += u;
             Ok(s)
         }))
-        .add_node_shared("flaky", move |_s: Arc<CountingState>, _c: NodeContext| {
+        .add_node_shared("flaky", {
             let attempts = attempts.clone();
-            async move {
-                let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
-                if n < 3 {
-                    Err(TinyAgentsError::Model(format!("transient blip {n}")))
-                } else {
-                    Ok(NodeResult::Update(1))
+            move |_s: Arc<CountingState>, _c: NodeContext| {
+                let attempts = attempts.clone();
+                async move {
+                    let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                    if n < 3 {
+                        Err(TinyAgentsError::Model(format!("transient blip {n}")))
+                    } else {
+                        Ok(NodeResult::Update(1))
+                    }
                 }
             }
         })
+        .set_entry("flaky")
+        .set_finish("flaky")
+        .compile()
+        .unwrap()
         .with_node_retry(
             RetryPolicy::default()
                 .with_max_attempts(5)
                 .with_backoff_sleep(false),
-        )
-        .set_entry("flaky")
-        .set_finish("flaky")
-        .compile()
-        .unwrap();
+        );
 
     let state = CountingState {
         clones: clones.clone(),
