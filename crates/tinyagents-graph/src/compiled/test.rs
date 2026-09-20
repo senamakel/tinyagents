@@ -4472,3 +4472,171 @@ async fn dropping_the_run_future_marks_status_cancelled_not_running() {
     );
     assert_eq!(status.status, ExecutionStatus::Cancelled);
 }
+
+// ── M2: hot-path state cloning ────────────────────────────────────────────
+//
+// `docs/runtime-comparison/code-review-graph.md` M2: before this fix, every
+// node-handler invocation — each attempt of a retried task, and each branch
+// of a parallel `Send` fan-out — cloned the whole `State` value at the call
+// site (`compiled/step.rs`'s `handler(state.clone(), ctx.clone())`). A
+// 4-way fan-out with 3 retries on one branch is 4 + 3 = 7 invocations, so at
+// least 7 `State::clone()` calls for that one superstep alone. The fix
+// clones `State` at most once per superstep (into an `Arc<State>`); every
+// attempt/branch after that shares the `Arc` via a cheap `Arc::clone`
+// instead. These tests instrument `State::clone()` itself to prove the
+// bound, using `add_node_shared` (M2's zero-clone handler entry point) so
+// the count reflects the executor's own cloning rather than the
+// `add_node`/`Arc<State>` compatibility adapter's per-invocation clone.
+
+/// A state value that counts every `Clone::clone()` call made on it, via a
+/// shared atomic counter, so a test can assert exactly how many times the
+/// executor cloned the whole state during a run.
+#[derive(Debug)]
+struct CountingState {
+    clones: Arc<AtomicUsize>,
+    value: i64,
+}
+
+impl Clone for CountingState {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, AtomicOrdering::SeqCst);
+        Self {
+            clones: self.clones.clone(),
+            value: self.value,
+        }
+    }
+}
+
+/// A 4-way parallel `Send` fan-out, with 3 retries on the `arg == 1` branch
+/// before it succeeds, clones `State` at most once per superstep (M2): one
+/// clone for the `dispatch` step, one for the fan-out step — regardless of
+/// the fan-out width or the retried branch's attempt count. Before the fix
+/// this was at least 7 clones (4 branches + 3 extra attempts) for the
+/// fan-out step alone.
+#[tokio::test]
+async fn parallel_fanout_with_retries_clones_state_at_most_once_per_step() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let graph = GraphBuilder::<CountingState, i64>::new()
+        .with_parallel(true)
+        .set_reducer(ClosureStateReducer::new(|mut s: CountingState, u: i64| {
+            s.value += u;
+            Ok(s)
+        }))
+        .add_node_shared(
+            "dispatch",
+            |_s: Arc<CountingState>, _c: NodeContext| async move {
+                Ok(NodeResult::Command(Command::send([
+                    Send::new("worker", json!(1)),
+                    Send::new("worker", json!(2)),
+                    Send::new("worker", json!(3)),
+                    Send::new("worker", json!(4)),
+                ])))
+            },
+        )
+        .add_node_shared("worker", move |_s: Arc<CountingState>, c: NodeContext| {
+            let attempts = attempts.clone();
+            async move {
+                let arg = c
+                    .send_arg
+                    .clone()
+                    .expect("worker scheduled via Send must carry its arg")
+                    .as_i64()
+                    .unwrap();
+                if arg == 1 {
+                    let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                    if n < 3 {
+                        return Err(TinyAgentsError::Model(format!("transient blip {n}")));
+                    }
+                }
+                Ok(NodeResult::Update(arg))
+            }
+        })
+        .with_node_policy(
+            "worker",
+            crate::builder::NodePolicy {
+                retry: Some(
+                    RetryPolicy::default()
+                        .with_max_attempts(5)
+                        .with_backoff_sleep(false),
+                ),
+                ..crate::builder::NodePolicy::default()
+            },
+        )
+        .set_entry("dispatch")
+        .mark_command_routing("dispatch")
+        .set_finish("worker")
+        .compile()
+        .unwrap();
+
+    let state = CountingState {
+        clones: clones.clone(),
+        value: 0,
+    };
+    let run = graph.run(state).await.unwrap();
+    assert_eq!(run.state.value, 1 + 2 + 3 + 4, "every branch's arg applied");
+    assert_eq!(
+        attempts.load(AtomicOrdering::SeqCst),
+        4,
+        "3 failed attempts + 1 success for the arg==1 branch"
+    );
+
+    let total_clones = clones.load(AtomicOrdering::SeqCst);
+    assert!(
+        total_clones <= 2,
+        "expected at most one `State` clone per superstep (2 steps: dispatch, \
+         then the 4-way fan-out with 3 retries), got {total_clones}"
+    );
+}
+
+/// The sequential (non-parallel) counterpart: a single node retried 3 times
+/// before it succeeds clones `State` at most once for its one superstep —
+/// the per-attempt clone the M2 finding describes is gone regardless of
+/// concurrency mode.
+#[tokio::test]
+async fn sequential_retries_clone_state_at_most_once_per_step() {
+    let clones = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let graph = GraphBuilder::<CountingState, i64>::new()
+        .set_reducer(ClosureStateReducer::new(|mut s: CountingState, u: i64| {
+            s.value += u;
+            Ok(s)
+        }))
+        .add_node_shared("flaky", move |_s: Arc<CountingState>, _c: NodeContext| {
+            let attempts = attempts.clone();
+            async move {
+                let n = attempts.fetch_add(1, AtomicOrdering::SeqCst);
+                if n < 3 {
+                    Err(TinyAgentsError::Model(format!("transient blip {n}")))
+                } else {
+                    Ok(NodeResult::Update(1))
+                }
+            }
+        })
+        .with_node_retry(
+            RetryPolicy::default()
+                .with_max_attempts(5)
+                .with_backoff_sleep(false),
+        )
+        .set_entry("flaky")
+        .set_finish("flaky")
+        .compile()
+        .unwrap();
+
+    let state = CountingState {
+        clones: clones.clone(),
+        value: 0,
+    };
+    let run = graph.run(state).await.unwrap();
+    assert_eq!(run.state.value, 1);
+    assert_eq!(attempts.load(AtomicOrdering::SeqCst), 4);
+
+    let total_clones = clones.load(AtomicOrdering::SeqCst);
+    assert!(
+        total_clones <= 2,
+        "expected at most one `State` clone for this one superstep's 4 \
+         attempts, got {total_clones}"
+    );
+}
