@@ -100,6 +100,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     pub fn new() -> Self {
         Self {
             middlewares: Vec::new(),
+            agent_middlewares: Vec::new(),
             model_middlewares: Vec::new(),
             tool_middlewares: Vec::new(),
         }
@@ -109,6 +110,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// onion order: the first pushed middleware is the outermost layer.
     pub fn push(&mut self, middleware: Arc<dyn Middleware<State, Ctx>>) {
         self.middlewares.push(middleware);
+    }
+
+    /// Appends an around-agent middleware. The first registered layer is the
+    /// outermost and the real agent loop is the innermost.
+    pub fn push_agent_middleware(&mut self, middleware: Arc<dyn AgentMiddleware<State, Ctx>>) {
+        self.agent_middlewares.push(middleware);
     }
 
     /// Appends a [`ModelMiddleware`] (around-model wrap hook). Registration order
@@ -128,6 +135,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// Returns the number of registered [`ModelMiddleware`] wrap hooks.
     pub fn model_middleware_len(&self) -> usize {
         self.model_middlewares.len()
+    }
+
+    /// Returns the number of registered around-agent middleware layers.
+    pub fn agent_middleware_len(&self) -> usize {
+        self.agent_middlewares.len()
     }
 
     /// Returns the number of registered [`ToolMiddleware`] wrap hooks.
@@ -307,6 +319,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         handler.run(ctx, state, request).await
     }
 
+    /// Runs the around-agent middleware onion around the complete agent loop.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_wrapped_agent(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        input: Vec<tinyinference_llm::message::Message>,
+        streaming: bool,
+        run: &mut AgentRun,
+        status: &mut crate::events::HarnessRunStatus,
+        base: &dyn AgentBaseCall<State, Ctx>,
+    ) -> Result<()> {
+        AgentHandler {
+            remaining: &self.agent_middlewares,
+            base,
+            status,
+        }
+        .run(ctx, state, AgentRequest::new(input, streaming), run)
+        .await
+    }
+
     /// Runs the registered [`ToolMiddleware`] wrap hooks as a nested onion around
     /// `base` (the real tool call) and returns the resolved
     /// [`MiddlewareToolOutcome`].
@@ -328,6 +361,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
 }
 
 // ── Wrap onion handlers ───────────────────────────────────────────────────────
+
+impl<State: Send + Sync, Ctx: Send + Sync> AgentHandler<'_, State, Ctx> {
+    /// Advances the around-agent onion by one layer.
+    pub async fn run(
+        self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: AgentRequest,
+        run: &mut AgentRun,
+    ) -> Result<()> {
+        let AgentHandler {
+            remaining,
+            base,
+            status,
+        } = self;
+        match remaining.split_first() {
+            Some((head, tail)) => {
+                let next = AgentHandler {
+                    remaining: tail,
+                    base,
+                    status,
+                };
+                let name = head.name().to_string();
+                ctx.emit(AgentEvent::MiddlewareStarted { name: name.clone() });
+                let outcome = head.wrap_agent(ctx, state, request, run, next).await;
+                ctx.emit(AgentEvent::MiddlewareCompleted { name });
+                outcome
+            }
+            None => base.call(ctx, state, request, run, status).await,
+        }
+    }
+}
 
 impl<State: Send + Sync, Ctx: Send + Sync> ModelHandler<'_, State, Ctx> {
     /// Advances the model-wrap onion one layer: invokes the next

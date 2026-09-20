@@ -38,7 +38,9 @@ pub use types::*;
 use std::sync::Arc;
 
 use crate::cache::ResponseCache;
-use crate::middleware::{Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware};
+use crate::middleware::{
+    AgentMiddleware, Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware,
+};
 use crate::model_registry::ModelRegistry;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinyinference_llm::model::ChatModel;
@@ -96,6 +98,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// onion order: the first pushed middleware is the outermost layer.
     pub fn push_middleware(&mut self, middleware: Arc<dyn Middleware<State, Ctx>>) -> &mut Self {
         self.middleware.push(middleware);
+        self
+    }
+
+    /// Appends middleware around the complete agent run.
+    pub fn push_agent_middleware(
+        &mut self,
+        middleware: Arc<dyn AgentMiddleware<State, Ctx>>,
+    ) -> &mut Self {
+        self.middleware.push_agent_middleware(middleware);
         self
     }
 

@@ -1,25 +1,19 @@
-//! Feature/integration tests for the harness persistence infrastructure
-//! (`harness::store` + `harness::memory`).
+//! Feature/integration tests for the harness store infrastructure.
 //!
 //! Covers the durable substrate that outlives a single run: key-value stores
 //! (in-memory, file-backed with path-traversal guards), append-only journals
 //! (offset semantics, retention/eviction, JSONL durability), the store
-//! registry, and thread-scoped conversation memory (ephemeral + store-backed,
-//! with the atomic bulk `replace` and the `ShortTermMemory` trim hook).
+//! registry.
 //!
 //! Deterministic and offline. File-backed cases use a unique temp directory.
 
 use std::path::PathBuf;
 
 use serde_json::json;
-use tinyagents_harness::memory::{
-    ChatHistory, InMemoryChatHistory, ShortTermMemory, StoreChatHistory,
-};
 use tinyagents_harness::store::{
     AppendStore, FileStore, InMemoryAppendStore, InMemoryStore, JsonlAppendStore, Store,
     StoreRegistry,
 };
-use tinyinference_llm::message::Message;
 
 /// A process-unique temp directory for file-backed cases.
 fn temp_dir(tag: &str) -> PathBuf {
@@ -168,105 +162,4 @@ async fn store_registry_resolves_named_and_default_stores() {
     let default = registry.default_store();
     default.put("ns", "k", json!(true)).await.unwrap();
     assert_eq!(default.get("ns", "k").await.unwrap(), Some(json!(true)));
-}
-
-// ── Memory: chat history ────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn in_memory_chat_history_appends_and_clears_per_thread() {
-    let history = InMemoryChatHistory::new();
-    history.append("t1", Message::user("hello")).await.unwrap();
-    history
-        .append("t1", Message::assistant("hi"))
-        .await
-        .unwrap();
-    history.append("t2", Message::user("other")).await.unwrap();
-
-    assert_eq!(history.messages("t1").await.unwrap().len(), 2);
-    assert_eq!(history.messages("t2").await.unwrap().len(), 1);
-    // An unseen thread is empty, not an error.
-    assert!(history.messages("t3").await.unwrap().is_empty());
-
-    history.clear("t1").await.unwrap();
-    assert!(history.messages("t1").await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn store_backed_chat_history_persists_through_the_store() {
-    let store = InMemoryStore::new();
-    let history = StoreChatHistory::new(store.clone());
-    history
-        .append("t1", Message::user("remember me"))
-        .await
-        .unwrap();
-
-    // The history is serialized under the chat-history namespace, so a second
-    // wrapper over the same store observes the same thread.
-    let reopened = StoreChatHistory::new(store);
-    let msgs = reopened.messages("t1").await.unwrap();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].text(), "remember me");
-}
-
-#[tokio::test]
-async fn replace_rewrites_history_atomically_and_delete_on_empty() {
-    let history = InMemoryChatHistory::new();
-    history.append("t1", Message::user("a")).await.unwrap();
-    history.append("t1", Message::user("b")).await.unwrap();
-
-    history
-        .replace("t1", vec![Message::system("compacted")])
-        .await
-        .unwrap();
-    let msgs = history.messages("t1").await.unwrap();
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].text(), "compacted");
-
-    // Replacing with an empty list drops the thread entirely.
-    history.replace("t1", Vec::new()).await.unwrap();
-    assert!(history.messages("t1").await.unwrap().is_empty());
-}
-
-// ── Memory: ShortTermMemory trim hook ───────────────────────────────────────
-
-#[tokio::test]
-async fn short_term_memory_applies_trim_hook_on_load_and_save() {
-    let history = InMemoryChatHistory::new();
-    for i in 0..5 {
-        history
-            .append("t1", Message::user(format!("m{i}")))
-            .await
-            .unwrap();
-    }
-
-    // Keep only the last two messages on load and save.
-    let memory = ShortTermMemory::new(history, "t1").with_trim(|msgs| {
-        let start = msgs.len().saturating_sub(2);
-        msgs[start..].to_vec()
-    });
-    assert_eq!(memory.thread_id(), "t1");
-
-    let loaded = memory.load().await.unwrap();
-    assert_eq!(loaded.len(), 2);
-    assert_eq!(loaded[0].text(), "m3");
-    assert_eq!(loaded[1].text(), "m4");
-
-    // Saving a longer list also trims before persisting.
-    let big: Vec<Message> = (0..4)
-        .map(|i| Message::assistant(format!("r{i}")))
-        .collect();
-    memory.save(big).await.unwrap();
-    let after = memory.load().await.unwrap();
-    assert_eq!(after.len(), 2);
-    assert_eq!(after[1].text(), "r3");
-}
-
-#[tokio::test]
-async fn short_term_memory_without_trim_is_pass_through() {
-    let memory = ShortTermMemory::new(InMemoryChatHistory::new(), "t1");
-    memory.append(Message::user("only")).await.unwrap();
-    let loaded = memory.load().await.unwrap();
-    assert_eq!(loaded.len(), 1);
-    memory.clear().await.unwrap();
-    assert!(memory.load().await.unwrap().is_empty());
 }

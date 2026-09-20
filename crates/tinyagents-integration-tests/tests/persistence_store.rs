@@ -1,13 +1,9 @@
-//! Regression tests for the harness store/memory backends and the file
+//! Regression tests for the harness store backends and the file
 //! checkpointer's on-disk durability.
-
-use std::sync::Arc;
 
 use tinyagents_graph::checkpoint::{Checkpoint, Checkpointer, FileCheckpointer};
 use tinyagents_harness::ids::NodeId;
-use tinyagents_harness::memory::{ChatHistory, StoreChatHistory};
 use tinyagents_harness::store::{AppendStore, FileStore, JsonlAppendStore};
-use tinyinference_llm::message::Message;
 
 fn checkpoint(thread: &str, id: &str) -> Checkpoint<i32> {
     Checkpoint {
@@ -112,46 +108,6 @@ async fn one_unreadable_thread_file_does_not_break_list_threads() {
         .await
         .expect("listing survives one bad file");
     assert!(threads.iter().any(|t| t == "good"));
-}
-
-// ── SESS-9: StoreChatHistory::append ─────────────────────────────────────────
-
-/// `append` is a read-modify-write over the store. Concurrent appends used to
-/// drop messages, giving the two `ChatHistory` backends different guarantees
-/// for one trait method.
-///
-/// The runtime flavour is load-bearing. `#[tokio::test]` defaults to a
-/// **current-thread** runtime, and `FileStore`'s methods are `async fn`s with
-/// no interior `.await`, so each read-modify-write runs to completion before
-/// the next task is polled — the race cannot occur and the test passes even
-/// against the unsynchronised version. Only a multi-threaded runtime actually
-/// interleaves them.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_store_appends_do_not_lose_messages() {
-    let dir = tempfile::tempdir().unwrap();
-    let history = Arc::new(StoreChatHistory::new(FileStore::new(dir.path())));
-
-    const N: usize = 24;
-    let mut handles = Vec::new();
-    for i in 0..N {
-        let history = history.clone();
-        handles.push(tokio::spawn(async move {
-            history
-                .append("thread", Message::user(format!("m{i}")))
-                .await
-                .unwrap();
-        }));
-    }
-    for h in handles {
-        h.await.unwrap();
-    }
-    let messages = history.messages("thread").await.unwrap();
-    assert_eq!(
-        messages.len(),
-        N,
-        "every concurrent append must survive; got {} of {N}",
-        messages.len()
-    );
 }
 
 // ── SESS-10: JsonlAppendStore offsets ────────────────────────────────────────

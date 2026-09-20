@@ -249,13 +249,20 @@ Stores:
 - not automatically injected into prompts unless middleware does it
 - reusable by memory, event recording, tool artifacts, and web UIs
 
-Suggested traits:
+Memory is host policy, implemented as around-agent middleware instead of a
+harness-owned storage interface:
 
 ```rust
 #[async_trait]
-pub trait ShortTermMemory<State>: Send + Sync {
-    async fn load(&self, thread_id: &ThreadId) -> Result<Option<State>>;
-    async fn save(&self, thread_id: &ThreadId, state: &State) -> Result<()>;
+impl AgentMiddleware<AppState, AppContext> for MemoryMiddleware {
+    async fn wrap_agent(&self, ctx: &mut RunContext<AppContext>, state: &AppState,
+        mut request: AgentRequest, run: &mut AgentRun,
+        next: AgentHandler<'_, AppState, AppContext>) -> Result<()> {
+        request.input.splice(0..0, self.load(ctx).await?);
+        let result = next.run(ctx, state, request, run).await;
+        self.save(ctx, run).await?;
+        result
+    }
 }
 ```
 

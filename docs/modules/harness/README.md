@@ -229,7 +229,7 @@ invocation, and how per-tool timeouts are resolved. See
 [hosting.md](hosting.md).
 
 Continued specification: [runtime.md](runtime.md) (tool registry, agent loop,
-middleware, memory/stores) and
+middleware, and host-owned state) and
 [observability-overview.md](observability-overview.md) (structured output,
 events/streaming, errors, testkit, milestones).
 
@@ -244,7 +244,6 @@ Feature details:
 - [Tool feature](tool.md)
 - [Tool exposure, discovery, and schema budgets](tool-discovery.md)
 - [Tool dialects](tool-dialect.md)
-- [Workspace isolation feature](workspace.md)
 - [Middleware feature](middleware.md)
 - [Sub-agent and orchestrator steering](subagent-steering.md)
 - [Structured output feature](structured-output.md)
@@ -268,8 +267,6 @@ pub struct AgentHarness<State, Ctx = ()> {
     embeddings: EmbeddingRegistry<Ctx>,
     tools: ToolRegistry<State, Ctx>,
     middleware: MiddlewareStack<State, Ctx>,
-    memory: Option<Arc<dyn ShortTermMemory<State>>>,
-    stores: StoreRegistry,
     policy: RunPolicy,
 }
 

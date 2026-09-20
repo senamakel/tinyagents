@@ -29,7 +29,6 @@ pub mod handoff;
 pub mod host;
 pub mod ids;
 pub mod limits;
-pub mod memory;
 pub mod middleware;
 pub mod model_registry;
 #[cfg(feature = "multimodal")]
@@ -53,7 +52,6 @@ pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "tools")]
 pub mod tools;
-pub mod workspace;
 
 pub use cancel::CancellationToken;
 pub use cost::CostTotals;
@@ -77,4 +75,3 @@ pub use steering::{
 };
 pub use subagent::{SubAgent, SubAgentSession, SubAgentTool};
 pub use tool::ToolRegistry;
-pub use workspace::{SharedRootWorkspace, WorkspaceIsolation};
