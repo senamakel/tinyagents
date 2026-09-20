@@ -3,6 +3,7 @@
 The builder supports:
 
 - `add_node`
+- `add_node_shared`
 - `add_sequence`
 - `add_edge`
 - `add_waiting_edge`
