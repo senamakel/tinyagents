@@ -968,10 +968,15 @@ mod lowering_tests {
         let def = definition();
         let topology = lowered_topology(&def).expect("topology lowering");
 
-        let node_ids: BTreeSet<String> = topology.nodes.iter().map(|node| node.id.clone()).collect();
+        let node_ids: BTreeSet<String> =
+            topology.nodes.iter().map(|node| node.id.clone()).collect();
         assert_eq!(
             node_ids,
-            BTreeSet::from(["plan".to_owned(), "research".to_owned(), "synthesize".to_owned()]),
+            BTreeSet::from([
+                "plan".to_owned(),
+                "research".to_owned(),
+                "synthesize".to_owned()
+            ]),
             "one graph node per phase in the definition"
         );
         assert_eq!(
@@ -1088,7 +1093,10 @@ mod lowering_tests {
             .unwrap();
         let interrupted = store.load("run-resume").unwrap().unwrap();
         assert_eq!(interrupted.status, WorkflowRunStatus::Interrupted);
-        assert!(executor.calls.lock().is_empty(), "no phase ran before the cancellation was observed");
+        assert!(
+            executor.calls.lock().is_empty(),
+            "no phase ran before the cancellation was observed"
+        );
 
         // Resume with a fresh token: the whole workflow must still complete,
         // and each phase's agents must have been called exactly once.

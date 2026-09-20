@@ -60,9 +60,13 @@ use tinyagents_harness::CancellationToken;
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_session::run_ledger::{WorkflowRun, WorkflowRunStatus};
 
-use super::engine::{OrchestrationError, PersistRequest, WorkflowEngine, WorkflowExecutor, WorkflowStore};
-use super::state::{all_phases_completed, next_runnable_phase, reset_running_phases, synthesize_summary};
 use super::WorkflowDefinition;
+use super::engine::{
+    OrchestrationError, PersistRequest, WorkflowEngine, WorkflowExecutor, WorkflowStore,
+};
+use super::state::{
+    all_phases_completed, next_runnable_phase, reset_running_phases, synthesize_summary,
+};
 
 /// The lowered graph's `State`/`Update` type: the durable run row plus a
 /// running count of how many children this drive has spawned so far (the
@@ -97,16 +101,21 @@ where
         let run_id = run_id.clone();
         let owner = owner.clone();
         let cancel = cancel.clone();
-        builder = builder.add_node("dispatch", move |state: SchedulerState, _ctx: NodeContext| {
-            let engine = engine.clone();
-            let definition = definition.clone();
-            let run_id = run_id.clone();
-            let owner = owner.clone();
-            let cancel = cancel.clone();
-            async move { dispatch(engine, definition, run_id, owner, cancel, state).await }
-        });
+        builder = builder.add_node(
+            "dispatch",
+            move |state: SchedulerState, _ctx: NodeContext| {
+                let engine = engine.clone();
+                let definition = definition.clone();
+                let run_id = run_id.clone();
+                let owner = owner.clone();
+                let cancel = cancel.clone();
+                async move { dispatch(engine, definition, run_id, owner, cancel, state).await }
+            },
+        );
     }
-    builder = builder.set_entry("dispatch").mark_command_routing("dispatch");
+    builder = builder
+        .set_entry("dispatch")
+        .mark_command_routing("dispatch");
 
     for phase in &definition.phases {
         let engine = engine.clone();
@@ -117,17 +126,21 @@ where
         let phase = phase.clone();
         let node_id = phase.name.clone();
         builder = builder
-            .add_node(node_id.clone(), move |state: SchedulerState, _ctx: NodeContext| {
-                let engine = engine.clone();
-                let definition = definition.clone();
-                let run_id = run_id.clone();
-                let owner = owner.clone();
-                let cancel = cancel.clone();
-                let phase = phase.clone();
-                async move {
-                    run_phase_node(engine, definition, run_id, owner, cancel, phase, state).await
-                }
-            })
+            .add_node(
+                node_id.clone(),
+                move |state: SchedulerState, _ctx: NodeContext| {
+                    let engine = engine.clone();
+                    let definition = definition.clone();
+                    let run_id = run_id.clone();
+                    let owner = owner.clone();
+                    let cancel = cancel.clone();
+                    let phase = phase.clone();
+                    async move {
+                        run_phase_node(engine, definition, run_id, owner, cancel, phase, state)
+                            .await
+                    }
+                },
+            )
             .mark_command_routing(node_id);
     }
 
@@ -357,13 +370,16 @@ where
 /// an empty `depends_on`); `tinyagents_graph`'s topology only records one
 /// `entry` node, so a definition with several independent root phases would
 /// lose all but one of them here.
-pub fn lowered_topology(definition: &WorkflowDefinition) -> Result<GraphTopology, OrchestrationError> {
+pub fn lowered_topology(
+    definition: &WorkflowDefinition,
+) -> Result<GraphTopology, OrchestrationError> {
     let mut builder = GraphBuilder::<(), ()>::new()
         .set_reducer(ClosureStateReducer::new(|state: (), _update: ()| Ok(state)));
     for phase in &definition.phases {
-        builder = builder.add_node(phase.name.clone(), |state: (), _ctx: NodeContext| async move {
-            Ok(NodeResult::Update(state))
-        });
+        builder = builder.add_node(
+            phase.name.clone(),
+            |state: (), _ctx: NodeContext| async move { Ok(NodeResult::Update(state)) },
+        );
     }
     let depended_on: HashSet<&str> = definition
         .phases
@@ -382,8 +398,8 @@ pub fn lowered_topology(definition: &WorkflowDefinition) -> Result<GraphTopology
             builder = builder.set_finish(phase.name.clone());
         }
     }
-    let graph = builder
-        .compile()
-        .map_err(|error| OrchestrationError(format!("workflow topology lowering failed: {error}")))?;
+    let graph = builder.compile().map_err(|error| {
+        OrchestrationError(format!("workflow topology lowering failed: {error}"))
+    })?;
     Ok(graph.topology())
 }
