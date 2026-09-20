@@ -10,7 +10,8 @@ use crate::ids::{CallId, ComponentId, EventId, ExecutionStatus, RunId, ThreadId}
 use crate::observability::AppendWorker;
 use crate::observability::{
     AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal, HarnessStatusStore,
-    InMemoryEventJournal, InMemoryStatusStore, JournalSink, RedactingSink, StoreEventJournal,
+    InMemoryEventJournal, InMemoryStatusStore, JournalSink, RedactingSink, SinkHealth,
+    StoreEventJournal,
 };
 use crate::store::InMemoryAppendStore;
 
@@ -309,6 +310,7 @@ async fn journal_sink_persists_observations() {
 
     // Persistence is asynchronous; block until the durable log catches up.
     sink.flush();
+    assert_eq!(sink.health(), SinkHealth::default());
 
     let stored = journal.read_from("run-sink", 0).await.unwrap();
     assert_eq!(stored.len(), 2);

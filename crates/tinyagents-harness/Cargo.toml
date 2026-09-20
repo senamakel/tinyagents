@@ -37,6 +37,9 @@ tempfile = "3"
 wait-timeout = "0.2"
 uuid = { version = "1", features = ["v4"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 sqlite = ["dep:rusqlite"]

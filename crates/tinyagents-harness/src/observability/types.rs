@@ -403,6 +403,18 @@ pub struct RedactingSink {
     pub(crate) mask: String,
 }
 
+/// Loss counters for a best-effort durable observability sink.
+///
+/// Both counters are lifetime totals shared by every clone of the sink.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SinkHealth {
+    /// Observations rejected before persistence because the bounded drain queue
+    /// was full or disconnected.
+    pub dropped: u64,
+    /// Observations accepted by the worker whose backend append later failed.
+    pub append_failures: u64,
+}
+
 /// An [`EventListener`] that writes each event as an [`AgentObservation`] into
 /// a [`HarnessEventJournal`].
 ///

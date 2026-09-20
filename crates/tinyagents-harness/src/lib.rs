@@ -69,7 +69,7 @@ pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
-    RedactingSink, StoreEventJournal,
+    ProcessProfile, ProcessProfiler, ProcessSnapshot, RedactingSink, SinkHealth, StoreEventJournal,
 };
 pub use run_queue::{QueueLane, QueueStatus, RunQueue};
 pub use steering::{
