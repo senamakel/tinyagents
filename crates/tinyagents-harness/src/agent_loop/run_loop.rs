@@ -929,6 +929,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let request_has_tools = !request.tools.is_empty();
             let dialect =
                 super::dialect::RunDialect::resolve(self.policy.tool_dialect, &request.tools);
+            let forced_text_dialect = dialect.is_text();
             let recovery = super::dialect::TextRecovery {
                 offered: std::sync::Arc::new(request.tools.clone()),
                 registry: dialect.registry_for(&request.tools),
@@ -1016,7 +1017,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // not already supply structured calls. Gated by
             // `RunPolicy::text_dialect_recovery` (computed above, before the
             // resolved model moved into the wrap onion).
-            if text_dialect_recovery_enabled && request_has_tools {
+            if (forced_text_dialect || text_dialect_recovery_enabled) && request_has_tools {
                 super::dialect::recover_text_calls(
                     &mut response,
                     &call_id,
