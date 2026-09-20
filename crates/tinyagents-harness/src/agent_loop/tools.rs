@@ -1411,8 +1411,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Terminal partner of [`AgentEvent::ToolStarted`] for a call the *tool
     /// itself* deferred mid-execution by raising `ApprovalRequired` /
     /// `CallDeferred`: closes the in-flight entry, releases the tool-call
-    /// slot (the call never produced a result), and files the request.
-    fn defer_started_tool_call(
+    /// slot (the call never produced a result), settles its tool-effect-ledger
+    /// row as [`ToolEffectStatus::Deferred`], and files the request.
+    ///
+    /// Settling to `Deferred` (rather than leaving the row `started`) is
+    /// what keeps [`Self::reconcile_tool_effects`] — which only reconciles
+    /// rows still `started` — from mistaking this deliberate pause for a
+    /// crash artifact on a later resume. See that method's doc comment and
+    /// [`AgentHarness::resume_deferred`][crate::agent_loop::AgentHarness::resume_deferred]
+    /// for the full picture.
+    async fn defer_started_tool_call(
         &self,
         ctx: &mut RunContext<Ctx>,
         status: &mut HarnessRunStatus,
@@ -1422,6 +1430,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) {
         release_active_tool_call(status, &prepared.call_id);
         ctx.limits.rollback_tool_calls(1);
+        self.record_tool_effect_settled(ctx, prepared, ToolEffectStatus::Deferred)
+            .await;
         self.defer_tool_call(ctx, status, request, deferred);
     }
 
