@@ -18,10 +18,10 @@ use tinyagents_graph::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::events::EventSink;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, Trajectory};
-use tinyagents_harness::*;
-use tinyagents_registry::*;
+use tinyagents_orchestration::subagent::{
+    ChildDataPolicy, SubAgent, SubAgentJobRegistry, SubAgentTool,
+};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::tool::ToolCall;
@@ -294,8 +294,9 @@ fn child_harness(answer: String) -> AgentHarness<()> {
     harness
 }
 
-fn parent_harness(scenario: Scenario, node: &str) -> AgentHarness<()> {
+fn parent_harness(scenario: Scenario, node: &str) -> (AgentHarness<()>, SubAgentJobRegistry) {
     let mut harness: AgentHarness<()> = AgentHarness::new();
+    let jobs = SubAgentJobRegistry::new();
 
     let mut calls = Vec::new();
     if scenario.use_regular_tool {
@@ -315,10 +316,10 @@ fn parent_harness(scenario: Scenario, node: &str) -> AgentHarness<()> {
             "delegate deterministic work to a child agent",
             Arc::new(child_harness(format!("child:{}:{node}", scenario.id))),
         ));
-        harness.register_tool_dispatch(Arc::new(SubAgentTool::new(
-            child,
-            ChildDataPolicy::new(|parent: &()| *parent),
-        )));
+        harness.register_tool_dispatch(Arc::new(
+            SubAgentTool::new(child, ChildDataPolicy::new(|parent: &()| *parent))
+                .with_job_registry(jobs.clone()),
+        ));
         calls.push(ToolCall::new(
             format!("{}-{node}-delegate", scenario.id),
             "delegate",
@@ -333,7 +334,7 @@ fn parent_harness(scenario: Scenario, node: &str) -> AgentHarness<()> {
         vec![tool_call_response(calls), text_response(final_answer)]
     };
     harness.register_model("parent", Arc::new(ScriptedModel::new(responses)));
-    harness
+    (harness, jobs)
 }
 
 async fn run_agent_node(
@@ -341,7 +342,7 @@ async fn run_agent_node(
     node: &'static str,
     events: EventSink,
 ) -> Result<FuzzUpdate> {
-    let harness = parent_harness(scenario, node);
+    let (harness, jobs) = parent_harness(scenario, node);
     let ctx = RunContext::new(RunConfig::new(format!("agent-{}-{node}", scenario.id)), ())
         .with_events(events);
 
@@ -357,10 +358,27 @@ async fn run_agent_node(
         .messages
         .iter()
         .any(|message| matches!(message, Message::Tool(_)) && message.text().contains("lookup:"));
-    let saw_subagent_tool = run
-        .messages
-        .iter()
-        .any(|message| matches!(message, Message::Tool(_)) && message.text().contains("child:"));
+    let saw_subagent_tool = if scenario.use_subagent {
+        let job = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Some(job) = jobs.list().into_iter().next()
+                    && job.status.is_terminal()
+                {
+                    return job;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("spawned fuzz subagent job reaches a terminal state");
+        assert_eq!(
+            job.output.as_deref(),
+            Some(format!("child:{}:{node}", scenario.id).as_str())
+        );
+        true
+    } else {
+        false
+    };
 
     Ok(FuzzUpdate::Agent {
         node: node.to_string(),

@@ -13,11 +13,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tinyagents_harness::SubAgent;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::limits::RunLimits;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::SlowModel;
+use tinyagents_orchestration::subagent::SubAgent;
 use tinyinference_llm::providers::MockModel;
 
 /// Builds a child harness whose policy caps wall-clock time at `timeout_ms` and

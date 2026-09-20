@@ -32,20 +32,25 @@ use tinyagents_harness::events::{AgentEvent, EventSink};
 use tinyagents_harness::ids::{CallId, RunId};
 use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
 use tinyagents_harness::tool::ToolDispatch;
-use tinyagents_harness::*;
+use tinyagents_orchestration::subagent::{
+    ChildDataPolicy, SubAgent, SubAgentJobRegistry, SubAgentTool,
+};
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ResponseFormat;
-use tinyinference_llm::tool::ToolCall;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Wraps a [`ScriptedModel`] as a named [`SubAgentTool`] whose child run always
 /// answers with `answer`.
-fn specialist(name: &str, description: &str, model: Arc<ScriptedModel>) -> SubAgentTool<()> {
+fn specialist(
+    name: &str,
+    description: &str,
+    model: Arc<ScriptedModel>,
+    jobs: SubAgentJobRegistry,
+) -> SubAgentTool<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
         .register_model("model", model)
@@ -56,6 +61,7 @@ fn specialist(name: &str, description: &str, model: Arc<ScriptedModel>) -> SubAg
         Arc::new(subagent),
         ChildDataPolicy::new(|parent: &()| *parent),
     )
+    .with_job_registry(jobs)
 }
 
 /// Reads the `{ "agents": [..] }` selection out of an [`AgentRun`], preferring
@@ -90,6 +96,7 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
     // 1. Register three named specialist sub-agents in the capability registry.
     let mut registry: CapabilityRegistry<()> = CapabilityRegistry::new();
     let mut dispatches: HashMap<String, Arc<SubAgentTool<()>>> = HashMap::new();
+    let jobs = SubAgentJobRegistry::new();
     for (name, description, model) in [
         (
             "researcher",
@@ -103,7 +110,7 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
             summarizer_model.clone(),
         ),
     ] {
-        let dispatch = Arc::new(specialist(name, description, model));
+        let dispatch = Arc::new(specialist(name, description, model, jobs.clone()));
         registry.register_tool(dispatch.tool())?;
         dispatches.insert(name.to_owned(), dispatch);
     }
@@ -195,13 +202,38 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
                 output_bytes: None,
                 error: None,
             });
-            Ok::<(String, String), TinyAgentsError>((name, result.output()))
+            let job_id = serde_json::from_str::<Value>(&result.output())?
+                .get("job_id")
+                .and_then(Value::as_str)
+                .expect("spawn result contains a job id")
+                .to_owned();
+            Ok::<(String, String), TinyAgentsError>((name, job_id))
         }
     });
-    let outputs: Vec<(String, String)> = join_all(dispatches)
+    let spawned: Vec<(String, String)> = join_all(dispatches)
         .await
         .into_iter()
         .collect::<Result<_>>()?;
+
+    let outputs = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let completed = spawned
+                .iter()
+                .filter_map(|(name, job_id)| {
+                    let job = jobs.get(job_id)?;
+                    job.status
+                        .is_terminal()
+                        .then(|| (name.clone(), job.output.unwrap_or_default()))
+                })
+                .collect::<Vec<_>>();
+            if completed.len() == spawned.len() {
+                return completed;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("chosen subagent jobs reach terminal states");
 
     sink.emit(AgentEvent::RunCompleted {
         run_id: RunId::new("orchestrator"),

@@ -4,15 +4,14 @@ Structural validation of a dependency DAG — duplicate ids, dangling edges, and
 cycles — over a borrowed node view, independent of any one caller's node
 shape or of the graph runtime.
 
-Multiple orchestration surfaces (workflow phases, team task boards, plan
-steps, both inside and outside this crate) keep re-deriving the same
+Multiple graph surfaces (task boards, plan steps, and host-defined workflows)
+keep re-deriving the same
 question: given nodes that each name the nodes they must run after, is the
 result a well-formed DAG? Rather than each caller reimplementing Kahn's
 algorithm against its own struct, this module takes a borrowed [`DagNode`]
 view that any caller can project its own type into for the duration of one
 validation call. It touches no graph runtime state and is usable before
-anything is compiled or executed — see `crates/tinyagents-orchestration` for
-external callers (`teams::service`, `workflow::validate`).
+anything is compiled or executed.
 
 ## Public surface
 
@@ -61,7 +60,5 @@ external callers (`teams::service`, `workflow::validate`).
 ## How it fits together
 
 `graph::dag` has no dependency on the rest of `graph`; it is a leaf utility
-consumed by `graph::lib` (re-exported at the crate root) and by
-`tinyagents-orchestration`'s workflow and team validation, which project their
-own phase/task structs into `DagNode` views before compiling or scheduling
-them.
+re-exported at the crate root for graph modules and hosts that need to project
+their own node types into `DagNode` views before compiling or scheduling them.
