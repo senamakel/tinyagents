@@ -927,6 +927,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 None
             };
             let request_has_tools = !request.tools.is_empty();
+            let dialect =
+                super::dialect::RunDialect::resolve(self.policy.tool_dialect, &request.tools);
+            let recovery = super::dialect::TextRecovery {
+                offered: std::sync::Arc::new(request.tools.clone()),
+                registry: dialect.registry_for(&request.tools),
+            };
+            dialect.apply_to_request(&mut request);
 
             let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
             status.mark_running(HarnessPhase::Model);
@@ -971,7 +978,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 required_capabilities: request.required_capabilities.clone(),
                 shape: super::dialect::CallShape {
                     streaming,
-                    ..Default::default()
+                    recovery,
                 },
             };
             // Snapshot the request messages for observability before `request`
