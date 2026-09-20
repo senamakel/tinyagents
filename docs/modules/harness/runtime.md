@@ -1,7 +1,7 @@
-# Harness Runtime: Tools, Agent Loop, Middleware, Memory
+# Harness Runtime: Tools, Agent Loop, Middleware, Host-Owned State
 
 Continues from [`README.md`](README.md): tool registry, agent loop,
-middleware, and memory/stores.
+middleware, host-owned state, and stores.
 
 ## Tool Registry
 
@@ -86,7 +86,7 @@ input messages
 Detailed lifecycle:
 
 1. Create `RunConfig` and `RunContext`.
-2. Load short-term memory for `thread_id` if configured.
+2. Registered host middleware may load short-term memory for `thread_id`.
 3. Normalize input into messages.
 4. Apply prompt templates and dynamic context.
 5. Select model.
@@ -95,8 +95,8 @@ Detailed lifecycle:
    pre-call compression.
 8. Invoke or stream the model through `wrap_model` middleware.
 9. Run `on_model_delta` middleware for streamed chunks.
-10. Run `after_model` middleware, including post-call compression and summary
-    persistence.
+10. Run `after_model` middleware, including post-call compression and any
+    host-selected summary persistence.
 11. Emit model events and append assistant message.
 12. If tool calls exist, validate name, schema, and limits.
 13. Run `before_tool` middleware per call.
@@ -121,7 +121,7 @@ Detailed lifecycle:
 17. Append tool messages.
 18. Repeat until no tool calls remain.
 19. Validate structured output if configured.
-20. Persist short-term memory.
+20. Registered host middleware may persist short-term memory.
 21. Emit final event and return `AgentRun`.
 
 Hard limits:
@@ -348,10 +348,11 @@ fallback to another model/tool, short-circuit with a response, or return a
 control command. Before/after hooks are simpler and should remain available for
 common mutation and observation cases.
 
-## Memory And Stores
+## Host-Owned Memory And Stores
 
-Memory and storage are related but not the same feature. `memory` owns
-conversation semantics. `store` owns persistence backends.
+Memory and storage are related but not the same feature. Hosts own conversation
+semantics and choose their memory policy; the harness exposes store primitives
+and middleware seams rather than a harness-owned memory implementation.
 
 Memory has two layers conceptually:
 
@@ -377,15 +378,34 @@ Stores:
 - not automatically injected into prompts unless middleware does it
 - reusable by memory, event recording, tool artifacts, and web UIs
 
-Suggested traits:
+Memory is host policy, implemented as around-agent middleware instead of a
+harness-owned storage interface:
 
 ```rust
 #[async_trait]
-pub trait ShortTermMemory<State>: Send + Sync {
-    async fn load(&self, thread_id: &ThreadId) -> Result<Option<State>>;
-    async fn save(&self, thread_id: &ThreadId, state: &State) -> Result<()>;
+impl AgentMiddleware<AppState, AppContext> for MemoryMiddleware {
+    async fn wrap_agent(&self, ctx: &mut RunContext<AppContext>, state: &AppState,
+        mut request: AgentRequest, run: &mut AgentRun,
+        next: AgentHandler<'_, AppState, AppContext>) -> Result<()> {
+        request.input.splice(0..0, self.load(ctx).await?);
+        let result = next.run(ctx, state, request, run).await;
+        let save_result = self.save(ctx, run).await;
+        match (result, save_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(save_error)) => Err(save_error),
+            (Err(run_error), Ok(())) => Err(run_error),
+            (Err(run_error), Err(save_error)) => {
+                self.record_persistence_failure(ctx, &save_error);
+                Err(run_error)
+            }
+        }
+    }
 }
 ```
+
+`record_persistence_failure` is host-defined telemetry (for example, an event
+or log). It must not replace a typed agent error: callers need the failure from
+the run to decide whether to retry, repair, or report it.
 
 The storage layer should be a separate harness feature:
 

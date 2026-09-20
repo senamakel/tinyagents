@@ -31,7 +31,6 @@ before publishing details.
 
 Examples of in-scope issues:
 
-- generated `.rag` source bypassing registry or policy checks
 - unintended tool, model, store, or filesystem access
 - unsafe handling of credentials or secrets
 - prompt/context leakage across runs, forks, or sub-agents

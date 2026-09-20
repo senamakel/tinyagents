@@ -15,15 +15,11 @@ build toward a production-grade Rust agent runtime.
   harness tools
 - named capability registry (models, tools, agents, graphs, stores,
   middleware, policy) bound by name (`registry/`)
-- the declarative `.rag` blueprint language: lexer, parser, compiler, and
-  registry-backed binding (`language/`)
 - an optional SQLite-backed checkpointer (`sqlite` feature)
 - an embedded Langfuse client and graph exporter for observability
 
 ## Near-Term Work
 
-- broaden `.rag` example coverage for less-common routing and
-  parallel-fanout shapes
 - continue splitting any module or doc that grows past the 500-line limit
   into focused files
 - expand live (network-gated) provider contract tests as new

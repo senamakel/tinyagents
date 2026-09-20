@@ -6,16 +6,14 @@
 //! [`tinyagents_harness::model_registry::ModelRegistry`] and
 //! [`tinyagents_harness::tool::ToolRegistry`], which are per-run executable stores.
 //! The [`CapabilityRegistry`] is a *capability catalog*: it owns named models,
-//! tools, graph blueprints, routers, and reducers so declarative `.rag`
-//! sources can be bound by name, then validated against what Rust has actually
-//! registered and allowed.
+//! tools, agents, graphs, routers, and reducers so host code can resolve
+//! capabilities by name.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_definition::AgentDefinition;
-use tinyagents_language::Blueprint;
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
@@ -27,10 +25,9 @@ use tinytools::Tool;
 ///
 /// Storage is partitioned by [`ComponentKind`]:
 ///
-/// - **Models, tools, graphs** keep an executable/serializable value.
-/// - **Routers, reducers** (and the reserved store/agent kinds) are name-only
-///   descriptors for now: enough for the `.rag` resolver to answer "is this
-///   name registered?".
+/// - **Models and tools** keep executable values.
+/// - **Graphs, routers, reducers**, and the reserved kinds are name-only
+///   descriptors.
 ///
 /// The [`metadata`](CapabilityRegistry::metadata) map is the source of truth for
 /// *presence*: every successful registration records a
@@ -53,7 +50,6 @@ where
     /// name (via `replace_model`) does not move it.
     pub(crate) model_order: Vec<String>,
     pub(crate) tools: HashMap<String, Arc<dyn Tool>>,
-    pub(crate) graphs: HashMap<String, Blueprint>,
     /// Declarative agent definitions keyed by their stable id. Execution is
     /// host-owned through graph's explicit `AgentInvoker` boundary.
     pub(crate) agents: HashMap<String, AgentDefinition>,

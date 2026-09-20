@@ -140,16 +140,14 @@ impl StreamProjection {
         Self::default()
     }
 
-    /// The next cursor value that will be assigned. Equal to the total number
-    /// of items folded in across every view so far.
+    /// The cursor of the most recently folded item, or zero before any item.
     pub fn cursor(&self) -> u64 {
         self.next_cursor
     }
 
     fn next(&mut self) -> u64 {
-        let cursor = self.next_cursor;
         self.next_cursor += 1;
-        cursor
+        self.next_cursor
     }
 
     /// Folds one graph event. Only [`GraphEvent::SubgraphStarted`] /

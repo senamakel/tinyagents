@@ -477,7 +477,7 @@ impl TranscriptHistory for FileTranscriptHistory {
         turn: TranscriptTurn<'_>,
         partial: Option<&TranscriptPartial>,
     ) -> anyhow::Result<()> {
-        log::debug!(
+        tracing::debug!(
             "[transcript-history] append_turn_with_partial prev={} next={} partial={} path={}",
             turn.prev.len(),
             turn.next.len(),

@@ -43,23 +43,3 @@ pub use diagnostics::{AliasBinding, DiagnosticSeverity, RegistryDiagnostic, Regi
 #[allow(deprecated)]
 pub use router::ModelRouter;
 pub use router::{WorkloadRoute, WorkloadRouter};
-
-impl<State: Send + Sync> tinyagents_language::capability_resolver::CapabilitySource
-    for CapabilityRegistry<State>
-{
-    fn names(&self, kind: tinyagents_language::capability_resolver::CapabilityKind) -> Vec<String> {
-        use tinyagents_language::capability_resolver::CapabilityKind;
-
-        let kind = match kind {
-            CapabilityKind::Model => ComponentKind::Model,
-            CapabilityKind::Tool => ComponentKind::Tool,
-            CapabilityKind::Graph => ComponentKind::Graph,
-            CapabilityKind::Router => ComponentKind::Router,
-            CapabilityKind::Reducer => ComponentKind::Reducer,
-            CapabilityKind::Agent => ComponentKind::Agent,
-            CapabilityKind::Script => ComponentKind::Script,
-            CapabilityKind::Capability => ComponentKind::Capability,
-        };
-        self.names_including_aliases(kind)
-    }
-}

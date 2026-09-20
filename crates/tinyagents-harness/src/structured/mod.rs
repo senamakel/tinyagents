@@ -4,8 +4,7 @@
 //! out of a model call rather than free-form prose — the boundary that lets a
 //! model's output become a program input. It underpins agents that return
 //! machine-checkable results to their caller and, at the deepest level, a model
-//! emitting a schema-conformant `.rag` blueprint or REPL plan that the same
-//! runtime then compiles and runs.
+//! emitting schema-conformant data that the runtime consumes next.
 //!
 //! Owns response formats, JSON schema validation, provider-native structured
 //! output, tool-call fallback structured output, parsed typed responses, and

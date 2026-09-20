@@ -6,6 +6,54 @@
 
 use super::*;
 
+struct AgentLoopBase<'a, State: Send + Sync, Ctx: Send + Sync> {
+    harness: &'a AgentHarness<State, Ctx>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> AgentBaseCall<State, Ctx>
+    for AgentLoopBase<'_, State, Ctx>
+{
+    fn call<'a>(
+        &'a self,
+        ctx: &'a mut RunContext<Ctx>,
+        state: &'a State,
+        request: crate::middleware::AgentRequest,
+        run: &'a mut AgentRun,
+        status: &'a mut HarnessRunStatus,
+    ) -> BoxAgentFuture<'a> {
+        Box::pin(async move {
+            ctx.streaming = request.streaming;
+            match self.harness.policy.execution {
+                crate::runtime::LoopExecution::Graph => match self.harness.loop_driver.clone() {
+                    Some(driver) => {
+                        driver
+                            .drive(
+                                self.harness,
+                                state,
+                                ctx,
+                                run,
+                                status,
+                                request.input,
+                                request.streaming,
+                            )
+                            .await
+                    }
+                    None => Err(TinyAgentsError::Validation(
+                        "RunPolicy::execution is LoopExecution::Graph but no LoopDriver is \
+                         installed; call AgentHarness::with_loop_driver first"
+                            .to_string(),
+                    )),
+                },
+                crate::runtime::LoopExecution::Direct => {
+                    self.harness
+                        .run_loop(state, ctx, run, status, request.input, request.streaming)
+                        .await
+                }
+            }
+        })
+    }
+}
+
 /// Owns the accumulating run until the driver reaches a terminal outcome.
 ///
 /// If the driving future is dropped at any await point, this guard observes the
@@ -374,50 +422,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
-        // A5: `RunPolicy::execution` selects the loop engine. `Direct` (the
-        // default) is the built-in `run_loop` below, unchanged from every
-        // release before A5. `Graph` delegates to the installed
-        // `LoopDriver` (see `agent_loop::phases::LoopDriver`) — typically
-        // `tinyagents-graph`'s `GraphLoopDriver` — which owns this same
-        // contract (RunStarted..RunCompleted/RunFailed/pause, writing every
-        // produced message onto `run.messages` on every exit path).
-        // Selecting `Graph` with no driver installed fails closed rather than
-        // silently falling back to `Direct`.
-        let outcome = match self.policy.execution {
-            crate::runtime::LoopExecution::Graph => match self.loop_driver.clone() {
-                Some(driver) => {
-                    driver
-                        .drive(
-                            self,
-                            state,
-                            &mut ctx,
-                            &mut terminal.run,
-                            &mut status,
-                            input,
-                            streaming,
-                        )
-                        .await
-                }
-                None => Err(TinyAgentsError::Validation(
-                    "RunPolicy::execution is LoopExecution::Graph but no LoopDriver is \
-                     installed; call AgentHarness::with_loop_driver first"
-                        .to_string(),
-                )),
-            },
-            crate::runtime::LoopExecution::Direct => {
-                self.run_loop(
-                    state,
-                    &mut ctx,
-                    &mut terminal.run,
-                    &mut status,
-                    input,
-                    streaming,
-                )
-                .await
-            }
-        };
-
-        match outcome {
+        let base = AgentLoopBase { harness: self };
+        match self
+            .middleware
+            .run_wrapped_agent(
+                &mut ctx,
+                state,
+                input,
+                streaming,
+                &mut terminal.run,
+                &mut status,
+                &base,
+            )
+            .await
+        {
             Ok(()) => {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical

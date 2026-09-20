@@ -362,9 +362,9 @@ Enforcement itself lives in `ToolPolicyMiddleware`; see
 for the exposure/execution hooks and the enforcement builders
 (`require_sandbox`, `require_approval`, `enforce_result_bytes`, `strict`,
 `deny_side_effects`, `require_classification`, `require_background_safe`). The
-`require_sandbox` gate reads the run's
-[`WorkspaceDescriptor`](workspace.md) to decide whether a `SandboxMode::Required`
-tool may run.
+`require_sandbox` gate reads the run's `tinytools::WorkspaceDescriptor` to
+decide whether a `SandboxMode::Required` tool may run. The host attaches that
+descriptor to `RunContext`, commonly from around-agent middleware.
 
 ## Deferred tool calls: approval and external execution (A2)
 

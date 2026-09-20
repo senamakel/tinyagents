@@ -12,7 +12,6 @@ use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 

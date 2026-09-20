@@ -683,6 +683,38 @@ mod file_backend {
         assert!(cp.get_thread("missing").await.unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn concurrent_file_lease_claims_have_one_winner() {
+        let tmp = TempDir::new("concurrent-lease-claim");
+        // Use separate handles to the same directory, matching independent
+        // executors rather than relying on any in-process coordination.
+        let first = FileCheckpointer::<i32>::new(tmp.path());
+        let second = FileCheckpointer::<i32>::new(tmp.path());
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+
+        let first_barrier = std::sync::Arc::clone(&barrier);
+        let first_claim = tokio::spawn(async move {
+            first_barrier.wait().await;
+            first
+                .try_claim("thread", "owner-a", std::time::Duration::from_secs(60))
+                .await
+        });
+        let second_barrier = std::sync::Arc::clone(&barrier);
+        let second_claim = tokio::spawn(async move {
+            second_barrier.wait().await;
+            second
+                .try_claim("thread", "owner-b", std::time::Duration::from_secs(60))
+                .await
+        });
+
+        let first_won = first_claim.await.unwrap().unwrap();
+        let second_won = second_claim.await.unwrap().unwrap();
+        assert_ne!(
+            first_won, second_won,
+            "only one concurrent owner may claim a file-backed lease"
+        );
+    }
+
     // ---- I9 regression: `list` must not decode full `State` -----------------
 
     /// A `State` whose `Deserialize` impl counts every call it makes, so a

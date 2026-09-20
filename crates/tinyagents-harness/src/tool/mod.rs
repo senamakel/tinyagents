@@ -7,6 +7,7 @@
 pub mod deferred;
 pub mod discover;
 pub mod effects;
+mod prompt;
 mod schema;
 mod schema_compact;
 mod schema_prepare;
@@ -27,6 +28,7 @@ pub use effects::{
     LedgerFailure, ToolEffect, ToolEffectLedger, ToolEffectSettle, ToolEffectStart,
     ToolEffectStatus,
 };
+pub use prompt::*;
 pub use schema::*;
 pub use schema_compact::*;
 pub use schema_prepare::*;

@@ -1,18 +1,17 @@
 # `tinyagents-registry` — named capability catalog
 
 The **registry** is the named-addressable catalog that makes TinyAgents
-recursive: a `.rag` blueprint or host session can reference a model, tool,
-graph, or agent *by name* rather than hardcoding it, and the registry
+recursive: a host session can reference a model, tool, graph, or agent *by
+name* rather than hardcoding it, and the registry
 resolves that name to a real handle — with the allowlist guarantee that
 only capabilities a human explicitly registered can be invoked.
 
 ## Public surface
 
 - **`CapabilityRegistry<State>`** — the core registry (generic over application
-  state `State`). Stores executable capabilities (models, tools, graphs, agents)
-  and metadata for every other kind (routers, reducers, etc.). Enforces
-  duplicate detection and provides aliasing, snapshot export, and a `.rag`
-  [`CapabilityResolver`] bridge.
+  state `State`). Stores executable model and tool capabilities, agent
+  definitions, and metadata for descriptor kinds. Enforces duplicate detection
+  and provides aliasing and snapshot export.
 - **`ComponentKind`, `ComponentId`, `ComponentMetadata`** — the vocabulary for
   registering and discovering capabilities by name and kind. Metadata is
   durable and serializable; [`RegistrySnapshot`] projects it for audit logs,
@@ -49,14 +48,13 @@ only capabilities a human explicitly registered can be invoked.
 
 - **`capability/`** — the [`CapabilityRegistry`] implementation: registration,
   lookup, aliasing, duplicate detection, and bridges to the harness
-  ([`ModelRegistry`], [`ToolRegistry`]) and language layers
-  ([`CapabilityResolver`]).
+  ([`ModelRegistry`], [`ToolRegistry`]).
   - `types.rs` — the [`CapabilityRegistry`] struct and storage maps.
   - `mod.rs` — registration and accessor methods.
   - `test.rs` — tests for registration, alias, and lookup.
 - **`component/`** — identity and discovery types: [`ComponentKind`],
   [`ComponentId`], [`ComponentMetadata`]. Used by every other part of the
-  registry and by the language layer.
+  registry and by host applications.
   - `types.rs` — the data types.
   - `mod.rs` — constructors and string conversions.
   - `test.rs` — tests for kind, id, and metadata.
@@ -77,10 +75,8 @@ only capabilities a human explicitly registered can be invoked.
 ## Relationship to other modules
 
 - **Depends on:** `tinyagents-harness` (model/tool registries, error types),
-  `tinyagents-language` (blueprint, capability resolver), `tinyagents-definition`
+  `tinyagents-definition`
   (agent definitions), `tinyinference-llm` (chat models, capabilities).
-- **Used by:** `tinyagents-harness` (for model/tool dispatch), the language layer
-  (for `.rag` capability resolution), and host code (for registration and
-  discovery).
+- **Used by:** host code for registration, discovery, and model/tool dispatch.
 - **Test coverage:** Integration tests in `crates/tinyagents-integration-tests/`
-  cover registry binding, serialization, and capability resolver interaction.
+  cover registry binding and serialization.

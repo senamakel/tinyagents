@@ -646,7 +646,10 @@ impl serde::Serialize for ChannelSet {
                     ChannelEntry {
                         kind: channel.kind().to_string(),
                         config: channel.config(),
-                        value: self.values.get(name).cloned(),
+                        value: channel
+                            .is_tracked()
+                            .then(|| self.values.get(name).cloned())
+                            .flatten(),
                     },
                 )
             })

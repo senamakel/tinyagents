@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use tinyagents_graph::*;
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 
 #[tokio::test]

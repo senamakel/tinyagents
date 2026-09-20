@@ -1,8 +1,8 @@
 //! Type definitions for the harness runtime facade.
 //!
 //! [`AgentHarness`] is the re-entrant runtime that the whole recursive
-//! architecture stands inside: parent agents, nested sub-agents, subgraph
-//! nodes, and model-authored blueprints all execute against the same composed
+//! architecture stands inside: parent agents, nested sub-agents, and subgraph
+//! nodes all execute against the same composed
 //! registries, middleware, and policy, so recursion reuses one runtime instead
 //! of forking new ones. [`RunPolicy`] is the cross-cutting policy that runtime
 //! enforces on every (parent or nested) run.

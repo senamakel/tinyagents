@@ -26,6 +26,7 @@
 
 #[cfg(feature = "langfuse")]
 mod langfuse;
+mod profile;
 mod types;
 mod worker;
 
@@ -36,6 +37,7 @@ pub use worker::{AppendWorker, DEFAULT_DRAIN_CAPACITY};
 pub use langfuse::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
+pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
 // Shared Langfuse payload helpers reused by the graph observability exporter so
 // ISO-8601 timestamp formatting and null-field pruning live in one place.
 #[cfg(feature = "langfuse")]
@@ -651,6 +653,14 @@ impl JournalSink {
     pub fn flush(&self) {
         self.worker.flush();
     }
+
+    /// Returns cumulative queue-drop and backend-failure counters.
+    pub fn health(&self) -> SinkHealth {
+        SinkHealth {
+            dropped: self.worker.dropped(),
+            append_failures: self.worker.append_failures(),
+        }
+    }
 }
 
 impl EventListener for JournalSink {
@@ -696,6 +706,14 @@ impl JsonlSink {
     /// caught up with the events emitted so far.
     pub fn flush(&self) {
         self.worker.flush();
+    }
+
+    /// Returns cumulative queue-drop and backend-failure counters.
+    pub fn health(&self) -> SinkHealth {
+        SinkHealth {
+            dropped: self.worker.dropped(),
+            append_failures: self.worker.append_failures(),
+        }
     }
 }
 

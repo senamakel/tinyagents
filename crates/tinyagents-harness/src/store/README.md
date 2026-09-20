@@ -7,7 +7,7 @@ runtime.
 
 In the recursive architecture the store is the durable, shared substrate that
 outlives any single run: parent and child runs, sub-agents, and
-REPL/blueprint executions read and write the same namespaced values, so a
+nested executions read and write the same namespaced values, so a
 deeply nested call can persist a result a sibling or a later turn picks up.
 It is the harness-side persistence layer for runtime data — events, model and
 tool call records, message history, artifacts, memory — and is intentionally

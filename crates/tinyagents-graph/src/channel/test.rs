@@ -400,6 +400,26 @@ fn channel_config_round_trips_for_every_built_in_kind() {
 }
 
 #[test]
+fn untracked_channel_value_is_not_serialized() {
+    let mut set = ChannelSet::new()
+        .with_channel("durable", LastValue)
+        .with_channel("scratch", Untracked);
+    set.apply_update("durable", json!("saved")).unwrap();
+    set.apply_update("scratch", json!("discarded")).unwrap();
+
+    let json = serde_json::to_value(&set).unwrap();
+    assert_eq!(json["channels"]["durable"]["value"], json!("saved"));
+    assert!(
+        json["channels"]["scratch"].get("value").is_none(),
+        "untracked values must not enter checkpoint wire data"
+    );
+
+    let decoded: ChannelSet = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.get("durable"), Some(&json!("saved")));
+    assert_eq!(decoded.get("scratch"), None);
+}
+
+#[test]
 fn binary_aggregate_named_unknown_reducer_errors() {
     let err = BinaryAggregate::named("does-not-exist-anywhere").unwrap_err();
     assert!(matches!(err, TinyAgentsError::Checkpoint(_)));

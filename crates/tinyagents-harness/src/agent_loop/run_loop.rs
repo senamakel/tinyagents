@@ -306,15 +306,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
             }
         }
-        // The dialect itself is resolved per turn, once the model for that
-        // turn is known (see the `run_dialect` binding below, right after
-        // `binding`): `Auto` needs the model's capability to decide between
-        // `Native` and the documented `Xml` fallback, and that capability is
-        // not known this early. `tool_schemas` — what the text protocols need
-        // a registry built from (the *prepared* direct set plus the discovery
-        // bridge, i.e. exactly what is rendered into the catalogue and can
-        // come back as a call) — is fixed for the whole run and captured here.
-
         // Fail closed on a structured-output schema whose name collides with a
         // registered tool *or* the intrinsic discovery bridge. Under the
         // tool-call strategy the schema is sent as an extra `function` entry,
@@ -610,6 +601,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .run_before_model(ctx, state, &mut request)
                 .await?;
 
+            // A forced native dialect cannot silently select a model that
+            // lacks provider-native tool calling. This has to happen after
+            // `before_model`, because middleware may add tools, and before
+            // model resolution, because the resolver is the capability gate.
+            // An automatic structured response also needs this gate: its
+            // fallback may become a native schema tool after selection.
+            if matches!(
+                self.policy.tool_dialect,
+                crate::config::ToolDispatcher::Native
+            ) && (!request.tools.is_empty()
+                || matches!(request.response_format, Some(ResponseFormat::Auto { .. })))
+            {
+                request
+                    .required_capabilities
+                    .get_or_insert_default()
+                    .tool_calling = true;
+            }
+
             // Safe checkpoint: a control requested from `before_model_control`
             // (for example `BudgetMiddleware` finding the budget already
             // exhausted) is honored **before** the model is actually
@@ -621,55 +630,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ControlEffect::None => {}
                 ControlEffect::ContinueLoop => continue,
                 ControlEffect::Exit(exit) => return Ok(exit),
-            }
-
-            // `ToolDispatcher::Native` is documented as *forcing* provider-native
-            // tool calls, unlike `Auto`'s "native when available, else Xml".
-            // `RunDialect::resolve` maps both to the same `Native` variant (it
-            // only decides whether *this* host renders a text protocol), so
-            // without a capability requirement that promise was unenforceable:
-            // a model profile lacking `tool_calling` could still be resolved,
-            // and a provider adapter is free to fall back to its own text
-            // encoding for such a profile. Requiring the capability makes
-            // resolution itself fail closed for an incapable model. An
-            // adapter's own *runtime* degrade after a live "tools not
-            // supported" provider response is a separate, adapter-internal
-            // reliability behavior this host-side dialect selection has no
-            // visibility into or control over.
-            //
-            // Checked against `request.tools` (the *effective* tool set),
-            // not the pre-`before_model` `tool_schemas` snapshot: a run that
-            // starts with no tools but whose `before_model` middleware adds
-            // some must still be gated — checking the earlier snapshot would
-            // silently let those middleware-added tools reach an
-            // incapable-of-native-tool-calling model.
-            //
-            // Also gated on an `Auto` structured-output format even when
-            // `request.tools` is still empty here: `StructuredStrategy`
-            // resolution (below, after `binding`) only ever appends a
-            // synthetic tool-call schema for a model whose profile already
-            // has `tool_calling` (`StructuredStrategy::for_profile`'s
-            // `ToolCall` arm), so requiring it up front is what makes that
-            // later fact true rather than merely hoped for — by the time
-            // structured planning knows whether a schema tool is needed the
-            // model is already resolved, too late to gate resolution on.
-            // Requiring the capability here is conservatively broader than
-            // strictly necessary for a model that would have used
-            // `ProviderSchema` instead, but never wrong: a fail-closed
-            // requirement narrowing the candidate pool is the point of this
-            // gate.
-            let structured_output_may_need_tool_calling = matches!(
-                self.policy.default_response_format,
-                Some(ResponseFormat::Auto { .. })
-            );
-            if matches!(
-                self.policy.tool_dialect,
-                crate::config::ToolDispatcher::Native
-            ) && (!request.tools.is_empty() || structured_output_may_need_tool_calling)
-            {
-                let mut required = request.required_capabilities.clone().unwrap_or_default();
-                required.tool_calling = true;
-                request.required_capabilities = Some(required);
             }
 
             // Resolve the model for the event/log name before invoking.
@@ -692,42 +652,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     })?
             };
             let model_name = binding.resolved.name.clone();
-
-            // Resolved per turn (not once for the whole run) because `Auto`
-            // needs the *resolved* model's capability, known only now:
-            // `ToolDispatcher::Auto` is documented as "provider-native tool
-            // calls when the provider supports them, otherwise Xml", but
-            // mapping it to the same host-side-no-op behavior as `Native`
-            // (as an earlier version of this dialect resolution did) left
-            // that fallback unenforced — a model with `tool_calling: false`
-            // selected under `Auto` would receive a request that still
-            // depended on provider-native tools, with no host-rendered text
-            // protocol and no adapter guaranteed to supply one. `Native`
-            // stays forced regardless of capability (it fails closed at
-            // resolution instead, via the capability requirement above);
-            // `Xml`/`Pformat` stay forced as explicit opt-ins.
-            let effective_dispatcher = match self.policy.tool_dialect {
-                crate::config::ToolDispatcher::Auto => {
-                    // A model with *no declared profile at all* is unknown,
-                    // not incapable — treated as capable (the historical
-                    // behavior, and correct for hosts/tests that never
-                    // bother declaring a profile). Only an explicit
-                    // `tool_calling: false` triggers the documented Xml
-                    // fallback.
-                    if binding
-                        .model
-                        .profile()
-                        .is_none_or(|profile| profile.tool_calling)
-                    {
-                        crate::config::ToolDispatcher::Native
-                    } else {
-                        crate::config::ToolDispatcher::Xml
-                    }
-                }
-                other => other,
-            };
-            let run_dialect =
-                super::dialect::RunDialect::resolve(effective_dispatcher, &tool_schemas);
 
             // An explicit request override that resolution skipped (unknown
             // name, missing capability, or provider-retired) falls through to
@@ -984,48 +908,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `None`. Read below by the dropped-tool-call nudge: nudging a
             // model to "issue the call" when no call could ever have been
             // accepted wastes up to `dropped_tool_call_nudges` model calls
-            // asking for something impossible before falling through.
+            // asking for something impossible before falling through. Also
+            // gates whether `recovery` below is populated at all: an empty
+            // recovery makes every grammar in `tinytools-agent` decline to
+            // recognize anything as a call, so a model that narrated
+            // `<tool_call>`-shaped markup as plain text while explicitly
+            // told not to call anything is never misread as a real,
+            // side-effecting call.
             let tools_available_this_turn =
                 offered_tool_count > 0 && request.tool_choice != ToolChoice::None;
-            // Whether text-dialect recovery (the post-response parse *and*
-            // the streaming scrubber, which both read `recovery`) should run
-            // for this call. A forced text dialect always recovers — the
-            // model can only answer in text, so parsing it is the protocol,
-            // not a fallback. Under `Native`, `RunPolicy::text_dialect_recovery`
-            // decides: its `Auto` default skips a model whose resolved
-            // profile reports native tool calling, since such a model that
-            // still answered in prose was explaining or quoting the format,
-            // not making a call (I-2). Decided here, before `binding.model`
-            // moves into the wrap onion below.
-            let text_dialect_recovery_enabled = run_dialect.is_text()
-                || match self.policy.text_dialect_recovery {
-                    crate::runtime::TextDialectRecovery::Off => false,
-                    crate::runtime::TextDialectRecovery::On => true,
-                    crate::runtime::TextDialectRecovery::Auto => !binding
-                        .model
-                        .profile()
-                        .map(|profile| profile.tool_calling)
-                        .unwrap_or(false),
-                };
-            // An empty recovery when the effective choice is `None`: a
-            // `before_model` middleware asking for no tool calls this turn
-            // must actually get none. `apply_to_request` below already skips
-            // its rewrite for `None`, but that alone left recovery/the
-            // stream scrubber still treating every offered name as
-            // recognizable — so a model that narrated `<tool_call>` markup
-            // as plain text anyway would still have it parsed and dispatched
-            // as a real, side-effecting call despite the explicit
-            // prohibition. An empty `offered` list makes every grammar in
-            // `tinytools-agent` decline to recognize anything as a call. The
-            // same empty recovery represents the policy above resolving to
-            // off, so the scrubber and the post-response parse agree.
-            let recovery = if !tools_available_this_turn || !text_dialect_recovery_enabled {
-                super::dialect::TextRecovery::default()
-            } else {
+            let dialect =
+                super::dialect::RunDialect::resolve(self.policy.tool_dialect, &request.tools);
+            let forced_text_dialect = dialect.is_text();
+            let recovery = if tools_available_this_turn {
                 super::dialect::TextRecovery {
                     offered: Arc::new(request.tools.clone()),
-                    registry: run_dialect.registry_for(&request.tools),
+                    registry: dialect.registry_for(&request.tools),
                 }
+            } else {
+                super::dialect::TextRecovery::default()
             };
             // Applied before budget preflight below: for a text dialect this
             // rewrite folds the protocol block and full tool catalogue into
@@ -1035,15 +936,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `max_input_tokens` pass admission on the small structured
             // request and then send a materially larger rendered-text one,
             // defeating the pre-call budget limit.
-            run_dialect.apply_to_request(&mut request);
+            dialect.apply_to_request(&mut request);
 
             // A host budget is acquired only for an explicit host-driven run.
-            // Do it after structured-output planning and the dialect
-            // rewrite: a synthetic schema tool and, for a text dialect, the
-            // rendered protocol/catalogue text are both part of the actual
-            // provider request and must be included in its estimate. The
-            // permit remains alive through response accounting, so
-            // cancellation or a provider error still releases it through
+            // Do it after structured-output planning: a synthetic schema tool
+            // is part of the provider request and must be included in its
+            // estimate. The permit remains alive through response accounting,
+            // so cancellation or a provider error still releases it through
             // Drop.
             let host_budget = if let Some(host_run) =
                 crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?
@@ -1092,7 +991,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             } else {
                 None
             };
-
             let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
             status.mark_running(HarnessPhase::Model);
             status.active_model_call = Some(call_id.clone());
@@ -1110,13 +1008,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
             status.set_last_event(record.id);
 
+            // Captured before `binding.model` moves into `base` below: decides
+            // whether text-dialect recovery should even be attempted for this
+            // call's response (see the call site after the model returns). A
+            // forced text dialect always recovers regardless of this flag —
+            // the model can only answer in text, so parsing it is the
+            // protocol, not a fallback. Under `Native`, `Auto` skips a model
+            // whose resolved profile reports native tool calling, since such
+            // a model that still answered in prose was explaining or quoting
+            // the format, not making a call (I-2).
+            let text_dialect_recovery_enabled = match self.policy.text_dialect_recovery {
+                crate::runtime::TextDialectRecovery::Off => false,
+                crate::runtime::TextDialectRecovery::On => true,
+                crate::runtime::TextDialectRecovery::Auto => !binding
+                    .model
+                    .profile()
+                    .map(|profile| profile.tool_calling)
+                    .unwrap_or(false),
+            };
+
             // The real model call (cache + retry + fallback core) is the
             // innermost base of the model-wrap onion. Lifecycle `before_model`
             // already ran above; the wrap onion runs here; lifecycle
             // `after_model` runs below — so ordering is:
             // before_model -> wrap onion (outer..inner..base) -> after_model.
-            // `recovery` and the dialect rewrite were computed above, before
-            // budget preflight (see the comment there for why).
             let base = ModelCallBase {
                 harness: self,
                 call_id: call_id.clone(),
@@ -1162,17 +1077,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // every grammar the protocol crate knows (`recover_text_calls`),
             // but only when the provider did not already supply structured
             // calls. `recovery` is already empty when this turn offered no
-            // tools, the effective tool choice was `None`, or
-            // `RunPolicy::text_dialect_recovery` disabled recovery for the
-            // resolved model (computed above, before the resolved model
-            // moved into the wrap onion); the fenced-code guard and the
-            // audit event live in the wrapper.
-            recover_text_dialect_calls(
-                ctx,
-                &mut response,
-                &call_id,
-                &recovery,
-            );
+            // tools or the effective tool choice was `None` (computed
+            // above); the `forced_text_dialect || text_dialect_recovery_enabled`
+            // gate additionally skips a resolved model whose profile reports
+            // native tool calling under `RunPolicy::text_dialect_recovery`'s
+            // `Auto` default. The fenced-code guard and the audit event live
+            // in the wrapper.
+            if forced_text_dialect || text_dialect_recovery_enabled {
+                recover_text_dialect_calls(ctx, &mut response, &call_id, &recovery);
+            }
 
             // Account for the completed provider response before fallible
             // response middleware. A middleware rejection must not erase

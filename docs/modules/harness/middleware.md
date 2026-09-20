@@ -216,7 +216,8 @@ enforcement builders:
 - `.deny_side_effects(mask)` — deny any tool declaring a side effect in `mask`.
 - `.require_sandbox(true)` — block a tool whose `runtime.sandbox ==
   SandboxMode::Required` **unless** the run carries a workspace whose `sandbox`
-  is `Required` (see [workspace isolation](workspace.md)); fail closed otherwise.
+  is `Required`; hosts attach that descriptor through around-agent middleware,
+  and enforcement fails closed otherwise.
 - `.require_approval([names])` — block any tool declaring
   `access.approval_required` unless its name is in the approved set.
 - `.enforce_result_bytes(true)` — in `after_tool`, truncate a result exceeding
