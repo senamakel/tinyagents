@@ -62,6 +62,9 @@ jobs:
           cargo test --workspace --no-default-features --features tools
           cargo test --workspace --no-default-features --features multimodal
 
+      - name: Free build artifacts before coverage
+        run: cargo clean
+
       - name: Coverage gate
         uses: taiki-e/install-action@cargo-llvm-cov
 
