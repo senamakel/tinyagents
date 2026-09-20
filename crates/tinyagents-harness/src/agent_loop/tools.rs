@@ -1342,10 +1342,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             Ok(pair) => pair,
             Err(err) => {
                 if let Some(request) = execution_deferral(&prepared.call, &err) {
-                    // Left `started` in the ledger: the call is genuinely
-                    // paused pending external resolution, not settled, and
-                    // `reconcile_tool_effects` (or the resume path) is what
-                    // eventually judges it.
+                    // Settled `Deferred` in the ledger (not left `started`):
+                    // the call is genuinely paused pending external
+                    // resolution, and `resume_deferred` is what eventually
+                    // answers it — see `defer_started_tool_call`'s doc
+                    // comment.
                     self.defer_started_tool_call(ctx, status, &prepared, request, deferred)
                         .await;
                     return Ok(None);
