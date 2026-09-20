@@ -651,7 +651,15 @@ where
         }
     }
 
-    async fn run_phase(
+    /// Runs exactly one phase to completion (or an interrupt/failure
+    /// boundary), including its own agent fan-out, durable persistence, and
+    /// child-lease heartbeat. `pub(crate)` so [`super::lower::lower_workflow`]
+    /// can reuse it unchanged as the lowered graph's per-phase node body —
+    /// see that module's doc for why reuse (rather than a second,
+    /// graph-specific implementation) is what keeps the graph path's
+    /// durability/cancellation/registration semantics identical to this
+    /// (legacy) scheduler's.
+    pub(crate) async fn run_phase(
         &self,
         run: &WorkflowRun,
         definition: &WorkflowDefinition,
