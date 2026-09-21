@@ -312,3 +312,53 @@ fn fingerprint_value_is_pinned_for_cross_process_stability() {
         "0c8eb74fc9194b5d7845d787735eb2e36a68dc9d2ed91e5e7e07a13035d7d2a6"
     );
 }
+
+#[test]
+fn system_segment_ids_number_every_leading_system_message() {
+    assert_eq!(system_segment_id(0), "system");
+    assert_eq!(system_segment_id(1), "system.1");
+    assert_eq!(system_segment_id(12), "system.12");
+    for id in ["system", "system.1", "system.42"] {
+        assert!(is_system_segment_id(id), "{id}");
+    }
+    for id in ["tools", "system.", "system.x", "systemic", "system.1.2", ""] {
+        assert!(!is_system_segment_id(id), "{id}");
+    }
+}
+
+#[test]
+fn push_system_messages_keeps_one_cacheable_segment_per_tier() {
+    let stable = Message::system("identity and rules");
+    let volatile = Message::system("connected services for this session");
+    let mut builder = PromptBuilder::new();
+    builder.push_system_messages(&[stable.clone(), volatile.clone()]);
+    let request = builder.build(vec![Message::user("hi")]);
+
+    assert_eq!(request.messages.len(), 3);
+    assert_eq!(request.messages[0], stable);
+    assert_eq!(request.messages[1], volatile);
+    let ids: Vec<&str> = request
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system", "system.1"]);
+    assert!(request.cache_segments.iter().all(|segment| segment.cacheable));
+    assert!(
+        request
+            .cache_segments
+            .iter()
+            .all(|segment| segment.role == SegmentRole::System)
+    );
+
+    // Rewriting only the volatile tier changes the fingerprint (the whole
+    // prefix is what a provider caches) but the stable segment keeps its id,
+    // so the layout guard can attribute the change to the second tier.
+    let mut other = PromptBuilder::new();
+    other.push_system_messages(&[stable, Message::system("different session")]);
+    assert_ne!(builder.fingerprint(), other.fingerprint());
+
+    let mut empty = PromptBuilder::new();
+    empty.push_system_messages(&[]);
+    assert!(empty.build(vec![]).cache_segments.is_empty());
+}
