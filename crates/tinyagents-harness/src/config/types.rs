@@ -71,6 +71,17 @@ pub enum ToolDispatcher {
     /// encoding, but it mis-parses on some models, so it is opt-in only and
     /// never selected by [`Auto`](Self::Auto).
     Pformat,
+    /// Force code-style calls with Python signatures in the prompt:
+    /// `def read_file(path: str, limit: int = None) -> str`, called as
+    /// `read_file(path="src/main.rs")`. Compact like P-Format but a syntax a
+    /// code-trained model already writes; opt-in, never selected by
+    /// [`Auto`](Self::Auto).
+    Python,
+    /// Force code-style calls with TypeScript signatures in the prompt:
+    /// `function read_file(path: string, limit?: number): string;`, called
+    /// as `read_file({path: "src/main.rs"})`. Opt-in, never selected by
+    /// [`Auto`](Self::Auto).
+    Typescript,
 }
 
 // ── RequiredOutput ────────────────────────────────────────────────────────────
