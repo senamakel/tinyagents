@@ -294,6 +294,125 @@ async fn a_forced_pformat_dialect_parses_positional_calls() {
     assert!(system.contains("lookup[0|<q>]"), "{system}");
 }
 
+#[tokio::test]
+async fn a_forced_python_dialect_parses_code_calls_with_signatures_in_the_prompt() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "Looking it up.\n<tool_call>\nlookup(q=\"needle\")\n</tool_call>",
+        "done",
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Python,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+    let ids = dispatched_ids(&listener);
+    assert_eq!(ids.len(), 1);
+    assert!(ids[0].ends_with("-tool-1"), "harness-minted id, got {}", ids[0]);
+
+    let first = &model.requests()[0];
+    assert!(first.tools.is_empty(), "schemas must not go on the wire");
+    let system = first
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(system.contains("## Tool Use Protocol"), "{system}");
+    assert!(system.contains("def lookup(q: str) -> str  # Looks something up."), "{system}");
+    assert!(!system.contains("\"type\": \"object\""), "no JSON schema: {system}");
+}
+
+#[tokio::test]
+async fn a_forced_typescript_dialect_parses_object_calls() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup({q: \"needle\"})</tool_call>",
+        "done",
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Typescript,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+    let system = model.requests()[0]
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(
+        system.contains("function lookup(q: string): string;  // Looks something up."),
+        "{system}"
+    );
+}
+
+#[tokio::test]
+async fn a_host_rendered_protocol_block_is_not_appended_twice() {
+    // OpenHuman composes the protocol block and the catalogue into its own
+    // system prompt. The run must still strip the schemas off the wire but
+    // must not put a second block in front of the model.
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup(q=\"needle\")</tool_call>",
+        "done",
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Python,
+            ..RunPolicy::default()
+        });
+
+    let host_prompt = "You are a helper.\n\n## Tool Use Protocol\n\nHost-rendered block.\n\n## Tools\n\ndef lookup(q: str) -> str";
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![Message::system(host_prompt), Message::user("go")],
+        )
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1, "the call still parses");
+    let first = &model.requests()[0];
+    assert!(first.tools.is_empty(), "schemas still come off the wire");
+    let system = first
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert_eq!(
+        system.matches("## Tool Use Protocol").count(),
+        1,
+        "one protocol block, not two: {system}"
+    );
+    assert!(!system.contains("Call a tool by writing"), "{system}");
+}
+
 /// Middleware that forces `tool_choice` before the dialect rewrite runs, the
 /// same shape a caller or another middleware forcing a specific tool would
 /// produce.
