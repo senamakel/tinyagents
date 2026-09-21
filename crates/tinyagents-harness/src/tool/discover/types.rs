@@ -3,7 +3,8 @@
 use std::{fmt, sync::Arc};
 
 use tinyinference_llm::tool::ToolSchema;
-use tinytools::{Bm25Index, Bm25Ranker, RankCandidate, RankContext, RankError, ToolRanker};
+use tinytools::rank::Bm25Index;
+use tinytools::{Bm25Ranker, RankCandidate, RankContext, RankError, ToolRanker};
 
 /// How the agent loop exposes [`tinytools::ToolExposure::Deferred`] tools.
 ///

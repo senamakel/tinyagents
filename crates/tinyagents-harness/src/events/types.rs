@@ -131,6 +131,24 @@ pub enum AgentEvent {
         query: String,
         /// Number of deferred tools returned.
         matched: usize,
+        /// Which ranker's answer was served: `"bm25"`, or the host ranker's
+        /// [`tinytools::ToolRanker::kind`]. Empty when the query was rejected
+        /// before ranking.
+        #[serde(default)]
+        ranker: String,
+        /// The best hit's calibrated confidence, when the ranker gave one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        top_confidence: Option<f64>,
+        /// Why the host ranker was not served, when one was active.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback: Option<String>,
+        /// The BM25 ranking, when the policy asked to compare it against the
+        /// served one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow_matched: Option<Vec<String>>,
+        /// Wall time of the ranking, in milliseconds.
+        #[serde(default)]
+        latency_ms: u64,
     },
 
     /// The model invoked a deferred tool through the intrinsic `tool_call`

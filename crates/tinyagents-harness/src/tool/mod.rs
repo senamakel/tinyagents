@@ -320,6 +320,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         self.schemas_with_exposure(tinytools::ToolExposure::Deferred)
     }
 
+    /// [`Self::deferred_schemas`] paired with each tool's
+    /// [`tinytools::Tool::family`], name-sorted, so the discovery catalogue
+    /// can say where a hit came from.
+    #[must_use]
+    pub fn deferred_schemas_with_families(
+        &self,
+    ) -> Vec<(tinyinference_llm::tool::ToolSchema, Option<String>)> {
+        let mut entries: Vec<_> = self
+            .tools
+            .values()
+            .map(|dispatch| dispatch.tool())
+            .filter(|tool| tool.exposure() == tinytools::ToolExposure::Deferred)
+            .map(|tool| {
+                let family = tool.family().map(str::to_owned);
+                (provider_schema(tool.as_ref()), family)
+            })
+            .collect();
+        entries.sort_by(|left, right| left.0.name.cmp(&right.0.name));
+        entries
+    }
+
     fn schemas_with_exposure(
         &self,
         exposure: tinytools::ToolExposure,
