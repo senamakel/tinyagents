@@ -321,7 +321,11 @@ async fn a_forced_python_dialect_parses_code_calls_with_signatures_in_the_prompt
     assert_eq!(run.tool_calls, 1);
     let ids = dispatched_ids(&listener);
     assert_eq!(ids.len(), 1);
-    assert!(ids[0].ends_with("-tool-1"), "harness-minted id, got {}", ids[0]);
+    assert!(
+        ids[0].ends_with("-tool-1"),
+        "harness-minted id, got {}",
+        ids[0]
+    );
 
     let first = &model.requests()[0];
     assert!(first.tools.is_empty(), "schemas must not go on the wire");
@@ -332,8 +336,14 @@ async fn a_forced_python_dialect_parses_code_calls_with_signatures_in_the_prompt
         .expect("system")
         .text();
     assert!(system.contains("## Tool Use Protocol"), "{system}");
-    assert!(system.contains("def lookup(q: str) -> str  # Looks something up."), "{system}");
-    assert!(!system.contains("\"type\": \"object\""), "no JSON schema: {system}");
+    assert!(
+        system.contains("def lookup(q: str) -> str  # Looks something up."),
+        "{system}"
+    );
+    assert!(
+        !system.contains("\"type\": \"object\""),
+        "no JSON schema: {system}"
+    );
 }
 
 #[tokio::test]
@@ -390,10 +400,7 @@ async fn a_host_rendered_protocol_block_is_not_appended_twice() {
 
     let host_prompt = "You are a helper.\n\n## Tool Use Protocol\n\nHost-rendered block.\n\n## Tools\n\ndef lookup(q: str) -> str";
     let run = harness
-        .invoke_default(
-            &(),
-            vec![Message::system(host_prompt), Message::user("go")],
-        )
+        .invoke_default(&(), vec![Message::system(host_prompt), Message::user("go")])
         .await
         .expect("run succeeds");
     assert_eq!(run.tool_calls, 1, "the call still parses");
