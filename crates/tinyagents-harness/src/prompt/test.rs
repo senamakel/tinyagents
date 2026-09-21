@@ -343,7 +343,12 @@ fn push_system_messages_keeps_one_cacheable_segment_per_tier() {
         .map(|segment| segment.id.as_str())
         .collect();
     assert_eq!(ids, vec!["system", "system.1"]);
-    assert!(request.cache_segments.iter().all(|segment| segment.cacheable));
+    assert!(
+        request
+            .cache_segments
+            .iter()
+            .all(|segment| segment.cacheable)
+    );
     assert!(
         request
             .cache_segments

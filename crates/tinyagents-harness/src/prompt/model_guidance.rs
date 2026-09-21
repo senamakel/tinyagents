@@ -126,7 +126,11 @@ mod test {
 
     #[test]
     fn the_block_stays_small() {
-        assert!(EXECUTION_DISCIPLINE.len() <= 900, "{}", EXECUTION_DISCIPLINE.len());
+        assert!(
+            EXECUTION_DISCIPLINE.len() <= 900,
+            "{}",
+            EXECUTION_DISCIPLINE.len()
+        );
         assert!(EXECUTION_DISCIPLINE.starts_with("## Execution discipline"));
     }
 }
