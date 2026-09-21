@@ -6736,6 +6736,8 @@ mod tool_effects_test {
 
 #[tokio::test]
 async fn tiered_system_messages_become_one_cacheable_segment_each() {
+    use crate::cache::PROMPT_CACHE_KEY_OPTION;
+    use tinyinference_llm::cache::CachePolicy;
     // A host that renders its system prompt in tiers sends them as consecutive
     // leading system messages. The request the model sees must keep one
     // segment per tier (so a rewritten volatile tier is attributable) and the
