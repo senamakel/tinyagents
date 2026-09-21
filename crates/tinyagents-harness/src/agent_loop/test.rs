@@ -6733,3 +6733,53 @@ mod tool_effects_test {
         );
     }
 }
+
+#[tokio::test]
+async fn tiered_system_messages_become_one_cacheable_segment_each() {
+    // A host that renders its system prompt in tiers sends them as consecutive
+    // leading system messages. The request the model sees must keep one
+    // segment per tier (so a rewritten volatile tier is attributable) and the
+    // fingerprint must cover both, in order.
+    let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_policy(RunPolicy {
+        cache: CachePolicy {
+            protect_prompt_prefix: true,
+            ..CachePolicy::default()
+        },
+        ..RunPolicy::default()
+    });
+
+    let stable = Message::system("identity and rules");
+    let volatile = Message::system("connected services this session");
+    harness
+        .invoke_default(
+            &(),
+            vec![stable.clone(), volatile.clone(), Message::user("hello")],
+        )
+        .await
+        .expect("run succeeds");
+
+    let request = model
+        .requests()
+        .into_iter()
+        .next()
+        .expect("model received one request");
+    let ids: Vec<&str> = request
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system", "system.1"]);
+    assert_eq!(request.messages[0], stable);
+    assert_eq!(request.messages[1], volatile);
+
+    let mut expected = crate::prompt::PromptBuilder::new();
+    expected.push_system_messages(&[stable, volatile]);
+    assert_eq!(
+        request.prompt_fingerprint,
+        expected.build(Vec::new()).prompt_fingerprint
+    );
+    assert!(request.provider_options[PROMPT_CACHE_KEY_OPTION].is_string());
+}
