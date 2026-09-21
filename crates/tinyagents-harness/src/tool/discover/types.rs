@@ -311,7 +311,8 @@ impl DeferredCatalog {
                 latency_ms: elapsed_ms(started),
             };
         };
-        let candidates: Vec<RankCandidate> = self.tools.iter().map(DeferredTool::candidate).collect();
+        let candidates: Vec<RankCandidate> =
+            self.tools.iter().map(DeferredTool::candidate).collect();
         let hosted = ranker.rank(query, context, &candidates, limit).await;
         let shadow_names = (policy.rank_mode == DiscoveryRankMode::Compare)
             .then(|| self.search_names(query, limit));

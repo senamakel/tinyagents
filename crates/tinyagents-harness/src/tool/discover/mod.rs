@@ -24,8 +24,8 @@ pub use bridge::{
 };
 // The BM25 arithmetic lives in `tinytools::rank` now, so a host ranks with the
 // same index the bridge does; the old paths keep resolving.
-pub use tinytools::rank::{Bm25Index, tokenize};
 pub use manifest::{MANIFEST_DESCRIPTION_CHARS, first_sentence, render_manifest};
+pub use tinytools::rank::{Bm25Index, tokenize};
 pub use types::{
     DeferredCatalog, DeferredTool, DiscoveryRankMode, RankedSearch, ToolDiscoveryPolicy,
 };

@@ -140,62 +140,267 @@ fn bridge_schemas_are_byte_stable_across_builds() {
     assert_eq!(a, b);
 }
 
-#[test]
-fn answer_tool_search_returns_full_schemas_for_hits() {
+#[tokio::test]
+async fn answer_tool_search_returns_full_schemas_for_hits() {
     let policy = ToolDiscoveryPolicy::default();
-    let (result, matched) = answer_tool_search(
+    let SearchAnswer {
+        result,
+        matched,
+        ranking,
+    } = answer_tool_search(
         &catalog(),
         &policy,
         &json!({"query": "read a pdf", "limit": 1}),
-    );
+    )
+    .await;
     assert!(!result.is_error);
     assert_eq!(matched, 1);
+    let ranking = ranking.unwrap();
+    assert_eq!(ranking.ranker, "bm25");
+    assert_eq!(ranking.names, vec!["pdf_read"]);
+    assert!(ranking.fallback.is_none());
+    assert!(ranking.shadow_names.is_none());
     let text = result.text();
     assert!(text.starts_with("1 match(es)."));
     assert!(text.contains("\"name\": \"pdf_read\""));
     assert!(text.contains("\"path\""));
 }
 
-#[test]
-fn answer_tool_search_clamps_limit_and_handles_misses() {
+#[tokio::test]
+async fn answer_tool_search_clamps_limit_and_handles_misses() {
     let policy = ToolDiscoveryPolicy {
         max_limit: 2,
         ..ToolDiscoveryPolicy::default()
     };
-    let (_, matched) = answer_tool_search(
+    let answer = answer_tool_search(
         &catalog(),
         &policy,
         &json!({"query": "pdf invite quote symbol attendees", "limit": 50}),
-    );
-    assert!(matched <= 2);
+    )
+    .await;
+    assert!(answer.matched <= 2);
 
-    let (result, matched) = answer_tool_search(&catalog(), &policy, &json!({"query": "zzzz qqqq"}));
-    assert!(!result.is_error);
-    assert_eq!(matched, 0);
-    assert!(result.text().starts_with("No deferred tool matches"));
+    let answer = answer_tool_search(&catalog(), &policy, &json!({"query": "zzzz qqqq"})).await;
+    assert!(!answer.result.is_error);
+    assert_eq!(answer.matched, 0);
+    assert!(answer.result.text().starts_with("No deferred tool matches"));
 
-    let (result, _) = answer_tool_search(&catalog(), &policy, &json!({"query": "  "}));
-    assert!(result.is_error);
+    let answer = answer_tool_search(&catalog(), &policy, &json!({"query": "  "})).await;
+    assert!(answer.result.is_error);
+    assert!(answer.ranking.is_none());
 }
 
 /// Regression: `max_limit: 0` used to reach `usize::clamp(1, 0)`, which
 /// panics because its minimum exceeds its maximum — a model-supplied numeric
 /// `limit` could crash the process. It must instead clamp against a
 /// normalized effective maximum of at least 1.
-#[test]
-fn answer_tool_search_does_not_panic_on_a_zero_max_limit() {
+#[tokio::test]
+async fn answer_tool_search_does_not_panic_on_a_zero_max_limit() {
     let policy = ToolDiscoveryPolicy {
         max_limit: 0,
         default_limit: 5,
         ..ToolDiscoveryPolicy::default()
     };
-    let (result, matched) = answer_tool_search(
+    let answer = answer_tool_search(
         &catalog(),
         &policy,
         &json!({"query": "pdf invite quote symbol attendees", "limit": 50}),
+    )
+    .await;
+    assert!(!answer.result.is_error);
+    assert!(
+        answer.matched <= 1,
+        "effective max_limit must clamp to at least 1"
     );
-    assert!(!result.is_error);
-    assert!(matched <= 1, "effective max_limit must clamp to at least 1");
+}
+
+/// A ranker that answers from a script: `Ok(keys)` or a failure.
+struct ScriptedRanker {
+    answer: Result<Vec<&'static str>, &'static str>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ScriptedRanker {
+    fn returning(keys: Vec<&'static str>) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            answer: Ok(keys),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn failing(reason: &'static str) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            answer: Err(reason),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl tinytools::ToolRanker for ScriptedRanker {
+    fn kind(&self) -> &'static str {
+        "scripted"
+    }
+
+    async fn rank(
+        &self,
+        _intent: &str,
+        _context: &tinytools::RankContext,
+        candidates: &[tinytools::RankCandidate],
+        limit: usize,
+    ) -> Result<Vec<tinytools::RankHit>, tinytools::RankError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Every candidate carries the family the catalogue was built with.
+        assert!(
+            candidates
+                .iter()
+                .all(|c| c.family.as_deref() == Some("fam"))
+        );
+        match &self.answer {
+            Ok(keys) => Ok(keys
+                .iter()
+                .take(limit)
+                .enumerate()
+                .map(|(i, key)| tinytools::RankHit {
+                    key: (*key).to_string(),
+                    score: 0.9 - i as f64 * 0.1,
+                    confidence: Some(0.9 - i as f64 * 0.1),
+                })
+                .collect()),
+            Err(reason) => Err(tinytools::RankError::Backend {
+                reason: (*reason).to_string(),
+            }),
+        }
+    }
+}
+
+fn catalog_with_families() -> DeferredCatalog {
+    DeferredCatalog::build_with_families(
+        catalog()
+            .schemas()
+            .cloned()
+            .map(|schema| (schema, Some("fam".to_string())))
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn host_ranker_is_served_with_its_confidence() {
+    let ranker = ScriptedRanker::returning(vec!["stock_quote", "pdf_read"]);
+    let policy = ToolDiscoveryPolicy::default().with_ranker(ranker.clone());
+    let answer = answer_tool_search(
+        &catalog_with_families(),
+        &policy,
+        &json!({"query": "read a pdf", "limit": 3}),
+    )
+    .await;
+    let ranking = answer.ranking.unwrap();
+    assert_eq!(ranking.ranker, "scripted");
+    assert_eq!(ranking.names, vec!["stock_quote", "pdf_read"]);
+    assert_eq!(ranking.top_confidence, Some(0.9));
+    assert!(ranking.fallback.is_none());
+    assert!(
+        ranking.shadow_names.is_none(),
+        "no shadow outside compare mode"
+    );
+    assert_eq!(answer.matched, 2);
+    assert!(answer.result.text().contains("\"name\": \"stock_quote\""));
+    assert_eq!(ranker.calls(), 1);
+}
+
+#[tokio::test]
+async fn host_ranker_failure_falls_back_to_bm25_and_says_why() {
+    let policy = ToolDiscoveryPolicy::default().with_ranker(ScriptedRanker::failing("503"));
+    let answer = answer_tool_search(
+        &catalog_with_families(),
+        &policy,
+        &json!({"query": "read a pdf"}),
+    )
+    .await;
+    let ranking = answer.ranking.unwrap();
+    assert_eq!(ranking.ranker, "bm25");
+    assert_eq!(ranking.names, vec!["pdf_read"]);
+    assert_eq!(
+        ranking.fallback.as_deref(),
+        Some("scripted failed: ranker backend failed: 503")
+    );
+    assert_eq!(answer.matched, 1);
+}
+
+#[tokio::test]
+async fn host_ranker_empty_answer_falls_back_to_bm25() {
+    let policy = ToolDiscoveryPolicy::default().with_ranker(ScriptedRanker::returning(vec![]));
+    let answer = answer_tool_search(
+        &catalog_with_families(),
+        &policy,
+        &json!({"query": "read a pdf"}),
+    )
+    .await;
+    let ranking = answer.ranking.unwrap();
+    assert_eq!(ranking.ranker, "bm25");
+    assert_eq!(ranking.names, vec!["pdf_read"]);
+    assert_eq!(
+        ranking.fallback.as_deref(),
+        Some("scripted returned no match")
+    );
+}
+
+#[tokio::test]
+async fn compare_mode_serves_the_ranker_and_reports_bm25_alongside() {
+    let ranker = ScriptedRanker::returning(vec!["stock_quote"]);
+    let policy = ToolDiscoveryPolicy::default()
+        .with_ranker(ranker.clone())
+        .with_rank_mode(DiscoveryRankMode::Compare);
+    let answer = answer_tool_search(
+        &catalog_with_families(),
+        &policy,
+        &json!({"query": "read a pdf"}),
+    )
+    .await;
+    let ranking = answer.ranking.unwrap();
+    assert_eq!(ranking.ranker, "scripted");
+    assert_eq!(ranking.names, vec!["stock_quote"]);
+    assert_eq!(ranking.shadow_names, Some(vec!["pdf_read".to_string()]));
+}
+
+#[tokio::test]
+async fn bm25_mode_ignores_an_installed_ranker() {
+    let ranker = ScriptedRanker::returning(vec!["stock_quote"]);
+    let policy = ToolDiscoveryPolicy::default()
+        .with_ranker(ranker.clone())
+        .with_rank_mode(DiscoveryRankMode::Bm25);
+    assert!(policy.active_ranker().is_none());
+    let answer = answer_tool_search(
+        &catalog_with_families(),
+        &policy,
+        &json!({"query": "read a pdf"}),
+    )
+    .await;
+    let ranking = answer.ranking.unwrap();
+    assert_eq!(ranking.ranker, "bm25");
+    assert_eq!(ranking.names, vec!["pdf_read"]);
+    assert_eq!(ranker.calls(), 0);
+}
+
+#[test]
+fn a_ranker_hit_naming_an_unknown_tool_is_dropped_from_the_answer() {
+    // `answer_tool_search` resolves names through `catalog.get`; a key the
+    // ranker invented never reaches the model. Pinned through the sync
+    // lookup so the guarantee is visible without a runtime.
+    assert!(catalog().get("invented").is_none());
+}
+
+#[test]
+fn policy_equality_and_debug_compare_ranker_kinds_only() {
+    let a = ToolDiscoveryPolicy::default().with_ranker(ScriptedRanker::returning(vec![]));
+    let b = ToolDiscoveryPolicy::default().with_ranker(ScriptedRanker::failing("x"));
+    assert_eq!(a, b, "same kind, same knobs");
+    assert_ne!(a, ToolDiscoveryPolicy::default());
+    assert!(format!("{a:?}").contains("Some(\"scripted\")"));
 }
 
 /// Regression: the `tool_search` schema advertised `"minimum": 1, "maximum":
