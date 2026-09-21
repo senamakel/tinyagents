@@ -13,7 +13,7 @@
 //! carry a provider prefix such as `openrouter/deepseek/deepseek-v4-flash`),
 //! so a host needs nothing but the resolved model name.
 
-use tinyinference_llm::ModelProfile;
+use tinyinference_llm::model::ModelProfile;
 
 /// Guidance rendered for the model families in [`NEEDS_EXECUTION_DISCIPLINE`].
 pub const EXECUTION_DISCIPLINE: &str = "\

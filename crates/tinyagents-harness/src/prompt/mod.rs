@@ -31,8 +31,13 @@
 //! assert!(!request.cache_segments.is_empty());
 //! ```
 
+mod model_guidance;
 mod types;
 
+pub use model_guidance::{
+    EXECUTION_DISCIPLINE, NEEDS_EXECUTION_DISCIPLINE, execution_discipline_for,
+    execution_discipline_for_profile, needs_execution_discipline,
+};
 pub use types::*;
 
 use serde_json::{Map, Value, json};
