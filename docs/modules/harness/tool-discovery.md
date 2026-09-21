@@ -35,10 +35,11 @@ a tool it does not know it needs.
 When a run has at least one deferred tool (after the host allow-list), the
 agent loop appends two intrinsic tools **after** the name-sorted direct set:
 
-- `tool_search { query, limit }` — BM25 over name, split identifier, description
-  and top-level property names. Returns up to `limit` matches (default 5, max
-  20) as `{name, description, parameters}` with the **full** schema, or a
-  "no match" note. Its description embeds a manifest of every deferred tool:
+- `tool_search { query, limit }` — ranks the catalogue's name, split
+  identifier, description, top-level property names and `Tool::family`.
+  Returns up to `limit` matches (default 5, max 20) as `{name, description,
+  parameters}` with the **full** schema, or a "no match" note. See
+  [Ranking](#ranking) for what does the ranking. Its description embeds a manifest of every deferred tool:
   `- name: first sentence (≤ 60 chars)`, degrading to names only, then to a
   bare count, until it fits `ToolDiscoveryPolicy::manifest_token_budget`
   (default 4,000 tokens).
@@ -54,6 +55,27 @@ Neither is a registered tool; a host that registers its own `tool_search` or
 max_limit }`). With `enabled: false` deferred tools are neither advertised nor
 searchable, but a direct call by name still runs: deferral only ever subtracts
 from the wire, never from what the host registered.
+
+### Ranking
+
+`DeferredCatalog::rank` answers as `ToolDiscoveryPolicy` says:
+
+- With no `ranker` installed (the default), BM25 from `tinytools::rank` —
+  free, deterministic, no network. `Bm25Index` and `tokenize` moved to that
+  crate so a host ranks with the same arithmetic the bridge does.
+- With a host `ranker: Arc<dyn tinytools::ToolRanker>` (a decision model such
+  as `tinytools-jev`, or an embedding index), `rank_mode` decides:
+  `Ranker` serves it; `Bm25` ignores it; `Compare` serves it and reports the
+  BM25 ranking alongside in `ToolSearched.shadow_matched` so the two can be
+  judged on live traffic without changing what the model sees.
+- A host ranker that fails or returns nothing **falls back to BM25** and
+  the reason lands in `ToolSearched.fallback`. A search never errors: an
+  error would leave every deferred tool unreachable for the turn.
+
+Every hit the ranker names is resolved through `catalog.get`, so a key the
+ranker invented never reaches the model. The catalogue is what the ranker
+sees; the model's `query` is the only intent, with an empty `RankContext` —
+the model already distilled the turn into it.
 
 ### Why a bridge and not hydration
 
@@ -87,8 +109,11 @@ allow-list.
   with, not as a live per-request wire metric — exposure-narrowing middleware
   (`ToolPolicyMiddleware::before_model`, dynamic/contextual selection) can
   still shrink an individual request below it.
-- `ToolSearched { call_id, query, matched }` and
-  `DeferredToolCall { call_id, tool_name }` — every discovery, auditable.
+- `ToolSearched { call_id, query, matched, ranker, top_confidence, fallback,
+  shadow_matched, latency_ms }` and `DeferredToolCall { call_id, tool_name }`
+  — every discovery, auditable: which ranker answered, how sure it was, why
+  a host ranker was not served, and what BM25 would have said in compare
+  mode.
 
 ## Schema budgets
 
