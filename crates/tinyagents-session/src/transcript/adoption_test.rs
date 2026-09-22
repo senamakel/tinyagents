@@ -517,8 +517,20 @@ fn concurrent_adoption_attempts_do_not_duplicate_or_race() {
     let dir = tempdir().unwrap();
     let dir_path: Arc<std::path::PathBuf> = Arc::new(dir.path().to_path_buf());
     let thread = "thread-1";
-    write_legacy(&dir_path, "1000_a", "2026-01-01T00:00:00Z", "one", thread);
-    write_legacy(&dir_path, "2000_a", "2026-01-02T00:00:00Z", "two", thread);
+    write_legacy(
+        dir_path.as_path(),
+        "1000_a",
+        "2026-01-01T00:00:00Z",
+        "one",
+        thread,
+    );
+    write_legacy(
+        dir_path.as_path(),
+        "2000_a",
+        "2026-01-02T00:00:00Z",
+        "two",
+        thread,
+    );
 
     let barrier = Arc::new(Barrier::new(4));
     let handles: Vec<_> = (0..4)
@@ -529,7 +541,7 @@ fn concurrent_adoption_attempts_do_not_duplicate_or_race() {
                 let session = SessionRef::scoped(thread, "orchestrator");
                 barrier.wait();
                 adopt_legacy_session_transcripts(
-                    &dir_path,
+                    dir_path.as_path(),
                     &session,
                     thread,
                     &legacy_meta("", "", thread),
@@ -549,7 +561,8 @@ fn concurrent_adoption_attempts_do_not_duplicate_or_race() {
     );
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let destination = resolve_keyed_transcript_path(&*dir_path, &session_stem(&session)).unwrap();
+    let destination =
+        resolve_keyed_transcript_path(dir_path.as_path(), &session_stem(&session)).unwrap();
     let adopted = read_transcript(&destination).unwrap();
     assert_eq!(adopted.messages.len(), 2, "no duplication across racers");
 }
