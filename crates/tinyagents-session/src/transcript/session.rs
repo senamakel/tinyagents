@@ -174,8 +174,11 @@ const MAX_COMPONENT_PREFIX: usize = 80;
 /// continuing to grow linearly with depth, so the worst case stays bounded
 /// regardless of how deep delegation nests; ordinary shallow delegation (the
 /// common case, see `nested_delegation_records_the_whole_path_in_one_flat_stem`)
-/// keeps its fully readable, unbounded-until-this-point chain.
-const MAX_PARENT_CHAIN_PREFIX: usize = 120;
+/// keeps its fully readable, unbounded-until-this-point chain. Sized to
+/// comfortably fit a handful of ordinary nesting levels (each component
+/// contributes up to `MAX_COMPONENT_PREFIX` + 1 + 32 hex digest chars, so two
+/// or three levels of long keys still fit) before the collapse kicks in.
+const MAX_PARENT_CHAIN_PREFIX: usize = 400;
 
 /// Separator between a component's human-readable prefix and its
 /// disambiguating digest. Must be a character [`sanitize_stem`] itself
