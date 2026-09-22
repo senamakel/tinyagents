@@ -250,8 +250,24 @@ pub trait TranscriptLocator: Send + Sync {
     ///
     /// Unlike [`Self::root_for_thread`] this is an exact lookup, not a
     /// newest-wins scan: one session resolves to one file, in every process and
-    /// on every launch. Defaults to the stem the session names.
-    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>>;
+    /// on every launch.
+    ///
+    /// Defaults to opening the stem the session names through
+    /// [`Self::open_stem`] and reading it back. [`Self::open_stem`] alone is
+    /// not sufficient — it binds a handle regardless of whether anything has
+    /// ever been written there, so this default has to perform the read and
+    /// report `None` unless the transcript actually exists, rather than
+    /// reporting a handle for a file that was never created. An implementor
+    /// with a cheaper existence check (a path probe, an index) should still
+    /// override this.
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        let stem = session_stem(session);
+        let handle = self.open_stem(&stem, seed_meta_for_discovered(&stem)).ok()?;
+        match handle.read_session() {
+            Ok(Some(_)) => Some(handle as Arc<dyn TranscriptRead>),
+            _ => None,
+        }
+    }
 
     /// Binds `session`'s own transcript for reading **and** appending.
     ///
