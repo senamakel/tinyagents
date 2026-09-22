@@ -114,6 +114,11 @@ pub(super) const MIGRATIONS: &[&str] = &[
         tool_name
      );",
     // ---- 2: run ledger ---------------------------------------------------
+    // The original DDL also carried `task_board_id` / `task_card_id` columns
+    // for the retired per-thread task board. They are gone from this
+    // statement rather than dropped by a later migration: a database created
+    // before their removal keeps the two nullable columns, unread and
+    // unwritten, which is harmless, and a fresh database never grows them.
     "CREATE TABLE IF NOT EXISTS agent_runs (
         id                 TEXT PRIMARY KEY,
         kind               TEXT NOT NULL,
