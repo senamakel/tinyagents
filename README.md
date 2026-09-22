@@ -190,7 +190,7 @@ All live in
   against a registry.
 - **`openai_self_blueprint`** — a model emits a `.rag` blueprint that is
   compiled and run.
-- **`goals_and_todos`** — a durable goal driving a task-board kanban on one
+- **`goals_and_todos`** — a durable goal driving a todo checklist on one
   thread.
 - **`openai_chat`**, **`openai_tools`**, **`openai_structured`**,
   **`openai_graph_agent`** — provider-backed chat, tool calling, structured
