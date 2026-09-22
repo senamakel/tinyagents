@@ -9,7 +9,9 @@ use super::*;
 use tempfile::tempdir;
 
 fn meta() -> TranscriptMeta {
-    TranscriptMeta { session_id: None, parent_session_id: None,
+    TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
         agent_name: "agent".into(),
         agent_id: Some("agent-id".into()),
         agent_type: Some("root".into()),
@@ -239,4 +241,186 @@ fn discovery_and_legacy_read_replay_the_canonical_format() {
         read_transcript_legacy_md(&legacy).unwrap().messages[0].content,
         "legacy body"
     );
+}
+
+// ── Session identity ──────────────────────────────────────────────────
+
+/// One conversation, two cold sessions: the second must find the first's file
+/// rather than mint a second stem for the same thread. This is the regression
+/// that cost a real user the opening turns of a thread.
+#[test]
+fn one_session_resolves_to_one_transcript_across_separate_bindings() {
+    let dir = tempdir().unwrap();
+    let session = SessionRef::scoped("thread-9fa08", "orchestrator");
+
+    let first = FileTranscriptLocator::new(dir.path())
+        .open_session(&session, meta())
+        .unwrap();
+    first
+        .append(TranscriptMessage::new("user", "i want to plan a trip to kashmir"))
+        .unwrap();
+
+    // A brand-new locator and handle, as a restarted process would build.
+    let second = FileTranscriptLocator::new(dir.path())
+        .open_session(&session, meta())
+        .unwrap();
+    second.append(TranscriptMessage::new("user", "hello?")).unwrap();
+
+    assert_eq!(first.path(), second.path());
+    let messages = second.messages().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].content, "i want to plan a trip to kashmir");
+    assert_eq!(messages[1].content, "hello?");
+
+    let roots: Vec<_> = std::fs::read_dir(dir.path().join("session_raw"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(roots.len(), 1, "one conversation must not sprawl: {roots:?}");
+}
+
+#[test]
+fn an_unwritten_session_reads_as_absent_rather_than_erroring() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-new", "orchestrator");
+
+    assert!(locator.read_session_transcript(&session).is_none());
+    assert!(!locator.session_exists(&session));
+    assert_eq!(locator.head_generation(&session), session);
+}
+
+#[test]
+fn session_identity_round_trips_through_the_jsonl_meta() {
+    let dir = tempdir().unwrap();
+    let path = resolve_keyed_transcript_path(dir.path(), "identity").unwrap();
+    let mut written = meta();
+    written.session_id = Some("thread-1.orchestrator.g1".into());
+    written.parent_session_id = Some("thread-1.orchestrator".into());
+    write_transcript(&path, &[TranscriptMessage::new("user", "hi")], &written, None).unwrap();
+
+    let read = read_transcript(&path).unwrap();
+    assert_eq!(read.meta.session_id.as_deref(), Some("thread-1.orchestrator.g1"));
+    assert_eq!(
+        read.meta.parent_session_id.as_deref(),
+        Some("thread-1.orchestrator")
+    );
+}
+
+/// A compaction must never destroy what it replaces. It seals the current
+/// generation and opens the next, so the replaced turns stay on disk.
+#[test]
+fn a_compaction_seals_a_generation_and_leaves_it_untouched() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    let first = locator.open_session(&session, meta()).unwrap();
+    for turn in ["one", "two", "three"] {
+        first.append(TranscriptMessage::new("user", turn)).unwrap();
+    }
+    let sealed_path = first.path().to_path_buf();
+    let sealed_bytes = std::fs::read(&sealed_path).unwrap();
+
+    let retained = vec![TranscriptMessage::new("user", "three")];
+    let (successor, handle) = locator
+        .begin_generation(&session, &retained, meta())
+        .unwrap();
+
+    assert_eq!(successor.generation, 1);
+    assert_eq!(
+        std::fs::read(&sealed_path).unwrap(),
+        sealed_bytes,
+        "the sealed generation must be byte-identical afterwards"
+    );
+    assert_ne!(handle.path(), sealed_path);
+
+    let carried = handle.messages().unwrap();
+    assert_eq!(carried.len(), 1);
+    assert_eq!(carried[0].content, "three");
+
+    let successor_meta = handle.read_session().unwrap().unwrap().meta;
+    assert_eq!(
+        successor_meta.session_id.as_deref(),
+        Some("thread-1.orchestrator.g1")
+    );
+    assert_eq!(
+        successor_meta.parent_session_id.as_deref(),
+        Some("thread-1.orchestrator")
+    );
+}
+
+/// After a compaction, a resume must land on the newest generation — the one
+/// the model is actually continuing — not on the sealed original.
+#[test]
+fn head_generation_follows_the_compaction_chain() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    locator
+        .open_session(&session, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "one"))
+        .unwrap();
+    assert_eq!(locator.head_generation(&session), session);
+
+    let (first_successor, _) = locator
+        .begin_generation(&session, &[TranscriptMessage::new("user", "one")], meta())
+        .unwrap();
+    assert_eq!(locator.head_generation(&session), first_successor);
+
+    let (second_successor, _) = locator
+        .begin_generation(
+            &first_successor,
+            &[TranscriptMessage::new("user", "one")],
+            meta(),
+        )
+        .unwrap();
+    assert_eq!(locator.head_generation(&session).generation, 2);
+    assert_eq!(locator.head_generation(&session), second_successor);
+}
+
+#[test]
+fn opening_a_generation_that_already_exists_is_refused() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+    let retained = [TranscriptMessage::new("user", "one")];
+
+    locator.begin_generation(&session, &retained, meta()).unwrap();
+    let second = locator.begin_generation(&session, &retained, meta());
+
+    assert!(
+        second.is_err(),
+        "sealing the same generation twice would overwrite durable history"
+    );
+}
+
+/// Two handles on one session — the shape two cores over one workspace
+/// produce — must both land in the same file, with neither losing the other's
+/// turns.
+#[test]
+fn concurrent_handles_on_one_session_both_extend_it() {
+    let dir = tempdir().unwrap();
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+    let left = FileTranscriptLocator::new(dir.path())
+        .open_session(&session, meta())
+        .unwrap();
+    let right = FileTranscriptLocator::new(dir.path())
+        .open_session(&session, meta())
+        .unwrap();
+
+    left.append(TranscriptMessage::new("user", "from left")).unwrap();
+    right.append(TranscriptMessage::new("user", "from right")).unwrap();
+    left.append(TranscriptMessage::new("user", "left again")).unwrap();
+
+    let contents: Vec<String> = left
+        .messages()
+        .unwrap()
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(contents, ["from left", "from right", "left again"]);
 }
