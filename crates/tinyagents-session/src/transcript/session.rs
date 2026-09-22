@@ -165,6 +165,16 @@ pub fn session_stem(session: &SessionRef) -> String {
 /// suffix, an agent id, and a chain of `__`-joined sub-agent ancestors.
 const MAX_COMPONENT_PREFIX: usize = 80;
 
+/// Separator between a component's human-readable prefix and its
+/// disambiguating digest. Must be a character [`sanitize_stem`] itself
+/// already allows through unchanged (alphanumeric, `_`, `-`, `.`):
+/// [`resolve_keyed_transcript_path`](super::paths::resolve_keyed_transcript_path)
+/// re-sanitizes the whole stem this function builds before it ever becomes a
+/// filename, and a separator outside that set would silently get replaced
+/// with `_` at that second pass — reintroducing exactly the alias this
+/// function exists to prevent.
+const DIGEST_SEPARATOR: char = '-';
+
 /// One component of a stem: path-safe, bounded in length, and encoded so
 /// that no two *different* raw values can ever collide on the same
 /// filename — including collisions introduced by the sanitization itself.
@@ -204,7 +214,7 @@ fn sanitize_component(value: &str) -> String {
 
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
-    out.push('~');
+    out.push(DIGEST_SEPARATOR);
     out.push_str(&format!("{:016x}", hasher.finish()));
     out
 }
