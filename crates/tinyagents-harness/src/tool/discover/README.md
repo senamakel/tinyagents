@@ -6,10 +6,9 @@ this file is the map of the module.
 
 | File          | Owns                                                                 |
 |---------------|----------------------------------------------------------------------|
-| `types.rs`    | `ToolDiscoveryPolicy` (the knobs), `DeferredCatalog` (a run's deferred schemas, BM25-indexed, name-sorted), `DeferredTool` |
-| `index.rs`    | `Bm25Index` + `tokenize` — ranking over `(sort_key, text)` pairs, knows nothing about tools |
+| `types.rs`    | `ToolDiscoveryPolicy` (the knobs, the host `ranker` and `DiscoveryRankMode`), `DeferredCatalog` (a run's deferred schemas, BM25-indexed, name-sorted, ranked through the policy), `DeferredTool`, `RankedSearch` |
 | `manifest.rs` | `render_manifest` — the budgeted listing inside `tool_search`'s description: full → names → count |
-| `bridge.rs`   | The two intrinsic tools: `bridge_schemas`, `answer_tool_search`, `unwrap_tool_call` |
+| `bridge.rs`   | The two intrinsic tools: `bridge_schemas`, `answer_tool_search` (async; returns a `SearchAnswer`), `unwrap_tool_call` |
 | `test.rs`     | Unit tests for all of the above                                      |
 
 The agent loop (`agent_loop/run_loop.rs`, `agent_loop/tools.rs`) is the only
@@ -27,3 +26,8 @@ Invariants worth keeping:
   the bridge is enabled; a `Hidden` tool is never callable by the model.
 - The manifest is bounded by `manifest_token_budget`; the search answer clips
   descriptions to 500 chars and `limit` to `max_limit`.
+- A search never fails. The host ranker (`ToolDiscoveryPolicy::ranker`,
+  any `tinytools::ToolRanker`) is served when active; on error or an empty
+  answer BM25 answers instead and `RankedSearch::fallback` says why.
+  `DiscoveryRankMode::Compare` serves the host ranker and carries the BM25
+  ranking alongside for comparison. BM25 itself lives in `tinytools::rank`.

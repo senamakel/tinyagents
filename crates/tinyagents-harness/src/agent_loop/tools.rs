@@ -284,16 +284,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if !self.policy.discovery.enabled {
             return crate::tool::discover::DeferredCatalog::default();
         }
-        let mut schemas = self
+        let mut entries = self
             .tools
-            .deferred_schemas()
+            .deferred_schemas_with_families()
             .into_iter()
-            .filter(|schema| host_allows(&schema.name))
+            .filter(|(schema, _)| host_allows(&schema.name))
             .collect::<Vec<_>>();
         if let Some(preparation) = &self.policy.tool_schemas {
-            schemas = crate::tool::prepare_tool_schemas(&schemas, preparation);
+            let families: Vec<Option<String>> =
+                entries.iter().map(|(_, family)| family.clone()).collect();
+            let schemas: Vec<_> = entries.into_iter().map(|(schema, _)| schema).collect();
+            entries = crate::tool::prepare_tool_schemas(&schemas, preparation)
+                .into_iter()
+                .zip(families)
+                .collect();
         }
-        crate::tool::discover::DeferredCatalog::build(schemas)
+        crate::tool::discover::DeferredCatalog::build_with_families(entries)
     }
 
     /// Resolves the discovery bridge for one call, when it is one.
@@ -303,7 +309,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// admission continues with it, and `None` untouched for any other name.
     /// A malformed `tool_call` payload is answered with a tool error rather
     /// than passed on, so the model can correct it.
-    fn answer_discovery_bridge(
+    async fn answer_discovery_bridge(
         &self,
         ctx: &RunContext<Ctx>,
         status: &mut HarnessRunStatus,
@@ -334,11 +340,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Ok(None);
         }
         if call.name == TOOL_SEARCH_NAME {
-            let (result, matched) = crate::tool::discover::answer_tool_search(
+            let answer = crate::tool::discover::answer_tool_search(
                 &catalog,
                 &self.policy.discovery,
                 &call.arguments,
-            );
+            )
+            .await;
+            let ranking = answer.ranking;
             // `query` is model-supplied tool-call content, same privacy
             // class as a normal tool call's arguments, so it honors the same
             // `RunPolicy::capture.tool_io` gate (default `false`, payload
@@ -355,10 +363,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 } else {
                     String::new()
                 },
-                matched,
+                matched: answer.matched,
+                ranker: ranking
+                    .as_ref()
+                    .map(|r| r.ranker.to_string())
+                    .unwrap_or_default(),
+                top_confidence: ranking.as_ref().and_then(|r| r.top_confidence),
+                fallback: ranking.as_ref().and_then(|r| r.fallback.clone()),
+                shadow_matched: ranking.as_ref().and_then(|r| r.shadow_names.clone()),
+                latency_ms: ranking.as_ref().map_or(0, |r| r.latency_ms),
             });
             status.set_last_event(record.id);
-            return Ok(Some(ResolvedToolCall::Answered(result)));
+            return Ok(Some(ResolvedToolCall::Answered(answer.result)));
         }
         match crate::tool::discover::unwrap_tool_call(&call.arguments) {
             Ok((name, arguments)) => {
@@ -517,7 +533,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // a call the provider could not parse is left for the recovery below.
         if call.invalid.is_none()
             && self.tools.dispatch(&call.name).is_none()
-            && let Some(answered) = self.answer_discovery_bridge(ctx, status, call)?
+            && let Some(answered) = self.answer_discovery_bridge(ctx, status, call).await?
         {
             return Ok(answered);
         }
