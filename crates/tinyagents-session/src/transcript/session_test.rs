@@ -34,12 +34,19 @@ fn an_unscoped_root_is_just_the_key_plus_a_digest() {
 }
 
 #[test]
-fn a_blank_agent_id_does_not_add_a_separator() {
-    let session = SessionRef::scoped("thread-1", "   ");
-    assert_eq!(
-        session_stem(&session),
-        session_stem(&SessionRef::root("thread-1"))
-    );
+fn a_scoped_session_with_a_blank_agent_id_is_still_distinct_from_an_unscoped_root() {
+    // `scoped` and `root` are two different constructors precisely because
+    // they name two different identities; a blank/whitespace agent id must
+    // not silently make `scoped` collapse into `root`'s stem (it used to,
+    // when the agent component was omitted entirely for a blank value).
+    let scoped_blank = SessionRef::scoped("thread-1", "   ");
+    let root = SessionRef::root("thread-1");
+    assert_ne!(session_stem(&scoped_blank), session_stem(&root));
+
+    // Two distinct blank/empty agent ids must also stay distinct from each
+    // other, since the digest covers the raw (pre-sanitization) value.
+    let scoped_empty = SessionRef::scoped("thread-1", "");
+    assert_ne!(session_stem(&scoped_blank), session_stem(&scoped_empty));
 }
 
 #[test]
