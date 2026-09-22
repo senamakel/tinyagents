@@ -88,7 +88,7 @@ impl SessionRef {
             session_key: child_key.into(),
             agent_id: None,
             generation: 0,
-            parent_stem: Some(session_stem(parent)),
+            parent_stem: Some(bounded_parent_stem(parent)),
         }
     }
 
