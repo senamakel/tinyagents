@@ -4,7 +4,9 @@ use tinyagents_harness::{
     CancellationToken,
     context::{RunConfig, RunContext},
 };
-use tinyagents_session::transcript::{TranscriptLocator, TranscriptMessage, TranscriptMeta};
+use tinyagents_session::transcript::{
+    SessionRef, TranscriptLocator, TranscriptMessage, TranscriptMeta, session_stem,
+};
 use tinyinference_llm::message::Message;
 
 use crate::{PrefixSnapshot, ToolSnapshot};
