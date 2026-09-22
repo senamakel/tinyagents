@@ -102,6 +102,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        let mut session_binding: Option<SessionRef> = None;
         let read = match options.resume {
             ResumeMode::Never => None,
             ResumeMode::LatestForAgent => target
@@ -112,6 +113,58 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     .locator
                     .root_for_thread_scoped(thread, target.meta.agent_id.as_deref())
             }),
+            ResumeMode::Session => {
+                let Some(session) = options.session.clone().or_else(|| target.session.clone())
+                else {
+                    return Ok(SessionResume {
+                        loaded: false,
+                        history: self.history.clone(),
+                    });
+                };
+                // The head generation, not the session the host named: a
+                // compaction may have sealed that one and opened a successor,
+                // and the head is the conversation the model is continuing.
+                let head = target.locator.head_generation(&session);
+                let read = target.locator.read_session_transcript(&head);
+                if read.is_some() {
+                    session_binding = Some(head);
+                } else if let Some(thread) = options.thread_id.as_deref() {
+                    // Nothing under this identity yet. A conversation written
+                    // before session identity existed is spread over one or
+                    // more timestamped stems; fold them in once so the model
+                    // regains the turns the newest-wins lookup had stranded.
+                    match adopt_legacy_session_transcripts(
+                        &target.locator.workspace_hint(),
+                        &session,
+                        thread,
+                        &target.meta,
+                    ) {
+                        Ok(Some(adoption)) => {
+                            tracing::info!(
+                                "[session] adopted {} legacy transcript(s) into session={} \
+                                 ({} message(s))",
+                                adoption.adopted.len(),
+                                session.session_id(),
+                                adoption.messages
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                "[session] legacy adoption failed for session={}: {error}",
+                                session.session_id()
+                            );
+                        }
+                    }
+                    session_binding = Some(session.clone());
+                }
+                match read {
+                    Some(read) => Some(read),
+                    None => session_binding
+                        .as_ref()
+                        .and_then(|bound| target.locator.read_session_transcript(bound)),
+                }
+            }
         };
         let Some(read) = read else {
             return Ok(SessionResume {
@@ -142,13 +195,25 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         }
         // A successful explicit resume always rebinds the write handle to the
         // selected transcript. Builder construction itself remains I/O-free.
+        //
+        // For a session resume the handle must address **the file that was just
+        // read**, not the target's original stem. Binding elsewhere is what
+        // used to re-materialise a resumed history into a fresh stem and
+        // orphan the original, leaving two roots claiming one thread.
+        if let (Some(target), Some(head)) = (self.target.as_mut(), session_binding) {
+            target.rebind_session(head);
+        }
         let target = self.target.as_ref().expect("target checked above");
-        self.transcript = Some(
-            target
+        self.transcript = Some(match target.session.as_ref() {
+            Some(session) => target
+                .locator
+                .open_session(session, target.meta.clone())
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+            None => target
                 .locator
                 .open_stem(&target.stem, target.meta.clone())
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-        );
+        });
         Ok(SessionResume {
             loaded: true,
             history,
