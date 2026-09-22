@@ -217,7 +217,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // actually writes to; `self.history` (what the model sees) keeps
         // coming from the scanned `read`, which is the intended recovery
         // behavior for those modes.
-        if false {
+        if target.session.is_some() && options.resume != ResumeMode::Session {
             self.persisted = self
                 .transcript
                 .as_ref()
