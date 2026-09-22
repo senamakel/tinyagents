@@ -162,6 +162,21 @@ pub fn session_stem(session: &SessionRef) -> String {
 /// suffix, an agent id, and a chain of `__`-joined sub-agent ancestors.
 const MAX_COMPONENT_PREFIX: usize = 80;
 
+/// Longest parent-chain prefix a [`SessionRef::child_of`] call keeps
+/// verbatim before collapsing it into a digest.
+///
+/// [`MAX_COMPONENT_PREFIX`] bounds one component, but `parent_stem` is
+/// already the *entire* ancestor chain, and each further `child_of` call
+/// concatenates onto it without bound — a delegation several levels deep,
+/// each level with a long key, would otherwise grow the final stem past
+/// filesystem name limits. Once the chain built so far exceeds this bound,
+/// [`bounded_parent_stem`] replaces it with a short digest instead of
+/// continuing to grow linearly with depth, so the worst case stays bounded
+/// regardless of how deep delegation nests; ordinary shallow delegation (the
+/// common case, see `nested_delegation_records_the_whole_path_in_one_flat_stem`)
+/// keeps its fully readable, unbounded-until-this-point chain.
+const MAX_PARENT_CHAIN_PREFIX: usize = 120;
+
 /// Separator between a component's human-readable prefix and its
 /// disambiguating digest. Must be a character [`sanitize_stem`] itself
 /// already allows through unchanged (alphanumeric, `_`, `-`, `.`):
