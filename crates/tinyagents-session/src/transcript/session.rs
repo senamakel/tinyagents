@@ -29,9 +29,6 @@
 //! recoverable by walking the chain even though the model only ever sees the
 //! head.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
 use super::paths::sanitize_stem;
 
 /// The separator every root-transcript scan uses to recognise a sub-agent
