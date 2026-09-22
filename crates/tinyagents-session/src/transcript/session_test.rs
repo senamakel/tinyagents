@@ -219,6 +219,41 @@ fn the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs() {
 /// from compounding rather than merely being "small enough in this one
 /// example".
 #[test]
+fn every_level_of_a_maximal_chain_stays_under_the_filesystem_limit() {
+    // The worst single (unparented) level: a maximal session_key, a maximal
+    // agent_id, and an existing compaction (`.g{n}`) — see
+    // `MAX_PARENT_CHAIN_PREFIX`'s doc for the arithmetic this pins.
+    let max_key = "k".repeat(200);
+    let root = SessionRef::scoped(&max_key, &max_key).next_generation();
+    let root_stem = session_stem(&root);
+    assert!(
+        root_stem.len() < 255,
+        "an unparented root must fit on its own: {} bytes",
+        root_stem.len()
+    );
+
+    // The worst parented level: a child (never has an agent_id) of that same
+    // maximal root, itself also compacted.
+    let child = SessionRef::child_of(&root, max_key.clone()).next_generation();
+    let child_stem = session_stem(&child);
+    assert!(
+        child_stem.len() < 255,
+        "a child of a maximal root must still fit: {} bytes",
+        child_stem.len()
+    );
+
+    // And the level after that, to confirm the collapse repeats rather than
+    // the bound only holding for one transition.
+    let grandchild = SessionRef::child_of(&child, max_key).next_generation();
+    let grandchild_stem = session_stem(&grandchild);
+    assert!(
+        grandchild_stem.len() < 255,
+        "a grandchild must still fit: {} bytes",
+        grandchild_stem.len()
+    );
+}
+
+#[test]
 fn a_deeply_nested_delegation_chain_stays_bounded() {
     let long_key = "k".repeat(80);
     let mut current = SessionRef::scoped(&long_key, "orchestrator");
