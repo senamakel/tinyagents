@@ -34,10 +34,17 @@ A host that composes its own system prompt from the same dialect — the
 protocol block and the catalogue already in place, inside its cacheable
 prefix — sets `RunPolicy::host_renders_tool_catalogue`. The text dialects
 then still fold the transcript, strip the schemas off the wire and bind the
-positional registry, but append nothing to the prompt; only a forced
-`tool_choice` (`Required` / `Tool(name)`) is still spelled out, since the
-host's prompt predates it. Without the flag the loop appends the block itself,
-and a host that also rendered one ships every signature twice.
+positional registry, but append nothing from the run's *ordinary* catalogue;
+only a forced `tool_choice` (`Required` / `Tool(name)`) is still spelled out,
+since the host's prompt predates it. Without the flag the loop appends the
+block itself, and a host that also rendered one ships every signature twice.
+
+One exception: a structured-output fallback tool synthesized for *this turn*
+(`StructuredStrategy::ToolCall` / `ToolCallUnion`, pushed onto the request
+after the host's static prompt was already composed) is not something the
+host could ever have advertised in its own catalogue. Its schema and
+signature are appended anyway, even under `host_renders_tool_catalogue`, or
+the model has nothing to answer the forced call against.
 
 Whatever the dialect, a response carrying no structured call is read through
 every grammar with the offered tool names supplied, so a damaged name
