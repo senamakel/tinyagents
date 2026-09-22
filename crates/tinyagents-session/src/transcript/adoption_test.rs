@@ -510,6 +510,40 @@ fn a_session_identified_root_on_the_same_thread_is_never_folded_in() {
     assert_eq!(adoption.adopted.len(), 1);
 }
 
+/// The thread-lookup scan itself silently drops a candidate it cannot read
+/// (logs a warning, excludes it) *before* adoption's own fold loop ever sees
+/// it — so a fail-fast check inside that loop alone cannot catch this case.
+/// The scan must surface "something in this workspace was unreadable" so
+/// adoption can defer instead of finalizing on only the readable roots.
+#[test]
+fn an_unreadable_root_the_scan_itself_drops_defers_adoption_rather_than_finalizing() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "readable", thread);
+    // A `.jsonl` file the scan cannot parse at all — `find_root_transcripts_for_thread`
+    // would silently exclude this from its result and only log a warning.
+    let corrupt_path = resolve_keyed_transcript_path(dir.path(), "2000_a").unwrap();
+    std::fs::write(&corrupt_path, b"not a valid meta line at all\n").unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let result = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    );
+
+    assert!(
+        result.is_err(),
+        "a workspace-wide unreadable candidate must defer adoption, not finalize on a partial fold"
+    );
+    let destination = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
+    assert!(
+        !destination.exists(),
+        "a deferred adoption must not create the idempotency marker"
+    );
+}
+
 /// Two independent adopters (simulating two racing processes) for the same
 /// session must not both fold the same legacy roots: the lock in
 /// [`adopt_legacy_session_transcripts`] serializes them, so the second call
