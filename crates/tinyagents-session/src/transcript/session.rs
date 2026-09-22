@@ -175,14 +175,38 @@ const MAX_COMPONENT_PREFIX: usize = 80;
 /// each level with a long key, would otherwise grow the final stem past
 /// filesystem name limits. Once the chain built so far exceeds this bound,
 /// [`bounded_parent_stem`] replaces it with a short digest instead of
-/// continuing to grow linearly with depth, so the worst case stays bounded
-/// regardless of how deep delegation nests; ordinary shallow delegation (the
-/// common case, see `nested_delegation_records_the_whole_path_in_one_flat_stem`)
-/// keeps its fully readable, unbounded-until-this-point chain. Sized to
-/// comfortably fit a handful of ordinary nesting levels (each component
-/// contributes up to `MAX_COMPONENT_PREFIX` + 1 + 32 hex digest chars, so two
-/// or three levels of long keys still fit) before the collapse kicks in.
-const MAX_PARENT_CHAIN_PREFIX: usize = 400;
+/// continuing to grow linearly with depth.
+///
+/// The bound has to keep *every* level's own resolved stem — not just the
+/// stored `parent_stem` — under common filesystem name limits (255 bytes),
+/// because collapsing only the *stored* chain does nothing for the level
+/// that is about to be built from it. Worst-case arithmetic, in bytes (every
+/// byte in a sanitized component is exactly one ASCII byte, so char counts
+/// and byte counts coincide throughout this module):
+///
+/// - One component's maximum width is
+///   `MAX_COMPONENT_PREFIX` (80) + 1 (`-`) + 32 (hex digest) = 113.
+/// - A root's own stem (`session_key`, optionally `.{agent_id}`, optionally
+///   `.g{n}`) is at most `113 + 1 + 113 + 6 = 233` — under 255 on its own,
+///   with no parent chain to add. (`child_of` never sets `agent_id`, so only
+///   the root can carry that second component.)
+/// - A non-root level's own contribution (`session_key` plus an optional
+///   `.g{n}`) is at most `113 + 6 = 119`.
+/// - For a child's *total* resolved stem (`{parent}__{own}`) to stay safely
+///   under 255 (240, leaving headroom for the `.jsonl` extension and this
+///   arithmetic's own margin), the stored `parent_stem` handed to it must be
+///   at most `240 - 2 (__) - 119 = 119`.
+///
+/// 110 is chosen comfortably inside that headroom. Any level whose own
+/// resolved stem would exceed 110 (which a root with even a moderately long
+/// key already does, at 113+) collapses to the ~38-byte `chain-{32 hex}`
+/// digest before being handed to its child, so no level's total ever
+/// exceeds `233` (an unparented root) or `38 + 2 + 119 = 159` (every
+/// subsequent, digest-parented level) — both comfortably under 255.
+/// Ordinary shallow delegation with short, human keys (the common case, see
+/// `a_shallow_delegation_chain_is_unaffected_by_the_bound`) stays far below
+/// 110 at every level and is never collapsed at all.
+const MAX_PARENT_CHAIN_PREFIX: usize = 110;
 
 /// Separator between a component's human-readable prefix and its
 /// disambiguating digest. Must be a character [`sanitize_stem`] itself
