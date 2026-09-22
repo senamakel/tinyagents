@@ -217,9 +217,7 @@ impl RunDialect {
         match self {
             Self::Xml | Self::Native => tinytools_agent::render::render_json_catalogue(&specs),
             Self::PFormat(_) => tinytools_agent::render::render_pformat_catalogue(&specs),
-            Self::Code(style, _) => {
-                tinytools_agent::render::render_code_catalogue(&specs, *style)
-            }
+            Self::Code(style, _) => tinytools_agent::render::render_code_catalogue(&specs, *style),
         }
     }
 }
