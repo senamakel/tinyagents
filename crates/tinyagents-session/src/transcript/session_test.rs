@@ -38,9 +38,13 @@ fn a_blank_agent_id_does_not_add_a_separator() {
 
 #[test]
 fn path_traversal_in_a_key_cannot_escape_the_transcript_directory() {
+    // `.` survives sanitization (generations use it), so `..` can remain as
+    // text. What must not survive is a path separator, because without one a
+    // `..` is just an ordinary filename character.
     let stem = session_stem(&SessionRef::root("../../etc/passwd"));
-    assert!(!stem.contains('/'));
-    assert!(!stem.contains(".."), "{stem}");
+    assert_eq!(stem, ".._.._etc_passwd");
+    assert!(!stem.contains('/'), "{stem}");
+    assert!(!stem.contains('\\'), "{stem}");
 }
 
 #[test]
