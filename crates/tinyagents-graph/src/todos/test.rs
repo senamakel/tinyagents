@@ -363,13 +363,32 @@ mod tool_tests {
     }
 
     #[test]
-    fn schema_only_knows_the_three_states() {
+    fn schema_admits_the_documented_read_and_status_forms() {
         let tool = TodoTool::new(store());
         let schema = tool.parameters_schema();
         assert_eq!(
             schema["properties"]["todos"]["items"]["properties"]["status"]["enum"],
-            json!(["pending", "in_progress", "completed"])
+            json!([
+                "pending",
+                "todo",
+                "open",
+                "not_started",
+                "in_progress",
+                "in-progress",
+                "inprogress",
+                "started",
+                "active",
+                "completed",
+                "complete",
+                "done",
+                "finished"
+            ])
         );
+        assert_eq!(
+            schema["properties"]["todos"]["type"],
+            json!(["array", "null"])
+        );
+        assert_eq!(schema["additionalProperties"], false);
         assert!(schema["properties"].get("op").is_none());
     }
 
@@ -442,6 +461,16 @@ mod tool_tests {
         )
         .await;
         assert!(res.is_error && res.output().contains("invalid status"));
+
+        for args in [
+            json!(null),
+            json!([]),
+            json!("not an object"),
+            json!({ "op": "clear" }),
+        ] {
+            let res = run(&tool, Some("t"), args).await;
+            assert!(res.is_error, "invalid arguments must be a tool error");
+        }
     }
 
     #[tokio::test]

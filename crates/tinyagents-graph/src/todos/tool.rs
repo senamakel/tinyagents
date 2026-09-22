@@ -51,8 +51,26 @@ impl TodoTool {
     }
 
     async fn dispatch(&self, thread_id: &str, args: &Value) -> Result<TodoOutcome> {
+        let Some(args) = args.as_object() else {
+            return Ok(TodoOutcome::Error(
+                "arguments must be an object".to_string(),
+            ));
+        };
         let snap = match args.get("todos") {
-            None | Some(Value::Null) => store::list(&self.store, thread_id).await,
+            None if args.is_empty() => store::list(&self.store, thread_id).await,
+            None => {
+                return Ok(TodoOutcome::Error(format!(
+                    "unknown arguments {:?}: pass `todos` or no arguments to read the list",
+                    args.keys().collect::<Vec<_>>()
+                )));
+            }
+            Some(Value::Null) if args.len() == 1 => store::list(&self.store, thread_id).await,
+            Some(Value::Null) => {
+                return Ok(TodoOutcome::Error(format!(
+                    "unknown arguments {:?}: pass only `todos` to read the list",
+                    args.keys().collect::<Vec<_>>()
+                )));
+            }
             Some(raw) => {
                 let items = match parse_items(raw) {
                     Ok(items) => items,
@@ -105,21 +123,26 @@ fn parameters_schema() -> Value {
         "type": "object",
         "properties": {
             "todos": {
-                "type": "array",
-                "description": "The full list, in order.",
+                "type": ["array", "null"],
+                "description": "The full list, in order. Pass null to read the current list.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "content": { "type": "string" },
                         "status": {
                             "type": "string",
-                            "enum": ["pending", "in_progress", "completed"]
+                            "enum": [
+                                "pending", "todo", "open", "not_started",
+                                "in_progress", "in-progress", "inprogress", "started", "active",
+                                "completed", "complete", "done", "finished"
+                            ]
                         }
                     },
                     "required": ["content", "status"]
                 }
             }
-        }
+        },
+        "additionalProperties": false
     })
 }
 
