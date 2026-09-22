@@ -198,10 +198,6 @@ pub struct AgentRun {
     pub prompt_ref: Option<String>,
     /// The worker thread id this run executes on, for `WorkerThread` runs.
     pub worker_thread_id: Option<String>,
-    /// Task-board id, for runs coordinated through a task board.
-    pub task_board_id: Option<String>,
-    /// Task-card id within `task_board_id`.
-    pub task_card_id: Option<String>,
     /// Filesystem path to a resumable checkpoint for this run, if persisted
     /// out-of-band from `checkpoint`.
     pub checkpoint_path: Option<String>,
@@ -326,8 +322,6 @@ pub struct AgentRunUpsert {
     pub status: AgentRunStatus,
     pub prompt_ref: Option<String>,
     pub worker_thread_id: Option<String>,
-    pub task_board_id: Option<String>,
-    pub task_card_id: Option<String>,
     pub checkpoint_path: Option<String>,
     pub checkpoint: Option<Value>,
     pub summary: Option<String>,
