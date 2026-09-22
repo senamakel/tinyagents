@@ -6,6 +6,54 @@
 
 use super::*;
 
+struct AgentLoopBase<'a, State: Send + Sync, Ctx: Send + Sync> {
+    harness: &'a AgentHarness<State, Ctx>,
+}
+
+impl<State: Send + Sync, Ctx: Send + Sync> AgentBaseCall<State, Ctx>
+    for AgentLoopBase<'_, State, Ctx>
+{
+    fn call<'a>(
+        &'a self,
+        ctx: &'a mut RunContext<Ctx>,
+        state: &'a State,
+        request: crate::middleware::AgentRequest,
+        run: &'a mut AgentRun,
+        status: &'a mut HarnessRunStatus,
+    ) -> BoxAgentFuture<'a> {
+        Box::pin(async move {
+            ctx.streaming = request.streaming;
+            match self.harness.policy.execution {
+                crate::runtime::LoopExecution::Graph => match self.harness.loop_driver.clone() {
+                    Some(driver) => {
+                        driver
+                            .drive(
+                                self.harness,
+                                state,
+                                ctx,
+                                run,
+                                status,
+                                request.input,
+                                request.streaming,
+                            )
+                            .await
+                    }
+                    None => Err(TinyAgentsError::Validation(
+                        "RunPolicy::execution is LoopExecution::Graph but no LoopDriver is \
+                         installed; call AgentHarness::with_loop_driver first"
+                            .to_string(),
+                    )),
+                },
+                crate::runtime::LoopExecution::Direct => {
+                    self.harness
+                        .run_loop(state, ctx, run, status, request.input, request.streaming)
+                        .await
+                }
+            }
+        })
+    }
+}
+
 /// Owns the accumulating run until the driver reaches a terminal outcome.
 ///
 /// If the driving future is dropped at any await point, this guard observes the
@@ -27,7 +75,16 @@ impl TerminalRunGuard {
 
     fn complete(mut self, succeeded: bool, error: Option<String>) -> AgentRun {
         if let Some(observer) = self.observer.take() {
-            observer(self.run.clone(), succeeded, error);
+            // A cheap summary (M-6), not a clone of the whole run: the
+            // observer only ever reads text/usage/executed-tools, and cloning
+            // `self.run` here duplicated the entire transcript just to throw
+            // it away after the observer call — `mem::take` below is the only
+            // place that needs to move the real run out.
+            observer(
+                crate::context::TerminalRunSummary::from_run(&self.run),
+                succeeded,
+                error,
+            );
         }
         std::mem::take(&mut self.run)
     }
@@ -37,7 +94,7 @@ impl Drop for TerminalRunGuard {
     fn drop(&mut self) {
         if let Some(observer) = self.observer.take() {
             observer(
-                self.run.clone(),
+                crate::context::TerminalRunSummary::from_run(&self.run),
                 false,
                 Some("hosted invocation cancelled by caller".to_string()),
             );
@@ -138,6 +195,77 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         input: Vec<Message>,
     ) -> Result<AgentLoopResult> {
         self.drive(state, ctx, input, false).await
+    }
+
+    /// Resumes a run that stopped with [`AgentRun::deferred`] set (A2).
+    ///
+    /// `messages` is the deferred run's transcript (`run.messages`, which
+    /// still ends with the assistant tool-call row whose deferred calls are
+    /// unanswered) and `results` resolves every pending call: an
+    /// [`crate::tool::ToolApprovalDecision`] runs or denies an approval-gated
+    /// call, a [`crate::tool::DeferredCallResult`] injects the host's outcome
+    /// for an external one. The loop answers each call — executing approved
+    /// ones for real, with the model's or the approver's edited arguments —
+    /// and then continues with the next model call exactly as if the batch
+    /// had never paused.
+    ///
+    /// The only state needed to resume is the transcript plus `results`, so
+    /// this works across a process restart: persist `run.messages` and
+    /// `run.deferred` (both serializable), and call this from any process.
+    /// Check [`crate::tool::DeferredToolRequests::remaining`] first —
+    /// an incomplete `results` fails with [`TinyAgentsError::Validation`]
+    /// naming the unresolved ids before anything runs.
+    ///
+    /// Equivalent to `invoke_in_context(state, ctx.with_deferred_results(results), messages)`,
+    /// preceded by a [`AgentHarness::reconcile_tool_effects`] pass scoped to
+    /// exclude the calls `results` is about to answer.
+    ///
+    /// A call this run's own `execution_deferral` filed (mid-execution
+    /// `ApprovalRequired`/`CallDeferred`) is settled in the tool-effect
+    /// ledger as [`crate::tool::ToolEffectStatus::Deferred`] the moment it
+    /// pauses — not left `started` — so [`AgentHarness::reconcile_tool_effects`]
+    /// (which only reconciles rows still `started`) does not treat it as a
+    /// crash artifact on its own. The `excluded` set passed here is
+    /// defense-in-depth on top of that: even if a call's row is unexpectedly
+    /// still `started` (the `Deferred` settle write is best-effort and only
+    /// logs on failure), excluding every id `results` answers guarantees this
+    /// call never receives a synthesized "interrupted" answer that would
+    /// pre-empt `results`'s real one.
+    ///
+    /// A genuinely crashed **sibling** call in the same batch — one with no
+    /// entry in `results` and a ledger row still `started` because the
+    /// process died before it could pause or settle — is not excluded, and
+    /// is reconciled normally (re-executed or answered "interrupted before
+    /// settlement" per its [`tinytools::ToolReplay`] policy) before the loop
+    /// resumes.
+    ///
+    /// Reconciling a genuine crash with no live `results` at all (a host
+    /// resuming from durable state after a real process crash, with no
+    /// deferral in flight) remains a host's explicit, separate call to
+    /// [`AgentHarness::reconcile_tool_effects`] — this method's own
+    /// reconcile pass only ever excludes ids `results` names, so it is a
+    /// strict addition, never a replacement, for that path.
+    pub async fn resume_deferred(
+        &self,
+        state: &State,
+        ctx: RunContext<Ctx>,
+        messages: Vec<Message>,
+        results: crate::tool::DeferredToolResults,
+    ) -> Result<AgentRun> {
+        let mut messages = messages;
+        if ctx.tool_effect_ledger.is_some() {
+            let run_id = ctx.run_id().as_str().to_string();
+            let excluded: std::collections::HashSet<crate::ids::CallId> = results
+                .approvals
+                .keys()
+                .chain(results.calls.keys())
+                .cloned()
+                .collect();
+            self.reconcile_tool_effects(&ctx, &run_id, &mut messages, &excluded)
+                .await?;
+        }
+        self.invoke_in_context(state, ctx.with_deferred_results(results), messages)
+            .await
     }
 
     /// Streaming counterpart of [`AgentHarness::invoke`].
@@ -294,14 +422,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
         let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
+        let base = AgentLoopBase { harness: self };
         match self
-            .run_loop(
-                state,
+            .middleware
+            .run_wrapped_agent(
                 &mut ctx,
-                &mut terminal.run,
-                &mut status,
+                state,
                 input,
                 streaming,
+                &mut terminal.run,
+                &mut status,
+                &base,
             )
             .await
         {
@@ -309,7 +440,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // A paused run is resumable, not finished: reporting it
                 // `completed` is what made "paused for a human" look identical
                 // to "the model produced an empty final answer".
-                let paused = terminal.run.paused.is_some();
+                // A deferred run (A2) is resumable for the same reason.
+                let paused = terminal.run.paused.is_some() || terminal.run.deferred.is_some();
                 if paused {
                     status.mark_interrupted();
                 } else {

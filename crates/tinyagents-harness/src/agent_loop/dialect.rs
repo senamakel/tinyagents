@@ -22,6 +22,9 @@ use tinytools_agent::{PFormatRegistry, StreamScrubber};
 use crate::config::ToolDispatcher;
 use crate::ids::CallId;
 
+#[cfg(test)]
+mod test;
+
 /// The dialect a run speaks, resolved once from policy.
 #[derive(Debug, Clone)]
 pub(super) enum RunDialect {
@@ -35,8 +38,13 @@ pub(super) enum RunDialect {
 
 impl RunDialect {
     /// Resolves the policy against the tools this run offers.
-    pub(super) fn resolve(dispatcher: ToolDispatcher, tools: &[ToolSchema]) -> Self {
+    pub(super) fn resolve(
+        dispatcher: ToolDispatcher,
+        tools: &[ToolSchema],
+        native_tool_calling: Option<bool>,
+    ) -> Self {
         match dispatcher {
+            ToolDispatcher::Auto if native_tool_calling == Some(false) => Self::Xml,
             ToolDispatcher::Auto | ToolDispatcher::Native => Self::Native,
             ToolDispatcher::Xml => Self::Xml,
             ToolDispatcher::Pformat => Self::PFormat(Arc::new(tinytools_agent::build_registry(
@@ -210,7 +218,7 @@ pub(super) fn recover_text_calls(
         return;
     }
     for diagnostic in &outcome.diagnostics {
-        tinyagents_tracing::debug!(?diagnostic, "[agent_loop] text-dialect recovery");
+        tracing::debug!(?diagnostic, "[agent_loop] text-dialect recovery");
     }
     // Appended, not assigned: a provider can legitimately return one native
     // structured call *and* narrate a second one as text in the same

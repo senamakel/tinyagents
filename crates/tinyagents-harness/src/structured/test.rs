@@ -46,6 +46,65 @@ fn auto_strategy_uses_provider_schema_with_native_structured_output() {
 }
 
 #[test]
+fn default_structured_mode_native_wins_over_capability_inference() {
+    // A profile that could otherwise infer `ToolCall` (tool_calling: true,
+    // no native structured output) is overridden by an explicit
+    // `default_structured_mode`.
+    let profile = ModelProfile {
+        tool_calling: true,
+        native_structured_output: false,
+        default_structured_mode: Some(tinyinference_llm::model::StructuredMode::Native),
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        StructuredStrategy::for_profile(Some(&profile)),
+        StructuredStrategy::ProviderSchema
+    );
+}
+
+#[test]
+fn default_structured_mode_tool_wins_over_capability_inference() {
+    let profile = ModelProfile {
+        native_structured_output: true,
+        json_schema: true,
+        default_structured_mode: Some(tinyinference_llm::model::StructuredMode::Tool),
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        StructuredStrategy::for_profile(Some(&profile)),
+        StructuredStrategy::ToolCall
+    );
+}
+
+#[test]
+fn default_structured_mode_prompted_carries_the_profiles_template() {
+    let profile = ModelProfile {
+        default_structured_mode: Some(tinyinference_llm::model::StructuredMode::Prompted),
+        prompted_output_template: Some("Answer using this schema:".to_string()),
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        StructuredStrategy::for_profile(Some(&profile)),
+        StructuredStrategy::Prompted {
+            template: Some("Answer using this schema:".to_string())
+        }
+    );
+}
+
+#[test]
+fn default_structured_mode_prompted_without_a_template_carries_none() {
+    let profile = ModelProfile {
+        default_structured_mode: Some(tinyinference_llm::model::StructuredMode::Prompted),
+        prompted_output_template: None,
+        ..ModelProfile::default()
+    };
+    assert_eq!(
+        StructuredStrategy::for_profile(Some(&profile)),
+        StructuredStrategy::Prompted { template: None }
+    );
+}
+
+#[test]
 fn provider_schema_parses_json_text() {
     let extractor =
         StructuredExtractor::new(StructuredStrategy::ProviderSchema, "result", json!({}));
@@ -107,6 +166,7 @@ fn structured_output_parse_deserialises() {
     let output = StructuredOutput {
         value: json!({"value": "hello"}),
         raw_text: None,
+        variant: None,
     };
     let parsed: Answer = output.parse().unwrap();
     assert_eq!(parsed.value, "hello");

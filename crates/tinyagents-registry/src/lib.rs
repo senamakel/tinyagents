@@ -20,7 +20,7 @@
 //! - [`ModelCatalog`] ([`catalog`]) — a checked-in snapshot of provider model
 //!   prices, context windows, and capabilities for deterministic, offline
 //!   lookup (cost estimation, model selection, capability gating).
-//! - [`ModelRouter`] ([`router`]) — the declarative workload-tier layer over the
+//! - [`WorkloadRouter`] ([`router`]) — the declarative workload-tier layer over the
 //!   named model registry: maps host workload aliases (`chat-v1`, `vision-v1`, …)
 //!   onto concrete registered models with per-tier capability gates and ordered
 //!   same-family fallback chains (registry component kind
@@ -40,23 +40,6 @@ pub use catalog::{
 };
 pub use component::{ComponentId, ComponentKind, ComponentMetadata};
 pub use diagnostics::{AliasBinding, DiagnosticSeverity, RegistryDiagnostic, RegistrySnapshot};
-pub use router::{ModelRouter, WorkloadRoute};
-
-impl<State: Send + Sync> tinyagents_language::capability_resolver::CapabilitySource
-    for CapabilityRegistry<State>
-{
-    fn names(&self, kind: tinyagents_language::capability_resolver::CapabilityKind) -> Vec<String> {
-        use tinyagents_language::capability_resolver::CapabilityKind;
-
-        let kind = match kind {
-            CapabilityKind::Model => ComponentKind::Model,
-            CapabilityKind::Tool => ComponentKind::Tool,
-            CapabilityKind::Graph => ComponentKind::Graph,
-            CapabilityKind::Router => ComponentKind::Router,
-            CapabilityKind::Reducer => ComponentKind::Reducer,
-            CapabilityKind::Agent => ComponentKind::Agent,
-            CapabilityKind::Script => ComponentKind::Script,
-        };
-        self.names_including_aliases(kind)
-    }
-}
+#[allow(deprecated)]
+pub use router::ModelRouter;
+pub use router::{WorkloadRoute, WorkloadRouter};

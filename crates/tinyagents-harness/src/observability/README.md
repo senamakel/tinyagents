@@ -34,10 +34,17 @@ surface and operational constraints.
   - `JournalSink` — persists observations into a `HarnessEventJournal`.
   - `JsonlSink` — appends records to a JSONL stream via
     `harness::store::JsonlAppendStore`.
+  - `SinkHealth` — queue-drop and backend-append-failure totals returned by
+    `JournalSink::health` and `JsonlSink::health`.
 - `AgentObservation`-derived metrics:
   - `AgentCallLatency` — start/end/elapsed for a single model or tool call.
   - `AgentLatencyMetrics` — latency rollups for one run, built with
     `AgentLatencyMetrics::from_observations(&[AgentObservation])`.
+- Process profiling:
+  - `ProcessSnapshot` — point-in-time process RSS and user/system CPU counters.
+  - `ProcessProfiler` — a scoped RSS sampler around a workload.
+  - `ProcessProfile` — the serializable wall-time, CPU utilization, and
+    baseline/peak RSS report returned by `ProcessProfiler::finish`.
 - `LangfuseAuth`, `LangfuseClient`, `LangfuseTraceConfig` (re-exported from the
   private `langfuse` submodule) — the Langfuse exporter used to ship harness
   (and, via shared helpers, graph) traces to Langfuse. The exporter emits a
@@ -72,9 +79,9 @@ first success afterwards logs one `WARN` recovery summary carrying how many
 observations were lost. The worker keeps attempting every item while degraded —
 the attempt is what detects recovery. Because reporting goes through `tracing`,
 an embedder with no subscriber installed sees nothing — install a subscriber to
-observe durable-log loss. `AppendWorker::append_failures` counts it, but like
-the queue-full `dropped` count it is crate-internal, so it is not a signal a
-host application can read today.
+observe durable-log loss. Host applications can inspect both loss paths through
+`JournalSink::health` / `JsonlSink::health` without relying on a tracing
+subscriber.
 
 ## Latency metrics semantics
 
@@ -89,6 +96,7 @@ silently excluded from the rollup rather than reported with a bogus duration.
 | File | Role |
 | --- | --- |
 | `types.rs` | Every public type: `AgentObservation`, journal/status-store traits and in-memory impls, sink structs, latency types. |
+| `profile.rs` | Scoped process CPU/RSS sampling for stress tests and host-specific workloads. |
 | `mod.rs` | Behavioral code: latency rollups, journal/store/sink impls. |
 | `langfuse/` | `LangfuseClient` and payload helpers (`clean_nulls`, `iso_ms`) shared with `graph::observability::langfuse`, split into `mod.rs` (impl + helpers), `types.rs` (`LangfuseAuth`/`LangfuseClient`/`LangfuseTraceConfig`), and `test.rs`. |
 | `test.rs` | Unit tests (journal round-trips, redaction, latency rollups, sink fan-out). |

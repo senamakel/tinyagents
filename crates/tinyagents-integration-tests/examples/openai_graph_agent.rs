@@ -9,7 +9,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run --example openai_graph_agent
+//! cargo run -p tinyagents-integration-tests --example openai_graph_agent
 //! ```
 
 use std::sync::Arc;
@@ -18,7 +18,6 @@ use tinyagents_graph::END;
 use tinyagents_graph::*;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::openai::OpenAiModel;

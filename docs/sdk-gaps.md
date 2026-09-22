@@ -362,17 +362,19 @@ Acceptance criteria:
 
 ### 12. Workspace Isolation And Sandbox Hooks
 
-Status: missing as an SDK-owned abstraction.
+Status: intentionally host-owned through `AgentMiddleware` and
+`RunContext::with_workspace`.
 
 OpenHuman has workspace/action-root policy, internal workspace protection,
 trusted roots, worktree isolation, sandbox modes, and command permission tiers.
 TinyAgents should not own OpenHuman's policy, but it needs generic hooks for
 agents that run tools over real files or command executors.
 
-Implement:
+Host implementations provide:
 
-- A `WorkspaceIsolation` or `ExecutionEnvironment` interface.
-- Hooks for preparing per-agent worktrees/sandboxes and cleaning them up.
+- Their own workspace or execution-environment interface.
+- Around-agent middleware for preparing per-agent worktrees/sandboxes and
+  cleaning them up on both success and failure.
 - Tool execution context fields for workspace root, logical task root, sandbox
   descriptor, and policy identity.
 - Events for isolation setup, violation, cleanup, and failure.

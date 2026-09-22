@@ -10,9 +10,11 @@ use crate::ids::{CallId, ComponentId, EventId, ExecutionStatus, RunId, ThreadId}
 use crate::observability::AppendWorker;
 use crate::observability::{
     AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal, HarnessStatusStore,
-    InMemoryEventJournal, InMemoryStatusStore, JournalSink, RedactingSink, StoreEventJournal,
+    InMemoryEventJournal, InMemoryStatusStore, JournalSink, RedactingSink, SinkHealth,
+    StoreEventJournal,
 };
 use crate::store::InMemoryAppendStore;
+use async_trait::async_trait;
 
 fn obs(run: &str, offset: u64, event: AgentEvent) -> AgentObservation {
     let run_id = RunId::new(run);
@@ -144,6 +146,7 @@ fn agent_latency_metrics_include_model_tool_and_run_elapsed() {
                 duration_ms: None,
                 output_bytes: None,
                 error: None,
+                metadata: None,
             },
         ),
         obs(
@@ -309,6 +312,7 @@ async fn journal_sink_persists_observations() {
 
     // Persistence is asynchronous; block until the durable log catches up.
     sink.flush();
+    assert_eq!(sink.health(), SinkHealth::default());
 
     let stored = journal.read_from("run-sink", 0).await.unwrap();
     assert_eq!(stored.len(), 2);
@@ -317,6 +321,62 @@ async fn journal_sink_persists_observations() {
     assert_eq!(stored[1].event.kind(), "stream.closed");
     assert_eq!(stored[1].run_id, RunId::new("run-sink"));
     assert_eq!(stored[1].root_run_id, RunId::new("run-sink"));
+}
+
+struct FailingJournal;
+
+#[async_trait]
+impl HarnessEventJournal for FailingJournal {
+    async fn append(&self, _observation: AgentObservation) -> crate::error::Result<u64> {
+        Err(TinyAgentsError::Storage("journal offline".into()))
+    }
+
+    async fn read_from(
+        &self,
+        _run_id: &str,
+        _offset: u64,
+    ) -> crate::error::Result<Vec<AgentObservation>> {
+        Ok(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn durable_sinks_report_backend_append_failures() {
+    let journal_sink = JournalSink::new(Arc::new(FailingJournal), RunId::new("run-failing-sink"));
+    journal_sink.on_event(&EventRecord {
+        id: EventId::new("evt-journal-failure"),
+        offset: 0,
+        event: AgentEvent::StateUpdate,
+    });
+    journal_sink.flush();
+    assert_eq!(
+        journal_sink.health(),
+        SinkHealth {
+            dropped: 0,
+            append_failures: 1,
+        }
+    );
+
+    let root = tempfile::tempdir().unwrap();
+    let blocked_root = root.path().join("blocked");
+    std::fs::write(&blocked_root, b"not a directory").unwrap();
+    let jsonl_sink = crate::observability::JsonlSink::new(
+        crate::store::JsonlAppendStore::new(blocked_root),
+        "events",
+    );
+    jsonl_sink.on_event(&EventRecord {
+        id: EventId::new("evt-jsonl-failure"),
+        offset: 0,
+        event: AgentEvent::StateUpdate,
+    });
+    jsonl_sink.flush();
+    assert_eq!(
+        jsonl_sink.health(),
+        SinkHealth {
+            dropped: 0,
+            append_failures: 1,
+        }
+    );
 }
 
 #[tokio::test]

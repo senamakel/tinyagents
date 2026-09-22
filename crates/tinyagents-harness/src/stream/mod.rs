@@ -4,7 +4,7 @@
 //! watch work unfold across a nested run tree: state snapshots, diffs, model
 //! deltas, debug traces, and interrupts from a run — and, transitively, from
 //! the sub-agents and sub-graphs it spawns — are projected as filtered
-//! [`StreamChunk`]s so a parent (or a REPL/CodeAct loop driving the run) can
+//! [`StreamChunk`]s so a parent driving the run can
 //! consume only the categories it cares about.
 //!
 //! This module provides:
@@ -34,9 +34,14 @@
 //! one mode the projection cannot supply — a full state snapshot is graph
 //! state, so the graph runtime pushes [`StreamChunk::Values`] itself.
 
+pub mod frame;
 mod project;
 mod types;
 
+pub use frame::{
+    AssistantFrame, FrameEncoder, PartialAssistantMessage, PartialTerminal, encode_frames,
+    reduce_frames,
+};
 pub use project::{project_event, project_event_for_modes, projected_mode};
 pub use types::*;
 

@@ -43,7 +43,7 @@ pub fn write_transcript(
     fs::write(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("write transcript {}", jsonl_path.display()))?;
 
-    log::debug!(
+    tracing::debug!(
         "[transcript] wrote {} messages (jsonl, full rewrite) to {}",
         messages.len(),
         jsonl_path.display()
@@ -125,7 +125,7 @@ pub fn append_transcript_turn_with_partial(
         serialise_interrupted_partial(partial, request_id, &mut buf)?;
         fs::write(jsonl_path, buf.as_bytes())
             .with_context(|| format!("create transcript {}", jsonl_path.display()))?;
-        log::debug!(
+        tracing::debug!(
             "[transcript] created append-only transcript with {} message(s) at {}",
             messages.len(),
             jsonl_path.display()
@@ -141,7 +141,7 @@ pub fn append_transcript_turn_with_partial(
     if common == prev_persisted.len() {
         // Pure extension — append only the new tail.
         let tail = &messages[common..];
-        log::debug!(
+        tracing::debug!(
             "[transcript] append: extending on-disk set (prev={}, new={}, appending {} tail line(s)) {}",
             prev_persisted.len(),
             messages.len(),
@@ -153,7 +153,7 @@ pub fn append_transcript_turn_with_partial(
         // Reduction / rewrite — the on-disk set is no longer a prefix. Append a
         // compaction record carrying the full reduced context so the
         // model-context reader can replay it, without destroying earlier lines.
-        log::debug!(
+        tracing::debug!(
             "[transcript] append: context reduced (prev={}, new={}, common_prefix={}) — writing compaction record {}",
             prev_persisted.len(),
             messages.len(),
@@ -256,7 +256,7 @@ pub fn append_interrupted_partial(
         &mut buf,
     )?;
     append_bytes(jsonl_path, buf.as_bytes())?;
-    log::debug!(
+    tracing::debug!(
         "[transcript] appended interrupted partial ({} chars, request_id={:?}) to {}",
         partial_content.len(),
         request_id,
@@ -323,7 +323,7 @@ fn render_md_companion(
     if let Some(parent) = md_path.parent()
         && let Err(err) = fs::create_dir_all(parent)
     {
-        log::warn!(
+        tracing::warn!(
             "[transcript] failed to create md companion dir {}: {err}",
             parent.display()
         );
@@ -331,13 +331,13 @@ fn render_md_companion(
     }
     let md = render_markdown(messages, meta, &per_msg_usage);
     if let Err(err) = fs::write(&md_path, md.as_bytes()) {
-        log::warn!(
+        tracing::warn!(
             "[transcript] failed to write markdown companion {}: {err}",
             md_path.display()
         );
         return;
     }
-    log::debug!(
+    tracing::debug!(
         "[transcript] wrote markdown companion to {}",
         md_path.display()
     );

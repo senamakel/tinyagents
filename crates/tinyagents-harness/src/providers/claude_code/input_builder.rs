@@ -167,8 +167,8 @@ fn content_blocks(raw: &str) -> Vec<Value> {
     let mut cursor = 0;
     while let Some((relative, prefix)) = [
         IMAGE_PREFIX,
-        NATIVE_IMAGE_PREFIX,
         LITERAL_NATIVE_IMAGE_PREFIX,
+        NATIVE_IMAGE_PREFIX,
     ]
     .iter()
     .filter_map(|prefix| raw[cursor..].find(prefix).map(|offset| (offset, *prefix)))

@@ -2,8 +2,7 @@
 
 use crate::builder::{END, GraphBuilder, START};
 use crate::command::NodeResult;
-use crate::export::{blueprint_to_mermaid, blueprint_to_topology, from_json, to_json, to_mermaid};
-use tinyagents_language::{compiler, parser};
+use crate::export::{from_json, to_json, to_mermaid};
 
 /// Builds a small branching graph: START -> route -> {even,odd} with `route`
 /// conditionally selecting a successor, both successors finishing.
@@ -129,52 +128,6 @@ fn builder_topology_works_before_compile() {
     assert_eq!(topology.graph_id, "wip");
     assert_eq!(topology.entry.as_deref(), Some("a"));
     assert_eq!(topology.nodes.len(), 1);
-}
-
-#[test]
-fn blueprint_exports_topology_and_mermaid() {
-    let source = r#"
-graph support {
-  start triage
-  channel messages append
-
-  node triage {
-    routes {
-      urgent -> escalate
-      normal -> respond
-    }
-  }
-  node escalate { next respond }
-  node respond { next END }
-}
-"#;
-
-    let program = parser::parse_str(source).expect("parses");
-    let blueprints = compiler::compile(&program).expect("compiles");
-    let blueprint = &blueprints[0];
-
-    let topology = blueprint_to_topology(blueprint);
-    assert_eq!(topology.graph_id, "support");
-    assert_eq!(topology.entry.as_deref(), Some("triage"));
-
-    // Channel/reducer names are carried over from the blueprint.
-    assert_eq!(topology.channels.len(), 1);
-    assert_eq!(topology.channels[0].name, "messages");
-    assert_eq!(topology.channels[0].reducer, "append");
-
-    // `respond` is terminal.
-    assert_eq!(topology.finish_nodes, vec!["respond"]);
-
-    // JSON round-trips.
-    let restored = from_json(&to_json(&topology)).expect("round trip");
-    assert_eq!(restored, topology);
-
-    // Mermaid carries the conditional labels.
-    let mermaid = blueprint_to_mermaid(blueprint);
-    assert!(mermaid.contains("START --> n_triage"));
-    assert!(mermaid.contains("n_triage -- urgent --> n_escalate"));
-    assert!(mermaid.contains("n_triage -- normal --> n_respond"));
-    assert!(mermaid.contains("n_respond --> END"));
 }
 
 /// A graph exercising every marker kind: a conditional route, a barrier

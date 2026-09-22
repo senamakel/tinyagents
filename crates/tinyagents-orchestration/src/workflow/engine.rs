@@ -9,6 +9,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -195,6 +196,7 @@ pub struct WorkflowEngine<S, E> {
     store: Arc<S>,
     executor: Arc<E>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
+    event_seq: AtomicU64,
     lease_for: Duration,
 }
 
@@ -267,6 +269,7 @@ where
             store,
             executor,
             event_sink: None,
+            event_seq: AtomicU64::new(0),
             lease_for: WORKFLOW_LEASE,
         }
     }
@@ -338,6 +341,9 @@ where
                 .values()
                 .any(|phase| phase.get("status").and_then(Value::as_str) == Some("running"))
         }) {
+            // The previous owner may have crashed after registering remote
+            // children. Fence side effects before making its phase runnable.
+            self.executor.cancel_children(&run.child_run_ids).await;
             let mut phase_states = run.phase_states.clone();
             reset_running_phases(
                 &mut phase_states,
@@ -347,7 +353,7 @@ where
                 &run,
                 PersistRequest {
                     phase_states,
-                    child_run_ids: run.child_run_ids.clone(),
+                    child_run_ids: Vec::new(),
                     status: WorkflowRunStatus::Running,
                     summary: None,
                     terminal: false,
@@ -355,10 +361,15 @@ where
                 &owner,
             )?;
         }
-        self.emit(tinyagents_graph::GraphEvent::RunStarted {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-        });
-        let mut total_spawned = run.child_run_ids.len() as u32;
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunStarted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+            },
+        );
+        // Registered children from an interrupted attempt are historical, not
+        // part of the retry's spawn budget.
+        let mut total_spawned = 0;
 
         loop {
             if cancel.is_cancelled() {
@@ -433,10 +444,13 @@ where
                 }
                 return Ok(());
             };
-            self.emit(tinyagents_graph::GraphEvent::NodeStarted {
-                node: tinyagents_harness::ids::NodeId::new("run_phase"),
-                step: total_spawned as usize + 1,
-            });
+            self.emit(
+                run_id,
+                tinyagents_graph::GraphEvent::NodeStarted {
+                    node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                    step: total_spawned as usize + 1,
+                },
+            );
             let phase_result = self
                 .run_phase(
                     &run,
@@ -463,10 +477,13 @@ where
                 }
             };
             run = updated;
-            self.emit(tinyagents_graph::GraphEvent::NodeCompleted {
-                node: tinyagents_harness::ids::NodeId::new("run_phase"),
-                step: total_spawned as usize + 1,
-            });
+            self.emit(
+                run_id,
+                tinyagents_graph::GraphEvent::NodeCompleted {
+                    node: tinyagents_harness::ids::NodeId::new("run_phase"),
+                    step: total_spawned as usize + 1,
+                },
+            );
             total_spawned += spawned;
             if run.status != WorkflowRunStatus::Running {
                 match run.status {
@@ -581,10 +598,16 @@ where
             tokio::select! {
                 outcomes = &mut outcomes => break outcomes,
                 _ = heartbeat.tick() => {
-                    if !self.store.renew(&run.id, owner, self.lease_for)? {
+                    let renewed = self.store.renew(&run.id, owner, self.lease_for);
+                    if !matches!(renewed, Ok(true)) {
                         cancel.cancel();
                         let children = registration.current().child_run_ids;
                         self.executor.cancel_children(&children).await;
+                        if let Err(error) = renewed {
+                            return Err(OrchestrationError(format!(
+                                "workflow lease renewal errored; cancelled registered children: {error}"
+                            )));
+                        }
                         return Err(OrchestrationError(
                             "workflow lease renewal failed; cancelled registered children".to_owned(),
                         ));
@@ -758,33 +781,48 @@ where
             })
     }
 
-    fn emit(&self, event: tinyagents_graph::GraphEvent) {
+    fn emit(&self, run_id: &str, event: tinyagents_graph::GraphEvent) {
         if let Some(sink) = &self.event_sink {
-            sink.emit(event);
+            sink.emit(tinyagents_graph::GraphEventEnvelope {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                task_id: None,
+                ns: Vec::new(),
+                seq: self.event_seq.fetch_add(1, Ordering::Relaxed),
+                event,
+            });
         }
     }
 
     fn finish_completed(&self, run_id: &str, steps: usize) {
-        self.emit(tinyagents_graph::GraphEvent::RunCompleted {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-            steps,
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunCompleted {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                steps,
+            },
+        );
         self.flush_terminal_events();
     }
 
     fn finish_failed(&self, run_id: &str, error: String) {
-        self.emit(tinyagents_graph::GraphEvent::RunFailed {
-            run_id: tinyagents_harness::ids::RunId::new(run_id),
-            error,
-        });
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunFailed {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+                error,
+            },
+        );
         self.flush_terminal_events();
     }
 
     fn finish_cancelled(&self, run_id: &str) {
-        // GraphEvent has no cancellation variant. Its terminal error event is
-        // the truthful durable signal for a cooperatively aborted run; callers
-        // distinguish cancellation from failure in the workflow ledger status.
-        self.finish_failed(run_id, "workflow cancelled".to_owned());
+        self.emit(
+            run_id,
+            tinyagents_graph::GraphEvent::RunCancelled {
+                run_id: tinyagents_harness::ids::RunId::new(run_id),
+            },
+        );
+        self.flush_terminal_events();
     }
 
     fn flush_terminal_events(&self) {
@@ -800,7 +838,12 @@ where
             .load(run_id)
             .ok()
             .flatten()
-            .is_some_and(|current| current.lease_owner.as_deref() != Some(owner))
+            .is_some_and(|current| {
+                current.lease_owner.as_deref() != Some(owner)
+                    || current
+                        .lease_expires_at
+                        .is_none_or(|expires| expires <= Utc::now())
+            })
     }
 
     /// Returns true after emitting the terminal event already committed by a

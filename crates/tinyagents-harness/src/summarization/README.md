@@ -32,6 +32,17 @@ loop.
   tool results, and reasoning blocks that `Message::text()` drops — into
   summarizable text, so `ConcatSummarizer`'s default output isn't a column of
   bare role labels for a tool-driven run.
+- **Compaction** (`compaction.rs`, `pub mod compaction`) is the durable,
+  rule-driven layer: `find_cut_point` (token-budget cut points, repaired via
+  `pairing.rs`), `summarize_with_split` (split-turn summarization + merge),
+  `Summarizer::summarize_request`/`SummaryRequest::previous_summary`
+  (iterative summaries), `CompactionRecord`/`CompactionSink`/
+  `CompactionReason`, `CompactionContext`/`CompactionDecision` (the
+  `before_compaction` hook), and `OverflowClassifier` (table-driven provider
+  overflow detection). `ContextCompressionMiddleware` uses all of this for
+  its `before_model` (threshold) and `wrap_model` (overflow → compact →
+  retry) paths. Full contract:
+  `docs/modules/harness/compaction.md`.
 
 ## Public surface
 
@@ -84,7 +95,9 @@ loop.
 | `pairing.rs` | Tool-call-pairing-safe cut-point repair. |
 | `render.rs` | `render_message_for_summary`. |
 | `trim.rs` | `trim_messages`/`trim_messages_with`/`trim_messages_to_token_budget_with`. |
+| `compaction.rs` | `find_cut_point`, `summarize_with_split`, `OverflowClassifier`, `CompactionContext`/`CompactionDecision`. |
 | `test.rs` | Coverage for token estimation, trim strategies, pairing repair, policy triggering/planning, and `ConcatSummarizer`. |
+| `compaction/test.rs` | Coverage for cut points, split-turn merge, iterative summaries, `OverflowClassifier`. |
 
 ## Key invariants
 

@@ -18,7 +18,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run --example goals_and_todos
+//! cargo run -p tinyagents-integration-tests --example goals_and_todos
 //! ```
 
 use std::sync::Arc;
@@ -29,7 +29,6 @@ use tinyagents_graph::*;
 use tinyagents_graph::{NodeContext, NodeFuture};
 use tinyagents_harness::store::{InMemoryStore, Store};
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 
 /// The thread both primitives are scoped to.

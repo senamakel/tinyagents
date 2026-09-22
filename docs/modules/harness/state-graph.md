@@ -1,380 +1,171 @@
-# Harness State Graph Runtime Feature
-
-The state graph runtime is the explicit state-machine form of the harness. It
-models an agent run as named nodes, edges, routing commands, typed working state,
-checkpointed run records, and resumable interrupts.
-
-This is not a replacement for the simple direct harness path. A direct model
-call and a model-plus-tools loop should remain easy. The graph runtime is for
-long-running, inspectable, branchy, resumable, human-reviewed, or UI-controlled
-agent work.
-
-## Source Inspiration
-
-OpenHuman PR #4261 implements a LangGraph-style runtime that is directly
-relevant to TinyAgents:
-
-- PR: <https://github.com/tinyhumansai/openhuman/pull/4261>
-- generic engine: `src/openhuman/agent_graph/graph/`
-- run/checkpoint persistence: `src/openhuman/agent_graph/checkpoint/`
-- HITL interrupts: `src/openhuman/agent_graph/hitl/`
-- graph lifecycle events: `src/openhuman/agent_graph/observability/`
-- built-in graph definitions: `src/openhuman/agent_graph/definitions/`
-- per-agent blueprints: `src/openhuman/agent_graph/blueprint/`
-- JSON-RPC surface: `src/openhuman/agent_graph/{ops,schemas}.rs`
-- live turn graph bridge: `src/openhuman/agent_graph/live/`
-- behavior-preserving turn state machine: `src/openhuman/agent/harness/engine/core.rs`
-
-Key design lesson from the PR: keep the generic graph engine decoupled from the
-agent harness, then bridge product-specific model/tool/memory behavior through
-nodes and runtime adapters.
-
-## Responsibilities
-
-- Define graph state and merge/reducer semantics.
-- Define async node execution.
-- Support static edges, conditional edges, fork/fan-out edges, and finish nodes.
-- Support node commands: continue, goto, fork, interrupt, and end.
-- Compile and validate graph topology before execution.
-- Execute graphs with deterministic super-step ordering.
-- Support branch state merging.
-- Enforce cancellation and max-step guards.
-- Persist run records and checkpoints.
-- Support pause/resume through human-in-the-loop interrupts.
-- Emit typed graph lifecycle events.
-- Expose graph definitions, run records, checkpoints, and per-agent blueprints
-  to UIs and tests.
-- Provide deterministic graph definitions and fake nodes for E2E tests.
-
-## Non-Responsibilities
-
-- It does not require all harness calls to use graphs.
-- It does not own provider adapters.
-- It does not own tool implementations.
-- It does not replace the graph module's broader workflow/topology APIs.
-- It does not hide model/tool safety checks inside graph routing.
-- It does not allow provider-supplied tool calls to bypass the per-turn
-  advertised tool allowlist.
-
-## Core Types
-
-```rust
-pub trait GraphState:
-    Clone + Serialize + DeserializeOwned + Send + Sync + 'static
-{
-    fn merge(&mut self, other: Self) -> Result<()>;
-}
-
-#[async_trait]
-pub trait Node<S: GraphState>: Send + Sync {
-    async fn run(&self, state: S, ctx: &NodeCtx<'_>) -> Result<NodeOutput<S>>;
-}
-
-pub struct NodeOutput<S> {
-    pub state: S,
-    pub command: Command,
-}
-
-pub enum Command {
-    Continue,
-    Goto(NodeId),
-    Fork(Vec<NodeId>),
-    Interrupt(InterruptRequest),
-    End,
-}
-```
-
-`GraphState::merge` is the reducer contract. Parallel branches receive cloned
-state and then merge back. Reducers must account for shared pre-fork state so
-they do not double-count base data.
-
-## Builder And Compile Validation
-
-```rust
-pub struct StateGraph<S: GraphState> {
-    name: GraphName,
-    nodes: HashMap<NodeId, Arc<dyn Node<S>>>,
-    edges: HashMap<NodeId, Edge<S>>,
-    entry: Option<NodeId>,
-    finish: HashSet<NodeId>,
-    max_steps: u32,
-}
-```
-
-Builder surface:
-
-- `add_node(id, node)`
-- `add_edge(from, to)`
-- `add_conditional_edges(from, targets, router)`
-- `add_fork(from, targets)`
-- `set_entry_point(id)`
-- `set_finish_point(id)`
-- `set_max_steps(max)`
-- `compile()`
-
-`compile()` must fail on:
-
-- missing entry point
-- unknown entry node
-- edge source that is not a node
-- edge target that is not a node or `END`
-- conditional target not declared
-- node with no outgoing edge and not marked as finish
-
-Compile failures should be distinct from runtime failures so tests can assert
-whether a graph definition is malformed or execution failed.
-
-## Execution Semantics
-
-Execution follows Pregel-style super-steps:
-
-1. Start with a frontier of `(entry_node, initial_state)`.
-2. Run every node in the current frontier.
-3. Collect each node's state and command.
-4. Compute the next frontier.
-5. Merge states that converge on the same next node.
-6. Stop when all branches end, an interrupt pauses the run, cancellation fires,
-   or the max-step guard trips.
-
-The runtime should keep deterministic ordering for tests and transcripts. A
-stable ordering such as `BTreeMap<NodeId, S>` for next-frontier convergence is
-preferred.
-
-## Human-In-The-Loop
-
-Human review is a first-class node outcome, not an ad hoc exception.
-
-```rust
-pub struct InterruptRequest {
-    pub kind: String,
-    pub question: String,
-    pub options: Vec<String>,
-    pub resume_to: Option<NodeId>,
-}
-
-pub trait ApplyResume {
-    fn apply_resume(&mut self, input: &str);
-}
-```
-
-When a node returns `Command::Interrupt`, the runtime should:
-
-- persist a paused run record
-- write a checkpoint snapshot
-- emit a graph paused event
-- return the interrupt payload to the caller
-- resume only when the run is still paused
-- fold the resume input into state before continuing
-- continue from `resume_to` or a validated static successor
-
-Resume must reject completed, failed, missing, or non-paused runs.
-
-## Checkpointing
-
-```rust
-#[async_trait]
-pub trait Checkpointer: Send + Sync {
-    async fn save_run(&self, rec: &GraphRunRecord) -> Result<()>;
-    async fn load_run(&self, run_id: &RunId) -> Result<Option<GraphRunRecord>>;
-    async fn list_runs(&self, limit: usize, offset: usize) -> Result<Vec<GraphRunRecord>>;
-    async fn save_checkpoint(&self, cp: &Checkpoint) -> Result<CheckpointId>;
-    async fn list_checkpoints(&self, run_id: &RunId) -> Result<Vec<Checkpoint>>;
-}
-```
-
-Run records should include:
-
-- run id
-- graph name
-- status
-- created and updated timestamps
-- last node
-- super-step count
-- serialized state
-- interrupt payload when paused
-- error text when failed
-- node transitions
-
-Checkpoints should include:
-
-- checkpoint id
-- run id
-- step
-- node
-- label such as `start`, `pause:approval`, `complete`, or `failed`
-- serialized state
-- timestamp
-
-Backends:
-
-- `InMemoryCheckpointer` for tests
-- SQLite for durable local runs
-- future Postgres/Mongo/object-store-backed checkpointers for server use
-
-Run listing must be newest-first and paged. Timestamps should be normalized to
-UTC or compared as parsed absolute times rather than relying on arbitrary string
-ordering.
-
-## Graph Events
-
-Event kinds:
-
-- `graph.run.started`
-- `graph.node.entered`
-- `graph.node.completed`
-- `graph.run.paused`
-- `graph.run.completed`
-- `graph.run.failed`
-- `graph.checkpoint.saved`
-- `graph.resume.started`
-- `graph.resume.completed`
-
-Node-completed events should include run id, graph name, step, node id, command
-label, and elapsed time. Run events should include status, last node, steps,
-checkpoint id when available, and error/interrupt metadata.
-
-## Definitions And Blueprints
-
-The runtime needs two definition forms:
-
-- executable definitions: compiled Rust node graphs
-- inspectable blueprints: serializable node/edge topology for UIs, tests, and
-  agent catalogs
-
-```rust
-pub enum NodeKind {
-    Dispatch,
-    Parse,
-    StopCheck,
-    Tools,
-    Compact,
-    Finalize,
-    Hitl,
-    Delegate(AgentId),
-    Custom(String),
-}
-
-pub enum EdgeSpec {
-    Static { from: NodeId, to: NodeId },
-    Conditional { from: NodeId, on: String, targets: Vec<NodeId> },
-    Fork { from: NodeId, targets: Vec<NodeId> },
-}
-
-pub struct GraphBlueprint {
-    pub name: String,
-    pub entry: NodeId,
-    pub finish: Vec<NodeId>,
-    pub nodes: Vec<NodeSpec>,
-    pub edges: Vec<EdgeSpec>,
-}
-```
-
-Per-agent convention:
-
-- `prompt` defines what the agent says
-- `graph` defines how the agent runs
-- loader tests validate every built-in agent graph
-- UIs can inspect the graph without running it
-
-Reusable blueprint shapes:
-
-- `canonical_turn`: `dispatch -> parse -> stop_check -> tools -> compact ->
-dispatch`, or `finalize`
-- `single_shot`: `dispatch -> finalize`
-- `plan_execute_review`: `plan -> execute -> review -> finalize`, with reject
-  looping back to execute
-- `delegate`: orchestrator-style delegation and join patterns
-
-## Live Turn Bridge
-
-The graph runtime must support real agent turns without forcing non-clonable
-provider/tool state into `GraphState`.
-
-Pattern:
-
-- keep provider, tool executor, message history, and cost state in a
-  run-scoped machine behind an async mutex or equivalent exclusive owner
-- keep graph-visible state small and serializable
-- use graph nodes to drive live phases
-- preserve legacy turn contracts while migrating phase by phase
-
-Canonical live phases:
-
-- `dispatch`: context guard, stop hooks, trim request copy, call provider,
-  append assistant message, record usage/cost
-- `parse`: decide final answer, tool loop, repeat-output breaker, or iteration
-  cap
-- `tools`: validate requested tools against the advertised allowlist, parse
-  arguments, execute tools, append tool messages, enforce failure breaker and
-  early-exit tools
-- `compact`: summarize or trim before looping
-- `finalize`: return outcome and preserve final history
-- `max_iterations`: invoke checkpoint strategy
-
-Safety requirements:
-
-- provider tool calls must be checked against tools advertised for that turn
-- malformed tool arguments must fail closed and must not execute side-effecting
-  tools with default empty arguments
-- native assistant tool-call history and tool result messages must preserve
-  provider call ids
-- early-exit tools must surface pause semantics without pretending a final
-  answer was produced
-
-## RPC Or Control Surface
-
-The harness should expose a control surface equivalent to:
-
-- `graph_definition_list`
-- `graph_agent_list`
-- `graph_agent_get`
-- `graph_run`
-- `graph_run_list`
-- `graph_run_get`
-- `graph_checkpoint_list`
-- `graph_resume`
-
-Read-only methods should return bare values where the surrounding RPC protocol
-already has its own envelope. Mutation methods may include logs or audit
-messages. The important contract is that UI clients can list definitions, start
-runs, inspect paused/completed runs, browse checkpoints, and resume HITL runs.
-
-## Testing Requirements
-
-Graph runtime tests should cover:
-
-- linear graph
-- conditional routing
-- cycles with max-step guard
-- fork and merge
-- merge failure
-- HITL pause and resume
-- reject loop and approve completion
-- unknown node compile error
-- dangling node compile error
-- cancellation
-- node error propagation
-- checkpoint round trip
-- run upsert
-- run listing pagination and newest-first order
-- checkpoint ordering and latest checkpoint
-- RPC run/list/get/checkpoint/resume flow
-- per-agent blueprint validation for every built-in agent
-- live turn graph preserves tool advertisement
-- live turn graph rejects unknown tools
-- live turn graph rejects malformed tool arguments without execution
-- live turn graph final output depends on actual tool execution
-
-## Implementation Notes
-
-OpenHuman PR #4261 intentionally keeps the generic graph engine independent from
-the agent harness. TinyAgents should keep the same boundary:
-
-- graph core depends only on graph traits, ids, commands, state, cancellation,
-  and progress sinks
-- harness integration lives in nodes, definitions, middleware, and runtime
-  adapters
-- graph checkpointing belongs to graph runtime, while harness stores still own
-  events, artifacts, messages, and application data
-- the simple harness path remains available for direct calls and ordinary
-  model-tool loops
+# Harness State Graph Runtime
+
+This document describes what actually exists in the workspace today. An
+earlier draft of this file sketched an aspirational `StateGraph<S>` design
+inspired by an OpenHuman PR; none of those types (`GraphState`, `Node<S>`,
+`Command::Fork`, a `StateGraph` builder) were ever implemented under
+`tinyagents-harness`. The real state-graph runtime lives in the
+`tinyagents-graph` crate (`crates/tinyagents-graph/src/`), documented in
+`docs/modules/graph/`, and this page now only covers the one harness-facing
+surface that is genuinely new: the compiled-graph rendition of the agent loop
+(A5, `docs/runtime-comparison/langgraph.md` §4 and
+`docs/runtime-comparison/pydantic-ai.md` §4's `iter` API).
+
+## Where the graph runtime actually lives
+
+`tinyagents-graph`'s `GraphBuilder`/`CompiledGraph` (`crates/tinyagents-graph/src/builder/`,
+`crates/tinyagents-graph/src/compiled/`) is the durable, typed, Pregel-style
+state graph: partial updates and reducers (`reducer`), commands and
+interrupts (`command`), checkpointing (`checkpoint`, with `InMemoryCheckpointer`,
+`FileCheckpointer`, and an optional `SqliteCheckpointer`), streaming/events
+(`stream`), subgraph embedding (`subgraph`), and recursion tracking
+(`recursion`). See `docs/modules/graph/` for that design in full; nothing on
+this page duplicates it.
+
+`tinyagents-harness` does not implement its own competing graph engine. What
+it exposes, in `tinyagents_harness::agent_loop::phases`, is a **seam**: typed
+phase contracts (`TurnPlan`, `ModelOutcome`, `ToolBatchOutcome`, `Settlement`)
+and a `LoopDriver` trait that lets `AgentHarness` delegate its loop execution
+to an alternate engine. `tinyagents-graph` is the only implementor of that
+seam, because the dependency direction in this workspace is graph → harness
+(never the reverse) — a compiled-graph rendition of the harness's own loop
+therefore has to live in the graph crate, wired back in through this trait.
+
+## The agent loop as a `CompiledGraph` (A5)
+
+`tinyagents_graph::agent_loop` (`crates/tinyagents-graph/src/agent_loop/`)
+compiles the harness's default `plan -> model -> tools -> settle` loop into
+an ordinary `CompiledGraph<LoopState, LoopUpdate>`. `LoopState` is a
+whole-state graph value (`LoopUpdate = LoopState`, built with
+`GraphBuilder::overwrite()`): every node returns the complete next state
+rather than a partial patch. It is `Serialize`/`Deserialize`, unlike the
+harness's own `RunContext` (deliberately not serializable), so a
+graph-driven run can be checkpointed mid-run — including at an interrupt —
+and resumed.
+
+Three entry points, sharing one set of node bodies
+(`runtime::plan_node`/`model_node`/`tools_node`/`settle_node`):
+
+- **`compile_loop(rt: Arc<LoopRuntime<State, Ctx>>) -> Result<CompiledGraph<LoopState, LoopUpdate>>`**
+  builds the real compiled graph over an owned `LoopRuntime` (harness/state
+  `Arc`'d, `RunContext`/`AgentRun`/`HarnessRunStatus` owned). This is the
+  graph that gets checkpointing, `resume`, and step-by-step control.
+- **`AgentLoopGraphExt::iter(harness: Arc<AgentHarness<..>>, app_state, ctx, input) -> LoopIter`**
+  mirrors pydantic-ai's `Agent.iter`: `LoopIter::next()` runs exactly one
+  node activation and reports a `LoopStep` (which node ran, what runs next,
+  whether it interrupted); `override_next(node)` redirects the next
+  activation; `state()` reads the committed `LoopState`; `run_to_end()` steps
+  until completion or the first unresolved interrupt.
+- **`GraphLoopDriver`** implements `phases::LoopDriver` and is installed with
+  `AgentHarness::with_loop_driver` plus
+  `RunPolicy::execution = LoopExecution::Graph` (the default,
+  `LoopExecution::Direct`, is the original `run_loop` body, byte-for-byte
+  unchanged). This makes `AgentHarness::invoke` itself run the graph-rendition
+  node bodies.
+
+### Why `GraphLoopDriver` does not build a `CompiledGraph`
+
+`phases::LoopDriver::drive` is handed a **borrowed** `&AgentHarness`/`&State`
+and `&mut RunContext`/`&mut AgentRun`/`&mut HarnessRunStatus` — the same
+shape `run_loop` itself uses. `GraphBuilder::add_node`'s closures must be
+`Send + Sync + 'static`, so a `CompiledGraph`'s nodes can only close over
+genuinely owned (`Arc`'d) data. Building an `Arc<AgentHarness>` from a bare
+`&AgentHarness` is not possible in safe Rust, and this workspace denies
+`unsafe_code`. Forcing every `with_loop_driver` caller to already hold an
+`Arc<AgentHarness>` before installing a driver would also be circular (the
+harness does not exist as an `Arc` until after it is fully built, including
+its driver).
+
+So `GraphLoopDriver::drive` instead calls the exact same node bodies
+directly, in a hand-rolled loop, against the real borrowed `&mut` state — no
+`Arc`, no `Mutex`, no `CompiledGraph`. This is sound with zero unsafe code
+because a borrowed async call needs no `'static` bound. The trade-off: an
+interrupt raised through `AgentHarness::invoke` (`RunPolicy::execution ==
+Graph`) still ends the run cleanly (mirroring a steering pause, or
+`TinyAgentsError::Interrupted` for a `MiddlewareControl::Interrupt` — see
+below) but is **not** a resumable `CompiledGraph` checkpoint. A caller that
+wants graph-level checkpoint/resume across an interrupt should drive the loop
+through `compile_loop`/`LoopIter` directly instead of through
+`AgentHarness::invoke`.
+
+### Routing and interrupts
+
+Every node routes explicitly (`mark_command_routing` on all four nodes) via
+`Command::goto`, driven by `tinyagents_harness::context::MiddlewareControl`:
+
+| `MiddlewareControl` | Graph routing |
+| --- | --- |
+| `Continue` / `UpdateState` | falls through to whatever the calling node had already determined the turn's natural next step to be (tool routing from `model`, `plan` from `tools`) |
+| `JumpTo(Model)` | routes to `plan` (closing any unanswered tool calls first) |
+| `JumpTo(Tools)` | routes to `tools` if there are pending calls, else `settle` |
+| `JumpTo(End)` / `StopWithFinal` | routes to `settle` with `finished = true` |
+| `Interrupt { node, message }` | `NodeResult::Interrupt` — a real, checkpointable `crate::Interrupt` returned directly by the `plan`/`model`/`tools` node bodies through `compile_loop`/`LoopIter` (these nodes are marked as interrupt points for the export only — via the `NodeMeta` flag directly, not `GraphBuilder::mark_interrupt`, which now aliases the real `interrupt_before` pause and would double-pause every activation); through `GraphLoopDriver` this instead surfaces as `TinyAgentsError::Interrupted`, matching `run_loop`'s own behavior for this control |
+
+A steering pause (`SteeringOutcome::Pause`, checked in `plan_node`) also
+produces a `NodeResult::Interrupt`, distinguished from a middleware interrupt
+by its id suffix (`-steering-pause`); `GraphLoopDriver` treats that one as a
+clean pause (`run.paused`, `Ok(())`), exactly like `run_loop`'s
+`LoopExit::Paused`.
+
+`RunLimits` (model/tool call caps) are enforced through the same
+`RunContext::limits`/`LimitTracker` the direct loop uses, reconciled against
+`RunPolicy::limits` with the identical (`runtime::reconcile_call_limits`)
+logic `run_loop_body` applies at the top of a run, so
+`RunConfig::with_max_model_calls` and `RunPolicy::limits` interact
+identically under both engines. A cap hit surfaces as
+`TinyAgentsError::LimitExceeded` (or a clean `LimitStop`-style finish under
+`LimitBehavior::StopWithPartial`) either way.
+
+### Tool batch execution
+
+The `tools` node runs a turn's whole tool-call batch in **one** node
+activation, via `tinyagents_harness::agent_loop::phases::execute_tool_batch`,
+rather than one graph node (or one `Send` fan-out branch) per call. The
+direct loop's serial-admission / serial-or-concurrent-dispatch decision (see
+`tinyagents_harness::agent_loop::tools`) is call-count- and
+middleware-dependent; re-deriving it as graph topology would either duplicate
+that decision as a router (two sources of truth) or lose the exact
+ordering/budget guarantees the direct loop promises. Reusing the harness
+function as-is keeps ordering, concurrency-eligibility, and budget/limit
+semantics identical to the direct loop by construction — at the cost of a
+coarser graph: a `tools` activation is atomic from the executor's point of
+view, so resuming after an interrupt mid-batch re-runs the whole batch, not
+just its unfinished calls.
+
+### Documented scope (not a byte-for-byte reimplementation)
+
+`tinyagents_graph::agent_loop` covers the common path: tool calling,
+structured output (`ResponseFormat::Auto`/`JsonSchema`, provider-schema and
+tool-call-fallback strategies), the output-validation retry loop (A3), run
+limits, `MiddlewareControl` routing, and steering. It intentionally does
+**not** cover: host-model routing (`HostCapabilities`), cross-provider
+handoff transforms, the deferred-tool discovery bridge, truncated-empty-
+response recovery/retry, `RunPolicy::retry`/`fallback`'s built-in retry loop
+(a registered `ModelMiddleware` still runs), response caching, and
+`StructuredStrategy::Prompted`/`ToolCallUnion` or
+`EndStrategy::Early`/`Exhaustive` (A6). `resolve_structured_plan` also
+resolves a profile-driven `ResponseFormat::Auto` choice against the
+*default* model binding rather than the turn's actually-resolved model.
+`RunPolicy::execution` defaults to `LoopExecution::Direct`, so no existing
+caller is affected unless it opts in.
+
+Equivalence between the two engines is covered by
+`crates/tinyagents-integration-tests/tests/loop_as_graph.rs`: scripted tool
+call, structured output, output-validation retry, limit stop, approval
+interrupt, and steering-inject scenarios run through both `Direct` and
+`Graph`, asserting matching transcript/structured output/usage and that the
+direct run's `AgentEvent` kind sequence is a subsequence of the graph run's
+(the graph engine may emit extra events — for example `ToolsAdvertised` once
+per turn instead of once per run — but never fewer or reordered ones); plus
+checkpoint+resume across an interrupt (`InMemoryCheckpointer` and
+`FileCheckpointer`) and `LoopIter` stepping with `override_next`.
+
+## See also
+
+- `docs/modules/graph/` — the underlying `GraphBuilder`/`CompiledGraph`
+  runtime this rendition is built from.
+- `docs/modules/graph/subagents-recursion.md` — how a compiled graph (this
+  one included) nests inside the recursive sub-agent/subgraph architecture.
+- `docs/runtime-comparison/langgraph.md` §4 and
+  `docs/runtime-comparison/pydantic-ai.md` §4 — the comparative design notes
+  A5 responds to.

@@ -388,6 +388,7 @@ fn checkpoint_events_carry_coordinates_in_metadata() {
             1_110,
             GraphEvent::CheckpointSaved {
                 checkpoint_id: CheckpointId::new("ckpt-7"),
+                step: Some(8),
             },
         )
     });

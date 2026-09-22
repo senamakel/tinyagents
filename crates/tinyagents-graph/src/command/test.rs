@@ -47,3 +47,48 @@ fn interrupt_ids_are_unique() {
     let fixed = Interrupt::with_id("fixed", "n", json!(null));
     assert_eq!(fixed.id, "fixed");
 }
+
+/// I7 regression: interrupt ids are minted with the same restart-safe
+/// process-nonce scheme `tinyagents_harness::ids::new_checkpoint_id` uses,
+/// not a bare process-local counter that restarts at `0` every process (see
+/// `docs/runtime-comparison/code-review-graph.md`). Asserts the id embeds
+/// the process nonce and that a large batch of mints never collides.
+#[test]
+fn interrupt_ids_embed_the_process_nonce_and_never_collide() {
+    let nonce = tinyagents_harness::ids::process_nonce().to_string();
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..1000 {
+        let interrupt = Interrupt::new("n", json!(null));
+        assert!(
+            interrupt.id.contains(&nonce),
+            "interrupt id `{}` must embed the process nonce `{nonce}`",
+            interrupt.id
+        );
+        assert!(
+            seen.insert(interrupt.id.clone()),
+            "interrupt id `{}` was minted twice",
+            interrupt.id
+        );
+    }
+}
+
+#[test]
+fn interrupt_response_schema_round_trips_and_defaults_to_none() {
+    let schema = json!({ "type": "object", "required": ["approved"] });
+    let interrupt =
+        Interrupt::new("approve", json!({ "ask": "ok?" })).with_response_schema(schema.clone());
+    assert_eq!(interrupt.response_schema, Some(schema.clone()));
+    let encoded = serde_json::to_value(&interrupt).unwrap();
+    assert_eq!(encoded["response_schema"], schema);
+    let decoded: Interrupt = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded, interrupt);
+
+    // Legacy checkpoint JSON without the field decodes with `None`, and a
+    // schema-less interrupt omits the key entirely on the wire.
+    let bare = Interrupt::new("approve", json!(null));
+    let encoded = serde_json::to_value(&bare).unwrap();
+    assert!(encoded.get("response_schema").is_none());
+    let legacy: Interrupt =
+        serde_json::from_value(json!({ "id": "i", "node": "approve", "payload": {} })).unwrap();
+    assert_eq!(legacy.response_schema, None);
+}

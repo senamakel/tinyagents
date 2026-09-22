@@ -1,9 +1,9 @@
 //! Serializable graph-topology types for export and visualization — the single,
 //! behavior-free description every graph in the recursive runtime collapses to.
 //!
-//! Hand-built graphs, `.rag` blueprints, and model-authored graphs all extract
-//! to the same [`GraphTopology`] shape, so one type backs JSON export, Mermaid
-//! rendering, and test snapshots regardless of how the graph came to exist.
+//! Hand-built and runtime-assembled graphs extract to the same
+//! [`GraphTopology`] shape, so one type backs JSON export, Mermaid rendering,
+//! and test snapshots regardless of how the graph came to exist.
 //!
 //! These types describe the *structure* of a graph — its nodes, edges, and
 //! conditional routes — without referencing any runnable node behavior (handler
@@ -11,9 +11,7 @@
 //! clone, `serde`-serializable, and safe to snapshot in tests or render as a
 //! diagram. Extract one from a compiled or built graph with
 //! [`crate::CompiledGraph::topology`] /
-//! [`crate::GraphBuilder::topology`], or from a `.rag`
-//! [`tinyagents_language::Blueprint`] via
-//! [`crate::export::blueprint_to_topology`].
+//! [`crate::GraphBuilder::topology`].
 
 use std::collections::BTreeMap;
 
@@ -36,8 +34,7 @@ pub struct GraphTopology {
     pub name: Option<String>,
     /// The entry node (the target of the virtual `START` node), if known.
     pub entry: Option<String>,
-    /// Maximum number of supersteps the graph may execute (0 when unknown,
-    /// e.g. for a blueprint without an explicit `recursion_limit`).
+    /// Maximum number of supersteps the graph may execute (0 when unknown).
     pub recursion_limit: usize,
     /// Whether the active node set of a superstep runs concurrently.
     pub parallel: bool,
@@ -56,7 +53,7 @@ pub struct GraphTopology {
     /// Nodes that route directly to the virtual `END` node, sorted.
     pub finish_nodes: Vec<String>,
     /// State channel / reducer bindings, when available (populated from a
-    /// `.rag` blueprint; empty for compiled whole-state graphs).
+    /// declarative state-channel binding; empty for whole-state graphs).
     pub channels: Vec<ChannelInfo>,
     /// Graph-level execution policy summary (recursion limit, concurrency,
     /// per-node timeout).
@@ -72,7 +69,7 @@ pub struct GraphTopology {
 pub struct NodeInfo {
     /// The node id.
     pub id: String,
-    /// The node kind, when known (e.g. `model`, `tool` from a blueprint).
+    /// The node kind, when supplied by the graph builder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// True when this node routes exclusively via a `Command` `goto` rather

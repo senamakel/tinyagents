@@ -172,3 +172,67 @@ fn preparing_a_set_preserves_order_and_count() {
     assert_eq!(prepared[0].name, "lookup");
     assert_eq!(prepared[1].name, "other");
 }
+
+// ---------------------------------------------------------------------------
+// `SchemaTransform` wiring (F1a)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_transform_runs_last_after_cleaning_and_strict() {
+    // `GeminiCompat` strips `additionalProperties`; the strict sanitizer
+    // (which runs first) sets it. If the transform genuinely runs last, the
+    // strict-set key must be gone from the final output.
+    let schema = ToolSchema::new(
+        "lookup",
+        "Look a record up",
+        json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}),
+    );
+    let preparation = SchemaPreparation::conservative()
+        .with_strict()
+        .with_schema_transform(SchemaTransform::GeminiCompat);
+    let prepared = prepare_tool_schema(&schema, &preparation);
+    assert!(prepared.parameters.get("additionalProperties").is_none());
+}
+
+#[test]
+fn with_profile_merges_the_resolved_profiles_transform() {
+    let profile = ModelProfile {
+        schema_transform: Some(SchemaTransform::StripDefs),
+        ..ModelProfile::default()
+    };
+    let preparation = SchemaPreparation::conservative().with_profile(Some(&profile));
+    assert_eq!(
+        preparation.schema_transform,
+        Some(SchemaTransform::StripDefs)
+    );
+
+    // A `None` profile (or one with no transform) leaves the preparation's
+    // own transform untouched rather than clearing it.
+    let untouched = SchemaPreparation::conservative()
+        .with_schema_transform(SchemaTransform::NoAdditionalProperties)
+        .with_profile(None);
+    assert_eq!(
+        untouched.schema_transform,
+        Some(SchemaTransform::NoAdditionalProperties)
+    );
+}
+
+#[test]
+fn apply_schema_transform_is_a_passthrough_without_a_transform() {
+    let schema = json!({"type": "object", "$defs": {"Id": {"type": "string"}}});
+    assert_eq!(apply_schema_transform(&schema, None), schema);
+}
+
+#[test]
+fn apply_profile_schema_transform_reads_the_profiles_transform() {
+    let schema = json!({"type": "object", "$defs": {"Id": {"type": "string"}}});
+    let profile = ModelProfile {
+        schema_transform: Some(SchemaTransform::StripDefs),
+        ..ModelProfile::default()
+    };
+    let transformed = apply_profile_schema_transform(&schema, Some(&profile));
+    assert!(transformed.get("$defs").is_none());
+
+    // No profile: unchanged.
+    assert_eq!(apply_profile_schema_transform(&schema, None), schema);
+}

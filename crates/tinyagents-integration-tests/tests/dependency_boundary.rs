@@ -139,19 +139,19 @@ const KNOWN_GENERIC_CLAUDE_CODE_CHAT_MESSAGE_DEBT: &[(&str, usize)] = &[
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        219,
+        221,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        282,
+        291,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        325,
+        340,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod.rs",
-        348,
+        374,
     ),
     (
         "crates/tinyagents-harness/src/providers/claude_code/mod_tests.rs",

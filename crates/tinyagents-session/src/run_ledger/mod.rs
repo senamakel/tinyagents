@@ -11,6 +11,7 @@
 
 pub mod ops;
 pub mod store;
+pub mod tool_effects;
 pub mod types;
 
 pub use ops::{
@@ -23,6 +24,11 @@ pub use ops::{
     shutdown_agent_team_member, transition_agent_run_status, try_claim_workflow_run,
     upsert_agent_run, upsert_agent_team, upsert_agent_team_member, upsert_agent_team_task,
     upsert_run_telemetry, upsert_workflow_run,
+};
+pub use tool_effects::{
+    RunLedgerToolEffects, ToolEffectRow, ToolEffectSettle, ToolEffectStart, ToolEffectStatus,
+    list_unresolved_tool_effects, mark_interrupted as mark_tool_effect_interrupted,
+    record_tool_started, settle_tool_effect,
 };
 pub use types::{
     AgentRun, AgentRunKind, AgentRunListRequest, AgentRunListResponse, AgentRunStatus,

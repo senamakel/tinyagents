@@ -199,7 +199,7 @@ impl RunConfig {
     /// Sets this run's depth in the sub-agent / recursion tree.
     ///
     /// Top-level runs are depth `0`; child runs spawned by a
-    /// [`crate::subagent::SubAgent`] carry the parent depth plus one.
+    /// Subagents in `tinyagents-orchestration` carry the parent depth plus one.
     pub fn with_depth(mut self, depth: usize) -> Self {
         self.lineage.depth = depth;
         self
@@ -226,7 +226,7 @@ impl RunConfig {
     /// The single source of truth for the sub-agent depth guard: returns
     /// `parent_depth + 1`, or [`crate::error::TinyAgentsError::SubAgentDepth`]
     /// carrying `max_depth` when the child would exceed the cap. Every recursion
-    /// surface — [`crate::subagent::SubAgent`], its reuse-session tool,
+    /// surface in `tinyagents-orchestration`, its reuse-session tool,
     /// and the REPL sub-run builtin — funnels its `depth + 1` check through here
     /// so the fail-closed guard cannot drift out of sync between them.
     pub fn checked_child_depth(parent_depth: usize, max_depth: usize) -> Result<usize> {
@@ -278,6 +278,13 @@ impl RunConfig {
 // ── RunContext ────────────────────────────────────────────────────────────────
 
 impl<Ctx> RunContext<Ctx> {
+    /// Whether this context carries a host-owned invocation authority.
+    ///
+    /// Orchestration layers use this to fail closed when a hosted parent is
+    /// sent through an explicit-model child entry point.
+    pub fn is_hosted(&self) -> bool {
+        self.host_authority.is_some()
+    }
     /// Builds a live run context from `config` and user `data`.
     ///
     /// A default [`StoreRegistry`] and [`EventSink`] are created, and a
@@ -295,46 +302,153 @@ impl<Ctx> RunContext<Ctx> {
             config,
             data,
             stores: StoreRegistry::new(),
+            namespaced_store: None,
+            state_view: None,
             events,
             limits,
             steering: None,
+            run_queue: None,
             cancellation: CancellationToken::new(),
             control: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            state_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            tool_state_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             workspace: None,
             on_error_dispatched: false,
             streaming: false,
             host_agent_id: None,
             host_authority: None,
             terminal_observer: None,
+            active_model_call: None,
+            deferred_results: None,
+            approved_calls: std::collections::HashSet::new(),
+            child_ordinal: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            tool_effect_ledger: None,
+            tool_effect_ledger_failure: crate::tool::LedgerFailure::default(),
+            compaction_sink: None,
         }
     }
 
-    /// Builds an isolated child context from this live parent context.
+    /// Attaches the resolutions for the deferred tool calls this run resumes
+    /// (A2). The agent loop applies them to the unanswered tool calls on the
+    /// transcript's last assistant row before making its next model call.
+    /// Prefer [`crate::runtime::AgentHarness::resume_deferred`], which does
+    /// this for you.
+    #[must_use]
+    pub fn with_deferred_results(mut self, results: crate::tool::DeferredToolResults) -> Self {
+        self.deferred_results = Some(results);
+        self
+    }
+
+    /// Takes the pending deferred-call resolutions, if any (A2).
+    pub(crate) fn take_deferred_results(&mut self) -> Option<crate::tool::DeferredToolResults> {
+        self.deferred_results.take()
+    }
+
+    /// Whether a human approved the tool call `call_id` on resume (A2).
+    ///
+    /// The agent loop consults this to skip its own deferral checks for an
+    /// approved call; an approval gate implemented as a `before_tool`
+    /// middleware should consult it too so it does not re-defer a call the
+    /// human already decided on.
+    pub fn is_call_approved(&self, call_id: &str) -> bool {
+        self.approved_calls.contains(call_id)
+    }
+
+    /// Marks `call_id` as approved for this run (A2).
+    pub(crate) fn mark_call_approved(&mut self, call_id: impl Into<String>) {
+        self.approved_calls.insert(call_id.into());
+    }
+
+    /// Returns the next value from this context's own child-ordinal counter
+    /// (starting at `0`), advancing it.
+    ///
+    /// The counter is per-context, not process-global: a freshly constructed
+    /// context (including a child context, which never inherits its parent's
+    /// counter) always starts at `0`. Callers that spawn deterministically
+    /// named children — [`crate::subagent::SubAgent`], for one — use this
+    /// instead of a process-wide sequence so two processes calling the same
+    /// parent context's child spawner in the same order derive identical
+    /// ordinals, and therefore identical child run ids (M-2).
+    pub fn next_child_ordinal(&self) -> u64 {
+        self.child_ordinal
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Builds an isolated child context from this live parent context,
+    /// propagating the parent's host authority.
     ///
     /// A child gets a new run id, lineage record, [`LimitTracker`], control
     /// slot, and instance id.  It deliberately shares the capabilities that
     /// describe one recursive operation: cancellation, events, stores,
     /// workspace policy, steering, streaming mode, thread identity, output
-    /// cap, and depth cap.  Metadata is shallow-merged automatically: any key
+    /// cap, and depth cap. Metadata is shallow-merged automatically: any key
     /// set on `child_config.metadata` overlays the parent's metadata object
     /// (see `shallow_merge_metadata`), so callers only need to pass the
     /// child-specific keys.
-    pub fn child<ChildCtx>(
+    ///
+    /// This keeps the child's `Ctx` type identical to the parent's, which is
+    /// what makes propagating [`Self::host_authority`] sound: the type-erased
+    /// authority installed by a hosted invocation is keyed to the exact
+    /// `(State, Ctx)` pair it was constructed for, and this method is the only
+    /// place that carries it forward. A recursive call that needs a
+    /// *different* `Ctx` type must go through [`Self::child_with_data`]
+    /// instead, which never propagates host authority.
+    pub fn child(&self, child_config: RunConfig, data: Ctx) -> Result<RunContext<Ctx>> {
+        let mut child = self.child_without_authority(child_config, data)?;
+        child.host_authority = self.host_authority.clone();
+        Ok(child)
+    }
+
+    /// Builds an isolated child context whose user data type may differ from
+    /// this context's, deliberately *not* propagating host authority.
+    ///
+    /// Use this whenever the child's `Ctx` differs from the parent's (for
+    /// example, a differently-typed sub-harness). Because [`RunContext`] does
+    /// not track its `State` type parameter at all, and the erased host
+    /// authority is keyed to a specific `(State, Ctx)` pair, there is no sound
+    /// way to check at this boundary whether the parent's authority would
+    /// still apply to the child's types. Rather than guess, the child simply
+    /// starts unhosted; a caller that legitimately needs to delegate hosted
+    /// authority across a `Ctx` change must do so explicitly through the
+    /// hosted subagent entry points, which re-derive authority from the live
+    /// host capability bundle rather than reinterpreting the parent's.
+    pub fn child_with_data<ChildCtx>(
+        &self,
+        child_config: RunConfig,
+        data: ChildCtx,
+    ) -> Result<RunContext<ChildCtx>> {
+        self.child_without_authority(child_config, data)
+    }
+
+    fn child_without_authority<ChildCtx>(
         &self,
         child_config: RunConfig,
         data: ChildCtx,
     ) -> Result<RunContext<ChildCtx>> {
         let mut config = self.config.child(child_config)?;
         config.metadata = shallow_merge_metadata(&self.config.metadata, config.metadata);
+        let child_run_id = config.run_id.clone();
+        // Derive a per-child handle (not a bare clone): it shares the parent's
+        // queue/policy but only drains commands addressed to *this* child's
+        // run id, `SteeringTarget::Root`-addressed commands stay with the
+        // parent, and its pause/checkpoint state is its own (I-5).
+        let steering = self
+            .steering
+            .as_ref()
+            .map(|handle| handle.for_child(child_run_id));
         let mut child = RunContext::new(config, data)
             .with_stores(self.stores.clone())
+            .with_optional_namespaced_store(self.namespaced_store.clone())
+            .with_optional_state_view(self.state_view.clone())
             .with_events(self.events.clone())
             .with_cancellation(self.cancellation.clone())
-            .with_optional_steering(self.steering.clone())
+            .with_optional_steering(steering)
             .with_optional_workspace(self.workspace.clone())
             .with_streaming(self.streaming);
         child.host_agent_id = self.host_agent_id.clone();
-        child.host_authority = self.host_authority.clone();
+        child.tool_effect_ledger = self.tool_effect_ledger.clone();
+        child.tool_effect_ledger_failure = self.tool_effect_ledger_failure;
+        child.compaction_sink = self.compaction_sink.clone();
         Ok(child)
     }
 
@@ -374,14 +488,11 @@ impl<Ctx> RunContext<Ctx> {
         std::mem::take(&mut self.on_error_dispatched)
     }
 
-    /// Attaches an isolated workspace descriptor that is threaded into every
+    /// Attaches a host-owned workspace descriptor that is threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
-    /// run creates, so tools read their allowed root from context. To prepare
-    /// and tear down the environment via a
-    /// [`WorkspaceIsolation`][crate::workspace::WorkspaceIsolation]
-    /// provider (emitting the workspace lifecycle events), use
-    /// [`crate::workspace::prepare_workspace`] to obtain the descriptor
-    /// first.
+    /// run creates, so tools read their allowed root from context. Preparation,
+    /// cleanup, and sandbox policy belong to the host; around-agent middleware
+    /// can set this before calling the inner run and clean it up afterward.
     pub fn with_workspace(mut self, workspace: tinytools::WorkspaceDescriptor) -> Self {
         self.workspace = Some(workspace);
         self
@@ -413,7 +524,14 @@ impl<Ctx> RunContext<Ctx> {
     /// request. This gives competing middleware layers a deterministic outcome
     /// instead of last-writer-wins — e.g. a pause request is never downgraded to
     /// a stop by a later, weaker request.
+    ///
+    /// [`MiddlewareControl::Continue`] is never installed: it carries no
+    /// instruction, so requesting it is a no-op regardless of what (if
+    /// anything) is already pending.
     pub fn request_control(&self, control: MiddlewareControl) {
+        if matches!(control, MiddlewareControl::Continue) {
+            return;
+        }
         if let Ok(mut guard) = self.control.lock() {
             let replace = match guard.as_ref() {
                 Some(existing) => control.precedence() > existing.precedence(),
@@ -428,6 +546,56 @@ impl<Ctx> RunContext<Ctx> {
     /// Takes any pending [`MiddlewareControl`] request, clearing it.
     pub fn take_control(&self) -> Option<MiddlewareControl> {
         self.control.lock().ok().and_then(|mut guard| guard.take())
+    }
+
+    /// Queues a [`StateUpdate`] for the host to apply.
+    ///
+    /// The agent loop only ever holds `state: &State` (a shared reference), so
+    /// [`MiddlewareControl::UpdateState`] cannot be applied in place; the loop
+    /// pushes it here instead of discarding it. Called by
+    /// [`crate::agent_loop`]'s control-checkpoint handling; a host drains the
+    /// queue with [`Self::take_state_updates`] and applies each update against
+    /// its own `&mut State` between runs (or between turns, via its own
+    /// checkpoint).
+    pub fn push_state_update(&self, update: StateUpdate) {
+        if let Ok(mut guard) = self.state_updates.lock() {
+            guard.push(update);
+        }
+    }
+
+    /// Drains every [`StateUpdate`] queued so far, in request order.
+    pub fn take_state_updates(&self) -> Vec<StateUpdate> {
+        self.state_updates
+            .lock()
+            .ok()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or_default()
+    }
+
+    /// Queues a raw JSON state update a tool requested via
+    /// [`tinytools::ToolControl::state_update`][tc].
+    ///
+    /// A canonical tool has no access to the harness's typed `State`, so its
+    /// state update travels as `serde_json::Value` rather than a
+    /// [`StateUpdate`] closure. Kept as a separate queue (not merged into
+    /// [`Self::push_state_update`]) so a host can tell a middleware-originated
+    /// typed update from a tool-originated JSON one without downcasting.
+    ///
+    /// [tc]: tinytools::ToolControl::state_update
+    pub fn push_tool_state_update(&self, update: serde_json::Value) {
+        if let Ok(mut guard) = self.tool_state_updates.lock() {
+            guard.push(update);
+        }
+    }
+
+    /// Drains every raw JSON tool state update queued so far, in request
+    /// order. See [`Self::push_tool_state_update`].
+    pub fn take_tool_state_updates(&self) -> Vec<serde_json::Value> {
+        self.tool_state_updates
+            .lock()
+            .ok()
+            .map(|mut guard| std::mem::take(&mut *guard))
+            .unwrap_or_default()
     }
 
     /// Attaches a [`CancellationToken`] so an orchestrator can request that this
@@ -450,6 +618,48 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
+    /// Attaches the hierarchical store every tool in this run receives as
+    /// [`ToolExecutionContext::store`][crate::tool::ToolExecutionContext::store]
+    /// (B1). See [`RunContext::namespaced_store`].
+    #[must_use]
+    pub fn with_namespaced_store(
+        mut self,
+        store: std::sync::Arc<dyn crate::store::namespaced::NamespacedStore>,
+    ) -> Self {
+        self.namespaced_store = Some(store);
+        self
+    }
+
+    fn with_optional_namespaced_store(
+        mut self,
+        store: Option<std::sync::Arc<dyn crate::store::namespaced::NamespacedStore>>,
+    ) -> Self {
+        self.namespaced_store = store;
+        self
+    }
+
+    /// Attaches a read-only snapshot of the application state every tool in
+    /// this run can recover with
+    /// [`ToolExecutionContext::state::<S>()`][crate::tool::ToolExecutionContext::state]
+    /// (B1). See [`RunContext::state_view`] for why this is an owned `Arc`
+    /// the host supplies rather than the loop's own `&State`.
+    #[must_use]
+    pub fn with_state_view<S: std::any::Any + Send + Sync>(
+        mut self,
+        state: std::sync::Arc<S>,
+    ) -> Self {
+        self.state_view = Some(state);
+        self
+    }
+
+    fn with_optional_state_view(
+        mut self,
+        state: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    ) -> Self {
+        self.state_view = state;
+        self
+    }
+
     /// Replaces the event sink with a (possibly shared) `events`.
     pub fn with_events(mut self, events: EventSink) -> Self {
         self.events = events;
@@ -462,8 +672,65 @@ impl<Ctx> RunContext<Ctx> {
     /// The agent loop drains the handle before each model call via
     /// [`crate::steering::apply_pending_steering`]. Without this the
     /// run accepts no steering.
+    ///
+    /// Binds the handle to this run's id as the **root** of its steering tree
+    /// (see [`crate::steering::SteeringTarget::Root`]); a child run created
+    /// from this context via [`Self::child`]/[`Self::child_with_data`] gets a
+    /// derived handle scoped to its own id instead of sharing this binding
+    /// (I-5).
     pub fn with_steering(mut self, steering: crate::steering::SteeringHandle) -> Self {
-        self.steering = Some(steering);
+        let root_run_id = self.lineage().root_run_id.clone();
+        self.steering = Some(steering.bind_root(root_run_id));
+        self
+    }
+
+    /// Attaches a [`crate::run_queue::RunQueueHandle`] so messages pushed
+    /// from outside the run reach the transcript at the loop's safe turn
+    /// boundaries (A4). See [`RunContext::run_queue`] for the drain points
+    /// and [`crate::runtime::RunPolicy::queue_mode`] for how many items each
+    /// boundary takes. Without this the loop consumes no queued messages.
+    pub fn with_run_queue(mut self, queue: crate::run_queue::RunQueueHandle) -> Self {
+        self.run_queue = Some(queue);
+        self
+    }
+
+    /// Attaches a durable tool-effect ledger (B5), so the agent loop writes a
+    /// `started` row before each tool call executes and a `completed`/
+    /// `failed` row after it settles. `None` (the default) disables all
+    /// ledger writes.
+    ///
+    /// See [`crate::tool::ToolEffectLedger`] and
+    /// [`RunContext::with_tool_effect_ledger_failure`] for how a `started`
+    /// write failure is handled.
+    #[must_use]
+    pub fn with_tool_effect_ledger(
+        mut self,
+        ledger: std::sync::Arc<dyn crate::tool::ToolEffectLedger>,
+    ) -> Self {
+        self.tool_effect_ledger = Some(ledger);
+        self
+    }
+
+    /// Sets how the agent loop reacts when [`crate::tool::ToolEffectLedger::started`]
+    /// itself fails. Defaults to [`crate::tool::LedgerFailure::Abort`].
+    #[must_use]
+    pub fn with_tool_effect_ledger_failure(mut self, failure: crate::tool::LedgerFailure) -> Self {
+        self.tool_effect_ledger_failure = failure;
+        self
+    }
+
+    /// Attaches a durable [`crate::summarization::CompactionSink`] so every
+    /// [`crate::summarization::CompactionRecord`] a compaction produces on
+    /// this run is persisted (typically into a session's entry tree),
+    /// instead of only living in
+    /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
+    /// in-process buffer. `None` (the default) disables persistence.
+    #[must_use]
+    pub fn with_compaction_sink(
+        mut self,
+        sink: std::sync::Arc<dyn crate::summarization::CompactionSink>,
+    ) -> Self {
+        self.compaction_sink = Some(sink);
         self
     }
 
@@ -485,6 +752,48 @@ impl<Ctx> RunContext<Ctx> {
     /// Returns this run's depth in the sub-agent / recursion tree.
     pub fn depth(&self) -> usize {
         self.config.depth()
+    }
+
+    /// Races `fut` against this run's cooperative cancellation and, when
+    /// `deadline` is `Some`, a wall-clock timeout — the one home for the
+    /// `tokio::select! { biased; _ = cancelled() => .., _ = timeout(remaining,
+    /// fut) => .. }` pattern that used to be copied at every host/provider I-O
+    /// boundary in the agent loop (R-1).
+    ///
+    /// `timeout_message` is only invoked when the timeout branch actually
+    /// fires, so callers can build a call-specific message (which fields it
+    /// names, which deadline it blames) without paying for the `format!` on
+    /// the hot, non-timeout path. `fut`'s own error type must convert from
+    /// [`TinyAgentsError`] so `Cancelled`/`Timeout` can be returned through
+    /// the same `Result` the callee already returns.
+    pub(crate) async fn bounded<T, E>(
+        &self,
+        deadline: Option<std::time::Duration>,
+        fut: impl std::future::Future<Output = std::result::Result<T, E>>,
+        timeout_message: impl FnOnce() -> String,
+    ) -> std::result::Result<T, E>
+    where
+        E: From<crate::error::TinyAgentsError>,
+    {
+        match deadline {
+            Some(remaining) => tokio::select! {
+                biased;
+                _ = self.cancellation.cancelled() => {
+                    Err(crate::error::TinyAgentsError::Cancelled.into())
+                }
+                result = tokio::time::timeout(remaining, fut) => match result {
+                    Ok(inner) => inner,
+                    Err(_) => Err(crate::error::TinyAgentsError::Timeout(timeout_message()).into()),
+                },
+            },
+            None => tokio::select! {
+                biased;
+                _ = self.cancellation.cancelled() => {
+                    Err(crate::error::TinyAgentsError::Cancelled.into())
+                }
+                result = fut => result,
+            },
+        }
     }
 
     /// Returns the maximum sub-agent / recursion depth permitted for this run

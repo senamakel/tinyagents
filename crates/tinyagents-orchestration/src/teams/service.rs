@@ -21,6 +21,7 @@ use tinyagents_session::run_ledger::{
 };
 use uuid::Uuid;
 
+use super::runtime::drain_run_events;
 use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamError, TeamView};
 
 /// Durable team state required by [`TeamService`].
@@ -274,16 +275,18 @@ impl<L: TeamLedger> TeamService<L> {
         owner_member_id: Option<&str>,
         depends_on: &[String],
     ) -> Result<AgentTeamTask> {
-        self.ledger
+        let team = self
+            .ledger
             .get_team(team_id)?
             .ok_or_else(|| anyhow!("unknown team: {team_id}"))?;
+        if team.status == AgentTeamStatus::Closed {
+            return Err(anyhow!("team is closed: {team_id}"));
+        }
         let existing = self.ledger.list_tasks(team_id)?;
         if let Some(owner) = owner_member_id
-            && !self
-                .ledger
-                .list_members(team_id)?
-                .iter()
-                .any(|member| member.id == owner)
+            && !self.ledger.list_members(team_id)?.iter().any(|member| {
+                member.id == owner && member.member_status != AgentTeamMemberStatus::Stopped
+            })
         {
             return Err(anyhow!(TeamError::UnknownMember {
                 member_id: owner.to_string()
@@ -315,6 +318,7 @@ impl<L: TeamLedger> TeamService<L> {
         member_id: &str,
         claim_token: &str,
     ) -> Result<ClaimOutcome> {
+        self.ensure_team_active(team_id)?;
         self.ensure_member(team_id, member_id)?;
         self.ledger
             .claim_task(team_id, task_id, member_id, claim_token)
@@ -346,15 +350,10 @@ impl<L: TeamLedger> TeamService<L> {
     }
 
     pub fn list_messages(&self, team_id: &str, limit: Option<u32>) -> Result<Vec<RunEvent>> {
-        Ok(self
-            .ledger
-            .list_events(&RunEventListRequest {
-                run_id: team_id.to_string(),
-                after_sequence: None,
-                limit,
-            })?
+        Ok(drain_run_events(&self.ledger, team_id)?
             .into_iter()
             .filter(|event| event.event_type == TEAM_MESSAGE_EVENT)
+            .take(limit.unwrap_or(u32::MAX) as usize)
             .collect())
     }
 
@@ -414,17 +413,26 @@ impl<L: TeamLedger> TeamService<L> {
     }
 
     fn ensure_member(&self, team_id: &str, member_id: &str) -> Result<()> {
-        if self
-            .ledger
-            .list_members(team_id)?
-            .iter()
-            .any(|member| member.id == member_id)
-        {
+        if self.ledger.list_members(team_id)?.iter().any(|member| {
+            member.id == member_id && member.member_status != AgentTeamMemberStatus::Stopped
+        }) {
             Ok(())
         } else {
             Err(anyhow!(TeamError::UnknownMember {
                 member_id: member_id.to_string()
             }))
+        }
+    }
+
+    fn ensure_team_active(&self, team_id: &str) -> Result<()> {
+        let team = self
+            .ledger
+            .get_team(team_id)?
+            .ok_or_else(|| anyhow!("unknown team: {team_id}"))?;
+        if team.status == AgentTeamStatus::Active {
+            Ok(())
+        } else {
+            Err(anyhow!("team is closed: {team_id}"))
         }
     }
 }

@@ -5,18 +5,20 @@
 //! and [`GraphBuilder::compile`] validates that topology and freezes it into an
 //! immutable [`crate::CompiledGraph`]. Because a node handler can itself
 //! drive another compiled graph or a sub-agent, the same builder API is what
-//! both hand-written Rust and model-authored `.rag` programs lower into
-//! when they assemble a workflow that may recurse into sub-workflows.
+//! hand-written Rust and runtime assembly use when constructing a workflow
+//! that may recurse into sub-workflows.
 //!
 //! See `types` for the builder data types. `compile` validates the topology
 //! and freezes it into an immutable [`crate::CompiledGraph`].
 
+mod policy;
 mod types;
 
-pub(crate) use types::{Branch, BuilderNode, NodeMeta};
+pub use policy::{CacheKeyFn, NodeCachePolicy, NodePolicy, OnErrorFn};
+pub(crate) use types::{Branch, BuilderNode, NodeMeta, UpdateCodec};
 pub use types::{
-    END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
-    RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeContext, NodeFuture, NodeHandler,
+    Route, RouterFn, START,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -79,6 +81,7 @@ where
             nodes: HashMap::new(),
             edges: HashMap::new(),
             branches: HashMap::new(),
+            route_label_checks: HashMap::new(),
             command_nodes: HashSet::new(),
             waiting: HashMap::new(),
             barrier_reliefs: Vec::new(),
@@ -88,7 +91,39 @@ where
             max_concurrency: None,
             node_timeout: None,
             node_meta: HashMap::new(),
+            node_policies: HashMap::new(),
+            node_defaults: None,
+            interrupt_before: HashSet::new(),
+            interrupt_after: HashSet::new(),
+            update_codec: None,
         }
+    }
+
+    /// Attaches a per-node execution [`NodePolicy`] (retry, timeouts, cache,
+    /// `on_error`, `defer`) to `node`, replacing any policy previously set
+    /// for it. At run time each field falls back to the
+    /// [`Self::set_node_defaults`] policy, then to the legacy graph-wide
+    /// `with_node_timeout`/`with_node_retry` settings — see
+    /// [`NodePolicy`]'s module docs for the exact precedence.
+    pub fn with_node_policy(
+        mut self,
+        node: impl Into<NodeId>,
+        policy: NodePolicy<State, Update>,
+    ) -> Self {
+        let node = node.into();
+        // Keep the export-only marker in sync with the runtime flag.
+        if policy.defer {
+            self.node_meta.entry(node.clone()).or_default().deferred = true;
+        }
+        self.node_policies.insert(node, policy);
+        self
+    }
+
+    /// Sets the graph-wide default [`NodePolicy`] every node falls back to,
+    /// field by field, when it has no per-node override.
+    pub fn set_node_defaults(mut self, policy: NodePolicy<State, Update>) -> Self {
+        self.node_defaults = Some(policy);
+        self
     }
 
     /// Applies a bundle of [`GraphDefaults`] in one call. Only the `Some` fields
@@ -173,17 +208,78 @@ where
         self
     }
 
+    /// Registers a named [`crate::Reducer<serde_json::Value>`] closure in the
+    /// process-wide [`crate::channel::ReducerRegistry`], returning the
+    /// builder for chaining.
+    ///
+    /// This is what makes a [`crate::BinaryAggregate`] channel serializable:
+    /// `BinaryAggregate::named(name)` looks the closure back up by name (see
+    /// its docs), and a channel built that way persists only `name` in its
+    /// [`crate::Channel::config`] — decoding a checkpoint later, in this or
+    /// another process, requires the same name to have been registered
+    /// first. The built-ins `"append"`, `"last"`, `"sum"`, `"max"`, `"min"`,
+    /// and `"set_union"` are always available with no registration.
+    ///
+    /// The registry is global rather than scoped to this builder because
+    /// checkpoint decode has no builder in scope at all — see
+    /// `crate::channel::registry`'s module docs.
+    pub fn register_reducer(
+        self,
+        name: impl Into<String>,
+        f: impl Fn(serde_json::Value, serde_json::Value) -> Result<serde_json::Value>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        crate::channel::ReducerRegistry::register(name, f);
+        self
+    }
+
     /// Adds an async node returning a [`NodeResult`].
+    ///
+    /// This is a thin by-value adapter over [`Self::add_node_shared`] (M2 in
+    /// `docs/runtime-comparison/code-review-graph.md`): internally every
+    /// handler receives the step's state as an `Arc<State>`, and this
+    /// adapter clones out of it once per invocation so the handler closure
+    /// keeps taking an owned `State` exactly as before — every existing
+    /// caller of `add_node` compiles unchanged. A handler that does not need
+    /// to mutate or move its own copy of `State` should prefer
+    /// [`Self::add_node_shared`] instead, which hands it the `Arc<State>`
+    /// directly and clones nothing.
     pub fn add_node<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
     where
         F: Fn(State, NodeContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
     {
-        let id = id.into();
         self.nodes.insert(
-            id.clone(),
+            id.into(),
             BuilderNode {
-                id,
+                handler: Arc::new(move |state: Arc<State>, ctx| {
+                    Box::pin(handler((*state).clone(), ctx))
+                }),
+            },
+        );
+        self
+    }
+
+    /// Adds an async node that receives the step's committed state directly
+    /// as an `Arc<State>`, returning a [`NodeResult`].
+    ///
+    /// The zero-clone counterpart to [`Self::add_node`] (M2): a superstep
+    /// clones `State` at most once (building the `Arc` the executor threads
+    /// through that step), and every branch/attempt of a handler added this
+    /// way shares that allocation via a cheap `Arc::clone` — no per-attempt,
+    /// per-branch `State` clone at all. Prefer this over [`Self::add_node`]
+    /// for a large `State` (e.g. a message-history-carrying value) or a node
+    /// that only reads its state.
+    pub fn add_node_shared<F, Fut>(mut self, id: impl Into<NodeId>, handler: F) -> Self
+    where
+        F: Fn(Arc<State>, NodeContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<NodeResult<Update>>> + Send + 'static,
+    {
+        self.nodes.insert(
+            id.into(),
+            BuilderNode {
                 handler: Arc::new(move |state, ctx| Box::pin(handler(state, ctx))),
             },
         );
@@ -192,8 +288,14 @@ where
 
     /// Adds a direct edge `from -> to`. Use [`START`]/[`END`] for the virtual
     /// entry/terminal nodes.
+    ///
+    /// Calling this more than once for the same `from` accumulates a static
+    /// **fan-out**: every registered `to` activates (not just the last one
+    /// registered), matching the documented "one or more node names" routing
+    /// contract. Adding the exact same `(from, to)` edge twice is a no-op —
+    /// the target is not scheduled twice.
     pub fn add_edge(mut self, from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
-        self.edges.insert(from.into(), to.into());
+        Self::push_edge(&mut self.edges, from.into(), to.into());
         self
     }
 
@@ -208,9 +310,18 @@ where
     {
         let nodes: Vec<NodeId> = nodes.into_iter().map(Into::into).collect();
         for pair in nodes.windows(2) {
-            self.edges.insert(pair[0].clone(), pair[1].clone());
+            Self::push_edge(&mut self.edges, pair[0].clone(), pair[1].clone());
         }
         self
+    }
+
+    /// Appends `to` to `from`'s static successor list, deduplicating so the
+    /// same target is never scheduled twice from one static fan-out.
+    fn push_edge(edges: &mut HashMap<NodeId, Vec<NodeId>>, from: NodeId, to: NodeId) {
+        let targets = edges.entry(from).or_default();
+        if !targets.contains(&to) {
+            targets.push(to);
+        }
     }
 
     /// Adds a barrier/waiting edge `from -> to`: like [`Self::add_edge`] but `to`
@@ -223,7 +334,7 @@ where
     pub fn add_waiting_edge(mut self, from: impl Into<NodeId>, to: impl Into<NodeId>) -> Self {
         let from = from.into();
         let to = to.into();
-        self.edges.insert(from.clone(), to.clone());
+        Self::push_edge(&mut self.edges, from.clone(), to.clone());
         self.waiting.entry(to).or_default().insert(from);
         self
     }
@@ -295,11 +406,70 @@ where
         self.branches.insert(
             from.into(),
             Branch {
-                router: Arc::new(move |state| router(state).to_string()),
+                router: Arc::new(move |state| Route::new(router(state))),
                 routes,
             },
         );
         self
+    }
+
+    /// Like [`Self::add_conditional_edges`], but additionally declares the
+    /// **exhaustive** set of labels `router` can ever return.
+    ///
+    /// [`Self::compile`] (via [`Self::validate_routes`]) cross-checks
+    /// `all_labels` against `routes`'s keys and rejects the build if a
+    /// declared label has no route — catching a typo'd route label (e.g. the
+    /// router returns `AgentRoute::Toool` because `Toool`/`Tool` are both
+    /// wired but one is missing from `routes`) before the graph ever runs,
+    /// instead of only failing at run time with
+    /// [`crate::TinyAgentsError::MissingRoute`] on whichever branch happens
+    /// to be taken.
+    ///
+    /// `all_labels` shares `router`'s return type `R`, so the compiler (not
+    /// just this check) ties the declared label set to what the router can
+    /// actually produce — a typed enum with, e.g., a `strum::EnumIter`-style
+    /// listing of its own variants is the natural `all_labels` source.
+    pub fn add_conditional_edges_checked<F, R, I, K, V, L>(
+        mut self,
+        from: impl Into<NodeId>,
+        router: F,
+        routes: I,
+        all_labels: L,
+    ) -> Self
+    where
+        F: Fn(&State) -> R + Send + Sync + 'static,
+        R: ToString,
+        I: IntoIterator<Item = (K, V)>,
+        K: ToString,
+        V: Into<NodeId>,
+        L: IntoIterator<Item = R>,
+    {
+        let from = from.into();
+        let labels: Vec<String> = all_labels.into_iter().map(|l| l.to_string()).collect();
+        self = self.add_conditional_edges(from.clone(), router, routes);
+        self.route_label_checks.insert(from, labels);
+        self
+    }
+
+    /// Cross-checks every [`Self::add_conditional_edges_checked`] declaration
+    /// against its node's actual route table, returning
+    /// [`crate::TinyAgentsError::MissingRoute`] for the first declared label
+    /// with no matching route. Called automatically by [`Self::compile`].
+    fn validate_routes(&self) -> Result<()> {
+        for (node, labels) in &self.route_label_checks {
+            let Some(branch) = self.branches.get(node) else {
+                continue;
+            };
+            for label in labels {
+                if !branch.routes.contains_key(label) {
+                    return Err(TinyAgentsError::MissingRoute {
+                        node: node.to_string(),
+                        route: label.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Declares that `node` routes exclusively via [`crate::Command`]
@@ -362,15 +532,74 @@ where
         self
     }
 
-    /// Marks `node` as an interrupt point for the export.
-    pub fn mark_interrupt(mut self, node: impl Into<NodeId>) -> Self {
-        self.node_meta.entry(node.into()).or_default().interrupt = true;
+    /// Marks `node` as an interrupt point: an alias for
+    /// [`Self::interrupt_before`] (the run pauses before `node` executes)
+    /// that also sets the export-facing interrupt marker
+    /// (`NodeInfo::interrupt`). Earlier versions set only the marker; the
+    /// runtime pause is now real.
+    pub fn mark_interrupt(self, node: impl Into<NodeId>) -> Self {
+        self.interrupt_before([node])
+    }
+
+    /// Pauses the run *before* each of `nodes` executes.
+    ///
+    /// When the executor is about to invoke a listed node, it instead
+    /// records an [`Interrupt`](crate::Interrupt) for that activation with
+    /// payload `{"phase": "before"}` (stamped with the task id) and persists
+    /// an interrupt-boundary checkpoint, without calling the handler. The
+    /// handler runs exactly once overall: `resume` re-schedules the paused
+    /// activation and runs it normally, delivering any `Command::resume`
+    /// value on [`NodeContext::resume`]. Requires a checkpointer and a
+    /// thread, like any interrupt. Nodes are validated at [`Self::compile`];
+    /// the export marks them as interrupt points.
+    pub fn interrupt_before(mut self, nodes: impl IntoIterator<Item = impl Into<NodeId>>) -> Self {
+        for node in nodes {
+            let node = node.into();
+            self.node_meta.entry(node.clone()).or_default().interrupt = true;
+            self.interrupt_before.insert(node);
+        }
         self
     }
 
-    /// Marks `node` as a deferred join for the export.
+    /// Pauses the run *after* each of `nodes` has run, before its result is
+    /// applied.
+    ///
+    /// The handler runs to completion; its `Update`/`Command` is then held
+    /// back from committed state — serialized as a deferred-result write
+    /// (`PendingWrite::interrupt_after`) in the interrupt-boundary
+    /// checkpoint — and an [`Interrupt`](crate::Interrupt) with payload
+    /// `{"phase": "after"}` is returned. The paused run's state (and the
+    /// checkpoint's) therefore does *not* yet include the node's write. On
+    /// `resume`, the executor replays the stored result — applying the
+    /// update through the reducer and honouring the node's `goto` — without
+    /// invoking the handler again, so the handler still runs exactly once.
+    /// A node that itself returns `NodeResult::Interrupt` is not paused a
+    /// second time. Requires `Update: Serialize + DeserializeOwned` (the
+    /// codec for the deferred write), plus a checkpointer and a thread.
+    pub fn interrupt_after(mut self, nodes: impl IntoIterator<Item = impl Into<NodeId>>) -> Self
+    where
+        Update: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        if self.update_codec.is_none() {
+            self.update_codec = Some(UpdateCodec::serde());
+        }
+        for node in nodes {
+            let node = node.into();
+            self.node_meta.entry(node.clone()).or_default().interrupt = true;
+            self.interrupt_after.insert(node);
+        }
+        self
+    }
+
+    /// Marks `node` as a deferred join: it is surfaced as deferred in the
+    /// export *and* scheduled with [`NodePolicy::defer`] semantics — it
+    /// only runs once nothing else is left in the frontier. Equivalent to
+    /// `with_node_policy(node, NodePolicy { defer: true, ..existing })`,
+    /// merging with any policy already set for the node.
     pub fn mark_deferred(mut self, node: impl Into<NodeId>) -> Self {
-        self.node_meta.entry(node.into()).or_default().deferred = true;
+        let node = node.into();
+        self.node_meta.entry(node.clone()).or_default().deferred = true;
+        self.node_policies.entry(node).or_default().defer = true;
         self
     }
 
@@ -382,11 +611,26 @@ where
             ));
         }
 
-        // entry must exist
-        let entry = self
+        // entry must exist, and be exactly one node: START does not fan out.
+        let start_targets = self
             .edges
             .get(&NodeId::from(START))
             .cloned()
+            .unwrap_or_default();
+        if start_targets.len() > 1 {
+            return Err(TinyAgentsError::Validation(format!(
+                "START must route to exactly one entry node, got {}: {}",
+                start_targets.len(),
+                start_targets
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let entry = start_targets
+            .into_iter()
+            .next()
             .ok_or(TinyAgentsError::MissingStart)?;
         if entry.as_str() == END {
             return Err(TinyAgentsError::Validation(
@@ -396,24 +640,29 @@ where
         self.require_node(&entry)?;
 
         // static edges
-        for (from, to) in &self.edges {
+        for (from, targets) in &self.edges {
             if from.as_str() != START {
                 self.require_node(from)?;
-            }
-            if to.as_str() != END {
-                self.require_node(to)?;
-            }
-            if to.as_str() == START {
-                return Err(TinyAgentsError::Validation(
-                    "START cannot be an edge target".to_string(),
-                ));
             }
             if from.as_str() == END {
                 return Err(TinyAgentsError::Validation(
                     "END cannot be an edge source".to_string(),
                 ));
             }
+            for to in targets {
+                if to.as_str() != END {
+                    self.require_node(to)?;
+                }
+                if to.as_str() == START {
+                    return Err(TinyAgentsError::Validation(
+                        "START cannot be an edge target".to_string(),
+                    ));
+                }
+            }
         }
+
+        // conditional route labels declared exhaustive must all have a route
+        self.validate_routes()?;
 
         // conditional edges
         for (from, branch) in &self.branches {
@@ -438,6 +687,11 @@ where
             }
         }
 
+        // interrupt selectors must name real nodes
+        for node in self.interrupt_before.iter().chain(&self.interrupt_after) {
+            self.require_node(node)?;
+        }
+
         // command-routing nodes must not also have static/conditional edges
         for node in &self.command_nodes {
             self.require_node(node)?;
@@ -454,6 +708,7 @@ where
             nodes,
             edges,
             branches,
+            route_label_checks: _,
             command_nodes,
             waiting,
             reducer,
@@ -463,6 +718,11 @@ where
             node_timeout,
             node_meta,
             barrier_reliefs,
+            node_policies,
+            node_defaults,
+            interrupt_before,
+            interrupt_after,
+            update_codec,
         } = self;
 
         Ok(CompiledGraph::from_parts(
@@ -481,7 +741,9 @@ where
             node_timeout,
             node_meta,
             barrier_reliefs,
-        ))
+        )
+        .with_node_policies(node_policies, node_defaults)
+        .with_interrupt_selectors(interrupt_before, interrupt_after, update_codec))
     }
 
     fn require_node(&self, id: &NodeId) -> Result<()> {

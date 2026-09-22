@@ -4,9 +4,7 @@ The authoring/compile contract: `GraphBuilder` accumulates nodes, edges,
 conditional routing, and a reducer; `.compile()` validates the topology and
 freezes it into an immutable `CompiledGraph`.
 
-This is the entry point every workflow lowers into before it can run — both
-hand-written Rust and model-authored `.rag` programs (via `language`)
-assemble a graph through this same API. Because a node handler can itself
+This is the entry point every workflow uses before it can run. Because a node handler can itself
 drive another compiled graph or a sub-agent, the builder is also what a
 recursively-generated sub-workflow compiles through, one level down.
 
@@ -23,9 +21,14 @@ recursively-generated sub-workflow compiles through, one level down.
 - `mark_command_routing`, `with_command_destinations` — declares a node
   routes exclusively via `Command::goto` rather than static/conditional
   edges; `compile()` rejects nodes that mix the two.
-- `with_node_kind`, `with_node_metadata`, `mark_subgraph`, `mark_interrupt`,
-  `mark_deferred` — behavior-free introspection markers surfaced by
-  `graph::export`.
+- `with_node_kind`, `with_node_metadata`, `mark_subgraph` — behavior-free
+  introspection markers surfaced by `graph::export`. `mark_deferred` and
+  `mark_interrupt` also set the marker but are *not* behavior-free:
+  `mark_deferred` is `NodePolicy::defer`, and `mark_interrupt` is an alias
+  for `interrupt_before`.
+- `interrupt_before`, `interrupt_after` — executor-level pauses at named
+  nodes (before the handler runs / after it runs but before its result is
+  applied); see `docs/modules/graph/interrupts.md`.
 - `with_parallel`, `with_max_concurrency`, `with_node_timeout`,
   `with_recursion_limit`, `with_graph_id`, `with_name`, `set_defaults` —
   per-graph configuration, either called directly or bundled via
@@ -78,10 +81,6 @@ recursively-generated sub-workflow compiles through, one level down.
 - `recursion::RecursionFrame` values seeded into a `NodeContext` come from
   `subgraph`/`subagent_node`, not from this module — the builder only carries
   the `recursion_limit` cap through to the compiled graph.
-- `language::build_graph` is the `.rag`-blueprint lowering path that drives
-  this same API (`add_node`/`add_edge`/`mark_command_routing`/`compile`) from
-  a parsed `Blueprint` instead of hand-written Rust calls.
-
 ## Operational constraints
 
 - `compile()` fails closed: no reducer, a missing/self-referential entry,

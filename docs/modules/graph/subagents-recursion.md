@@ -201,3 +201,15 @@ Rules:
 - node-loop recursion and graph-call recursion are tracked separately
 - checkpoint metadata includes the current recursion stack
 - UIs should be able to render nested runs without reconstructing them from logs
+
+## See also
+
+- [Harness state graph runtime](../harness/state-graph.md) documents
+  `tinyagents_graph::agent_loop` (A5): the harness's own `plan -> model ->
+  tools -> settle` loop, compiled into an ordinary `CompiledGraph`. It is a
+  leaf graph, not a sub-agent host, but it composes with everything on this
+  page the same way any other compiled graph does — a `plan`/`model`/`tools`
+  node it drives can itself call a sub-agent tool, and the compiled loop
+  graph can itself be embedded as a subgraph node, so "graphs run graphs"
+  still holds all the way down into the loop that is usually the
+  recursion's innermost, non-graph leaf.

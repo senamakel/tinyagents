@@ -8,7 +8,7 @@ nested model/tool/agent call beneath it. That uniform wrapping is what lets
 concerns like tracing, usage/cost roll-up, and guardrails compose consistently
 as models call models and graphs run graphs.
 
-## Two extension shapes
+## Extension shapes
 
 - **Lifecycle middleware** (`Middleware` trait) — observes and optionally
   mutates values flowing past fixed points: `before_agent` / `after_agent`,
@@ -16,7 +16,12 @@ as models call models and graphs run graphs.
   `on_tool_delta` / `after_tool`, and `on_error`. Every hook has a no-op
   default, is async, and returns `Result<()>`; an `Err` short-circuits the
   stack.
-- **Wrap ("around-call") middleware** (`ModelMiddleware`, `ToolMiddleware`) —
+- **Around-agent middleware** (`AgentMiddleware`) — surrounds a complete run,
+  receives the mutable partial `AgentRun`, and can rewrite initial input,
+  prepare run-scoped resources, short-circuit, or finalize after either success
+  or failure. Host-owned memory, workspace lifecycle, and session policy belong
+  here.
+- **Around-call middleware** (`ModelMiddleware`, `ToolMiddleware`) —
   surrounds the inner call with a `next` handler (`ModelHandler` /
   `ToolHandler`) instead of only observing before/after values. A wrap
   middleware can proceed (call `next.run(..)` once), short-circuit (never call
@@ -25,8 +30,8 @@ as models call models and graphs run graphs.
   substitute a response on error). This is the only extension point expressive
   enough for retry/fallback/caching semantics.
 
-Both shapes are composed by `MiddlewareStack`, which holds three ordered
-lists: `Middleware`, `ModelMiddleware`, `ToolMiddleware`.
+All shapes are composed by `MiddlewareStack`, which keeps independent ordered
+lists for lifecycle, agent, model, and tool middleware.
 
 ## Onion ordering
 
@@ -62,6 +67,8 @@ the loop itself) skips its own dispatch for that error.
 ## Public surface
 
 - `Middleware<State, Ctx = ()>` — the lifecycle trait described above.
+- `AgentMiddleware<State, Ctx>` / `AgentHandler` / `AgentBaseCall` — the
+  complete-run onion used for host-owned behavior and resource lifecycles.
 - `ModelMiddleware<State, Ctx>` / `ToolMiddleware<State, Ctx>` — the wrap
   traits, each with a single `wrap_model` / `wrap_tool` method.
 - `MiddlewareStack<State, Ctx>` — the composer; `push` / `push_model` /

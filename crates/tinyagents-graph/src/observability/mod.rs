@@ -55,7 +55,7 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 
 use crate::status::GraphRunStatus;
-use crate::stream::{GraphEvent, GraphEventSink};
+use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
 use tinyagents_harness::error::Result;
 use tinyagents_harness::ids::{CheckpointId, EventId, GraphId, NodeId, RunId, ThreadId, now_ms};
 use tinyagents_harness::observability::{AppendWorker, DEFAULT_DRAIN_CAPACITY};
@@ -543,12 +543,12 @@ impl JournalGraphSink {
 }
 
 impl GraphEventSink for JournalGraphSink {
-    fn emit(&self, event: GraphEvent) {
-        let obs = self.observe(&event);
+    fn emit(&self, envelope: GraphEventEnvelope) {
+        let obs = self.observe(&envelope.event);
         // Hand off to the background drain; never block the executor on I/O.
         self.worker.submit(obs);
         if let Some(inner) = &self.inner {
-            inner.emit(event);
+            inner.emit(envelope);
         }
     }
 
@@ -560,11 +560,27 @@ impl GraphEventSink for JournalGraphSink {
     }
 }
 
+impl JournalGraphSink {
+    /// Number of observations dropped because the background drain's bounded
+    /// queue was full when they were submitted (G-M7).
+    ///
+    /// Journaling is deliberately lossy under load — [`Self::emit`] never
+    /// blocks the executor waiting for durable I/O, so a burst that outpaces
+    /// the drain worker drops the observation rather than stalling the run.
+    /// A non-zero value here means the journal is an incomplete record of
+    /// what happened during that burst; a caller that needs a complete log
+    /// should watch this counter (or size the drain capacity generously for
+    /// its workload) rather than assume every emitted event was persisted.
+    pub fn dropped(&self) -> u64 {
+        self.worker.dropped()
+    }
+}
+
 /// Extracts the checkpoint id a [`GraphEvent::CheckpointSaved`] carries, so the
 /// observation envelope can record it directly.
 fn checkpoint_of(event: &GraphEvent) -> Option<CheckpointId> {
     match event {
-        GraphEvent::CheckpointSaved { checkpoint_id } => Some(checkpoint_id.clone()),
+        GraphEvent::CheckpointSaved { checkpoint_id, .. } => Some(checkpoint_id.clone()),
         _ => None,
     }
 }

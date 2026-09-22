@@ -15,18 +15,18 @@
 //! `routes.rs`): register a model per tier alias, build a `FallbackPolicy`, stamp
 //! a required [`CapabilitySet`] per turn.
 //!
-//! [`ModelRouter`] is the crate-owned home for exactly that policy. A host
+//! [`WorkloadRouter`] is the crate-owned home for exactly that policy. A host
 //! *declares* its tier table once — each [`WorkloadRoute`] names the model an
 //! alias forwards to, the capabilities a request routed there must satisfy, and
 //! the ordered sibling aliases to fall back to — and the router answers the three
 //! questions the turn assembly needs:
 //!
 //! - **resolution**: which registered model does this alias forward to?
-//!   ([`target_model`](ModelRouter::target_model))
+//!   ([`target_model`](WorkloadRouter::target_model))
 //! - **fallback**: the [`FallbackPolicy`] for a turn whose primary is this alias
-//!   (`[alias, fallbacks…]`) ([`fallback_policy`](ModelRouter::fallback_policy))
+//!   (`[alias, fallbacks…]`) ([`fallback_policy`](WorkloadRouter::fallback_policy))
 //! - **capability gate**: the [`CapabilitySet`] to stamp on requests routed here
-//!   ([`required_capabilities`](ModelRouter::required_capabilities))
+//!   ([`required_capabilities`](WorkloadRouter::required_capabilities))
 //!
 //! It holds no models and drives no I/O — it is pure, cheap, cloneable policy
 //! that a harness assembler reads while wiring a registry + run policy. That
@@ -37,9 +37,9 @@
 //!
 //! ```
 //! use tinyinference_llm::model::CapabilitySet;
-//! use tinyagents_registry::router::{ModelRouter, WorkloadRoute};
+//! use tinyagents_registry::router::{WorkloadRouter, WorkloadRoute};
 //!
-//! let router = ModelRouter::new()
+//! let router = WorkloadRouter::new()
 //!     .with_route(WorkloadRoute::new("chat-v1", "chat-v1").with_fallbacks(["burst-v1"]))
 //!     .with_route(WorkloadRoute::new("burst-v1", "burst-v1").with_fallbacks(["chat-v1"]))
 //!     .with_route(
@@ -78,7 +78,7 @@ use tinyinference_llm::model::CapabilitySet;
 ///
 /// See the [module docs](self) for the design rationale and an example.
 #[derive(Clone, Debug, Default)]
-pub struct ModelRouter {
+pub struct WorkloadRouter {
     /// Insertion-ordered route table. Small (a handful of tiers), so linear scans
     /// are cheaper than a map and keep ordering deterministic.
     routes: Vec<WorkloadRoute>,
@@ -86,7 +86,7 @@ pub struct ModelRouter {
     default_alias: Option<String>,
 }
 
-impl ModelRouter {
+impl WorkloadRouter {
     /// An empty router with no routes and no default.
     pub fn new() -> Self {
         Self::default()
@@ -206,3 +206,12 @@ impl ModelRouter {
         }
     }
 }
+
+/// Deprecated alias for [`WorkloadRouter`]. `ModelRouter` routes workload
+/// *tiers* to models, not models themselves, so the name was renamed for
+/// clarity; this alias exists only so external callers do not break.
+#[deprecated(
+    since = "2.2.0",
+    note = "renamed to `WorkloadRouter` for clarity: it routes workload tiers, not models"
+)]
+pub type ModelRouter = WorkloadRouter;

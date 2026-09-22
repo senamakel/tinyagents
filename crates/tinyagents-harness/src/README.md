@@ -30,7 +30,6 @@ the module map below.
 | `host` | Host capability traits — the seams a host implements to supply product-specific behavior to a generic runtime. |
 | `ids` | Identifier newtypes (`RunId`, `CallId`, …) and lifecycle enums used to correlate a recursive run tree. |
 | `limits` | Run-scoped limit enforcement (model/tool call caps, wall clock) that keeps recursion bounded. |
-| `memory` | Short-term conversation memory and its store boundary. |
 | `middleware` | The middleware stack wrapping every level of the recursion identically. See [`middleware/README.md`](middleware/README.md). |
 | `model_registry` | Runtime-owned executable model registry, name resolution, and fallback ordering. |
 | `multimodal` (feature `multimodal`) | Attachment resolution for `[IMAGE:…]` / `[FILE:…]` markers into model-readable bytes. |
@@ -52,7 +51,6 @@ the module map below.
 | `token_estimation` | The crate's shared, structurally-complete token estimator (a port of LangChain's `count_tokens_approximately`). |
 | `tool` | Harness-side registration and execution support for canonical (`tinytools`) tools. See [`tool/README.md`](tool/README.md). |
 | `tools` (feature `tools`) | Optional builtin harness tools implementing the canonical `tinytools::Tool` interface. |
-| `workspace` | Workspace isolation and sandbox hooks for tools that run over real files or command executors, including git-worktree-backed isolation. See [`workspace/README.md`](workspace/README.md). |
 
 ## How the pieces fit together
 
@@ -71,9 +69,9 @@ the module map below.
 4. **Observe**: every step emits an `AgentEvent` (`events`); `stream` projects
    those onto consumer-facing `StreamChunk`s, and `observability` durably
    journals them.
-5. **Persist**: `store` (flat, append-only, or hierarchical/namespaced) is the
-   substrate a run's history, artifacts, and memory (`memory`) live in across
-   process restarts.
+5. **Extend**: host-owned `AgentMiddleware` wraps the complete run to load and
+   save memory, prepare and clean up workspaces, or attach other product policy.
+   The harness keeps only the execution seam.
 6. **Test**: `testkit` supplies deterministic doubles for every seam above so
    the whole loop is testable without a live provider.
 

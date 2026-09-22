@@ -9,12 +9,13 @@ use futures::StreamExt;
 use crate::events::AgentEvent;
 use crate::ids::{CallId, RunId};
 use crate::testkit::{
-    DeterministicClock, DeterministicIds, EventRecorder, FakeTool, ScriptedModel, StreamingMock,
-    Trajectory,
+    DeterministicClock, DeterministicIds, EventRecorder, FakeTool, SchemaDrivenModel,
+    ScriptedModel, StreamingMock, Trajectory, generate_args_from_schema,
 };
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStreamItem, collect_model_stream,
 };
+use tinyinference_llm::tool::ToolSchema;
 use tinyinference_llm::usage::Usage;
 use tinytools::Tool;
 
@@ -333,6 +334,7 @@ fn make_trajectory() -> Vec<AgentEvent> {
             duration_ms: None,
             output_bytes: None,
             error: None,
+            metadata: None,
         },
         AgentEvent::ModelStarted {
             call_id: CallId::new("c2"),
@@ -490,4 +492,96 @@ fn trajectory_assert_order_empty_labels_always_passes() {
     let traj = Trajectory::from_events(make_trajectory());
     traj.assert_order(&[])
         .expect("empty label list should always pass");
+}
+
+// ---------------------------------------------------------------------------
+// SchemaDrivenModel
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generate_args_from_schema_fills_declared_properties_by_type() {
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "count": {"type": "integer"},
+            "ratio": {"type": "number"},
+            "enabled": {"type": "boolean"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "nested": {
+                "type": "object",
+                "properties": {"inner": {"type": "string"}}
+            }
+        }
+    });
+    let args = generate_args_from_schema(&schema);
+    assert_eq!(args["name"], "test");
+    assert_eq!(args["count"], 0);
+    assert_eq!(args["ratio"], 0.0);
+    assert_eq!(args["enabled"], false);
+    assert_eq!(args["tags"], serde_json::json!(["test"]));
+    assert_eq!(args["nested"]["inner"], "test");
+}
+
+#[test]
+fn generate_args_from_schema_treats_untyped_properties_schema_as_object() {
+    let schema = serde_json::json!({"properties": {"a": {"type": "string"}}});
+    let args = generate_args_from_schema(&schema);
+    assert_eq!(args["a"], "test");
+}
+
+#[test]
+fn generate_args_from_schema_empty_object_schema_is_empty_object() {
+    let schema = serde_json::json!({"type": "object"});
+    assert_eq!(generate_args_from_schema(&schema), serde_json::json!({}));
+}
+
+fn tool_schema(name: &str, params: serde_json::Value) -> ToolSchema {
+    ToolSchema::new(name, format!("{name} description"), params)
+}
+
+#[tokio::test]
+async fn schema_driven_model_calls_every_declared_tool_once_then_final_response() {
+    let model = SchemaDrivenModel::with_final_text("all tools called");
+    let tools = vec![
+        tool_schema(
+            "search",
+            serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}}),
+        ),
+        tool_schema(
+            "count",
+            serde_json::json!({"type": "object", "properties": {"n": {"type": "integer"}}}),
+        ),
+    ];
+
+    // Call 0: expect a tool call for `search` with a schema-generated `query`.
+    let request = ModelRequest::new(vec![]).with_tools(tools.clone());
+    let response = model.invoke(&(), request).await.unwrap();
+    assert_eq!(response.tool_calls().len(), 1);
+    assert_eq!(response.tool_calls()[0].name, "search");
+    assert_eq!(response.tool_calls()[0].arguments["query"], "test");
+
+    // Call 1: expect a tool call for `count`.
+    let request = ModelRequest::new(vec![]).with_tools(tools.clone());
+    let response = model.invoke(&(), request).await.unwrap();
+    assert_eq!(response.tool_calls()[0].name, "count");
+    assert_eq!(response.tool_calls()[0].arguments["n"], 0);
+
+    // Call 2: every declared tool has been called once; return the final
+    // configured response instead.
+    let request = ModelRequest::new(vec![]).with_tools(tools.clone());
+    let response = model.invoke(&(), request).await.unwrap();
+    assert!(response.tool_calls().is_empty());
+    assert_eq!(response.text(), "all tools called");
+
+    assert_eq!(model.call_count(), 3);
+    assert_eq!(model.requests().len(), 3);
+}
+
+#[tokio::test]
+async fn schema_driven_model_with_no_tools_returns_final_response_immediately() {
+    let model = SchemaDrivenModel::with_final_text("no tools needed");
+    let response = model.invoke(&(), ModelRequest::new(vec![])).await.unwrap();
+    assert!(response.tool_calls().is_empty());
+    assert_eq!(response.text(), "no tools needed");
 }
