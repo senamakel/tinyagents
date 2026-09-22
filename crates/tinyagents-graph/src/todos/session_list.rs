@@ -57,15 +57,38 @@ pub fn wire_status(status: TaskCardStatus) -> &'static str {
     }
 }
 
+/// The checklist as the model should read it back: one line per item, no
+/// ids. The board renderer appends `` `(task-n)` `` to every line, and a model
+/// that had just written the list read those ids as "a list pre-filled from a
+/// previous session" and wrote the same list again until the repeat guard
+/// stopped the run.
+pub fn render_checklist(cards: &[TaskBoardCard]) -> String {
+    if cards.is_empty() {
+        return "_No todos._".to_string();
+    }
+    cards
+        .iter()
+        .map(|card| {
+            let marker = match wire_status(card.status) {
+                "in_progress" => "[~]",
+                "completed" => "[x]",
+                _ => "[ ]",
+            };
+            format!("- {marker} {}", card.title)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The JSON a call answers with: the list as the model sees it plus the
-/// markdown rendering for transcripts.
+/// checklist rendering for transcripts.
 pub fn payload(snapshot: &TodosSnapshot) -> Value {
     let todos: Vec<Value> = snapshot
         .cards
         .iter()
         .map(|card| json!({ "content": card.title, "status": wire_status(card.status) }))
         .collect();
-    json!({ "todos": todos, "markdown": snapshot.markdown })
+    json!({ "todos": todos, "markdown": render_checklist(&snapshot.cards) })
 }
 
 /// Turns the model's `todos` array into board cards. Every problem is a

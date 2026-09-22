@@ -96,8 +96,11 @@ Code and Codex use.
   "pending" | "in_progress" | "completed"}]}`. An empty list clears it; a call
   with no arguments reads it back. There is no `op`, no ids, no approval
   gate, evidence, plan or blocker.
-- It shares `store::replace` / `store::list`, so ordering, the
-  single-`in_progress` invariant and the markdown rendering are the board's.
+- It shares `store::replace` / `store::list`, so ordering and the
+  single-`in_progress` invariant are the board's. The `markdown` it answers
+  with is its own id-free checklist (`- [~] item`): the board's `(task-n)`
+  suffixes made a model treat the list it had just written as someone else's
+  and rewrite it until the repeat guard stopped the run.
   Board-only states fold on the way out (`ready`/`awaiting_approval`/
   `blocked` → `pending`, `rejected` → `completed`).
 - The list is keyed by `ToolRunContext::thread_id`. A host that scopes lists

@@ -703,7 +703,11 @@ mod session_list_tests {
         let p = raw(&written);
         assert_eq!(p["todos"][0]["status"], "in_progress");
         assert_eq!(p["todos"][1]["status"], "pending");
-        assert!(p["markdown"].as_str().unwrap().contains("[~] Write tests"));
+        let markdown = p["markdown"].as_str().unwrap();
+        assert_eq!(
+            markdown, "- [~] Write tests\n- [ ] Ship it",
+            "no ids, no board fields"
+        );
 
         let read = run(&tool, Some("t"), json!({})).await;
         assert_eq!(raw(&read)["todos"].as_array().unwrap().len(), 2);
