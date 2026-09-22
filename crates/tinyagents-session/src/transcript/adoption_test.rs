@@ -331,7 +331,7 @@ fn adoption_preserves_tool_rounds_and_usage_of_legacy_transcripts() {
             input: 11,
             output: 7,
             cached_input: 3,
-            context_window: Some(1000),
+            context_window: 1000,
             cost_usd: 0.25,
         },
         ts: "2026-01-01T00:00:00Z".into(),
