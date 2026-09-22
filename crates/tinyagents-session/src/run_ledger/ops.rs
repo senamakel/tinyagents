@@ -51,10 +51,10 @@ pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<
         conn.execute(
             "INSERT INTO agent_runs (
                 id, kind, parent_run_id, parent_thread_id, agent_id, status,
-                prompt_ref, worker_thread_id, task_board_id, task_card_id,
+                prompt_ref, worker_thread_id,
                 checkpoint_path, checkpoint_json, summary, error, metadata_json,
                 started_at, updated_at, completed_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
                 kind = CASE
                     WHEN agent_runs.kind = 'worker_thread' AND excluded.kind = 'subagent' THEN agent_runs.kind
@@ -66,8 +66,6 @@ pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<
                 status = excluded.status,
                 prompt_ref = COALESCE(excluded.prompt_ref, agent_runs.prompt_ref),
                 worker_thread_id = COALESCE(excluded.worker_thread_id, agent_runs.worker_thread_id),
-                task_board_id = COALESCE(excluded.task_board_id, agent_runs.task_board_id),
-                task_card_id = COALESCE(excluded.task_card_id, agent_runs.task_card_id),
                 checkpoint_path = COALESCE(excluded.checkpoint_path, agent_runs.checkpoint_path),
                 checkpoint_json = COALESCE(excluded.checkpoint_json, agent_runs.checkpoint_json),
                 summary = COALESCE(excluded.summary, agent_runs.summary),
@@ -87,8 +85,6 @@ pub fn upsert_agent_run(workspace_dir: &Path, upsert: AgentRunUpsert) -> Result<
                 upsert.status.as_str(),
                 upsert.prompt_ref,
                 upsert.worker_thread_id,
-                upsert.task_board_id,
-                upsert.task_card_id,
                 upsert.checkpoint_path,
                 checkpoint_json,
                 upsert.summary,
@@ -565,7 +561,7 @@ pub fn list_agent_runs(
 
         let query_sql = format!(
             "SELECT id, kind, parent_run_id, parent_thread_id, agent_id, status,
-                    prompt_ref, worker_thread_id, task_board_id, task_card_id,
+                    prompt_ref, worker_thread_id,
                     checkpoint_path, checkpoint_json, summary, error, metadata_json,
                     started_at, updated_at, completed_at
              FROM agent_runs {where_sql}
@@ -1625,7 +1621,7 @@ fn map_agent_team_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentTea
 fn get_agent_run_inner(conn: &Connection, id: &str) -> Result<Option<AgentRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, parent_run_id, parent_thread_id, agent_id, status,
-                prompt_ref, worker_thread_id, task_board_id, task_card_id,
+                prompt_ref, worker_thread_id,
                 checkpoint_path, checkpoint_json, summary, error, metadata_json,
                 started_at, updated_at, completed_at
          FROM agent_runs WHERE id = ?1",
@@ -1660,8 +1656,8 @@ fn get_optional_run_telemetry(
 
 fn map_agent_run_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRun> {
     let id: String = row.get(0)?;
-    let checkpoint_json: Option<String> = row.get(11)?;
-    let metadata_json: String = row.get(14)?;
+    let checkpoint_json: Option<String> = row.get(9)?;
+    let metadata_json: String = row.get(12)?;
     Ok(AgentRun {
         id: id.clone(),
         kind: super::types::AgentRunKind::parse(&row.get::<_, String>(1)?),
@@ -1671,17 +1667,15 @@ fn map_agent_run_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Re
         status: AgentRunStatus::parse(&row.get::<_, String>(5)?),
         prompt_ref: row.get(6)?,
         worker_thread_id: row.get(7)?,
-        task_board_id: row.get(8)?,
-        task_card_id: row.get(9)?,
-        checkpoint_path: row.get(10)?,
+        checkpoint_path: row.get(8)?,
         checkpoint: parse_json_opt(checkpoint_json),
-        summary: row.get(12)?,
-        error: row.get(13)?,
+        summary: row.get(10)?,
+        error: row.get(11)?,
         metadata: parse_json(metadata_json),
         telemetry: get_optional_run_telemetry(conn, &id)?,
-        started_at: parse_rfc3339(&row.get::<_, String>(15)?)?,
-        updated_at: parse_rfc3339(&row.get::<_, String>(16)?)?,
-        completed_at: parse_rfc3339_opt(row.get(17)?)?,
+        started_at: parse_rfc3339(&row.get::<_, String>(13)?)?,
+        updated_at: parse_rfc3339(&row.get::<_, String>(14)?)?,
+        completed_at: parse_rfc3339_opt(row.get(15)?)?,
     })
 }
 

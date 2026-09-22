@@ -123,8 +123,6 @@ pub(super) const MIGRATIONS: &[&str] = &[
         status             TEXT NOT NULL,
         prompt_ref         TEXT,
         worker_thread_id   TEXT,
-        task_board_id      TEXT,
-        task_card_id       TEXT,
         checkpoint_path    TEXT,
         checkpoint_json    TEXT,
         summary            TEXT,
