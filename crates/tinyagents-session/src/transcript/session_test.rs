@@ -115,9 +115,17 @@ fn a_root_stem_never_contains_the_subagent_separator() {
 
 #[test]
 fn nested_delegation_records_the_whole_path_in_one_flat_stem() {
-    let root = SessionRef::scoped("thread-1", "orchestrator");
-    let child = SessionRef::child_of(&root, "researcher");
-    let grandchild = SessionRef::child_of(&child, "reader");
+    // Short keys: with a 32-hex-char digest on every component, even
+    // moderately descriptive names ("orchestrator", "researcher") push a
+    // 2-3 level chain's own resolved stem past `MAX_PARENT_CHAIN_PREFIX` —
+    // intentionally, since that bound exists to keep the *filename* safe,
+    // not to guarantee unlimited readability. This test is about the flat
+    // "__"-joined shape surviving when the chain stays short enough not to
+    // collapse; `a_deeply_nested_delegation_chain_stays_bounded` covers the
+    // collapse itself.
+    let root = SessionRef::scoped("t1", "o");
+    let child = SessionRef::child_of(&root, "r1");
+    let grandchild = SessionRef::child_of(&child, "r2");
 
     let stem = session_stem(&grandchild);
     assert_eq!(stem.matches(SUBAGENT_SEPARATOR).count(), 2);
