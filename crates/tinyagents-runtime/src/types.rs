@@ -19,6 +19,13 @@ pub enum ResumeMode {
     LatestForAgent,
     /// Load the most recent root transcript matching `TurnOptions::thread_id`.
     Thread,
+    /// Load the head generation of the session bound to this target.
+    ///
+    /// Unlike [`Self::Thread`] this is an exact lookup rather than a
+    /// newest-wins scan, and the file it reads is the file the turn then
+    /// appends to. That identity between read and write is what keeps one
+    /// conversation in one transcript across restarts and across processes.
+    Session,
 }
 
 /// Explicit runtime controls for one session turn.
@@ -31,6 +38,9 @@ pub struct TurnOptions<C = ()> {
     pub stream: bool,
     /// Transcript resume behavior requested for this turn.
     pub resume: ResumeMode,
+    /// Durable session to resume under [`ResumeMode::Session`]. When absent,
+    /// the bound target's own session is used.
+    pub session: Option<SessionRef>,
     /// Cooperative cancellation shared with the caller.
     pub cancellation: CancellationToken,
     /// Explicit live execution context consumed by the driver.
@@ -69,6 +79,10 @@ pub struct TranscriptTarget {
     /// Optional agent key used only by `ResumeMode::LatestForAgent` lookup.
     /// When absent, the write stem is also the resume lookup key.
     pub resume_agent: Option<String>,
+    /// Durable session identity, when the host binds one. Present means
+    /// `ResumeMode::Session` can resolve, and that a compaction opens the next
+    /// generation instead of rewriting this one.
+    pub session: Option<SessionRef>,
     pub meta: TranscriptMeta,
 }
 
@@ -82,8 +96,35 @@ impl TranscriptTarget {
             locator,
             stem: stem.into(),
             resume_agent: None,
+            session: None,
             meta,
         }
+    }
+
+    /// A target addressed by durable session identity rather than a raw stem.
+    ///
+    /// The stem is derived from the session, so it is stable across processes
+    /// and launches — the property a `{unix_ts}_{agent}` stem never had.
+    pub fn for_session(
+        locator: Arc<dyn TranscriptLocator>,
+        session: SessionRef,
+        meta: TranscriptMeta,
+    ) -> Self {
+        Self {
+            locator,
+            stem: session_stem(&session),
+            resume_agent: None,
+            session: Some(session),
+            meta,
+        }
+    }
+
+    /// Rebinds this target onto `session` after a compaction opened it.
+    pub(crate) fn rebind_session(&mut self, session: SessionRef) {
+        self.stem = session_stem(&session);
+        self.meta.session_id = Some(session.session_id());
+        self.meta.parent_session_id = session.parent_session_id();
+        self.session = Some(session);
     }
 
     /// Uses a distinct agent key when looking up the latest transcript.
@@ -95,6 +136,7 @@ impl TranscriptTarget {
     pub(crate) fn same_binding(&self, other: &Self) -> bool {
         self.stem == other.stem
             && self.resume_agent == other.resume_agent
+            && self.session == other.session
             && Arc::ptr_eq(&self.locator, &other.locator)
     }
 }
