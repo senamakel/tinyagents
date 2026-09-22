@@ -87,8 +87,10 @@ The agent loop selects one per run from `RunPolicy::tool_dialect`
 (`ToolDispatcher::{Auto, Native, Xml, Pformat, Python, Typescript}`). `Auto`
 resolves to native when the model profile supports it and to XML otherwise;
 P-Format and the code dialects are opt-in. When a host has already composed a
-`## Tool Use Protocol` block into the system prompt, the loop strips the
-schemas off the wire but does not append a second block.
+tool protocol into the system prompt, the loop still appends its authoritative
+block from the final post-middleware tool set. A heading in arbitrary prompt
+text cannot prove that the host block matches the selected dialect, current
+catalogue, or effective tool choice.
 
 ## Which surface to use
 

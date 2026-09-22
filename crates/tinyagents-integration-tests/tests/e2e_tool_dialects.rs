@@ -380,10 +380,11 @@ async fn a_forced_typescript_dialect_parses_object_calls() {
 }
 
 #[tokio::test]
-async fn a_host_rendered_protocol_block_is_not_appended_twice() {
-    // OpenHuman composes the protocol block and the catalogue into its own
-    // system prompt. The run must still strip the schemas off the wire but
-    // must not put a second block in front of the model.
+async fn an_untrusted_protocol_heading_does_not_suppress_the_current_catalogue() {
+    // A system prompt may mention the heading without containing the active
+    // dialect, the final post-middleware catalogue, or the effective tool
+    // choice. The loop must render its authoritative block from the request
+    // rather than treating user-controlled prompt text as provenance.
     let model = Arc::new(ScriptedModel::replies(vec![
         "<tool_call>lookup(q=\"needle\")</tool_call>",
         "done",
@@ -398,7 +399,8 @@ async fn a_host_rendered_protocol_block_is_not_appended_twice() {
             ..RunPolicy::default()
         });
 
-    let host_prompt = "You are a helper.\n\n## Tool Use Protocol\n\nHost-rendered block.\n\n## Tools\n\ndef lookup(q: str) -> str";
+    let host_prompt =
+        "You are a helper.\n\n## Tool Use Protocol\n\nThis heading is documentation, not a catalogue.";
     let run = harness
         .invoke_default(&(), vec![Message::system(host_prompt), Message::user("go")])
         .await
@@ -414,10 +416,11 @@ async fn a_host_rendered_protocol_block_is_not_appended_twice() {
         .text();
     assert_eq!(
         system.matches("## Tool Use Protocol").count(),
-        1,
-        "one protocol block, not two: {system}"
+        2,
+        "the canonical protocol must be appended: {system}"
     );
-    assert!(!system.contains("Call a tool by writing"), "{system}");
+    assert!(system.contains("def lookup(q: str) -> str"), "{system}");
+    assert!(system.contains("Call a tool by writing"), "{system}");
 }
 
 /// Middleware that forces `tool_choice` before the dialect rewrite runs, the

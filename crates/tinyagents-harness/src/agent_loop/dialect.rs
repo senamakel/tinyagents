@@ -40,10 +40,6 @@ pub(super) enum RunDialect {
     Code(CodeStyle, Arc<PFormatRegistry>),
 }
 
-/// The heading every text protocol block starts with. When the host has
-/// already put one in the system prompt, the run must not add a second.
-const PROTOCOL_HEADING: &str = "## Tool Use Protocol";
-
 impl RunDialect {
     /// Resolves the policy against the tools this run offers.
     pub(super) fn resolve(
@@ -114,21 +110,6 @@ impl RunDialect {
         let tools = std::mem::take(&mut request.tools);
         let messages = prompt_tools::coalesce_tool_results(&request.messages);
         let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
-        // A host that composes its own system prompt (OpenHuman's
-        // `ToolsSection`) has already rendered the protocol block and the
-        // catalogue there. Appending the run's copy on top would put two
-        // protocol blocks — and, for XML, two full-schema catalogues — in
-        // front of the model on every turn, which is exactly the token cost
-        // a text dialect exists to avoid. The schemas still come off the
-        // wire above; only the prompt rewrite is skipped.
-        if host_rendered_protocol(&messages) {
-            tracing::debug!(
-                "[agent_loop] system prompt already carries a tool protocol block; not appending"
-            );
-            request.messages = messages;
-            request.tool_choice = ToolChoice::Auto;
-            return;
-        }
         request.messages = match self {
             Self::Xml | Self::Native => {
                 prompt_tools::with_tool_instructions(&messages, &tools, &request.tool_choice)
@@ -188,14 +169,6 @@ fn registry_from(tools: &[ToolSchema]) -> PFormatRegistry {
             .iter()
             .map(|schema| (schema.name.clone(), schema.parameters.clone())),
     )
-}
-
-/// Whether a system message already carries a text-dialect protocol block.
-fn host_rendered_protocol(messages: &[tinyinference_llm::message::Message]) -> bool {
-    messages
-        .iter()
-        .filter(|message| matches!(message, tinyinference_llm::message::Message::System(_)))
-        .any(|message| message.text().contains(PROTOCOL_HEADING))
 }
 
 /// What a model call needs in order to recover text-dialect calls: the
