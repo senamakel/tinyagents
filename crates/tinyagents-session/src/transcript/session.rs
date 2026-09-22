@@ -130,10 +130,10 @@ impl SessionRef {
 /// `.g{n}` appended from generation 1, and the whole thing prefixed with
 /// `{parent}__` for a sub-agent.
 pub fn session_stem(session: &SessionRef) -> String {
-    let mut stem = sanitize_stem(&session.session_key);
+    let mut stem = sanitize_component(&session.session_key);
     if let Some(agent_id) = session.agent_id.as_deref().filter(|id| !id.trim().is_empty()) {
         stem.push('.');
-        stem.push_str(&sanitize_stem(agent_id));
+        stem.push_str(&sanitize_component(agent_id));
     }
     if session.generation > 0 {
         stem.push_str(&format!(".g{}", session.generation));
