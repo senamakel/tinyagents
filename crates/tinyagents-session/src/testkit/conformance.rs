@@ -247,7 +247,7 @@ fn content_view(messages: &[TranscriptMessage]) -> Vec<(String, String)> {
         .collect()
 }
 
-fn contract_meta() -> TranscriptMeta { session_id: None, parent_session_id: None,
+fn contract_meta() -> TranscriptMeta {
     TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: "contract-agent".to_string(),
         agent_id: Some("contract-agent-id".to_string()),

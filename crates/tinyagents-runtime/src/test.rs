@@ -86,7 +86,7 @@ fn outcome(history: Vec<Message>) -> DriverOutcome {
     }
 }
 
-fn meta() -> TranscriptMeta { session_id: None, parent_session_id: None,
+fn meta() -> TranscriptMeta {
     TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: "agent".into(),
         agent_id: Some("agent-id".into()),

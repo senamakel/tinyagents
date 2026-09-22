@@ -282,7 +282,7 @@ impl TranscriptLocator for FileTranscriptLocator {
 /// [`FileTranscriptHistory`] is one type serving both roles; giving read-only
 /// handles a `None` meta would mean an `Option` field every write path then has
 /// to unwrap for no benefit.
-fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta { session_id: None, parent_session_id: None,
+fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
     TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: agent_name.to_string(),
         agent_id: None,

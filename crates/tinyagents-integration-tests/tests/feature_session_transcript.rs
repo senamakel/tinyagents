@@ -9,7 +9,7 @@ use tinyagents_session::transcript::{
     read_transcript, read_transcript_display,
 };
 
-fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptMeta { session_id: None, parent_session_id: None,
+fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptMeta {
     TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: "researcher".into(),
         agent_id: Some("researcher-v1".into()),

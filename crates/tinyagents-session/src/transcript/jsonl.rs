@@ -274,7 +274,7 @@ pub(super) fn serialise_message_lines(
 }
 
 /// Convert a parsed `MetaPayload` into the public [`TranscriptMeta`].
-pub(super) fn meta_from_payload(mp: MetaPayload) -> TranscriptMeta { session_id: None, parent_session_id: None,
+pub(super) fn meta_from_payload(mp: MetaPayload) -> TranscriptMeta {
     TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: mp.agent,
         agent_id: mp.agent_id,
