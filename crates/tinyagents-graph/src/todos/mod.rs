@@ -1,33 +1,24 @@
-//! Per-thread **task board** (kanban todos): a list of task cards per thread.
+//! Per-thread **todo list**: an ordered checklist of steps per thread.
 //!
 //! Where [`graph::goals`](crate::goals) holds a single durable objective
-//! per thread, a task board holds the concrete work items: an ordered list of
-//! [`TaskBoardCard`]s with a small kanban lifecycle. This module owns the data
-//! model and markdown rendering ([`types`]),
-//! harness-[`Store`](tinyagents_harness::store::Store)-backed CRUD with the
-//! single-`InProgress` invariant ([`store`]), and the model-facing multiplexer
-//! tool ([`tool`]).
+//! per thread, the todo list holds the concrete steps the run is working
+//! through: an ordered list of [`TodoItem`]s, each `pending`, `in_progress`
+//! or `completed`. This module owns the data model and markdown rendering
+//! ([`types`]), harness-[`Store`](tinyagents_harness::store::Store)-backed
+//! persistence with the single-`InProgress` invariant ([`store`]), and the
+//! model-facing tool ([`tool`]).
 //!
-//! Two layers sit on top of the board for hosts that run cards autonomously:
-//! [`runs`] records who claimed a card, heartbeats while they work, and hands
-//! the card back when a worker goes silent; [`dispatch`] is the scheduling
-//! policy — which card is next, whether it needs approval first, what prompt
-//! its run gets, and how an in-flight run is cancelled.
-//!
-//! Ported from OpenHuman's task board / `todos` modules, minus the app-specific
-//! coupling (progress events, RPC envelopes, in-memory scratch fallback): a
-//! board is always `(Store, thread_id)`.
+//! The list is the shape Claude Code and Codex keep: the model rewrites the
+//! whole list as it works, and nothing else hangs off an item — no ids, no
+//! approvals, no assignment, no run log. A list is always `(Store, thread_id)`.
 
-pub mod dispatch;
-pub mod runs;
 pub mod store;
 mod tool;
 mod types;
 
 pub use tool::{TodoTool, register_todo_tools, todo_tools};
 pub use types::{
-    CardPatch, TaskApprovalMode, TaskBoard, TaskBoardCard, TaskCardStatus, TodosSnapshot,
-    normalise_board, parse_status, render_markdown,
+    TodoItem, TodoList, TodoStatus, TodosSnapshot, normalise_list, parse_status, render_markdown,
 };
 
 #[cfg(test)]
