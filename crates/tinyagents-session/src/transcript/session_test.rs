@@ -172,3 +172,37 @@ fn the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs() {
     assert_eq!(super::fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
     assert_eq!(super::fnv1a64(b"thread-9fa08c44"), 0xdf74_ac18_4530_bb17);
 }
+
+/// A delegation chain several levels deep, each level with a long key, must
+/// not grow the final stem without bound — see `MAX_PARENT_CHAIN_PREFIX`.
+#[test]
+fn a_deeply_nested_delegation_chain_stays_bounded() {
+    let long_key = "k".repeat(80);
+    let mut current = SessionRef::scoped(&long_key, "orchestrator");
+    for level in 0..10 {
+        current = SessionRef::child_of(&current, format!("{long_key}-{level}"));
+    }
+    let stem = session_stem(&current);
+    assert!(
+        stem.len() < 2000,
+        "{} levels of long keys must not grow the stem linearly: {} bytes",
+        10,
+        stem.len()
+    );
+    // Still never fabricates or destroys the sub-agent separator.
+    assert!(stem.contains(SUBAGENT_SEPARATOR));
+}
+
+/// Bounding the chain must never change what a *shallow* delegation's stem
+/// looks like — the collapse only kicks in once the accumulated chain
+/// actually exceeds the bound.
+#[test]
+fn a_shallow_delegation_chain_is_unaffected_by_the_bound() {
+    let root = SessionRef::scoped("thread-1", "orchestrator");
+    let child = SessionRef::child_of(&root, "researcher");
+    let grandchild = SessionRef::child_of(&child, "reader");
+
+    let stem = session_stem(&grandchild);
+    assert!(!stem.contains("chain-"), "{stem} collapsed too early");
+    assert_eq!(stem.matches(SUBAGENT_SEPARATOR).count(), 2);
+}
