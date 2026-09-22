@@ -254,6 +254,25 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// `parent`'s stem, bounded to [`MAX_PARENT_CHAIN_PREFIX`]: verbatim when
+/// short enough, otherwise collapsed to a fixed-length digest. See
+/// [`MAX_PARENT_CHAIN_PREFIX`] for why this exists.
+///
+/// Never introduces (or removes) a [`SUBAGENT_SEPARATOR`]: the replacement
+/// is a whole new component substituted for the whole prior chain, not a
+/// truncation of it — truncating the chain string directly could cut
+/// through an existing `__` and either fabricate one at a new position or
+/// destroy the one recording a real ancestor boundary. Composed of only
+/// alphanumerics and `-`, so it is stable under [`sanitize_component`]'s own
+/// second pass same as every other component.
+fn bounded_parent_stem(parent: &SessionRef) -> String {
+    let stem = session_stem(parent);
+    if stem.len() <= MAX_PARENT_CHAIN_PREFIX {
+        return stem;
+    }
+    format!("chain{DIGEST_SEPARATOR}{:016x}", fnv1a64(stem.as_bytes()))
+}
+
 #[cfg(test)]
 #[path = "session_test.rs"]
 mod test;
