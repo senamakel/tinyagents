@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc};
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::transcript::{
-    TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn, TurnUsage,
+    SessionRef, TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn, TurnUsage,
 };
 use tinyinference_llm::message::Message;
 
