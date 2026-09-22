@@ -44,8 +44,6 @@ fn contract_run(id: &str, parent: Option<&str>) -> AgentRunUpsert {
         status: AgentRunStatus::Running,
         prompt_ref: None,
         worker_thread_id: None,
-        task_board_id: None,
-        task_card_id: None,
         checkpoint_path: None,
         checkpoint: None,
         summary: None,

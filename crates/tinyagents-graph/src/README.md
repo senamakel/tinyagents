@@ -34,7 +34,7 @@ carry their own `README.md` — see the module map below.
 | `subagent_node` | Embeds a harness agent as a graph node (the graph-level analogue of `subgraph`, but for agents instead of graphs). |
 | `subgraph` | Embeds a `CompiledGraph` as a node (shared-state or adapter mode) — graph-level recursion. See [`subgraph/README.md`](subgraph/README.md). |
 | `testkit` | Deterministic node doubles, event recorder, fluent run assertions, storage conformance suites. See [`testkit/README.md`](testkit/README.md). |
-| `todos` | A per-thread kanban task board and harness tools. See [`todos/README.md`](todos/README.md). |
+| `todos` | A per-thread todo checklist and its harness tool. See [`todos/README.md`](todos/README.md). |
 
 ## How the pieces fit together
 

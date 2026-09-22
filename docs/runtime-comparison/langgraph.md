@@ -88,7 +88,7 @@ Legend: Yes / Partial / No. File paths are what I checked.
 | PII middleware | Yes | Partial — `RedactionMiddleware`, `RedactingSink` | No detector/strategy matrix. |
 | Model/tool call limits, model retry/fallback, tool retry, rate limit | Yes | Yes — `BudgetMiddleware`, `RetryMiddleware`, `ModelFallbackMiddleware`, `RateLimitMiddleware`, `limits/` | |
 | LLM tool selector / provider tool search | Yes | Yes/No — `DynamicToolSelectionMiddleware`, `ContextualToolSelectionMiddleware` (`tool/select/`); no provider-side tool search | |
-| Todo list middleware | Yes (opt-in) | Yes — `graph/src/todos/` (`TaskBoard`, richer) | |
+| Todo list middleware | Yes (opt-in) | Yes — `graph/src/todos/` (`TodoList`, same shape) | |
 | Shell / file-search middleware | Yes | No in harness (`tools/` has `time.rs` only); `workspace/` gives roots | OpenHuman owns tools. |
 | `ToolRuntime` injection (state, store, stream_writer, tool_call_id) | Yes | Partial — `ToolExecutionContext` (run/thread/depth/events/cancel/workspace); no state/store/tool_call_id | `tool/injected.rs` exists for hidden args. |
 | Tool returns `Command` (state update + routing) | Yes | No — `ToolResult{content,is_error}` (vendor `tinytools`) | |
