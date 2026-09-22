@@ -473,7 +473,13 @@ fn a_different_agents_root_on_the_same_thread_is_never_folded_in() {
 fn a_session_identified_root_on_the_same_thread_is_never_folded_in() {
     let dir = tempdir().unwrap();
     let thread = "thread-1";
-    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "legacy", thread);
+    write_legacy(
+        dir.path(),
+        "1000_a",
+        "2026-01-01T00:00:00Z",
+        "legacy",
+        thread,
+    );
     let mut already_adopted = legacy_meta("2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z", thread);
     already_adopted.session_id = Some("thread-1~deadbeef.orchestrator~deadbeef".into());
     write_transcript(

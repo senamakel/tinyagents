@@ -300,10 +300,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         .and_then(|name| name.to_str())
         .unwrap_or("transcript");
     let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = dir.join(format!(
-        ".{file_name}.tmp-{}-{nonce}",
-        std::process::id()
-    ));
+    let tmp_path = dir.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
 
     fs::write(&tmp_path, contents)
         .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
