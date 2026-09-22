@@ -106,7 +106,9 @@
 //! | `legacy_md`     | Legacy HTML-comment `.md` reader.                            |
 //! | `migration`     | One-shot legacy date-grouped layout conversion.               |
 //! | `session`       | [`SessionRef`] identity and its deterministic stem.           |
+//! | `adoption`      | Folding pre-identity transcripts into a session.              |
 
+mod adoption;
 mod history;
 mod jsonl;
 mod legacy_md;
@@ -123,6 +125,7 @@ pub use history::{
     FileTranscriptHistory, FileTranscriptLocator, TranscriptHistory, TranscriptLocator,
     TranscriptPartial, TranscriptRead, TranscriptTurn,
 };
+pub use adoption::{SessionAdoption, adopt_legacy_session_transcripts};
 pub use legacy_md::read_transcript_legacy_md;
 pub use migration::{TranscriptLayoutMigration, migrate_layout_if_needed};
 pub use paths::{find_latest_transcript, resolve_keyed_transcript_path};
