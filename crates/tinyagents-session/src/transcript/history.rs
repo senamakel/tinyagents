@@ -634,7 +634,6 @@ impl FileTranscriptHistory {
             .map(|t| t.meta)
             .unwrap_or_else(|| self.seed_meta.clone()))
     }
-
 }
 
 /// A process-wide, per-path mutex serializing the read-modify-write sequence
