@@ -712,3 +712,33 @@ fn adoption_folds_the_replayed_context_of_a_compacted_legacy_transcript() {
         .collect();
     assert_eq!(contents, ["two"]);
 }
+
+/// A stale-lock reclaim (see `AdoptionLock::acquire`) means two
+/// `AdoptionLock` values can briefly both believe they hold the same path.
+/// The one that lost that race must never unlink the file out from under
+/// the one that actually holds it now — that is exactly what its
+/// ownership token (compared in `Drop`) exists to prevent.
+#[test]
+fn drop_never_removes_a_lock_another_owner_now_holds() {
+    let dir = tempdir().unwrap();
+    let lock_path = dir.path().join("thread-1.jsonl.adopting");
+
+    let first = AdoptionLock::acquire(&lock_path).unwrap().unwrap();
+    // Simulate a concurrent stale-lock reclaim by another process: it
+    // removes the file and creates its own with a fresh token, exactly
+    // what `AdoptionLock::acquire`'s reclaim branch does.
+    std::fs::remove_file(&lock_path).unwrap();
+    let second = AdoptionLock::acquire(&lock_path).unwrap().unwrap();
+
+    drop(first);
+    assert!(
+        lock_path.exists(),
+        "the first (now-stale) lock's Drop must not remove the second owner's live lock"
+    );
+
+    drop(second);
+    assert!(
+        !lock_path.exists(),
+        "the still-legitimate second owner's Drop must remove its own lock"
+    );
+}
