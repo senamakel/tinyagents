@@ -168,9 +168,33 @@ fn two_long_keys_that_share_a_bounded_prefix_still_get_distinct_stems() {
 /// different filename for every session ever written.
 #[test]
 fn the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs() {
-    assert_eq!(super::fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
-    assert_eq!(super::fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
-    assert_eq!(super::fnv1a64(b"thread-9fa08c44"), 0xdf74_ac18_4530_bb17);
+    assert_eq!(
+        super::fnv1a64(b"", 0xcbf2_9ce4_8422_2325),
+        0xcbf2_9ce4_8422_2325
+    );
+    assert_eq!(
+        super::fnv1a64(b"a", 0xcbf2_9ce4_8422_2325),
+        0xaf63_dc4c_8601_ec8c
+    );
+    assert_eq!(
+        super::fnv1a64(b"thread-9fa08c44", 0xcbf2_9ce4_8422_2325),
+        0xdf74_ac18_4530_bb17
+    );
+    // fnv1a128 combines two 64-bit passes with two different fixed seeds —
+    // pin the combined output too, since a future change that widened or
+    // reseeded only one pass would otherwise slip past the check above.
+    assert_eq!(
+        super::fnv1a128(b""),
+        0xcbf2_9ce4_8422_2325_9e37_79b9_7f4a_7c15
+    );
+    assert_eq!(
+        super::fnv1a128(b"a"),
+        0xaf63_dc4c_8601_ec8c_22c0_4a33_4b91_791c
+    );
+    assert_eq!(
+        super::fnv1a128(b"thread-9fa08c44"),
+        0xdf74_ac18_4530_bb17_1e90_1a3d_7200_1847
+    );
 }
 
 /// A delegation chain several levels deep, each level with a long key, must
