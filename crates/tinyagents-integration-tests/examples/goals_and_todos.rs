@@ -1,16 +1,17 @@
-//! Per-thread **goal + task board** working together on one thread.
+//! Per-thread **goal + todo list** working together on one thread.
 //!
 //! This offline example wires both `graph::goals` and `graph::todos` on a single
-//! thread and lets the goal *drive* the board:
+//! thread and lets the goal *drive* the list:
 //!
 //! - A durable [`ThreadGoal`] ("ship the v2 release") is the completion
 //!   contract, with a token budget.
-//! - A [`TaskBoard`] holds the concrete work items (three cards).
+//! - A [`TodoList`] holds the concrete steps (three items).
 //! - A `goal_gate_node` forms a self-driving loop: each iteration the `work`
-//!   node advances the board by one kanban transition (Todo → InProgress →
-//!   Done), and once every card is Done it marks the goal `Complete`. The gate
-//!   keeps looping while the goal is Active and under budget, accounting the
-//!   iteration's token usage, and routes to `END` when the goal completes.
+//!   node rewrites the list one transition further along (Pending →
+//!   InProgress → Completed), and once every item is Completed it marks the
+//!   goal `Complete`. The gate keeps looping while the goal is Active and under
+//!   budget, accounting the iteration's token usage, and routes to `END` when
+//!   the goal completes.
 //!
 //! Both primitives persist on one shared [`InMemoryStore`], addressed by the
 //! run's thread id.
@@ -46,7 +47,7 @@ struct ReleaseState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // One store backs both the goal and the board for this thread.
+    // One store backs both the goal and the list for this thread.
     let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
 
     // 1. Set the durable objective with a generous token budget.
@@ -58,45 +59,55 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // 2. Seed the board with the concrete work items.
-    for title in [
-        "Write the changelog",
-        "Tag the release",
-        "Publish the crate",
-    ] {
-        todo_store::add(&store, THREAD, title, Default::default()).await?;
-    }
+    // 2. Seed the list with the concrete steps.
+    todo_store::replace(
+        &store,
+        THREAD,
+        [
+            "Write the changelog",
+            "Tag the release",
+            "Publish the crate",
+        ]
+        .into_iter()
+        .map(TodoItem::new)
+        .collect(),
+    )
+    .await?;
 
     println!(
-        "Initial board:\n{}\n",
+        "Initial list:\n{}\n",
         todo_store::list(&store, THREAD).await?.markdown
     );
 
-    // 3a. The work node: advance the board by ONE kanban transition per
-    // iteration, then complete the goal once every card is Done.
+    // 3a. The work node: rewrite the list ONE transition further along per
+    // iteration, then complete the goal once every item is Completed.
     let work_store = store.clone();
     let work_node = move |mut state: ReleaseState, _ctx: NodeContext| {
         let store = work_store.clone();
         Box::pin(async move {
             state.iteration += 1;
-            let cards = todo_store::list(&store, THREAD).await?.cards;
+            let mut items = todo_store::list(&store, THREAD).await?.items;
 
-            if let Some(active) = cards
-                .iter()
-                .find(|c| c.status == TaskCardStatus::InProgress)
+            if let Some(active) = items
+                .iter_mut()
+                .find(|item| item.status == TodoStatus::InProgress)
             {
-                // Finish the card currently in progress.
-                todo_store::update_status(&store, THREAD, &active.id, TaskCardStatus::Done).await?;
-                println!("  ✓ done: {}", active.title);
-            } else if let Some(next) = cards.iter().find(|c| c.status == TaskCardStatus::Todo) {
-                // Pull the next card into progress (single-in-progress invariant).
-                todo_store::update_status(&store, THREAD, &next.id, TaskCardStatus::InProgress)
-                    .await?;
-                println!("  → started: {}", next.title);
+                // Finish the step currently in progress.
+                active.status = TodoStatus::Completed;
+                println!("  ✓ completed: {}", active.content);
+                todo_store::replace(&store, THREAD, items).await?;
+            } else if let Some(next) = items
+                .iter_mut()
+                .find(|item| item.status == TodoStatus::Pending)
+            {
+                // Pull the next step into progress (single-in-progress invariant).
+                next.status = TodoStatus::InProgress;
+                println!("  → started: {}", next.content);
+                todo_store::replace(&store, THREAD, items).await?;
             } else {
-                // Every card is Done — the objective is satisfied.
+                // Every step is Completed — the objective is satisfied.
                 goal_store::complete(&store, THREAD).await?;
-                println!("  ★ all cards done → goal complete");
+                println!("  ★ all steps completed → goal complete");
             }
 
             Ok(NodeResult::Update(state))
@@ -132,7 +143,7 @@ async fn main() -> Result<()> {
 
     // 5. Report the final state of both primitives.
     let goal = goal_store::get(&store, THREAD).await?.expect("goal exists");
-    let board = todo_store::list(&store, THREAD).await?;
+    let todos = todo_store::list(&store, THREAD).await?;
 
     println!(
         "\nFinished after {} work iterations.\n",
@@ -147,7 +158,7 @@ async fn main() -> Result<()> {
             .map(|b| b.to_string())
             .unwrap_or_else(|| "∞".into()),
     );
-    println!("\nFinal board:\n{}", board.markdown);
+    println!("\nFinal list:\n{}", todos.markdown);
 
     Ok(())
 }
