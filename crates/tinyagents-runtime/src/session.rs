@@ -133,24 +133,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // before session identity existed is spread over one or
                     // more timestamped stems; fold them in once so the model
                     // regains the turns the newest-wins lookup had stranded.
-                    match target.locator.adopt_legacy(&session, thread, &target.meta) {
-                        Ok(Some(adoption)) => {
-                            tracing::info!(
-                                "[session] adopted {} legacy transcript(s) into session={} \
-                                 ({} message(s))",
-                                adoption.adopted.len(),
-                                session.session_id(),
-                                adoption.messages
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            tracing::warn!(
-                                "[session] legacy adoption failed for session={}: {error}",
-                                session.session_id()
-                            );
-                        }
-                    }
+                    // Adoption is best effort: it recovers history that would
+                    // otherwise be stranded, but failing to recover it must not
+                    // fail the turn the user is waiting on. The session crate
+                    // logs the outcome either way.
+                    let _ = target.locator.adopt_legacy(&session, thread, &target.meta);
                     session_binding = Some(session.clone());
                 }
                 match read {
