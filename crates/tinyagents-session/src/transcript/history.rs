@@ -23,10 +23,19 @@ use std::sync::Arc;
 use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
-    SessionTranscript, TranscriptMeta, TurnUsage, append_transcript_turn, find_latest_transcript,
-    find_root_transcript_for_thread, find_root_transcript_for_thread_scoped, read_transcript,
-    resolve_keyed_transcript_path,
+    SessionRef, SessionTranscript, TranscriptMeta, TurnUsage, append_transcript_turn,
+    find_latest_transcript, find_root_transcript_for_thread,
+    find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
+    session_stem, write_transcript,
 };
+
+/// Upper bound on the compaction generations one session may accumulate.
+///
+/// Generation resolution probes `{stem}`, `{stem}.g1`, `{stem}.g2` … on disk
+/// rather than consulting an index, so it needs a stop condition that holds
+/// even if something in the directory is unexpected. A conversation that
+/// compacts more than this many times has other problems.
+const MAX_GENERATIONS: u32 = 4096;
 
 /// One turn's worth of transcript write, borrowed.
 ///
@@ -193,6 +202,70 @@ pub trait TranscriptLocator: Send + Sync {
         stem: &str,
         seed: TranscriptMeta,
     ) -> anyhow::Result<Arc<dyn TranscriptHistory>>;
+
+    /// The newest generation of `session` that exists, or `session` itself when
+    /// none has been written yet.
+    ///
+    /// A compaction seals a generation and opens the next
+    /// ([`Self::begin_generation`]), so the head is the one a resume must load
+    /// and append to. The default walks the successor chain through
+    /// [`Self::session_exists`]; an implementor with an index may override it.
+    fn head_generation(&self, session: &SessionRef) -> SessionRef {
+        let mut head = session.clone();
+        if !self.session_exists(&head) {
+            return head;
+        }
+        while head.generation < MAX_GENERATIONS {
+            let next = head.next_generation();
+            if !self.session_exists(&next) {
+                break;
+            }
+            head = next;
+        }
+        head
+    }
+
+    /// Whether `session` has a transcript on disk.
+    fn session_exists(&self, session: &SessionRef) -> bool {
+        self.read_session_transcript(session).is_some()
+    }
+
+    /// Reads `session`'s transcript, or `None` when it has none yet.
+    ///
+    /// Unlike [`Self::root_for_thread`] this is an exact lookup, not a
+    /// newest-wins scan: one session resolves to one file, in every process and
+    /// on every launch. Defaults to the stem the session names.
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>>;
+
+    /// Binds `session`'s own transcript for reading **and** appending.
+    ///
+    /// This is the method that closes the bug the whole session identity exists
+    /// for: resume reads and the subsequent append address the same file, so a
+    /// restart extends the conversation instead of re-materialising it into a
+    /// fresh stem and orphaning the original.
+    fn open_session(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.open_stem(&session_stem(session), seed)
+    }
+
+    /// Seals `session` and opens its successor, starting from `replacement`.
+    ///
+    /// Called when a turn's logical message set is no longer an extension of
+    /// what is persisted — a compaction. Rewriting the sealed file in place
+    /// would destroy the replaced turns; instead generation `n` is left
+    /// byte-for-byte as it was and generation `n+1` begins from the compacted
+    /// set, recording `n` as its parent. The conversation therefore stays fully
+    /// recoverable by walking the chain even though the model only sees the
+    /// head.
+    fn begin_generation(
+        &self,
+        session: &SessionRef,
+        replacement: &[TranscriptMessage],
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)>;
 }
 
 /// The default [`TranscriptLocator`]: real files under
