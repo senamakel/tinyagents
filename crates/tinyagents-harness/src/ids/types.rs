@@ -23,7 +23,11 @@ pub struct RunId(pub(crate) String);
 pub struct ThreadId(pub(crate) String);
 
 /// Identifies an individual model or tool call inside a run.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Also `Ord`, so it can key the `BTreeMap`s in
+/// [`crate::tool::DeferredToolRequests`]/[`crate::tool::DeferredToolResults`]
+/// deterministically.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CallId(pub(crate) String);
 
 /// Identifies a single emitted harness event.
@@ -47,7 +51,7 @@ pub struct NodeId(pub(crate) String);
 ///
 /// A `TaskId` distinguishes the individual recursive tasks a graph schedules —
 /// for example each child task produced by a `Send` fanout — so a
-/// [`crate::graph::recursion::RecursionFrame`] can name the exact task a nested
+/// `RecursionFrame` (in `tinyagents-graph`) can name the exact task a nested
 /// call descends from, independent of the [`NodeId`] it ran.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskId(pub(crate) String);
@@ -95,6 +99,11 @@ pub enum ExecutionStatus {
     Failed,
     /// Cancelled before completion.
     Cancelled,
+    /// Stopped gracefully at a superstep boundary by a drain request (see
+    /// `tinyagents_graph::DrainSignal`): the in-flight superstep was allowed
+    /// to finish and the still-pending work was checkpointed, so the run is
+    /// resumable exactly like an interrupted one.
+    Drained,
 }
 
 /// The active operation within a harness run, used for compact status reads.

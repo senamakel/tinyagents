@@ -115,6 +115,8 @@ pub fn rank_tools_by_prompt(
 // Verb detection
 // ─────────────────────────────────────────────────────────────────────────
 
+/// English action words that map to a query's detected [`ToolVerb`], checked
+/// against whole words in the lowercased prompt by [`detect_verbs`].
 fn verb_aliases(v: ToolVerb) -> &'static [&'static str] {
     match v {
         ToolVerb::Create => &[
@@ -175,6 +177,9 @@ fn tool_verb_prefixes(v: ToolVerb) -> &'static [&'static str] {
     }
 }
 
+/// Detects which [`ToolVerb`]s a prompt expresses, by whole-word alias match
+/// plus the `Send`-resource-noun special case documented on
+/// [`SEND_NOUN_ALIASES`]. A prompt may match more than one verb.
 fn detect_verbs(prompt: &str) -> HashSet<ToolVerb> {
     let lowered = prompt.to_ascii_lowercase();
     let mut found = HashSet::new();
@@ -295,6 +300,9 @@ const ABBREVS: &[(&str, &[&str])] = &[
 ];
 
 /// Tokenize a string into lowercase alphanumeric words.
+/// Splits `s` into a set of lowercase alphanumeric words, dropping
+/// punctuation and de-duplicating. Used for both query and tool-name/
+/// description tokenization so overlap counting compares like with like.
 fn tokenize(s: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     let mut current = String::new();
@@ -311,6 +319,8 @@ fn tokenize(s: &str) -> HashSet<String> {
     out
 }
 
+/// Tokenizes `query`, drops stopwords and single-character tokens, then
+/// unions in the [`ABBREVS`] expansions for any abbreviation present.
 fn query_tokens(query: &str) -> HashSet<String> {
     let raw: HashSet<String> = tokenize(query)
         .into_iter()
@@ -329,6 +339,8 @@ fn query_tokens(query: &str) -> HashSet<String> {
     expanded
 }
 
+/// Scores a candidate tool by query-token overlap: a hit in `name` counts
+/// three times as much as a hit in `desc`, matching the module doc's weighting.
 fn weighted_overlap(qt: &HashSet<String>, name: &str, desc: &str) -> i32 {
     let name_tokens = tokenize(name);
     let desc_tokens = tokenize(desc);
@@ -349,6 +361,10 @@ pub(crate) fn verbs_are_compatible(query: ToolVerb, tool: ToolVerb) -> bool {
     query == tool || matches!((query, tool), (ToolVerb::List, ToolVerb::Read))
 }
 
+/// Additive score adjustment from verb alignment between `name`'s verb and
+/// the query's detected verbs: `+3` exact match, `+1` compatible-but-not-exact
+/// (see [`verbs_are_compatible`]), `-2` a recognised but conflicting verb,
+/// `0` when the query has no detected verb or the tool's verb is neutral.
 fn verb_bonus(name: &str, query_verbs: &HashSet<ToolVerb>) -> i32 {
     if query_verbs.is_empty() {
         return 0;

@@ -241,10 +241,10 @@ pub type OutputMapper<Update> = Arc<dyn Fn(SubAgentOutput) -> Update + Send + Sy
 
 /// A graph node that delegates to a harness agent resolved by name.
 ///
-/// A `SubAgentNode` binds an agent [`ComponentId`] (resolved against a
-/// [`CapabilityRegistry`](crate::registry::CapabilityRegistry) at run time) to a
-/// pair of mappers and a [`SubAgentPolicy`]. Lower it into a graph node handler
-/// with [`subagent_node`](super::subagent_node).
+/// A `SubAgentNode` binds an agent `ComponentId` (resolved against a
+/// capability registry at run time) to a pair of mappers and a
+/// [`SubAgentPolicy`]. Lower it into a graph node handler with
+/// [`subagent_node`](super::subagent_node).
 pub struct SubAgentNode<State, Update> {
     /// The registered agent name to resolve and delegate to.
     pub agent: String,

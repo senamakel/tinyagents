@@ -15,7 +15,7 @@ body:
     id: proposal
     attributes:
       label: Proposed shape
-      description: Describe the API, `.rag` syntax, module, or behavior you imagine.
+      description: Describe the API, module, or behavior you imagine.
     validations:
       required: true
   - type: textarea

@@ -50,6 +50,35 @@ pub struct CostRecord {
 Pricing tables are time-sensitive. They should be updateable through config or a
 store-backed table, not hardcoded permanently in provider adapters.
 
+### Tiered pricing (implemented)
+
+The real `ModelPricing` (`crates/tinyagents-harness/src/cost/types.rs`) is a
+struct of optional `f64` per-token rates, not the `Decimal`/`ModelPrice` shape
+above; that shape is aspirational. It now also carries
+`tiers: Vec<PriceTier>`, for providers (Gemini, xAI, and others) that charge a
+higher rate once a call's context crosses a threshold:
+
+```rust
+pub struct PriceTier {
+    pub up_to_tokens: Option<u64>, // None = unlimited / the top tier
+    pub input: Option<f64>,
+    pub output: Option<f64>,
+    pub cache_read: Option<f64>,
+    pub cache_write: Option<f64>,
+}
+```
+
+`estimate_cost` selects the tier whose `up_to_tokens` is the smallest value
+`>=` the call's `Usage.input_tokens` (or the tier with `up_to_tokens: None`
+once every capped tier is exceeded), and uses that tier's rates — falling
+back to the flat `ModelPricing` fields for any rate the matched tier leaves
+`None`. A `ModelPricing` with an empty `tiers` list behaves exactly as
+before. `tiers` is `serde(default)`, so existing serialized pricing tables
+deserialize unchanged. See `crates/tinyagents-harness/src/cost/test.rs` for
+the tier-selection and fallback tests, and
+`crates/tinyagents-registry/src/bin/catalog_gen.rs` for how the generator
+maps `models.dev`'s `cost.tiers` shape into `PriceTier`s.
+
 ## Budget Enforcement
 
 Budget policy should support:

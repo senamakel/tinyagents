@@ -1,7 +1,8 @@
-# `session` — durable session history and run ledger
+# `session` — durable session history, run ledger, and transcripts
 
-SQLite-backed history for agent sessions, and a restart-survivable ledger for
-background agent/workflow execution. Requires the `sqlite` feature.
+SQLite-backed history for agent sessions (requires the `sqlite` feature), a
+restart-survivable ledger for background agent/workflow execution, and a
+JSONL-backed transcript store for KV-cache-stable resume.
 
 ## Why this is a top-level module
 
@@ -17,10 +18,15 @@ would imply a dependency that exists in neither direction.
 | --- | --- | --- |
 | `harness::store` | "what is this run working with right now?" | during a run |
 | `graph::checkpoint` | "how do I resume this interrupted run?" | until resumed |
-| **`session`** | "what happened, what did it cost, how did runs nest?" | indefinitely |
+| **`session` (SQLite)** | "what happened, what did it cost, how did runs nest?" | indefinitely |
+| **`session::transcript` (JSONL)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
 
-Nothing resumes from this module. It is queryable history: cross-session search,
-cost attribution, and orchestration recovery.
+The SQLite-backed history (`ops`, `run_ledger`) is queryable history that
+nothing resumes *from*: cross-session search, cost attribution, and
+orchestration recovery. `session::transcript` is the exception — it exists
+specifically so a restarted run can resume with the byte-identical message
+stream a provider (and its prompt cache) already saw; see its own
+[README](./transcript/README.md) for the format.
 
 ## Layout
 
@@ -28,13 +34,16 @@ Every entry point takes the workspace root and derives the path itself, so a
 host chooses only where its workspace lives:
 
 ```text
-{workspace_dir}/session_db/sessions.db
+{workspace_dir}/session_db/sessions.db          ← SQLite: sessions, run ledger
+{workspace_dir}/session_raw/{stem}.jsonl        ← JSONL: transcripts (source of truth)
+{workspace_dir}/sessions/YYYY_MM_DD/{stem}.md   ← human-readable transcript view
 ```
 
 ## Public surface
 
 Re-exported from the crate root (see `src/lib.rs`); the full surface stays
-reachable under `session::` and `session::run_ledger::`.
+reachable under `session::`, `session::run_ledger::`, and
+`session::transcript::`.
 
 - **Recording** — `record_session_start`, `record_message`,
   `record_message_with_reasoning`, `record_tool_call`, `record_session_end`.
@@ -44,10 +53,24 @@ reachable under `session::` and `session::run_ledger::`.
 - **Querying** — `get_session`, `list_sessions`, `search_sessions`,
   `list_messages`, `list_tool_calls`, `list_children`
 - **Recovery** — `mark_interrupted`
+- **Retention** — `apply_retention`, `prune_sessions_before`,
+  `prune_tool_calls_before`, `prune_run_events_before`,
+  `prune_run_telemetry_before`, `trim_session_messages`, `reindex_fts`
 - **Run ledger** — agent runs, workflow runs, teams, members, tasks, run events,
-  and telemetry, with the claim/completion coordination primitives
+  and telemetry, with the claim/completion coordination primitives — see its
+  own [README](./run_ledger/README.md)
+- **Transcripts** — full-rewrite and append-only writers, model-context and
+  display readers, thread lookups and usage summaries — see its own
+  [README](./transcript/README.md)
 - **Connections** — `with_connection` (autocommit) and `with_transaction`
   (`BEGIN IMMEDIATE`)
+- **Testkit** — `testkit::conformance::run_ledger_conformance` and
+  `transcript_history_conformance`: contract suites certifying that a run
+  ledger workspace or a `TranscriptHistory` implementation behaves like the
+  bundled ones. Run against the SQLite run ledger (two independent
+  workspaces) and both `FileTranscriptHistory` and the in-memory
+  `testkit::InMemoryTranscriptHistory` double in
+  `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
 ## Schema
 
@@ -137,10 +160,13 @@ gate fails — otherwise a retry after fixing an unrelated gate would fail
 
 | File | Role |
 | --- | --- |
-| `mod.rs` | module docs and public surface |
-| `types.rs` | serde record types |
-| `store.rs` | connection/transaction helpers and schema init |
-| `ops.rs` | recording and querying |
+| `lib.rs` | crate docs and public surface |
+| `types.rs` | serde record types for sessions/messages/tool calls |
+| `store.rs` | connection/transaction helpers and pragma setup |
+| `migrations.rs` | versioned, append-only schema migration list |
+| `ops.rs` | session recording and querying |
+| `retention.rs` | pruning, trimming, and FTS index repair |
 | `context.rs` | `StorageContext`, the error-context shim |
-| `run_ledger/` | background run + team coordination |
+| `run_ledger/` | background run + team coordination — see its own [README](./run_ledger/README.md) |
+| `transcript.rs` + `transcript/` | durable, provider-neutral transcripts for KV-cache-stable resume — see its own [README](./transcript/README.md) |
 | `test.rs` | module-local unit tests |

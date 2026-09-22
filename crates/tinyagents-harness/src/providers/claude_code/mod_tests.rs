@@ -1,3 +1,6 @@
+//! Unit tests for `thread_key_from_request` metadata precedence and
+//! `ClaudeCodeProvider`'s `ModelProfile` construction.
+
 use super::*;
 
 #[test]
@@ -78,6 +81,15 @@ fn cache_identity_includes_project_scope() {
     assert_ne!(first.cache_identity(), second.cache_identity());
 }
 
+fn lookup_schema() -> tinyinference_llm::tool::ToolSchema {
+    tinyinference_llm::tool::ToolSchema {
+        name: "lookup".into(),
+        description: "look something up".into(),
+        parameters: serde_json::json!({"type": "object"}),
+        format: Default::default(),
+    }
+}
+
 #[test]
 fn prompt_guided_tool_response_is_exposed_to_the_harness() {
     let response = model_response_with_tools(
@@ -88,7 +100,7 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
             ),
             usage: None,
         },
-        true,
+        &[lookup_schema()],
     );
     assert_eq!(response.text(), "before");
     assert_eq!(response.message.tool_calls.len(), 1);
@@ -98,7 +110,7 @@ fn prompt_guided_tool_response_is_exposed_to_the_harness() {
 #[test]
 fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut scrubber = ToolCallStreamScrubber::new();
+    let mut scrubber = TextScrubber::new(&[]);
     let fragments = [
         "before ",
         "<tool_",
@@ -145,9 +157,11 @@ fn streaming_prompt_tool_markup_is_hidden_but_final_call_is_recovered() {
             text: Some(fragments.concat()),
             usage: None,
         },
-        true,
+        &[lookup_schema()],
     );
-    assert_eq!(response.text(), "before  after");
+    // The terminal parse joins the narrative fragments on a newline, where the
+    // live stream preserved the model's own spacing; both carry the same words.
+    assert_eq!(response.text(), "before\nafter");
     assert_eq!(response.message.tool_calls.len(), 1);
     assert_eq!(response.message.tool_calls[0].name, "lookup");
     assert_eq!(
@@ -180,4 +194,77 @@ fn request_messages_include_tool_and_schema_instructions() {
         .join("\n");
     assert!(system.contains("Tool Use Protocol"));
     assert!(system.contains("JSON Schema"));
+}
+
+#[test]
+fn request_rendering_preserves_text_adjacent_to_typed_images() {
+    use tinyinference_llm::message::{ImageRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Text("before ".into()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,QUJD".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Text(" after".into()),
+        ],
+    })]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content[0]["text"], "before ");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[2]["text"], " after");
+}
+
+#[test]
+fn request_rendering_keeps_private_image_marker_text_literal() {
+    let request = ModelRequest::new(vec![Message::user(
+        "literal [OH_IMAGE:data:image/png;base64,QUJD]",
+    )]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["text"], "literal ");
+    assert_eq!(content[1]["text"], "[OH_IMAGE:data:image/png;base64,QUJD]");
+}
+
+#[test]
+fn request_rendering_preserves_unclosed_private_image_marker_text() {
+    let text = "literal [OH_IMAGE:data:image/png;base64,QUJD";
+    let request = ModelRequest::new(vec![Message::user(text)]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["text"], text);
+}
+
+#[test]
+fn request_messages_filter_host_custom_records() {
+    let request = ModelRequest::new(vec![
+        Message::user("hello"),
+        Message::Custom(tinyinference_llm::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: serde_json::json!({"summary": "host-only"}),
+            display: Some("host-only".into()),
+        }),
+    ]);
+
+    let messages = request_messages(&request);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].content, "hello");
 }

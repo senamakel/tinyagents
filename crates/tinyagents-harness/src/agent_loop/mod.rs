@@ -3,7 +3,7 @@
 //! This loop is the innermost turn of the recursive runtime: it is where one
 //! model call is driven to completion, and because a
 //! whole harness can be exposed as a tool
-//! ([`crate::subagent::SubAgentTool`]), the very tools this loop
+//! (`SubAgentTool` in `tinyagents-orchestration`), the very tools this loop
 //! executes may themselves be other agents — so "a model calling a model" is
 //! just this loop nested inside one of its own tool calls. Each invocation runs
 //! inside a [`RunContext`] that tracks recursion depth, fans usage/cost up to a
@@ -98,30 +98,44 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cache::{ResponseCache, cache_key};
-use crate::context::{MiddlewareControl, RunConfig, RunContext};
+use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, HarnessRunStatus, LimitKind};
 use crate::ids::{CallId, ComponentId, HarnessPhase};
-use crate::middleware::{AgentRun, BoxModelFuture, BoxToolFuture, ModelBaseCall, ToolBaseCall};
+use crate::middleware::{
+    AgentBaseCall, AgentRun, BoxAgentFuture, BoxModelFuture, BoxToolFuture, ModelBaseCall,
+    ToolBaseCall,
+};
 use crate::model_registry::{ResolvedModelBinding, model_eligible};
-use crate::runtime::{AgentHarness, InvalidArgsPolicy, UnknownToolPolicy};
+use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use futures::StreamExt;
 use serde_json::Value;
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
     ChatModel, ModelDelta, ModelRequest, ModelResolutionSource, ModelResponse, ModelStreamItem,
-    ResolvedModel, ResponseFormat, StreamAccumulator, ToolChoice,
+    PromptSegment, ResolvedModel, ResponseFormat, SegmentRole, StreamAccumulator, ToolChoice,
 };
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
 
+mod dialect;
 mod entry;
+mod handoff_transform;
 mod model_call;
+pub mod phases;
 mod run_loop;
-mod stream;
+pub(crate) mod stream;
+mod tool_changes;
 mod tools;
 
 pub use stream::AgentStreamItem;
+pub(crate) use stream::{StreamRunner, invoke_stream_with_runner};
 
+#[cfg(test)]
+mod deferred_test;
+#[cfg(test)]
+mod rich_tool_test;
+#[cfg(test)]
+mod run_queue_test;
 #[cfg(test)]
 mod test;

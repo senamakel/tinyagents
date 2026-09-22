@@ -75,6 +75,14 @@ impl RunLimits {
         self.behavior = behavior;
         self
     }
+
+    /// Caps how many tool calls a concurrently-executed batch may run at
+    /// once. `None` removes the cap. See
+    /// [`RunLimits::max_tool_concurrency`].
+    pub fn with_max_tool_concurrency(mut self, n: Option<usize>) -> Self {
+        self.max_tool_concurrency = n;
+        self
+    }
 }
 
 /// Tracks live counters for a single harness run and enforces [`RunLimits`].
@@ -100,6 +108,22 @@ impl LimitTracker {
             tool_calls: 0,
             started_at: Instant::now(),
         }
+    }
+
+    /// Resets the wall-clock start to now, leaving the call counters and
+    /// limits untouched.
+    ///
+    /// [`RunContext::new`][crate::context::RunContext::new] constructs the
+    /// tracker (and therefore stamps `started_at`) at context-construction
+    /// time, which is not always the same moment the run actually starts
+    /// doing work — a context built ahead of time and queued, or reused
+    /// across a retry of the *surrounding* host operation, would otherwise
+    /// have its wall-clock deadline silently burn down before the agent loop
+    /// issues its first model call (M-8). The agent loop calls this at the
+    /// top of the run so the deadline is always measured from when the run
+    /// actually began.
+    pub fn restart(&mut self) {
+        self.started_at = Instant::now();
     }
 
     /// Records one model call and returns an error if the cap is exceeded.
@@ -148,7 +172,7 @@ impl LimitTracker {
     fn exhausted(&self, kind: LimitKind, cap: usize) -> Result<LimitOutcome> {
         match self.limits.behavior {
             LimitBehavior::Error => {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     target: "tinyagents::limits",
                     limit_kind = kind.as_str(),
                     cap,
@@ -163,7 +187,7 @@ impl LimitTracker {
                 )))
             }
             LimitBehavior::StopWithPartial => {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     target: "tinyagents::limits",
                     limit_kind = kind.as_str(),
                     cap,
@@ -286,7 +310,7 @@ impl LimitTracker {
     /// defaulted. See the note on [`LimitTracker::tighten_call_limits`] for what
     /// the agent loop has to do about it.
     pub fn sync_call_limits(&mut self, max_model_calls: usize, max_tool_calls: usize) {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::limits",
             from_model_calls = self.limits.max_model_calls,
             from_tool_calls = self.limits.max_tool_calls,
@@ -307,30 +331,23 @@ impl LimitTracker {
     /// already applies to the retry cap. Counts and the wall-clock start are
     /// preserved.
     ///
-    /// # Wiring note for the agent loop (wave 2)
+    /// # How the agent loop actually uses this
     ///
-    /// The loop currently calls [`LimitTracker::sync_call_limits`] with the
-    /// `RunPolicy` caps. Switching that call site to this method fixes the
-    /// silent widening of an explicit `RunConfig` cap, but it also changes the
-    /// case a policy raising the cap **above the `RunConfig` default** stops
-    /// working — which `policy_model_call_limit_above_run_config_default_is_honored`
-    /// in `agent_loop/test.rs` pins.
-    ///
-    /// Both cases are legitimate, and they are only distinguishable by knowing
-    /// whether the `RunConfig` cap was *explicitly set* or merely defaulted. The
-    /// clean fix is on the `RunConfig` side (a `RunConfig` owned by
-    /// `harness::context`, not this module): make its call caps
-    /// `Option<usize>` — or track an `explicitly_set` flag — and then in the
-    /// loop:
-    ///
-    /// - `RunConfig` cap explicitly set → `tighten_call_limits(policy caps)`
-    ///   (the caller's ceiling wins, and the policy may only tighten it).
-    /// - `RunConfig` cap merely defaulted → `sync_call_limits(policy caps)`
-    ///   (the policy is the only real source of truth, so it may raise it).
+    /// `RunConfig`'s call caps are `Option<usize>` precisely so the loop can
+    /// tell "explicitly set" apart from "merely defaulted" before reconciling
+    /// with the harness `RunPolicy`. Per axis (model calls, tool calls) it
+    /// resolves an *effective* cap itself — the stricter of the two when the
+    /// `RunConfig` cap was explicitly set, otherwise the policy's cap
+    /// outright — and then calls [`LimitTracker::sync_call_limits`] once with
+    /// the already-reconciled values. `tighten_call_limits` is not used there:
+    /// applying it on top of an effective cap already derived from the
+    /// config's *default* would additionally min against that default and so
+    /// could not honor a policy that legitimately raises an unset cap. See
+    /// `run_loop.rs`'s `resolve_call_cap` in `harness::agent_loop`.
     pub fn tighten_call_limits(&mut self, max_model_calls: usize, max_tool_calls: usize) {
         let model = self.limits.max_model_calls.min(max_model_calls);
         let tool = self.limits.max_tool_calls.min(max_tool_calls);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             target: "tinyagents::limits",
             from_model_calls = self.limits.max_model_calls,
             from_tool_calls = self.limits.max_tool_calls,

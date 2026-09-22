@@ -88,9 +88,12 @@ fn enforce_blocks_unsafe_paths_and_emits_violation() {
     let recorder = Arc::new(RecordingListener::new());
     events.subscribe(recorder.clone());
 
-    let ws = WorkspaceDescriptor::new("/work/agent-a");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("agent-a");
+    std::fs::create_dir_all(&root).unwrap();
+    let ws = WorkspaceDescriptor::new(&root);
     // Allowed path passes silently with no event.
-    enforce_workspace_path(&ws, Path::new("/work/agent-a/out.txt"), &events).unwrap();
+    enforce_workspace_path(&ws, &root.join("out.txt"), &events).unwrap();
     assert!(recorder.is_empty());
 
     // Unsafe path fails closed and emits a violation.
@@ -102,13 +105,14 @@ fn enforce_blocks_unsafe_paths_and_emits_violation() {
 
 #[test]
 fn run_context_workspace_threads_into_tool_execution_context() {
+    use crate::CallId;
     use crate::context::{RunConfig, RunContext};
     use crate::tool::ToolExecutionContext;
 
     let ws = WorkspaceDescriptor::new("/work/agent-a").with_policy_id("run-9");
     let ctx: RunContext = RunContext::new(RunConfig::new("run-9"), ()).with_workspace(ws.clone());
 
-    let tool_ctx = ToolExecutionContext::from_run_context(&ctx);
+    let tool_ctx = ToolExecutionContext::from_run_context(&ctx, CallId::new("call-9"));
     assert_eq!(tool_ctx.workspace, Some(ws));
 }
 

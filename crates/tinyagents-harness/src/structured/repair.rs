@@ -39,7 +39,7 @@ use serde_json::Value;
 
 /// Which rung of the ladder produced a value.
 ///
-/// Carried out of [`parse_lenient`] so the caller can log — and a
+/// Carried out of `parse_lenient` so the caller can log — and a
 /// [`super::StructuredOutcome`] can record — that the model's text needed
 /// repairing, instead of a repair silently masking a degrading model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,16 +96,14 @@ pub fn parse_lenient(raw: &str) -> Option<(Value, JsonRepair)> {
     if unfenced != trimmed
         && let Ok(value) = serde_json::from_str::<Value>(unfenced)
     {
-        tinyagents_tracing::debug!(
-            "[structured::repair] recovered JSON by removing a markdown code fence"
-        );
+        tracing::debug!("[structured::repair] recovered JSON by removing a markdown code fence");
         return Some((value, JsonRepair::CodeFence));
     }
 
     if let Some(sliced) = slice_json_span(unfenced)
         && let Ok(value) = serde_json::from_str::<Value>(sliced)
     {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[structured::repair] recovered JSON by slicing it out of surrounding text"
         );
         return Some((value, JsonRepair::Slice));
@@ -114,17 +112,13 @@ pub fn parse_lenient(raw: &str) -> Option<(Value, JsonRepair)> {
     // Reuses the crate's existing relaxed-JSON repairs rather than a second,
     // divergent implementation. It only yields objects, which is the shape a
     // JSON-Schema structured output almost always declares.
-    if let Some(value) = crate::relaxed_json::recover_relaxed_object(unfenced) {
-        tinyagents_tracing::debug!(
-            "[structured::repair] recovered JSON through the relaxed-JSON repairs"
-        );
+    if let Some(value) = tinytools_agent::repair::json::recover_object(unfenced) {
+        tracing::debug!("[structured::repair] recovered JSON through the relaxed-JSON repairs");
         return Some((value, JsonRepair::Relaxed));
     }
 
     if let Some(value) = close_truncated(unfenced) {
-        tinyagents_tracing::debug!(
-            "[structured::repair] recovered JSON by closing a truncated value"
-        );
+        tracing::debug!("[structured::repair] recovered JSON by closing a truncated value");
         return Some((value, JsonRepair::Closed));
     }
 

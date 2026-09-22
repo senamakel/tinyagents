@@ -1,4 +1,4 @@
-//! Declarative types for the high-level [`ModelRouter`](super::ModelRouter): a
+//! Declarative types for the high-level [`WorkloadRouter`](super::WorkloadRouter): a
 //! [`WorkloadRoute`] (one named tier) and the router that owns an ordered set of
 //! them.
 
@@ -14,7 +14,7 @@ use tinyinference_llm::model::CapabilitySet;
 /// A route is pure metadata — it names a model rather than owning one, so the
 /// same route table can be declared once and projected onto any
 /// [`CapabilityRegistry`](crate::CapabilityRegistry) /
-/// [`ModelRegistry`](tinyagents_harness::runtime::ModelRegistry) that has registered
+/// [`ModelRegistry`](tinyagents_harness::ModelRegistry) that has registered
 /// those model names. This is what lets a host describe its tiered routing
 /// (workload aliases → concrete BYOK/managed/local models) declaratively and hand
 /// it to the crate, instead of re-implementing alias resolution + fallback

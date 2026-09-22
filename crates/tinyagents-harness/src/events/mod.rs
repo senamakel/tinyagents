@@ -16,7 +16,7 @@
 //!   transition (run boundaries, model calls, tool invocations, middleware,
 //!   routing, retries, and state updates).
 //! - [`EventRecord`] — a monotonically-offset-keyed wrapper that pairs an
-//!   [`EventId`] with the raw event.
+//!   [`EventId`](crate::EventId) with the raw event.
 //! - [`EventListener`] — a `Send + Sync` trait for pluggable event observers.
 //! - [`EventSink`] — a cloneable, thread-safe fan-out bus that assigns ids and
 //!   offsets and notifies registered listeners.
@@ -89,7 +89,7 @@ impl EventSink {
     /// Creates a new, empty event sink with no registered listeners.
     ///
     /// The sink is given a process-unique stream prefix (`s<n>`), so distinct
-    /// sinks never mint colliding [`EventId`]s within one process. For ids that
+    /// sinks never mint colliding [`EventId`](crate::EventId)s within one process. For ids that
     /// stay unique *across process restarts* — the case that matters for a
     /// durable journal aggregating many runs — construct the sink with
     /// [`Self::with_stream_id`] seeded from a stable run/thread id instead.
@@ -97,7 +97,7 @@ impl EventSink {
         Self::with_stream_id(format!("s{}", crate::ids::next_seq()))
     }
 
-    /// Creates a new, empty event sink whose emitted [`EventId`]s are prefixed
+    /// Creates a new, empty event sink whose emitted [`EventId`](crate::EventId)s are prefixed
     /// with `stream_id`. Passing a stable, unique identifier (typically the
     /// run's or root run's id) makes event ids reproducible and collision-free
     /// across restarts: the same logical event re-emitted for the same
@@ -108,7 +108,7 @@ impl EventSink {
             inner: Arc::new(Mutex::new(EventSinkInner {
                 stream_id: stream_id.into(),
                 next_offset: 0,
-                listeners: Vec::new(),
+                listeners: Arc::new(Vec::new()),
                 pending: std::collections::VecDeque::new(),
                 dispatching: false,
             })),
@@ -119,7 +119,7 @@ impl EventSink {
     /// [`AgentEvent`] emitted through this sink (or any of its clones).
     pub fn subscribe(&self, listener: Arc<dyn EventListener>) {
         let mut inner = lock_recovering(&self.inner);
-        inner.listeners.push(listener);
+        Arc::make_mut(&mut inner.listeners).push(listener);
     }
 
     /// Removes a previously subscribed listener.
@@ -130,9 +130,7 @@ impl EventSink {
     pub fn unsubscribe(&self, listener: &Arc<dyn EventListener>) -> bool {
         let mut inner = lock_recovering(&self.inner);
         let before = inner.listeners.len();
-        inner
-            .listeners
-            .retain(|candidate| !Arc::ptr_eq(candidate, listener));
+        Arc::make_mut(&mut inner.listeners).retain(|candidate| !Arc::ptr_eq(candidate, listener));
         inner.listeners.len() != before
     }
 
@@ -141,7 +139,7 @@ impl EventSink {
         lock_recovering(&self.inner).listeners.len()
     }
 
-    /// Emits an event, assigning a monotonic [`EventId`] and offset, then
+    /// Emits an event, assigning a monotonic [`EventId`](crate::EventId) and offset, then
     /// notifying all registered listeners in insertion order.
     ///
     /// Returns the [`EventRecord`] that was enqueued so the caller can record
@@ -157,7 +155,7 @@ impl EventSink {
     /// re-entrant record is queued and delivered by the active drain loop)
     /// when they guard against unbounded event recursion.
     /// A panicking listener does **not** wedge the sink: the `dispatching` flag
-    /// is released by a [`DispatchGuard`] on unwind, so later emits still
+    /// is released by an internal `DispatchGuard` on unwind, so later emits still
     /// dispatch (the panicking listener's own record is lost, and any records
     /// still queued behind it are delivered by whichever emitter drains next).
     pub fn emit(&self, event: AgentEvent) -> EventRecord {
@@ -167,6 +165,15 @@ impl EventSink {
             inner.next_offset += 1;
             let id = crate::ids::EventId::new(format!("{}-evt-{offset}", inner.stream_id));
             let record = EventRecord { id, offset, event };
+            // The id/offset must still be minted with no listeners — callers
+            // (e.g. `HarnessRunStatus::set_last_event`) rely on the returned
+            // record regardless of whether anyone is watching — but with
+            // nothing registered there is nothing to fan out to, so the
+            // `Arc` clone, enqueue, and drain loop below are pure overhead on
+            // every emit of a run nobody is observing. Skip them.
+            if inner.listeners.is_empty() {
+                return record;
+            }
             let listeners = inner.listeners.clone();
             inner.pending.push_back((record.clone(), listeners));
             let should_drain = !inner.dispatching;
@@ -188,7 +195,7 @@ impl EventSink {
                     }
                 };
                 let (queued, listeners) = next;
-                for listener in &listeners {
+                for listener in listeners.iter() {
                     listener.on_event(&queued);
                 }
             }

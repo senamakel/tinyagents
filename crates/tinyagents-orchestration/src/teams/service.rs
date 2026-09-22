@@ -1,3 +1,11 @@
+//! Team service and durable ledger: the public API for team management.
+//!
+//! [`TeamService`] validates team structure, manages member and task
+//! persistence (via [`TeamLedger`]), and enforces coordination invariants.
+//! [`SessionTeamLedger`] provides a built-in `tinyagents-session` backend;
+//! hosts can supply their own ledger implementation for testing or custom
+//! storage.
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +21,7 @@ use tinyagents_session::run_ledger::{
 };
 use uuid::Uuid;
 
+use super::runtime::drain_run_events;
 use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamError, TeamView};
 
 /// Durable team state required by [`TeamService`].
@@ -21,13 +30,22 @@ use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamErro
 /// than introducing another task store. Hosts can substitute a fake ledger in
 /// tests or select their own durable implementation.
 pub trait TeamLedger: Send + Sync {
+    /// Upserts a team row: creates if absent, updates if present.
     fn upsert_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam>;
+    /// Retrieves a team by id.
     fn get_team(&self, id: &str) -> Result<Option<AgentTeam>>;
+    /// Lists teams according to the request filters.
     fn list_teams(&self, request: &AgentTeamListRequest) -> Result<AgentTeamListResponse>;
+    /// Upserts a team member: creates if absent, updates if present.
     fn upsert_member(&self, upsert: AgentTeamMemberUpsert) -> Result<AgentTeamMember>;
+    /// Lists members of a team in creation order.
     fn list_members(&self, team_id: &str) -> Result<Vec<AgentTeamMember>>;
+    /// Lists tasks assigned to a team in creation order.
     fn list_tasks(&self, team_id: &str) -> Result<Vec<AgentTeamTask>>;
+    /// Upserts a task: creates if absent, updates if present.
     fn upsert_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask>;
+    /// Attempts to claim a task for a member using an atomic CAS operation.
+    /// Returns the claim outcome (success, already claimed, not found).
     fn claim_task(
         &self,
         team_id: &str,
@@ -35,6 +53,8 @@ pub trait TeamLedger: Send + Sync {
         member_id: &str,
         claim_token: &str,
     ) -> Result<ClaimOutcome>;
+    /// Records a task completion with optional evidence, atomically advancing
+    /// the task status and optionally validating evidence before transition.
     fn complete_task(
         &self,
         team_id: &str,
@@ -43,29 +63,39 @@ pub trait TeamLedger: Send + Sync {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
+    /// Stops a member and releases its claimed tasks, returning the stopped
+    /// member and the released task ids.
     fn shutdown_member(
         &self,
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>>;
+    /// Appends an event to the durable run event log.
     fn append_event(&self, event: RunEventAppend) -> Result<RunEvent>;
+    /// Lists events from the run event log according to the request filters.
     fn list_events(&self, request: &RunEventListRequest) -> Result<Vec<RunEvent>>;
 }
 
 /// [`TeamLedger`] backed by `tinyagents-session`'s run ledger at a caller
 /// supplied workspace root. It makes no workspace or host policy decision.
+///
+/// Delegates all operations to the session run-ledger functions, projecting
+/// the workspace path into each call. This is the default implementation when
+/// using TinyAgents' built-in session storage.
 #[derive(Debug, Clone)]
 pub struct SessionTeamLedger {
     workspace_dir: PathBuf,
 }
 
 impl SessionTeamLedger {
+    /// Creates a ledger wrapping the session layer at the specified workspace.
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
         }
     }
 
+    /// Returns the workspace directory used for all ledger operations.
     pub fn workspace_dir(&self) -> &Path {
         &self.workspace_dir
     }
@@ -157,16 +187,27 @@ impl TeamLedger for SessionTeamLedger {
 }
 
 /// Host-neutral service for durable, dependency-aware agent teams.
+///
+/// Provides a high-level API for team management: creating teams, adding
+/// members, creating and claiming tasks, composing prompts, and shutting down
+/// members. All mutations are durably persisted via a caller-supplied
+/// [`TeamLedger`]; the service enforces coordination invariants (no duplicate
+/// member names, valid task dependencies, no cycles).
+///
+/// Generic over the ledger to allow hosts to inject their own storage
+/// implementation or a test double.
 #[derive(Debug, Clone)]
 pub struct TeamService<L> {
     ledger: L,
 }
 
 impl<L> TeamService<L> {
+    /// Creates a service wrapping the provided [`TeamLedger`].
     pub fn new(ledger: L) -> Self {
         Self { ledger }
     }
 
+    /// Returns a reference to the underlying ledger.
     pub fn ledger(&self) -> &L {
         &self.ledger
     }
@@ -234,16 +275,18 @@ impl<L: TeamLedger> TeamService<L> {
         owner_member_id: Option<&str>,
         depends_on: &[String],
     ) -> Result<AgentTeamTask> {
-        self.ledger
+        let team = self
+            .ledger
             .get_team(team_id)?
             .ok_or_else(|| anyhow!("unknown team: {team_id}"))?;
+        if team.status == AgentTeamStatus::Closed {
+            return Err(anyhow!("team is closed: {team_id}"));
+        }
         let existing = self.ledger.list_tasks(team_id)?;
         if let Some(owner) = owner_member_id
-            && !self
-                .ledger
-                .list_members(team_id)?
-                .iter()
-                .any(|member| member.id == owner)
+            && !self.ledger.list_members(team_id)?.iter().any(|member| {
+                member.id == owner && member.member_status != AgentTeamMemberStatus::Stopped
+            })
         {
             return Err(anyhow!(TeamError::UnknownMember {
                 member_id: owner.to_string()
@@ -275,6 +318,7 @@ impl<L: TeamLedger> TeamService<L> {
         member_id: &str,
         claim_token: &str,
     ) -> Result<ClaimOutcome> {
+        self.ensure_team_active(team_id)?;
         self.ensure_member(team_id, member_id)?;
         self.ledger
             .claim_task(team_id, task_id, member_id, claim_token)
@@ -306,15 +350,10 @@ impl<L: TeamLedger> TeamService<L> {
     }
 
     pub fn list_messages(&self, team_id: &str, limit: Option<u32>) -> Result<Vec<RunEvent>> {
-        Ok(self
-            .ledger
-            .list_events(&RunEventListRequest {
-                run_id: team_id.to_string(),
-                after_sequence: None,
-                limit,
-            })?
+        Ok(drain_run_events(&self.ledger, team_id)?
             .into_iter()
             .filter(|event| event.event_type == TEAM_MESSAGE_EVENT)
+            .take(limit.unwrap_or(u32::MAX) as usize)
             .collect())
     }
 
@@ -374,17 +413,26 @@ impl<L: TeamLedger> TeamService<L> {
     }
 
     fn ensure_member(&self, team_id: &str, member_id: &str) -> Result<()> {
-        if self
-            .ledger
-            .list_members(team_id)?
-            .iter()
-            .any(|member| member.id == member_id)
-        {
+        if self.ledger.list_members(team_id)?.iter().any(|member| {
+            member.id == member_id && member.member_status != AgentTeamMemberStatus::Stopped
+        }) {
             Ok(())
         } else {
             Err(anyhow!(TeamError::UnknownMember {
                 member_id: member_id.to_string()
             }))
+        }
+    }
+
+    fn ensure_team_active(&self, team_id: &str) -> Result<()> {
+        let team = self
+            .ledger
+            .get_team(team_id)?
+            .ok_or_else(|| anyhow!("unknown team: {team_id}"))?;
+        if team.status == AgentTeamStatus::Active {
+            Ok(())
+        } else {
+            Err(anyhow!("team is closed: {team_id}"))
         }
     }
 }

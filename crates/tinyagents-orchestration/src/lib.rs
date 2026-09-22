@@ -1,14 +1,15 @@
-//! Host-neutral composition of durable agent work.
+//! Host-neutral subagent invocation and lifecycle orchestration.
 //!
-//! This crate coordinates typed team and workflow plans over the established
-//! TinyAgents graph, harness, and session layers. Hosts supply persistence
-//! roots and concrete worker execution; policy, credentials, tools, progress,
-//! and RPC remain host concerns.
+//! This crate owns TinyAgents' subagent-facing surfaces: direct child-agent
+//! invocation, the typed tool adapter, reusable child sessions, and the
+//! durable lifecycle driver. Hosts supply persistence and concrete execution;
+//! policy, credentials, progress, and RPC remain host concerns.
 //!
 //! Dependency direction is deliberately one way:
-//! `orchestration -> {graph, harness, session}`. The lower-level crates never
+//! `orchestration -> {harness, runtime}`. The lower-level crates never
 //! depend on this composition layer.
 
+pub mod subagent;
 pub mod teams;
 pub mod workflow;
 
@@ -20,9 +21,8 @@ mod boundary_tests {
         assert!(!manifest.contains("openhuman"));
 
         for lower_layer in [
-            include_str!("../../tinyagents-graph/Cargo.toml"),
             include_str!("../../tinyagents-harness/Cargo.toml"),
-            include_str!("../../tinyagents-session/Cargo.toml"),
+            include_str!("../../tinyagents-runtime/Cargo.toml"),
         ] {
             assert!(
                 !lower_layer.contains("tinyagents-orchestration"),
@@ -32,14 +32,20 @@ mod boundary_tests {
     }
 
     #[test]
-    fn public_team_surface_compiles() {
-        fn assert_ledger<L: crate::teams::TeamLedger>() {}
-        let _ = assert_ledger::<crate::teams::SessionTeamLedger>;
+    fn public_subagent_surface_compiles() {
+        fn assert_executor<E: crate::subagent::SubagentExecutor>() {}
+        let _ = assert_executor::<NeverExecutor>;
     }
 
-    #[test]
-    fn public_workflow_surface_compiles() {
-        fn assert_store<S: crate::workflow::WorkflowStore>() {}
-        let _ = assert_store::<crate::workflow::SessionWorkflowStore>;
+    struct NeverExecutor;
+
+    #[async_trait::async_trait]
+    impl crate::subagent::SubagentExecutor for NeverExecutor {
+        async fn execute(
+            &self,
+            _execution: crate::subagent::SubagentExecution,
+        ) -> Result<crate::subagent::SubagentOutcome, crate::subagent::SubagentError> {
+            unreachable!()
+        }
     }
 }

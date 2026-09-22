@@ -8,7 +8,7 @@
 //! capability be discovered, listed, and bound by name long after the process
 //! that registered it has exited.
 //!
-//! See [`types`] for the definitions. This module adds constructors, accessors,
+//! See `types` for the definitions. This module adds constructors, accessors,
 //! and string conversions used by the [`crate::CapabilityRegistry`].
 
 mod types;
@@ -57,11 +57,11 @@ impl ComponentKind {
         ComponentKind::Reducer,
         ComponentKind::Store,
         ComponentKind::Agent,
-        ComponentKind::Script,
         ComponentKind::Middleware,
         ComponentKind::Checkpointer,
         ComponentKind::TaskStore,
         ComponentKind::Listener,
+        ComponentKind::Capability,
     ];
 
     /// Returns the lowercase string name of this kind, matching its serialized
@@ -75,11 +75,11 @@ impl ComponentKind {
             ComponentKind::Reducer => "reducer",
             ComponentKind::Store => "store",
             ComponentKind::Agent => "agent",
-            ComponentKind::Script => "script",
             ComponentKind::Middleware => "middleware",
             ComponentKind::Checkpointer => "checkpointer",
             ComponentKind::TaskStore => "task_store",
             ComponentKind::Listener => "listener",
+            ComponentKind::Capability => "capability",
         }
     }
 }

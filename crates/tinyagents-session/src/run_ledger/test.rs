@@ -3,6 +3,7 @@
 //! Consolidated here per AGENTS.md: one `test.rs` per module directory.
 
 use super::ops::*;
+use super::tool_effects::*;
 use super::types::*;
 use chrono::Utc;
 use serde_json::json;
@@ -848,6 +849,26 @@ fn team_members_and_tasks_list_back() {
     assert_eq!(teams.count, 1);
 }
 
+#[test]
+fn team_list_count_is_total_before_pagination() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+    seed_team(workspace_dir, "team-1");
+    seed_team(workspace_dir, "team-2");
+
+    let teams = list_agent_teams(
+        workspace_dir,
+        &AgentTeamListRequest {
+            limit: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(teams.teams.len(), 1);
+    assert_eq!(teams.count, 2);
+}
+
 fn seed_run(workspace_dir: &Path, id: &str, status: AgentRunStatus) {
     upsert_agent_run(
         workspace_dir,
@@ -901,4 +922,189 @@ fn interrupt_orphaned_runs_settles_only_non_terminal_inflight_rows() {
 
     // Idempotent: a second sweep finds nothing left to settle.
     assert_eq!(interrupt_orphaned_agent_runs(workspace_dir).unwrap(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Tool-effect ledger (B5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn record_tool_started_writes_a_started_row() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+
+    let row = record_tool_started(
+        workspace_dir,
+        ToolEffectStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: Some("key-1".into()),
+            effect_summary: Some("send to a@example.com".into()),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(row.run_id, "run-1");
+    assert_eq!(row.call_id, "call-1");
+    assert_eq!(row.tool, "send_email");
+    assert_eq!(row.status, ToolEffectStatus::Started);
+    assert_eq!(row.idempotency_key.as_deref(), Some("key-1"));
+    assert!(row.settled_at.is_none());
+}
+
+#[test]
+fn settle_tool_effect_transitions_status_and_stamps_settled_at() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+    record_tool_started(
+        workspace_dir,
+        ToolEffectStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: None,
+            effect_summary: None,
+        },
+    )
+    .unwrap();
+
+    let settled = settle_tool_effect(
+        workspace_dir,
+        ToolEffectSettle {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            status: ToolEffectStatus::Completed,
+            effect_summary: Some("sent, id abc123".into()),
+        },
+    )
+    .unwrap()
+    .expect("row exists");
+
+    assert_eq!(settled.status, ToolEffectStatus::Completed);
+    assert_eq!(settled.effect_summary.as_deref(), Some("sent, id abc123"));
+    assert!(settled.settled_at.is_some());
+}
+
+#[test]
+fn settle_tool_effect_without_a_prior_start_still_inserts_a_row() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+
+    let settled = settle_tool_effect(
+        workspace_dir,
+        ToolEffectSettle {
+            run_id: "run-1".into(),
+            call_id: "call-never-started".into(),
+            status: ToolEffectStatus::Failed,
+            effect_summary: None,
+        },
+    )
+    .unwrap()
+    .expect("row is inserted even without a prior `started`");
+    assert_eq!(settled.status, ToolEffectStatus::Failed);
+}
+
+#[test]
+fn list_unresolved_tool_effects_returns_only_started_rows_for_the_run() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+
+    for call_id in ["call-open", "call-done", "call-other-run"] {
+        record_tool_started(
+            workspace_dir,
+            ToolEffectStart {
+                run_id: if call_id == "call-other-run" {
+                    "run-2".into()
+                } else {
+                    "run-1".into()
+                },
+                call_id: call_id.into(),
+                tool: "some_tool".into(),
+                idempotency_key: None,
+                effect_summary: None,
+            },
+        )
+        .unwrap();
+    }
+    settle_tool_effect(
+        workspace_dir,
+        ToolEffectSettle {
+            run_id: "run-1".into(),
+            call_id: "call-done".into(),
+            status: ToolEffectStatus::Completed,
+            effect_summary: None,
+        },
+    )
+    .unwrap();
+
+    let unresolved = list_unresolved_tool_effects(workspace_dir, "run-1").unwrap();
+    assert_eq!(unresolved.len(), 1);
+    assert_eq!(unresolved[0].call_id, "call-open");
+}
+
+#[test]
+fn mark_interrupted_settles_a_started_row_as_interrupted() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+    record_tool_started(
+        workspace_dir,
+        ToolEffectStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: None,
+            effect_summary: None,
+        },
+    )
+    .unwrap();
+
+    let row = mark_interrupted(workspace_dir, "run-1", "call-1")
+        .unwrap()
+        .expect("row exists");
+    assert_eq!(row.status, ToolEffectStatus::Interrupted);
+    assert!(
+        list_unresolved_tool_effects(workspace_dir, "run-1")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn run_ledger_tool_effects_implements_the_harness_ledger_trait() {
+    use tinyagents_harness::tool::{
+        ToolEffectLedger, ToolEffectSettle as HarnessSettle, ToolEffectStart as HarnessStart,
+        ToolEffectStatus as HarnessStatus,
+    };
+
+    let dir = TempDir::new().unwrap();
+    let ledger = RunLedgerToolEffects::new(dir.path().to_path_buf());
+
+    ledger
+        .started(HarnessStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: "key-1".into(),
+            effect_summary: None,
+        })
+        .await
+        .unwrap();
+
+    let unresolved = ledger.unresolved("run-1").await.unwrap();
+    assert_eq!(unresolved.len(), 1);
+    assert_eq!(unresolved[0].call_id, "call-1");
+    assert_eq!(unresolved[0].status, HarnessStatus::Started);
+
+    ledger
+        .settled(HarnessSettle {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            status: HarnessStatus::Completed,
+            effect_summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert!(ledger.unresolved("run-1").await.unwrap().is_empty());
 }

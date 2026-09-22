@@ -1,8 +1,12 @@
-//! Tests added in a later pass.
+//! Unit tests for the cache module.
 //!
-//! Smoke tests confirming that [`super::InMemoryResponseCache`] round-trips a
-//! response, that [`super::cache_key`] is deterministic, and that
-//! [`super::PromptCacheLayout`] correctly detects stable vs. changed prefixes.
+//! Covers [`super::InMemoryResponseCache`] put/get round-trips, LRU eviction,
+//! and zero-capacity handling; determinism and sensitivity of [`super::cache_key`]
+//! to message content, ordering, and tool schemas; and
+//! [`super::PromptCacheLayout`]/[`super::CacheLayoutEvent`] detection of stable
+//! vs. changed prefixes. `SingleFlight` and the `sqlite`-feature cache backend
+//! are exercised separately in
+//! `crates/tinyagents-integration-tests/tests/wave2_cache_store.rs`.
 
 use super::*;
 use serde_json::json;

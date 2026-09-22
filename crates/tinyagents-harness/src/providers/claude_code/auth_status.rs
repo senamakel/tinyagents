@@ -45,6 +45,7 @@ pub enum AuthSource {
     /// subscription type returned best-effort; absent when the schema
     /// drifts.
     Subscription {
+        /// Signed-in account's email, when the CLI reports one.
         account_email: Option<String>,
         /// `"max"` / `"pro"` etc., for display. Absent when not reported.
         subscription_type: Option<String>,
@@ -64,13 +65,17 @@ pub enum AuthSource {
     /// failed, non-zero exit (e.g. a CLI older than `auth status`), or
     /// unparseable output. We surface this as "couldn't determine" and a
     /// Reconnect affordance, **never** as signed-out.
-    Unknown { reason: Option<String> },
+    Unknown {
+        /// Human-readable cause, when known, for logs and UI diagnostics.
+        reason: Option<String>,
+    },
 }
 
 /// Returned by the `claude_code_auth_status` RPC. Snake-case Serde so the
 /// TS side discriminates on `source`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatus {
+    /// The classified auth state.
     #[serde(flatten)]
     pub source: AuthSource,
     /// Unix seconds when this probe ran — UI shows "last checked" so users
@@ -154,7 +159,7 @@ pub fn parse_auth_status_json(raw: &str) -> AuthSource {
 /// `OPENHUMAN_CLAUDE_CLI` override via [`version_check::resolve_binary`].
 fn probe_via_cli() -> AuthSource {
     let Some(bin) = version_check::resolve_binary() else {
-        log::debug!("[claude-code][auth] no `claude` binary on PATH; auth state unknown");
+        tracing::debug!("[claude-code][auth] no `claude` binary on PATH; auth state unknown");
         return AuthSource::Unknown {
             reason: Some("`claude` CLI not found on PATH".to_string()),
         };
@@ -171,7 +176,7 @@ fn probe_via_cli() -> AuthSource {
     {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("[claude-code][auth] spawn failed bin={bin_str} err={e}");
+            tracing::warn!("[claude-code][auth] spawn failed bin={bin_str} err={e}");
             return AuthSource::Unknown {
                 reason: Some(format!("spawn failed: {e}")),
             };
@@ -184,7 +189,7 @@ fn probe_via_cli() -> AuthSource {
     let status = match child.wait_timeout(AUTH_STATUS_TIMEOUT) {
         Ok(Some(s)) => s,
         Ok(None) => {
-            log::warn!(
+            tracing::warn!(
                 "[claude-code][auth] `claude auth status` timed out after {}s; killing bin={bin_str}",
                 AUTH_STATUS_TIMEOUT.as_secs()
             );
@@ -198,7 +203,7 @@ fn probe_via_cli() -> AuthSource {
             };
         }
         Err(e) => {
-            log::warn!("[claude-code][auth] wait failed bin={bin_str} err={e}");
+            tracing::warn!("[claude-code][auth] wait failed bin={bin_str} err={e}");
             let _ = child.kill();
             let _ = child.wait();
             return AuthSource::Unknown {
@@ -214,7 +219,7 @@ fn probe_via_cli() -> AuthSource {
         if let Some(mut s) = child.stderr.take() {
             let _ = s.read_to_string(&mut stderr);
         }
-        log::debug!(
+        tracing::debug!(
             "[claude-code][auth] `claude auth status` exit={} stderr={}",
             status,
             stderr.trim()
@@ -229,7 +234,7 @@ fn probe_via_cli() -> AuthSource {
         let _ = s.read_to_string(&mut stdout);
     }
     let source = parse_auth_status_json(stdout.trim());
-    log::debug!(
+    tracing::debug!(
         "[claude-code][auth] probe classified source={}",
         match &source {
             AuthSource::Subscription { .. } => "subscription",
@@ -253,7 +258,7 @@ pub fn probe() -> AuthStatus {
     if let Ok(k) = std::env::var("ANTHROPIC_API_KEY")
         && !k.trim().is_empty()
     {
-        log::debug!("[claude-code][auth] ANTHROPIC_API_KEY present → api_key_env");
+        tracing::debug!("[claude-code][auth] ANTHROPIC_API_KEY present → api_key_env");
         return AuthStatus {
             source: AuthSource::ApiKeyEnv,
             last_checked,

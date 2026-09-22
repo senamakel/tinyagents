@@ -222,6 +222,22 @@ Live event delivery should not block model or tool execution unless the run
 policy explicitly requires a mandatory observer. Durable listeners should replay
 from the journal rather than relying on in-memory broadcast delivery.
 
+### Implementation status (runtime-comparison Phase 3, C2)
+
+`HarnessEventJournal`/`StoreEventJournal` exist as designed above (offset
+replay, no block-level detail). What is new this phase is a durable shape for
+*in-progress* assistant messages specifically:
+`tinyagents_harness::stream::{AssistantFrame, FrameEncoder, reduce_frames}`
+(`crates/tinyagents-harness/src/stream/frame.rs`) — see
+`docs/modules/harness/streaming.md`'s "Implementation status" for the codec
+itself. A journal that persists `AssistantFrame`s alongside its ordinary
+`HarnessEvent` stream lets a reconnecting consumer rebuild a partial
+in-progress message with `reduce_frames` instead of only replaying whichever
+already-flattened `AgentEvent::ModelDelta`s the journal captured — the
+journal wiring (an `AssistantFrame`-aware `HarnessEventJournal`
+implementation, or a `Model*` frame projection alongside `ModelDelta`) is not
+itself implemented yet; the codec is the missing primitive that unblocks it.
+
 ## Observability Cache
 
 The harness cache feature can store derived observability projections. These

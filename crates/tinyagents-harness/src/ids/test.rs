@@ -62,6 +62,14 @@ fn status_and_phase_use_snake_case() {
         "\"interrupted\""
     );
     assert_eq!(
+        serde_json::to_string(&ExecutionStatus::Drained).unwrap(),
+        "\"drained\""
+    );
+    assert_eq!(
+        serde_json::from_str::<ExecutionStatus>("\"drained\"").unwrap(),
+        ExecutionStatus::Drained
+    );
+    assert_eq!(
         serde_json::to_string(&HarnessPhase::BuildingRequest).unwrap(),
         "\"building_request\""
     );

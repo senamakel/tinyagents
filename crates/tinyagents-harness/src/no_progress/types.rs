@@ -124,6 +124,8 @@ impl NoProgress {
     }
 }
 
+/// Mutable counters backing [`NoProgressTracker::record`][crate::no_progress::NoProgressTracker::record];
+/// reset to default on any success or on a halt.
 #[derive(Default)]
 pub(super) struct LadderState {
     /// Signature of the previous failing call (tool + args + first error line).
@@ -159,6 +161,9 @@ pub enum SuccessfulRepeat {
     Halt(String),
 }
 
+/// One run of consecutive identical signatures (assistant output or a
+/// successful tool-call batch), keyed by a content hash rather than the
+/// content itself to keep the tracker cheap to hold across a whole turn.
 #[derive(Default)]
 pub(super) struct Streak {
     pub(super) last_hash: Option<u64>,

@@ -1,3 +1,10 @@
+//! Unit tests for graph orchestration: tool argument parsing and outcomes for
+//! `spawn`/`await`/`cancel`/`kill`/`status`/`list`/`timeout`/`race`/`yield`/
+//! `steer`, `TaskStore` transition validation and filtering for both
+//! [`InMemoryTaskStore`] and [`JsonlTaskStore`] (including log replay and
+//! history), `reconcile_orphaned_tasks` sweep semantics, and
+//! `DetachedTaskRegistry` ownership/steering/cancellation behavior.
+
 use std::sync::Arc;
 
 use serde_json::json;
@@ -33,7 +40,7 @@ fn raw(result: &ToolResult) -> &serde_json::Value {
         .iter()
         .find_map(|content| match content {
             ToolContent::Json { data } => Some(data),
-            ToolContent::Text { .. } => None,
+            ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => None,
         })
         .expect("orchestration tool returns a JSON payload")
 }

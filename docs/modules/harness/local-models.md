@@ -59,13 +59,19 @@ of these are real captures from `llama3.2:3b` for a tool declaring one required
 {"param":{"city":"Paris"}}                                            # invented wrapper
 ```
 
-`normalize_tool_arguments` unwraps a single envelope level for a known set of
-wrapper keys, but only when the outer object is already schema-invalid, the tool
-does not itself declare an argument of that name, and the unwrapped value
-validates. Failing any of those, the original arguments survive so the model
-sees a precise error rather than a rewritten one.
+`normalize_tool_arguments` applies the protocol crate's argument repairs
+(`tinytools_agent::repair::args`) in order — decode a stringified or fenced
+document, unwrap one envelope level for a known set of wrapper keys, coerce
+string scalars to the declared primitive types — and keeps each rewrite only
+when the outer object is schema-invalid, the tool does not itself declare an
+argument of that name, and the rewritten value validates. Failing that, the
+original arguments survive so the model sees a precise error rather than a
+rewritten one.
 
-This only runs under a recovering `InvalidArgsPolicy` — see below.
+This normalization step only runs under
+`InvalidArgsPolicy::NormalizeThenReturnToolError` — see below. The default
+policy, `ReturnToolError`, still recovers (it returns the validation error as
+a tool-error message instead of aborting) but skips this normalization pass.
 
 ### Tool calls emitted as text
 
@@ -79,22 +85,28 @@ puts the call in `content` instead of the wire's `tool_calls` array, with no
 
 Left alone this is catastrophic rather than merely lossy: the loop sees an
 assistant message with no tool calls, treats it as the final answer, and returns
-JSON-looking prose to the user while the tool never runs.
-`apply_prompt_tool_calls` recovers it, requiring the **entire** message content
-to parse as one object naming a tool so prose that merely quotes JSON is never
-swallowed. Mismatched and single-quoted *keys* are repaired; single-quoted
-*values* deliberately are not, because an apostrophe in a value is ordinary
-English.
+JSON-looking prose to the user while the tool never runs. The response is read
+through every grammar in `tinytools_agent::parse` with the offered tool names
+supplied; the bare-object path requires the **entire** message content to parse
+as one object naming an offered tool (or carrying the canonical `arguments`
+key), so prose that merely quotes JSON is never swallowed. Mismatched and
+single-quoted *keys* are repaired; single-quoted *values* deliberately are not,
+because an apostrophe in a value is ordinary English. The same pass recovers
+`<tool_call>` in every spelling, DeepSeek DSML and R1 markup, Kimi sentinels,
+gpt-oss Harmony and Mistral blocks — see
+[tool-dialect.md](tool-dialect.md).
 
-### Invalid arguments abort the run by default
+### Invalid arguments recover by default, but without normalization
 
-`RunPolicy::invalid_args` defaults to `InvalidArgsPolicy::Fail`: the first
-schema-invalid tool call kills the whole run. That is defensible for a frontier
-model, where such a call is nearly always a genuine bug. For a 3B model it makes
-the loop unusable — and it disables the argument recovery above, which only runs
-under the recovering policy.
+`RunPolicy::invalid_args` defaults to `InvalidArgsPolicy::ReturnToolError`:
+a schema-invalid tool call is returned to the model as a tool error instead
+of aborting the run. (`Fail`, which aborts on the first schema-invalid call,
+is still available and defensible for a frontier model where such a call is
+nearly always a genuine bug — but it is no longer the default.) The default
+still does not run the provider-shape normalization pass above, which makes a
+3B model's malformed argument wrappers unusable without opting in further.
 
-**A host driving a local model should opt in:**
+**A host driving a local model should opt in to normalization:**
 
 ```rust
 harness.with_policy(RunPolicy {

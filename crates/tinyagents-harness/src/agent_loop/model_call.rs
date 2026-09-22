@@ -21,6 +21,22 @@ use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache
 use tinyinference_llm::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Resolves the model binding through the host's routing authority when
+    /// this run is a hosted invocation; returns `None` for a plain SDK run so
+    /// the caller falls through to local [`crate::model_registry::ModelRegistry`]
+    /// resolution instead.
+    ///
+    /// The first call for a run (`ctx.depth() == 0`) is flagged
+    /// [`as_team_lead`][crate::host::ModelResolveRequest::as_team_lead] so the
+    /// host can apply lead-specific routing. An explicit `request.model` (or,
+    /// failing that, the host binding's own pin) is forwarded as the model
+    /// pin, and the request's required capabilities are forwarded so the host
+    /// cannot resolve a model that cannot serve this call. Resolution is
+    /// bounded by [`Self::model_call_budget`] and races cooperative
+    /// cancellation; a `Cancelled`/`Timeout` failure is returned verbatim,
+    /// any other host failure is logged and collapsed to a generic
+    /// [`TinyAgentsError::Model`] so host-internal detail never leaks into the
+    /// run's error surface.
     pub(super) async fn resolve_host_model(
         &self,
         ctx: &RunContext<Ctx>,
@@ -44,21 +60,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         let resolution = host_run.host.models.resolve(&resolve);
         let (budget, bound) = self.model_call_budget(ctx);
-        let model = match budget {
-            Some(remaining) => tokio::select! {
-                biased;
-                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its {bound}", ctx.run_id())))?,
-            },
-            None => tokio::select! {
-                biased;
-                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = resolution => result,
-            },
-        }.map_err(|error| match error {
-            TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
-            _ => { tinyagents_tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
-        })?;
+        let model = ctx
+            .bounded(budget, resolution, || {
+                format!(
+                    "host model resolution for run `{}` exceeded its {bound}",
+                    ctx.run_id()
+                )
+            })
+            .await
+            .map_err(|error| match error {
+                TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+                _ => {
+                    tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed");
+                    TinyAgentsError::Model("host model resolution failed".to_string())
+                }
+            })?;
         let name = model
             .profile()
             .and_then(|profile| profile.model.clone())
@@ -126,8 +142,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
-        streaming: bool,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let streaming = shape.streaming;
         let policy = self.effective_cache_policy(request);
         // The identity of the model that is actually about to be called — known
         // only *after* resolution, which is why the key cannot be finalized by
@@ -158,14 +175,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
 
         if side_effecting_provider {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 provider = "claude-code",
                 "[cache] response cache disabled for side-effecting provider"
             );
         } else if decision.is_none() {
             let reason = self.cache_skip_reason(request);
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 reason = reason.as_str(),
                 "[cache] response cache not consulted for this model call"
@@ -180,7 +197,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let looked_up = match cache.get(key).await {
                 Ok(hit) => hit,
                 Err(error) => {
-                    tinyagents_tracing::warn!(
+                    tracing::warn!(
                         call_id = %call_id.as_str(),
                         %error,
                         "[cache] response-cache lookup failed; treating as a miss"
@@ -240,7 +257,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             let injected =
                 policy.protect_prompt_prefix && apply_prompt_cache_breakpoints(&mut breakpointed);
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 protect_prompt_prefix = policy.protect_prompt_prefix,
                 prompt_cache_key_injected = injected,
@@ -253,7 +270,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         };
 
         let response = self
-            .invoke_model_resolving(state, ctx, effective_request, call_id, binding, streaming)
+            .invoke_model_resolving(state, ctx, effective_request, call_id, binding, shape)
             .await?;
 
         if let Some((cache, key)) = decision.as_ref() {
@@ -268,7 +285,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .as_ref()
                 .map(|resolved| resolved.name.as_str());
             if served_by.is_some_and(|name| name != primary_name) {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     call_id = %call_id.as_str(),
                     primary = %primary_name,
                     served_by = served_by.unwrap_or_default(),
@@ -281,7 +298,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // The provider call already succeeded and was paid for.
                 // Discarding its answer because the cache is unavailable would
                 // be strictly worse than not caching.
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     call_id = %call_id.as_str(),
                     %error,
                     "[cache] response-cache write failed; returning the response uncached"
@@ -343,7 +360,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<ModelResponse> {
         let content = cached.message.content.clone();
         let tool_calls = cached.tool_calls().to_vec();
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             call_id = %call_id.as_str(),
             text_len = cached.text().len(),
             tool_calls = tool_calls.len(),
@@ -378,6 +395,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     call_id: call.id.clone(),
                     content: serde_json::to_string(&call.arguments).unwrap_or_default(),
                     tool_name: Some(call.name.clone()),
+                    ..Default::default()
                 }),
             });
         }
@@ -425,8 +443,41 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
         if saw_streamed_content {
+            // Same rule as the live streaming path (see the matching comment
+            // in `invoke_model_streaming_once`): keep the cached response's
+            // own `Thinking` blocks (with their signature) verbatim unless
+            // the synthetic replay deltas were actually transformed by
+            // `on_model_delta`, since a signed thinking block must be
+            // replayed byte-for-byte ahead of a tool call on the next turn.
+            let cached_reasoning: String = cached
+                .message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let reasoning_untransformed = cached_reasoning == streamed_reasoning;
+
             let mut transformed_content = Vec::new();
-            if !streamed_reasoning.is_empty() {
+            if reasoning_untransformed {
+                transformed_content.extend(
+                    cached
+                        .message
+                        .content
+                        .iter()
+                        .filter(|block| {
+                            matches!(
+                                block,
+                                tinyinference_llm::message::ContentBlock::Thinking { .. }
+                            )
+                        })
+                        .cloned(),
+                );
+            } else if !streamed_reasoning.is_empty() {
                 transformed_content.push(tinyinference_llm::message::ContentBlock::Thinking {
                     text: streamed_reasoning,
                     signature: None,
@@ -468,8 +519,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         binding: ResolvedModelBinding<State>,
-        streaming: bool,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let streaming = shape.streaming;
         let mut current_name = binding.resolved.name.clone();
         let mut model = binding.model;
         let mut resolved = binding.resolved;
@@ -518,6 +570,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         request,
                         call_id,
                         &mut deltas_emitted,
+                        shape,
                     );
                     Self::with_call_budget(remaining, run_id.as_str(), "model call", bound, fut)
                         .await
@@ -530,7 +583,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // for the call to run to completion. `cancelled()` is
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
-                    let cancellation = ctx.cancellation.clone();
                     let fut = async {
                         model
                             .invoke(state, request.clone())
@@ -544,11 +596,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         bound,
                         fut,
                     );
-                    tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                        result = budgeted => result,
-                    }
+                    // `with_call_budget` already applies its own deadline, so
+                    // this only needs to race cancellation against an
+                    // otherwise-unbounded future — `bounded`'s `None` arm,
+                    // which never calls `timeout_message`.
+                    ctx.bounded(None, budgeted, || {
+                        unreachable!("with_call_budget already applies its own timeout")
+                    })
+                    .await
                 };
                 match attempt_result {
                     Ok(response) => break Ok(response),
@@ -556,6 +611,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // `RunLimits::max_retries_per_call` is a hard ceiling
                         // that a looser `RetryPolicy::max_attempts` cannot
                         // exceed; whichever is stricter wins.
+                        // A registered `RetryMiddleware` (or any other
+                        // `ModelMiddleware::overrides_retry`) already retries
+                        // the whole wrap onion around this base call. Retrying
+                        // again here would multiply attempts
+                        // (`mw.max_attempts × policy.retry.max_attempts ×
+                        // |fallback|` for one logical failure) and emit
+                        // `RetryScheduled` for attempts the middleware cannot
+                        // see, so the base call skips its own retry loop and
+                        // defers entirely to the middleware (I-7); the
+                        // fallback chain below is unaffected.
+                        let retry_overridden = self.middleware.has_retry_override();
                         let max_attempts = self
                             .policy
                             .retry
@@ -566,7 +632,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // uses), applying the harness ceiling by capping a
                         // cloned policy first so the two sites cannot drift.
                         let capped = self.policy.retry.clone().with_max_attempts(max_attempts);
-                        if capped.should_retry_error(attempt, &error) {
+                        if !retry_overridden && capped.should_retry_error(attempt, &error) {
                             // Compute the backoff from the *pre-increment*
                             // attempt number: `attempt == 0` is the first
                             // retry and must sleep `initial_backoff_ms`
@@ -583,7 +649,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 // for a streaming call *is* the signal that
                                 // every delta seen so far for this `call_id`
                                 // must be dropped.
-                                tinyagents_tracing::warn!(
+                                tracing::warn!(
                                     call_id = %call_id.as_str(),
                                     discarded_deltas = deltas_emitted,
                                     attempt,
@@ -616,6 +682,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     if response.resolved_model.is_none() {
                         response.resolved_model = Some(resolved);
                     }
+                    split_thinking_tags(&mut response, model.profile());
                     return Ok(response);
                 }
                 Err(error) => {
@@ -784,10 +851,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         match budget {
             Some(budget) => match tokio::time::timeout(budget, fut).await {
                 Ok(result) => result,
-                Err(_) => Err(TinyAgentsError::Timeout(format!(
-                    "{what} for run `{run_id}` exceeded its {bound} ({} ms)",
-                    budget.as_millis()
-                ))),
+                Err(_) => {
+                    let message = format!(
+                        "{what} for run `{run_id}` exceeded its {bound} ({} ms)",
+                        budget.as_millis()
+                    );
+                    // Only the per-model-call ceiling is retryable: it means
+                    // this one call wedged, not that the run is out of time.
+                    // Every other bound this helper is used with (the run's
+                    // remaining wall-clock budget, for model calls, tool
+                    // calls, host resolution, tool authorization/screening,
+                    // and host turn preparation) is terminal.
+                    if bound == PER_CALL_BOUND_LABEL {
+                        Err(TinyAgentsError::CallTimeout(message))
+                    } else {
+                        Err(TinyAgentsError::Timeout(message))
+                    }
+                }
             },
             None => fut.await,
         }
@@ -808,6 +888,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// `deltas_emitted` is incremented for every delta actually handed to
     /// consumers, so the retry path can tell whether a failed attempt already
     /// published output that now has to be discarded.
+    // `deltas_emitted` must stay an out-parameter: on the error path the
+    // retry logic reads how much output already reached consumers, which a
+    // return value could not carry alongside the error.
+    #[allow(clippy::too_many_arguments)]
     async fn invoke_model_streaming_once(
         &self,
         state: &State,
@@ -816,9 +900,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
         call_id: &CallId,
         deltas_emitted: &mut usize,
+        shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let recovery = &shape.recovery;
         let mut stream = model.stream(state, request.clone()).await?;
         let mut accumulator = StreamAccumulator::new();
+        // Tool-call markup a model narrates as text is held back from live
+        // consumers and turned into calls on the terminal response instead.
+        // Runs for every provider: native models narrate calls often enough.
+        let mut text_scrubber = recovery.scrubber(call_id);
         // A terminal `Completed` response usually has richer provider metadata
         // than deltas (message id, usage, tool calls, and route information),
         // but its text is still the raw provider payload.  Keep the text and
@@ -830,6 +920,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut saw_streamed_content = false;
         let mut transformed_tools = StreamAccumulator::new();
         let mut saw_tool_delta = false;
+
+        // Some providers pad the very first streamed text chunk with
+        // whitespace that is a wire-format artifact, not content (see
+        // `ModelProfile::ignore_streamed_leading_whitespace`). Stripped once,
+        // on the first delta that actually carries non-whitespace text;
+        // deltas consisting only of leading whitespace are dropped outright
+        // rather than surfaced empty.
+        let mut strip_leading_whitespace = model
+            .profile()
+            .map(|profile| profile.ignore_streamed_leading_whitespace)
+            .unwrap_or(false);
 
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
@@ -851,6 +952,67 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 },
             };
 
+            // Scrub tool-call markup from visible text before anything else
+            // sees it; a delta the scrubber empties carries nothing to emit.
+            if let (Some(scrubber), ModelStreamItem::MessageDelta(delta)) =
+                (text_scrubber.as_mut(), &mut item)
+                && !delta.text.is_empty()
+            {
+                delta.text = scrubber.feed(&delta.text);
+                if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none()
+                {
+                    continue;
+                }
+            }
+            if let (Some(scrubber), ModelStreamItem::Completed(_)) = (text_scrubber.as_mut(), &item)
+            {
+                let tail = scrubber.flush();
+                if !tail.is_empty() {
+                    // The held-back remainder is ordinary text after all.
+                    // Route it through the same delta middleware pipeline as
+                    // every other streamed delta (below): a naive direct
+                    // emit skipped `run_on_model_delta` and host progress, so
+                    // redaction/policy/transformation middleware could not
+                    // inspect or suppress this tail and consumers saw it
+                    // behave differently from every other delta.
+                    let mut model_delta = ModelDelta {
+                        call_id: call_id.as_str().to_string(),
+                        content: tail,
+                        reasoning: String::new(),
+                        tool_call: None,
+                    };
+                    self.middleware
+                        .run_on_model_delta(ctx, state, &mut model_delta)
+                        .await?;
+                    // Unconditional, not gated on the post-middleware content:
+                    // the pre-middleware tail here is always non-empty (the
+                    // surrounding `if` already checked it), matching the
+                    // ordinary delta path below, which ORs the *pre*-middleware
+                    // text against the post-middleware one. Gating on
+                    // `model_delta.content` alone meant a middleware that
+                    // suppressed the whole tail to `""` left
+                    // `saw_streamed_content` false, which skipped terminal
+                    // reconciliation and let the provider's raw (unscrubbed)
+                    // `Completed` content silently restore the exact text the
+                    // middleware had just suppressed.
+                    saw_streamed_content = true;
+                    streamed_text.push_str(&model_delta.content);
+                    ctx.emit(AgentEvent::ModelDelta {
+                        run_id: ctx.config.run_id.clone(),
+                        call_id: call_id.clone(),
+                        delta: MessageDelta::text(model_delta.content.clone()),
+                    });
+                    crate::runtime::emit_host_progress::<State, Ctx>(
+                        ctx,
+                        crate::host::ProgressEvent::Token {
+                            run: ctx.run_id().clone(),
+                            text: model_delta.content,
+                        },
+                    );
+                    *deltas_emitted += 1;
+                }
+            }
+
             // Surface incremental message/tool-call fragments through events and
             // the `on_model_delta` middleware hook before merging them.
             let message_delta = match &item {
@@ -863,7 +1025,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 _ => None,
             };
 
-            if let Some(message_delta) = message_delta {
+            if let Some(mut message_delta) = message_delta {
+                if strip_leading_whitespace && !message_delta.text.is_empty() {
+                    let stripped = message_delta.text.trim_start();
+                    if stripped.is_empty() {
+                        message_delta.text.clear();
+                    } else if stripped.len() == message_delta.text.len() {
+                        // No leading whitespace to strip in this delta; the
+                        // next delta carrying text is no longer the first.
+                        strip_leading_whitespace = false;
+                    } else {
+                        message_delta.text = stripped.to_string();
+                        strip_leading_whitespace = false;
+                    }
+                }
                 saw_tool_delta |= message_delta.tool_call.is_some();
                 // Build the middleware-facing delta first (it needs owned
                 // copies of the fields), then move `message_delta` into the
@@ -933,16 +1108,69 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 *deltas_emitted += 1;
             }
 
+            // Reconcile even when nothing ordinary streamed: a response that
+            // is *purely* text-dialect tool-call markup suppresses every
+            // delta (so `saw_streamed_content` stays false) but still needs
+            // its raw `<tool_call>`-style text replaced — otherwise that raw
+            // markup survives in the terminal response's content block
+            // alongside the structured calls the scrubber recovered below,
+            // and gets persisted into the transcript to be replayed back to
+            // the model next turn.
+            let scrubber_recovered_calls = text_scrubber
+                .as_ref()
+                .is_some_and(super::dialect::DeltaScrubber::has_calls);
             if let ModelStreamItem::Completed(response) = &mut item
-                && saw_streamed_content
+                && (saw_streamed_content || scrubber_recovered_calls)
             {
                 // Deltas represent only text/thinking, so preserve terminal
                 // blocks that cannot be streamed as a `ModelDelta` (JSON,
-                // images, and provider extensions).  Provider signatures on
-                // thinking are intentionally discarded: a transformed block
-                // can no longer be replayed as the signed raw one.
+                // images, and provider extensions).
+                //
+                // A signed `Thinking` block must be replayed *verbatim* on
+                // the next model call when thinking + tool calls are both in
+                // play (Anthropic requires the exact signed block ahead of a
+                // `tool_use`); synthesizing a fresh, unsigned block here would
+                // make that replay fail. So the terminal provider blocks are
+                // kept as-is unless a delta middleware actually rewrote the
+                // reasoning text: compare the concatenated `Thinking` text
+                // that crossed `on_model_delta` against the terminal
+                // response's own `Thinking` text. Equal means no middleware
+                // touched it — keep the terminal blocks (signature intact).
+                // Different means the delta stream was transformed — fall
+                // back to a synthetic, unsigned block built from what
+                // actually crossed the middleware boundary, same as before.
+                // `RedactedThinking` carries no reasoning text at all (it is
+                // opaque), so it is always kept verbatim.
+                let terminal_reasoning: String = response
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let reasoning_untransformed = terminal_reasoning == streamed_reasoning;
+
                 let mut content = Vec::new();
-                if !streamed_reasoning.is_empty() {
+                if reasoning_untransformed {
+                    content.extend(
+                        response
+                            .message
+                            .content
+                            .iter()
+                            .filter(|block| {
+                                matches!(
+                                    block,
+                                    tinyinference_llm::message::ContentBlock::Thinking { .. }
+                                )
+                            })
+                            .cloned(),
+                    );
+                    streamed_reasoning.clear();
+                } else if !streamed_reasoning.is_empty() {
                     content.push(tinyinference_llm::message::ContentBlock::Thinking {
                         text: std::mem::take(&mut streamed_reasoning),
                         signature: None,
@@ -963,6 +1191,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 response.message.content = content;
             }
             if let ModelStreamItem::Completed(response) = &mut item
+                && text_scrubber
+                    .as_ref()
+                    .is_some_and(super::dialect::DeltaScrubber::has_calls)
+                && let Some(scrubber) = text_scrubber.take()
+            {
+                // The streamed text held complete tool-call blocks, scrubbed
+                // from the reconciled text above, so this is the only place
+                // they can be dispatched from. Appended, not assigned: a
+                // provider can legitimately return a native structured call
+                // *and* narrate a second one as text in the same turn, and
+                // gating this on `tool_calls.is_empty()` used to silently
+                // drop the narrated one whenever a native call was present.
+                response.message.tool_calls.extend(scrubber.into_calls());
+            }
+            if let ModelStreamItem::Completed(response) = &mut item
                 && saw_tool_delta
             {
                 // The terminal response carries richer metadata, but its raw
@@ -977,8 +1220,78 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             accumulator.push(&item);
         }
 
-        Ok(accumulator.finish()?)
+        let mut response = accumulator.finish()?;
+        split_thinking_tags(&mut response, model.profile());
+        Ok(response)
     }
+}
+
+/// Splits a model's inline `<open>...</close>`-tagged reasoning span out of a
+/// `Text` content block into a dedicated [`ContentBlock::Thinking`] block,
+/// for a model whose [`ModelProfile::thinking_tags`] declares the tag pair it
+/// emits inline instead of on a distinct reasoning channel.
+///
+/// A no-op when the profile declares no tag pair, or the response carries no
+/// text block containing both tags. Only the first tagged span in each text
+/// block is extracted — every provider that uses this convention emits at
+/// most one reasoning span ahead of the visible answer — and any text before
+/// or after the span is preserved as ordinary `Text` blocks in the same
+/// position.
+///
+/// [`ContentBlock::Thinking`]: tinyinference_llm::message::ContentBlock::Thinking
+/// [`ModelProfile::thinking_tags`]: tinyinference_llm::model::ModelProfile::thinking_tags
+pub(super) fn split_thinking_tags(
+    response: &mut tinyinference_llm::model::ModelResponse,
+    profile: Option<&tinyinference_llm::model::ModelProfile>,
+) {
+    let Some((open, close)) = profile.and_then(|p| p.thinking_tags.as_ref()) else {
+        return;
+    };
+    if open.is_empty() || close.is_empty() {
+        return;
+    }
+
+    let mut rebuilt = Vec::with_capacity(response.message.content.len());
+    for block in response.message.content.drain(..) {
+        match block {
+            tinyinference_llm::message::ContentBlock::Text(text) => {
+                match split_one(&text, open, close) {
+                    Some((before, thinking, after)) => {
+                        if !before.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Text(before));
+                        }
+                        if !thinking.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Thinking {
+                                text: thinking,
+                                signature: None,
+                            });
+                        }
+                        if !after.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Text(after));
+                        }
+                    }
+                    None => rebuilt.push(tinyinference_llm::message::ContentBlock::Text(text)),
+                }
+            }
+            other => rebuilt.push(other),
+        }
+    }
+    response.message.content = rebuilt;
+}
+
+/// Splits `text` on the first `open`/`close` tag pair, returning
+/// `(before, inside, after)` with the tags themselves removed and each
+/// segment trimmed of the whitespace/newlines the tags typically pad. `None`
+/// when the text does not contain a complete `open`...`close` span.
+fn split_one(text: &str, open: &str, close: &str) -> Option<(String, String, String)> {
+    let open_idx = text.find(open)?;
+    let after_open = open_idx + open.len();
+    let close_rel = text[after_open..].find(close)?;
+    let close_idx = after_open + close_rel;
+    let before = text[..open_idx].trim().to_string();
+    let inside = text[after_open..close_idx].trim().to_string();
+    let after = text[close_idx + close.len()..].trim().to_string();
+    Some((before, inside, after))
 }
 /// The innermost model call wrapped by the model-wrap onion.
 ///
@@ -1006,7 +1319,7 @@ pub(super) struct ModelCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     pub(super) resolved: ResolvedModel,
     pub(super) model: Arc<dyn ChatModel<State>>,
     pub(super) required_capabilities: Option<tinyinference_llm::model::CapabilitySet>,
-    pub(super) streaming: bool,
+    pub(super) shape: super::dialect::CallShape,
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
@@ -1062,7 +1375,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 if binding.resolved.source == ModelResolutionSource::RequestOverride
                     && binding.resolved.name == requested =>
             {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     call_id = %self.call_id.as_str(),
                     from = %self.resolved.name,
                     to = %binding.resolved.name,
@@ -1071,7 +1384,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 Ok(binding)
             }
             _ => {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     call_id = %self.call_id.as_str(),
                     requested = %requested,
                     resolved = %self.resolved.name,
@@ -1097,16 +1410,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
+            let mut request = request;
+            super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
             let binding = self.rebind(ctx, &request).await?;
             self.harness
-                .invoke_model_with_retry(
-                    state,
-                    ctx,
-                    &request,
-                    &self.call_id,
-                    binding,
-                    self.streaming,
-                )
+                .invoke_model_with_retry(state, ctx, &request, &self.call_id, binding, &self.shape)
                 .await
         })
     }
@@ -1135,12 +1443,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
                 settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
             });
             let timeout_result = super::tools::timeout_result(&call, timeout);
-            let future = async {
-                self.dispatch
-                    .execute(state, call.arguments, self.options, ctx)
-                    .await
-                    .map_err(super::tools::map_tool_dispatch_error)
-            };
+            let future = super::tools::execute_tool_recovering_model_retry(self.dispatch.execute(
+                state,
+                CallId::new(call.id),
+                call.arguments,
+                self.options,
+                ctx,
+            ));
             match timeout.and_then(|resolved| resolved.deadline) {
                 Some(deadline) => match tokio::time::timeout(deadline, future).await {
                     Ok(result) => result,

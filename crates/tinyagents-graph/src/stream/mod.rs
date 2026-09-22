@@ -5,24 +5,35 @@
 //! The durable executor emits a stream of [`GraphEvent`]s as it walks
 //! supersteps, schedules tasks, updates state, saves checkpoints, and raises
 //! interrupts. Routing those events into a [`GraphEventSink`] is what lets a
-//! REPL, a UI, or an enclosing graph watch a subgraph or sub-agent execute in
+//! UI or enclosing graph watch a subgraph or sub-agent execute in
 //! real time; because every event is tagged with its node and step, the streams
 //! of nested runs can be merged and attributed back up the run tree.
 //!
-//! See [`types`] for the event and stream-mode definitions. The executor emits
+//! See `types` for the event and stream-mode definitions. The executor emits
 //! [`GraphEvent`]s into an optional [`GraphEventSink`]; callers can plug in a
 //! [`NoopSink`], a test-friendly [`CollectingSink`], or any custom transport.
 
+pub mod project;
 mod types;
 
-pub use types::{GraphEvent, StreamMode};
+pub use project::{
+    Cursored, MessageEntry, ProjectedSince, StreamProjection, SubagentEntry, SubagentPhase,
+    ToolCallEntry, ToolCallPhase, project_graph_event,
+};
+pub use types::{GraphEvent, GraphEventEnvelope, StreamMode};
 
 use std::sync::{Arc, Mutex};
 
 /// A pluggable target for low-level graph events.
+///
+/// Every event is delivered wrapped in a [`GraphEventEnvelope`], which
+/// carries the run id, checkpoint namespace, and a monotonic sequence number
+/// alongside the [`GraphEvent`] itself — see [`GraphEventEnvelope`] for what
+/// each field means and how it is scoped.
 pub trait GraphEventSink: Send + Sync {
-    /// Receives one graph event. Implementations must not block the executor.
-    fn emit(&self, event: GraphEvent);
+    /// Receives one enveloped graph event. Implementations must not block the
+    /// executor.
+    fn emit(&self, envelope: GraphEventEnvelope);
 
     /// Blocks until every event emitted so far has been durably handled.
     ///
@@ -38,13 +49,13 @@ pub trait GraphEventSink: Send + Sync {
 pub struct NoopSink;
 
 impl GraphEventSink for NoopSink {
-    fn emit(&self, _event: GraphEvent) {}
+    fn emit(&self, _envelope: GraphEventEnvelope) {}
 }
 
 /// A sink that records every event for inspection in tests and UIs.
 #[derive(Clone, Default)]
 pub struct CollectingSink {
-    events: Arc<Mutex<Vec<GraphEvent>>>,
+    events: Arc<Mutex<Vec<GraphEventEnvelope>>>,
 }
 
 impl CollectingSink {
@@ -53,8 +64,21 @@ impl CollectingSink {
         Self::default()
     }
 
-    /// Returns a clone of the recorded events.
+    /// Returns a clone of the recorded events, discarding their envelopes.
+    ///
+    /// The pre-C3 shape most callers (mostly tests) still want: event kind
+    /// and payload only, with no run/namespace/sequence attribution. Use
+    /// [`Self::envelopes`] when that attribution matters.
     pub fn events(&self) -> Vec<GraphEvent> {
+        self.envelopes()
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect()
+    }
+
+    /// Returns a clone of the recorded envelopes (event plus run/namespace/
+    /// sequence attribution).
+    pub fn envelopes(&self) -> Vec<GraphEventEnvelope> {
         self.events.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
@@ -70,9 +94,9 @@ impl CollectingSink {
 }
 
 impl GraphEventSink for CollectingSink {
-    fn emit(&self, event: GraphEvent) {
+    fn emit(&self, envelope: GraphEventEnvelope) {
         if let Ok(mut guard) = self.events.lock() {
-            guard.push(event);
+            guard.push(envelope);
         }
     }
 }

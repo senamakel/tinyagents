@@ -50,6 +50,30 @@ pub(crate) enum LoopExit {
     LimitStop(LimitKind),
     /// Steering latched a pause; the run is resumable, not finished.
     Paused(PauseState),
+    /// One or more tool calls in the last batch need a human decision or
+    /// host-side execution before the run can continue (A2). The transcript
+    /// keeps the assistant's tool-call row and every non-deferred sibling's
+    /// result; resume with
+    /// [`crate::runtime::AgentHarness::resume_deferred`].
+    Deferred(crate::tool::DeferredToolRequests),
+}
+
+/// The effect of draining a pending [`crate::context::MiddlewareControl`] at
+/// one of the loop's safe checkpoints.
+///
+/// Kept distinct from [`LoopExit`] because not every drained control ends the
+/// run: [`crate::context::MiddlewareControl::JumpTo`]`(`[`crate::context::LoopTarget::Model`]`)`
+/// must abandon the current turn (skip whatever the checkpoint's caller was
+/// about to do next) without exiting the loop body, which a plain
+/// `Option<LoopExit>` cannot express.
+#[derive(Clone, Debug)]
+pub(crate) enum ControlEffect {
+    /// Nothing to do; the checkpoint's caller proceeds as it otherwise would.
+    None,
+    /// Abandon the rest of this turn and restart the loop body from the top.
+    ContinueLoop,
+    /// The run is done; propagate this [`LoopExit`] to the caller.
+    Exit(LoopExit),
 }
 
 /// The full result of an agent-loop invocation: the accumulated [`AgentRun`]

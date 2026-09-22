@@ -1,8 +1,8 @@
 # Harness Module Specification
 
 The harness is the orchestration layer around LLM calls. It owns model
-registration, tool registration, prompt assembly, middleware, memory, event
-streaming, tracing, retries, limits, summarization, caching, usage accounting,
+registration, tool registration, prompt assembly, middleware, event streaming,
+tracing, retries, limits, summarization, caching, usage accounting,
 pricing, sub-agent/orchestrator steering, and test support.
 
 The harness should be usable in three modes:
@@ -78,7 +78,7 @@ tests for every adapter.
 ## Responsibilities
 
 - Normalize user input into structured messages.
-- Build model requests from messages, prompts, tools, memory, and config.
+- Build model requests from messages, prompts, tools, host-provided context, and config.
 - Track context-window pressure and choose trimming or summarization policies.
 - Preserve provider prompt/KV-cache stability by making stable prompt prefixes
   explicit and keeping volatile context out of those prefixes by default.
@@ -95,7 +95,7 @@ tests for every adapter.
 - Apply middleware before and after model calls, tool calls, retries, and errors.
 - Enforce model-call limits, tool-call limits, timeouts, and retry policy.
 - Emit typed events for tracing, streaming, and tests.
-- Persist short-term thread memory when configured.
+- Expose middleware hooks for hosts to load and persist short-term thread memory when configured.
 - Expose durable stores through runtime context.
 - Store run data, messages, events, tool artifacts, and application records
   through pluggable backends.
@@ -159,7 +159,6 @@ crates/tinyagents-harness/src/
   events.rs
   graph_runtime.rs
   limits.rs
-  memory.rs
   message.rs
   middleware.rs
   model.rs
@@ -200,7 +199,6 @@ Feature ownership:
 - `graph_runtime`: explicit state graphs, node commands, reducers,
   checkpointing, HITL, run records, and graph execution blueprints.
 - `limits`: model-call, tool-call, concurrency, timeout, and recursion policy.
-- `memory`: short-term thread memory and long-term stores.
 - `message`: structured messages, content blocks, tool call correlation.
 - `middleware`: before/after/wrap hooks and middleware stack ordering.
 - `model`: provider-neutral model traits, requests, responses, streams.
@@ -215,74 +213,19 @@ Feature ownership:
 - `stream`: token streams, tool progress streams, event streams, adapters.
 - `summarization`: context summaries, message compaction, summary provenance.
 - `structured`: typed response formats and validation.
-- `store`: JSONL, file, MongoDB, in-memory, and other persistence backends.
+- `store`: persistence contracts supplied by hosts.
 - `testkit`: fakes, recorders, deterministic ids, trajectory assertions.
 - `tool`: tool traits, schemas, validation, execution, result formatting.
 - `usage`: token accounting, cached token tracking, context-window estimates.
-- `workspace`: per-agent filesystem/sandbox isolation, allowed-root descriptors,
-  and fail-closed path enforcement for tools that touch real files.
 
-### Host-authorized invocations
+### Host-authorized invocations and tool timeouts
 
-`AgentHarness` is reusable process infrastructure: it owns durable model and
-tool registries, middleware, policy, and caches. A host capability bundle is
-instead supplied for each root through `runtime::AgentInvocation`:
+Split into a focused doc: how a host capability bundle is bound to one
+invocation, and how per-tool timeouts are resolved. See
+[hosting.md](hosting.md).
 
-```rust,no_run
-use tinyagents_harness::{
-    context::{RunConfig, RunContext},
-    runtime::{AgentHarness, AgentInvocation, AgentTurnRequest},
-};
-
-# async fn example<State: Send + Sync + 'static>(
-#     harness: &AgentHarness<State>,
-#     host: tinyagents_harness::host::HostCapabilities<State>,
-#     state: &State,
-# ) -> tinyagents_harness::Result<()> {
-let invocation = AgentInvocation::new(
-    host,
-    AgentTurnRequest::new("assistant", vec![]),
-    RunContext::new(RunConfig::new("run-42"), ()),
-);
-let _run = harness.invoke_agent(invocation, state).await?;
-# Ok(())
-# }
-```
-
-This prevents concurrent roots from replacing one another's progress,
-security, approval, or other host authority. The harness never stores a live
-capability bundle (not even in a run-id map): it lives only in the
-non-serializable `RunContext`, is never checkpointed, and is dropped with that
-invocation. Recursive children inherit the exact parent bundle through their
-live context and cannot select a bundle from their own harness. The lower-level
-explicit-model `invoke*` APIs remain separate for SDK callers that intentionally
-assemble a run without host capabilities.
-
-Hosted invocations require `State: 'static` because their live capability
-authority must be retained in the recursive context. The explicit-model
-`invoke*`, streaming, and direct `SubAgent` paths do not install or inspect
-that authority and continue to support borrowed state.
-
-For a child of a hosted parent, call
-`SubAgent::invoke_hosted_in_parent`; it rechecks the parent's delegate
-allowlist and inherits the exact bundle. The borrowed-state-compatible
-`SubAgent::invoke_in_parent` is explicit-only and rejects a hosted parent
-context before it can start a child.
-
-### Tool timeout policy
-
-Hosts enable per-tool deadlines with
-`AgentHarness::with_tool_timeout_settings(ToolTimeoutSettings)`. The setting is
-shared and dynamically updateable. Each tool supplies `ToolTimeout::Inherit`
-(the default), `Millis(budget)`, or `Unbounded`; resolution happens at the
-innermost tool call after wrap middleware has had a chance to rewrite its
-arguments. On expiry the loop appends a recoverable tool-error result and keeps
-running, allowing model repair. The independent run wall-clock limit remains a
-hard error. See [`tool.md`](tool.md) for the tool contract and
-[`runtime.md`](runtime.md) for harness assembly.
-
-Continued specification: [runtime.md](runtime.md) (tool registry, agent loop,
-middleware, memory/stores) and
+Continued specifications: [runtime.md](runtime.md) (tool registry, agent loop,
+middleware, host-owned state, and stores), [store.md](store.md) (host persistence), and
 [observability-overview.md](observability-overview.md) (structured output,
 events/streaming, errors, testkit, milestones).
 
@@ -295,102 +238,32 @@ Feature details:
 - [State graph runtime feature](state-graph.md)
 - [Prompt feature](prompt.md)
 - [Tool feature](tool.md)
+- [Tool execution context and rich returns (B1/B2)](tool-context.md)
+- [Tool exposure, discovery, and schema budgets](tool-discovery.md)
 - [Tool dialects](tool-dialect.md)
-- [Workspace isolation feature](workspace.md)
 - [Middleware feature](middleware.md)
 - [Sub-agent and orchestrator steering](subagent-steering.md)
 - [Structured output feature](structured-output.md)
 - [Limits, retry, fallback, and rate limiting](limits-retry.md)
 - [Summarization feature](summarization.md)
+- [Compaction: rules, split turns, iterative summaries, overflow recovery](compaction.md)
 - [Usage feature](usage.md)
 - [Cost feature](cost.md)
 - [Cache feature](cache.md)
 - [Streaming feature](streaming.md)
 - [Store feature](store.md)
 - [Observability and events](observability.md)
+- [Performance and capacity testing](performance.md)
 - [Testkit feature](testkit.md)
+- [Host authorization and tool timeouts](hosting.md)
+- [LangChain feature parity map](langchain-parity.md)
+- [Design notes: harness core-type sketch](design-notes.md)
 
-## LangChain Feature Parity Map
+## Core Types (moved)
 
-This map is not a mandate to clone LangChain. It is a checklist of proven
-surface area that TinyAgents should intentionally support, adapt, or reject.
-
-| LangChain area               | Source                                                                                              | TinyAgents harness implication                                                                                                                                                                                                                                                                                                         |
-| ---------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create_agent` factory       | `libs/langchain_v1/langchain/agents/factory.py`                                                     | `AgentHarness` should compose model selection, tool execution, middleware, structured output, runtime context, and graph-node compatibility behind one builder while keeping traits reusable outside the facade.                                                                                                                       |
-| Agent middleware             | `libs/langchain_v1/langchain/agents/middleware/types.py`                                            | Middleware needs before/after hooks, streaming delta hooks, and wrap hooks that can replace the model/tool call, inject commands, short-circuit, or jump to `model`, `tools`, or `end`.                                                                                                                                                |
-| Built-in middleware          | `libs/langchain_v1/langchain/agents/middleware/*.py`                                                | Ship focused middleware for summarization, context compression, transcript compression, retrieval compression, output compression, prompt cache layout guards, context editing, PII redaction, model/tool limits, retries, fallback, tool selection, human-in-the-loop, shell/file-search style privileged tools, and todo/task state. |
-| Structured output            | `libs/langchain_v1/langchain/agents/structured_output.py`                                           | Support provider-native schemas and artificial tool-call schemas, with typed validation, retryable validation errors, union/oneOf variants, and configurable error handling.                                                                                                                                                           |
-| Message model                | `libs/core/langchain_core/messages/*.py`                                                            | Use typed content blocks for text, JSON, image, audio, file, tool call, tool result, reasoning, citations, refusal/safety, and provider extension data.                                                                                                                                                                                |
-| Content translation          | `libs/core/langchain_core/messages/block_translators/*.py`                                          | Provider adapters must translate to/from the canonical TinyAgents message model without losing ids, tool-call chunks, reasoning, usage, or provider metadata.                                                                                                                                                                          |
-| Model profiles               | `libs/core/langchain_core/language_models/model_profile.py`                                         | Store model capability metadata: context limits, modalities, tool calling, tool-choice support, streaming tool chunks, structured output, reasoning output, temperature, attachments, status, and release dates.                                                                                                                       |
-| Model resolution             | OpenHuman smart model resolution by hints                                                           | Resolve model calls from explicit overrides, prior state, hints, agent defaults, registry defaults, and fallbacks; persist the resulting provider/model identity so future calls can reuse it safely.                                                                                                                                  |
-| Embeddings                   | `libs/core/langchain_core/embeddings/embeddings.py`                                                 | Define provider-neutral embedding traits for documents and queries, with batch, async, dimensionality, provider metadata, usage, cost, cache, and fake deterministic implementations.                                                                                                                                                  |
-| OpenHuman agent graph        | `openhuman#4261`, `src/openhuman/agent_graph/graph/*`                                               | Add a LangGraph-style state-machine runtime: typed state reducers, async nodes, static/conditional/fork edges, Pregel super-steps, compile validation, cancellation, max-step guards, interrupts, and resume.                                                                                                                          |
-| OpenHuman checkpointer       | `openhuman#4261`, `src/openhuman/agent_graph/checkpoint/*`                                          | Persist graph runs and checkpoints through a pluggable `Checkpointer`, with in-memory tests and durable SQLite-style production storage.                                                                                                                                                                                               |
-| OpenHuman graph blueprints   | `openhuman#4261`, `src/openhuman/agent_graph/blueprint/*`                                           | Keep per-agent execution topology in `graph.rs`-style blueprints next to prompts, so "what the agent says" and "how the agent runs" are inspectable separately.                                                                                                                                                                        |
-| OpenHuman live turn graph    | `openhuman#4261`, `src/openhuman/agent_graph/live/*` and `agent/harness/engine/core.rs`             | Preserve the hot-path turn contract while making phases explicit: dispatch, parse, stop check, tools, compact, loop, finalize, max-iteration checkpoint.                                                                                                                                                                               |
-| OpenHuman sub-agent steering | `spawn_subagent`, `spawn_async_subagent`, `steer_subagent`, `wait_subagent` product pattern         | Generalize steering into typed commands so parent orchestrators, humans, middleware, UIs, and tests can guide sub-agents or orchestrators without prompt-injection side channels.                                                                                                                                                      |
-| Vector stores                | `libs/core/langchain_core/vectorstores/base.py`, `in_memory.py`                                     | Support add/update/delete/get-by-id, similarity search, score-threshold search, MMR search, metadata filters, async variants, and in-memory test stores.                                                                                                                                                                               |
-| Retrievers and indexing      | `libs/core/langchain_core/retrievers.py`, `indexing/*.py`                                           | Treat retrievers as query-to-document components with events, tags, metadata, and record-manager-backed incremental indexing for dedupe and cleanup.                                                                                                                                                                                   |
-| Tool runtime injection       | `langgraph.prebuilt.ToolRuntime` as re-exported by `libs/langchain_v1/langchain/tools/tool_node.py` | Tools should receive typed runtime context, state, store handles, stream writers, and cancellation handles through Rust parameters, not model-visible JSON schema fields.                                                                                                                                                              |
-| Callback/tracer events       | `libs/core/langchain_core/callbacks` and `libs/core/langchain_core/tracers`                         | Emit typed events for every lifecycle boundary and expose sinks for tracing, streaming, logs, tests, and future UI replay.                                                                                                                                                                                                             |
-| Runnables config             | `libs/core/langchain_core/runnables/config.py`                                                      | `RunConfig` should carry tags, metadata, configurable values, concurrency, recursion, callbacks/events, and stable run identity through nested calls.                                                                                                                                                                                  |
-| Retry/fallback/rate limit    | `libs/core/langchain_core/runnables/retry.py`, `fallbacks.py`, `rate_limiters.py`                   | Policies should distinguish retryable transport errors, provider errors, validation errors, tool errors, budget failures, and rate-limit waits.                                                                                                                                                                                        |
-| Cache                        | `libs/core/langchain_core/caches.py`                                                                | Separate local response cache from provider prompt/KV-cache reuse, preserve stable prefix layout, and include all behavior-affecting request fields in keys.                                                                                                                                                                           |
-| Stores and chat history      | `libs/core/langchain_core/stores.py`, `chat_history.py`                                             | Keep generic stores separate from conversation memory and graph checkpoints.                                                                                                                                                                                                                                                           |
-| Standard tests               | `libs/standard-tests`                                                                               | Add reusable conformance tests so provider adapters prove tool calling, structured output, streaming, usage, callbacks/events, multimodal input, Unicode, and error behavior.                                                                                                                                                          |
-
-## Core Types
-
-```rust
-pub struct AgentHarness<State, Ctx = ()> {
-    models: ModelRegistry<State, Ctx>,
-    embeddings: EmbeddingRegistry<Ctx>,
-    tools: ToolRegistry<State, Ctx>,
-    middleware: MiddlewareStack<State, Ctx>,
-    memory: Option<Arc<dyn ShortTermMemory<State>>>,
-    stores: StoreRegistry,
-    policy: RunPolicy,
-}
-
-pub struct RunConfig {
-    pub run_id: RunId,
-    pub parent_run_id: Option<RunId>,
-    pub root_run_id: RunId,
-    pub thread_id: Option<ThreadId>,
-    pub tags: Vec<String>,
-    pub metadata: serde_json::Value,
-    pub configurable: serde_json::Value,
-    pub timeout: Option<Duration>,
-    pub max_model_calls: usize,
-    pub max_tool_calls: usize,
-    pub max_concurrency: usize,
-}
-
-pub struct RunContext<Ctx = ()> {
-    pub config: RunConfig,
-    pub data: Ctx,
-    pub events: EventSink,
-    pub stores: StoreRegistry,
-    pub cancellation: CancellationToken,
-}
-```
-
-`RunConfig` is serializable invocation policy and identity. `RunContext` is the
-runtime dependency container. This split keeps tests deterministic and prevents
-global singletons.
-
-Nested model calls, tools, sub-agents, and graph nodes must inherit the root run
-id, selected tags, inherited metadata, event sink, cancellation token, stores,
-usage tracker, cost tracker, and configured budget policy. They may add local
-tags and metadata, but they must not mutate parent config in place.
-
-Nested runs may also receive steering commands. Steering is explicit runtime
-control from a parent orchestrator, human, graph supervisor, middleware, or
-test. A steered run must record actor, target, policy, payload summary, and the
-safe boundary where the command was applied. See
-[Sub-agent and orchestrator steering](subagent-steering.md).
+See [`design-notes.md`](design-notes.md) for the harness core-type sketch
+(`AgentHarness`, `RunConfig`, `RunContext`) — moved out of this file to keep
+it under the repo's 500-line Markdown limit.
 
 ## Messages
 
@@ -543,5 +416,5 @@ and durable state when configured.
 ---
 
 Continues in [`runtime.md`](runtime.md) (tool registry, agent loop,
-middleware, memory/stores) and [`observability-overview.md`](observability-overview.md)
+middleware, host-owned state, and stores) and [`observability-overview.md`](observability-overview.md)
 (structured output, events/streaming, errors, testkit, milestones).

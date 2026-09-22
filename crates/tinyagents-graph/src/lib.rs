@@ -5,9 +5,8 @@
 //! architecture: because a node can embed another compiled graph
 //! ([`subgraph`]) or invoke a sub-agent, **graphs run graphs** and orchestration
 //! recurses while every step stays typed, checkpointed, and observable. A
-//! workflow authored from a `.rag` blueprint or driven from a host orchestrator
-//! lowers into exactly these same types, so a model can describe, compile, and
-//! re-enter the very runtime it is executing inside.
+//! workflow driven from a host orchestrator lowers into exactly these same
+//! types.
 //!
 //! The pieces: partial updates and reducers ([`reducer`]), commands and
 //! interrupts ([`command`]), a builder/compile contract ([`builder`]), a
@@ -21,12 +20,9 @@
 //! Each concern lives in its own submodule with `types.rs` (definitions),
 //! `mod.rs` (implementations), and `test.rs` (unit tests).
 
-#![cfg_attr(
-    not(feature = "tracing"),
-    allow(dead_code, unused_imports, unused_variables)
-)]
-
+pub mod agent_loop;
 pub mod builder;
+pub mod cache;
 pub mod channel;
 pub mod checkpoint;
 pub mod command;
@@ -35,7 +31,6 @@ pub mod dag;
 pub mod delegation;
 pub mod export;
 pub mod goals;
-pub mod language;
 pub mod observability;
 pub mod orchestration;
 pub mod parallel;
@@ -53,22 +48,28 @@ pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 // --- Durable execution model ---
 pub use builder::{
-    END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
-    RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext, NodeFuture,
+    NodeHandler, NodePolicy, Route, RouterFn, START,
 };
+#[cfg(feature = "sqlite")]
+pub use cache::SqliteTaskCache;
+pub use cache::{InMemoryTaskCache, TaskCache, TaskCacheKey};
 pub use channel::{
-    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, Delta, Ephemeral,
-    LastValue, Messages, NamedBarrier, Topic, Untracked,
+    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
+    Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
 #[cfg(feature = "sqlite")]
 pub use checkpoint::SqliteCheckpointer;
 pub use checkpoint::{
-    BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSource,
-    CheckpointTuple, Checkpointer, DurabilityMode, FileCheckpointer, InMemoryCheckpointer,
-    PendingActivation, PendingWrite,
+    BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
+    CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
+    FileCheckpointer, InMemoryCheckpointer, PendingActivation, PendingWrite,
 };
 pub use command::{Command, Interrupt, NodeResult, RouteTarget, Send};
-pub use compiled::{CompiledGraph, GraphExecution, GraphInput, ResumeTarget, StateSnapshot};
+pub use compiled::{
+    CompiledGraph, DrainHandle, DrainSignal, GraphExecution, GraphInput, ResumeTarget, RunOptions,
+    StateSnapshot,
+};
 pub use dag::{DagIssue, DagNode};
 pub use delegation::{
     CURRENT_SCHEMA_VERSION as DELEGATION_SCHEMA_VERSION, DelegationConfig, DelegationOutcome,
@@ -78,8 +79,8 @@ pub use delegation::{
 };
 pub use export::{
     ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, NodeInfo,
-    NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, blueprint_to_json,
-    blueprint_to_mermaid, blueprint_to_topology, from_json, to_json, to_mermaid,
+    NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, from_json, to_json,
+    to_mermaid,
 };
 pub use goals::store as goal_store;
 pub use goals::{
@@ -112,7 +113,10 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
-pub use stream::{CollectingSink, GraphEvent, GraphEventSink, NoopSink, StreamMode};
+pub use stream::{
+    CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
+    StreamProjection, project_graph_event,
+};
 pub use subagent_node::{
     AgentInvocation, AgentInvocationBinding, AgentInvoker, InputMapper, OutputMapper,
     SubAgentBudget, SubAgentInput, SubAgentNode, SubAgentOutput, SubAgentPolicy, subagent_node,

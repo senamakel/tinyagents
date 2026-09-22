@@ -28,7 +28,6 @@ use tinyagents_harness::ids::{ExecutionStatus, RunId};
 use tinyagents_harness::runtime::{AgentHarness, PayloadCapture, RunPolicy};
 use tinyagents_harness::testkit::FakeTool;
 use tinyagents_harness::*;
-use tinyagents_language::*;
 use tinyagents_registry::*;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;
@@ -48,6 +47,7 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(7, 3)),
+            origin: None,
         },
         usage: Some(Usage::new(7, 3)),
         finish_reason: Some("tool_calls".to_string()),
@@ -67,6 +67,7 @@ fn text_response(text: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(text.to_string())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(4, 2)),
+            origin: None,
         },
         usage: Some(Usage::new(4, 2)),
         finish_reason: Some("stop".to_string()),

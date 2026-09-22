@@ -12,7 +12,9 @@ use tinyagents_graph::reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 use tinyagents_graph::status::GraphRunStatus;
-use tinyagents_graph::stream::{CollectingSink, GraphEvent, GraphEventSink, NoopSink, StreamMode};
+use tinyagents_graph::stream::{
+    CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
+};
 use tinyagents_graph::{Command, Interrupt, NodeResult, Send};
 use tinyagents_harness::ids::{
     CheckpointId, ExecutionStatus, GraphId, InterruptId, NodeId, RunId, ThreadId, new_call_id,
@@ -116,6 +118,7 @@ async fn graph_reducers_streams_observability_and_status_helpers_work() {
         },
         GraphEvent::CheckpointSaved {
             checkpoint_id: CheckpointId::new("cp-1"),
+            step: Some(1),
         },
         GraphEvent::InterruptEmitted {
             interrupt: explicit.clone(),
@@ -145,17 +148,25 @@ async fn graph_reducers_streams_observability_and_status_helpers_work() {
     assert_eq!(events[10].step(), None);
     assert_ne!(StreamMode::Values, StreamMode::Debug);
 
+    let envelope = |event: GraphEvent| GraphEventEnvelope {
+        run_id: RunId::new("run-g"),
+        task_id: None,
+        ns: Vec::new(),
+        seq: 0,
+        event,
+    };
+
     let sink = CollectingSink::new();
     assert!(sink.is_empty());
     for event in events.clone() {
-        sink.emit(event);
+        sink.emit(envelope(event));
     }
     assert_eq!(sink.len(), events.len());
     assert_eq!(sink.events()[0].kind(), "run.started");
-    NoopSink.emit(GraphEvent::Custom {
+    NoopSink.emit(envelope(GraphEvent::Custom {
         name: "drop".into(),
         data: json!(null),
-    });
+    }));
 
     let journal = Arc::new(InMemoryGraphEventJournal::new());
     assert!(journal.is_empty("run-g"));
@@ -168,13 +179,14 @@ async fn graph_reducers_streams_observability_and_status_helpers_work() {
     .with_thread(Some(ThreadId::new("thread")))
     .with_namespace(vec!["child".into()])
     .with_inner(Arc::new(sink.clone()));
-    journal_sink.emit(GraphEvent::StepStarted {
+    journal_sink.emit(envelope(GraphEvent::StepStarted {
         step: 3,
         active: vec![NodeId::new("a")],
-    });
-    journal_sink.emit(GraphEvent::CheckpointSaved {
+    }));
+    journal_sink.emit(envelope(GraphEvent::CheckpointSaved {
         checkpoint_id: CheckpointId::new("cp-3"),
-    });
+        step: Some(3),
+    }));
     // Persistence is asynchronous; block until the durable log catches up.
     journal_sink.flush();
     assert_eq!(journal.len("run-g"), 2);

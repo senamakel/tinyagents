@@ -12,7 +12,9 @@ use crate::middleware::{
     PromptCacheGuardMiddleware,
 };
 use crate::summarization::{
-    ConcatSummarizer, SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy, trim_messages,
+    CompactionContext, CompactionDecision, CompactionReason, CompactionRecord, ConcatSummarizer,
+    OverflowClassifier, SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy,
+    find_cut_point, summarize_with_split, trim_messages,
 };
 
 // ── MessageTrimMiddleware ─────────────────────────────────────────────────────
@@ -77,7 +79,39 @@ impl ContextCompressionMiddleware {
             records: std::sync::Mutex::new(std::collections::VecDeque::new()),
             max_records: DEFAULT_COMPRESSION_RECORD_CAP,
             on_failure: CompressionFailurePolicy::default(),
+            last_summary: std::sync::Mutex::new(None),
+            max_turn_tokens: None,
+            overflow_classifier: OverflowClassifier::default(),
+            before_compaction: None,
         }
+    }
+
+    /// Sets the token budget above which a single turn handed to the
+    /// summarizer is split into two halves and merged (see
+    /// [`summarize_with_split`]). Unset (the default) never splits.
+    pub fn with_max_turn_tokens(mut self, max_turn_tokens: u64) -> Self {
+        self.max_turn_tokens = Some(max_turn_tokens);
+        self
+    }
+
+    /// Replaces the [`OverflowClassifier`] consulted by the
+    /// overflow → compact → retry recovery path (this middleware's
+    /// [`ModelMiddleware::wrap_model`] implementation). Defaults to
+    /// [`OverflowClassifier::default`]'s built-in provider patterns.
+    pub fn with_overflow_classifier(mut self, classifier: OverflowClassifier) -> Self {
+        self.overflow_classifier = classifier;
+        self
+    }
+
+    /// Installs a `before_compaction` hook consulted before every compaction
+    /// this middleware runs (proactive threshold or reactive overflow
+    /// recovery). See [`CompactionDecision`].
+    pub fn with_before_compaction(
+        mut self,
+        hook: impl Fn(&CompactionContext) -> CompactionDecision + Send + Sync + 'static,
+    ) -> Self {
+        self.before_compaction = Some(std::sync::Arc::new(hook));
+        self
     }
 
     /// Sets the [`CompressionFailurePolicy`] applied when the [`Summarizer`]
@@ -137,11 +171,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         request: &mut ModelRequest,
     ) -> Result<()> {
         // Below the window threshold: pass through untouched (no-op, no event).
-        if !self.policy.should_summarize(&request.messages) {
+        // The tool declarations count: they ride along on every request.
+        if !self
+            .policy
+            .should_summarize_with_tools(&request.messages, &request.tools)
+        {
             return Ok(());
         }
 
-        let (to_summarize, mut to_keep) = self.policy.plan(&request.messages);
+        let (to_summarize, to_keep) = self.policy.plan(&request.messages);
         // Nothing old enough to compress (e.g. keep_last covers everything):
         // leave the transcript untouched rather than summarizing an empty set.
         if to_summarize.is_empty() {
@@ -149,7 +187,62 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         }
 
         let from_tokens = total_message_tokens(&request.messages);
-        let record = match self.summarizer.summarize(&to_summarize).await {
+        // `plan` splits by count (`non_system[..first_kept_index]` is exactly
+        // `to_summarize`); the record's `first_kept_index` is therefore just
+        // its length — see `compaction::CompactionRecord::first_kept_index`.
+        let first_kept_index = to_summarize.len();
+
+        match self.hook_decision(
+            CompactionReason::Threshold,
+            from_tokens,
+            &to_summarize,
+            &to_keep,
+        ) {
+            CompactionDecision::Decline => return Ok(()),
+            CompactionDecision::UseSummary(text) => {
+                let record = SummaryRecord {
+                    summary: Message::system(text),
+                    provenance: crate::summarization::CompressionProvenance {
+                        source_ids: Vec::new(),
+                        original_token_estimate: 0,
+                        summary_token_estimate: 0,
+                        reason: "before_compaction hook supplied the summary".to_string(),
+                    },
+                };
+                let new_messages = splice_summary(to_keep, record.summary.clone());
+                let to_tokens = total_message_tokens(&new_messages);
+                self.finish_compaction(
+                    ctx,
+                    record,
+                    first_kept_index,
+                    from_tokens,
+                    to_tokens,
+                    CompactionReason::Threshold,
+                );
+                request.messages = new_messages;
+                ctx.emit(AgentEvent::Compressed {
+                    from_tokens,
+                    to_tokens,
+                });
+                return Ok(());
+            }
+            CompactionDecision::Proceed => {}
+        }
+
+        let previous_summary = self
+            .last_summary
+            .lock()
+            .expect("last_summary mutex poisoned")
+            .clone();
+        let record = match summarize_with_split(
+            self.summarizer.as_ref(),
+            &to_summarize,
+            self.max_turn_tokens.unwrap_or(u64::MAX),
+            previous_summary,
+            crate::token_estimation::estimate_message_tokens,
+        )
+        .await
+        {
             Ok(record) => record,
             Err(err) => {
                 // A summarizer failure hits precisely the longest, most valuable
@@ -167,10 +260,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
                     CompressionFailurePolicy::PassThrough => return Ok(()),
                     // Deterministic front-drop to the policy's trigger budget,
                     // preserving system messages (see `TrimStrategy::MaxTokens`).
+                    // The trigger itself now charges tool schemas
+                    // (`should_summarize_with_tools` above), so the message
+                    // budget here must reserve that same schema cost first —
+                    // otherwise a request whose schemas already consume a
+                    // meaningful share of `trigger_budget` (or all of it)
+                    // would still trim messages to the *full* budget and can
+                    // remain above the threshold after trimming, with no
+                    // further recovery possible.
                     CompressionFailurePolicy::FallbackTrim => {
+                        let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+                            &request.tools,
+                            &crate::token_estimation::TokenCountOptions::default(),
+                        );
+                        let message_budget =
+                            self.policy.trigger_budget().saturating_sub(schema_tokens);
                         let trimmed = trim_messages(
                             &request.messages,
-                            &TrimStrategy::MaxTokens(self.policy.trigger_budget()),
+                            &TrimStrategy::MaxTokens(message_budget),
                         );
                         let to_tokens = total_message_tokens(&trimmed);
                         request.messages = trimmed;
@@ -185,21 +292,250 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         };
 
         // `plan` returns `to_keep` as `[system prompts..., recent turns...]`.
-        // Insert the summary *after* the leading system prompts, not at index 0:
-        // a system prompt must stay first so its persistent instructions keep
-        // priority and the cacheable prefix is not churned. The summary of the
-        // elided older turns then sits between the system prompt and the kept
-        // recent turns, in chronological position.
-        let system_prefix = to_keep
-            .iter()
-            .take_while(|m| matches!(m, tinyinference_llm::message::Message::System(_)))
-            .count();
-        let recent = to_keep.split_off(system_prefix);
-        let mut new_messages = Vec::with_capacity(to_keep.len() + recent.len() + 1);
-        new_messages.append(&mut to_keep);
-        new_messages.push(record.summary.clone());
-        new_messages.extend(recent);
+        // `splice_summary` inserts the summary *after* the leading system
+        // prompts, not at index 0: a system prompt must stay first so its
+        // persistent instructions keep priority and the cacheable prefix is
+        // not churned. The summary of the elided older turns then sits
+        // between the system prompt and the kept recent turns, in
+        // chronological position.
+        let new_messages = splice_summary(to_keep, record.summary.clone());
         let to_tokens = total_message_tokens(&new_messages);
+
+        self.finish_compaction(
+            ctx,
+            record,
+            first_kept_index,
+            from_tokens,
+            to_tokens,
+            CompactionReason::Threshold,
+        );
+        request.messages = new_messages;
+
+        ctx.emit(AgentEvent::Compressed {
+            from_tokens,
+            to_tokens,
+        });
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
+    for ContextCompressionMiddleware
+{
+    fn name(&self) -> &str {
+        self.label
+    }
+
+    /// Implements pi's overflow → compact → retry recovery
+    /// (`docs/runtime-comparison/pi.md` §4.5): the wrapped model call runs
+    /// once; if it fails with an error
+    /// [`Self::overflow_classifier`][ContextCompressionMiddleware] classifies
+    /// as a provider context-window overflow, this compacts the transcript
+    /// once (recorded with [`CompactionReason::Overflow`]) and retries the
+    /// *same* turn exactly once more. A second overflow (or a decline from
+    /// the `before_compaction` hook) propagates the error instead of retrying
+    /// again, so a pathological transcript that cannot be shrunk under the
+    /// window cannot loop forever.
+    async fn wrap_model(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: ModelRequest,
+        next: ModelHandler<'_, State, Ctx>,
+    ) -> Result<MiddlewareModelOutcome> {
+        let first_error = match next.run(ctx, state, request.clone()).await {
+            Ok(outcome) => return Ok(outcome),
+            Err(error) => error,
+        };
+
+        let Some(_overflow) = self.overflow_classifier.classify(&first_error) else {
+            return Err(first_error);
+        };
+
+        let keep_recent_tokens = self.policy.trigger_budget();
+        let Some(cut) = find_cut_point(
+            &request.messages,
+            keep_recent_tokens,
+            crate::token_estimation::estimate_message_tokens,
+        ) else {
+            // Nothing safe to cut (e.g. the whole transcript is already
+            // within budget, or is a single indivisible tool-call pair) —
+            // there is no compaction that could help, so surface the
+            // original provider error.
+            return Err(first_error);
+        };
+
+        let (system, non_system) = partition_messages_system(&request.messages);
+        let to_summarize = non_system[..cut.index].to_vec();
+        let mut to_keep = system;
+        to_keep.extend(non_system[cut.index..].iter().cloned());
+        let from_tokens = cut.tokens_before + cut.tokens_after;
+
+        match self.hook_decision(
+            CompactionReason::Overflow,
+            from_tokens,
+            &to_summarize,
+            &to_keep,
+        ) {
+            CompactionDecision::Decline => return Err(first_error),
+            CompactionDecision::Proceed => {}
+            CompactionDecision::UseSummary(text) => {
+                let record = SummaryRecord {
+                    summary: Message::system(text),
+                    provenance: crate::summarization::CompressionProvenance {
+                        source_ids: Vec::new(),
+                        original_token_estimate: 0,
+                        summary_token_estimate: 0,
+                        reason: "before_compaction hook supplied the summary".to_string(),
+                    },
+                };
+                let mut retried = request.clone();
+                let new_messages = splice_summary(to_keep, record.summary.clone());
+                let to_tokens = total_message_tokens(&new_messages);
+                self.finish_compaction(
+                    ctx,
+                    record,
+                    cut.index,
+                    from_tokens,
+                    to_tokens,
+                    CompactionReason::Overflow,
+                );
+                retried.messages = new_messages;
+                return next.run(ctx, state, retried).await;
+            }
+        }
+
+        let previous_summary = self
+            .last_summary
+            .lock()
+            .expect("last_summary mutex poisoned")
+            .clone();
+        let record = match summarize_with_split(
+            self.summarizer.as_ref(),
+            &to_summarize,
+            self.max_turn_tokens.unwrap_or(u64::MAX),
+            previous_summary,
+            crate::token_estimation::estimate_message_tokens,
+        )
+        .await
+        {
+            Ok(record) => record,
+            // Compaction itself failed: nothing changed, so surface the
+            // original overflow rather than a confusing summarizer error.
+            Err(_) => return Err(first_error),
+        };
+
+        let new_messages = splice_summary(to_keep, record.summary.clone());
+        let to_tokens = total_message_tokens(&new_messages);
+        self.finish_compaction(
+            ctx,
+            record,
+            cut.index,
+            from_tokens,
+            to_tokens,
+            CompactionReason::Overflow,
+        );
+
+        let mut retried = request;
+        retried.messages = new_messages;
+        // The retry is the *last* attempt: a second overflow propagates
+        // rather than looping — see this method's docs.
+        next.run(ctx, state, retried).await
+    }
+}
+
+/// Inserts `summary` into `to_keep` right after any leading system messages,
+/// so a system prompt stays first (preserving both its instruction priority
+/// and the cacheable prefix) and the summary sits chronologically between it
+/// and the kept recent turns.
+fn splice_summary(mut to_keep: Vec<Message>, summary: Message) -> Vec<Message> {
+    let system_prefix = to_keep
+        .iter()
+        .take_while(|m| matches!(m, Message::System(_)))
+        .count();
+    let recent = to_keep.split_off(system_prefix);
+    let mut new_messages = Vec::with_capacity(to_keep.len() + recent.len() + 1);
+    new_messages.append(&mut to_keep);
+    new_messages.push(summary);
+    new_messages.extend(recent);
+    new_messages
+}
+
+/// [`crate::summarization::pairing`] partitions operate on non-system
+/// slices; this mirrors that split for callers outside the `summarization`
+/// module (`compaction::find_cut_point` already partitions internally, but
+/// its caller here also needs the same partition to rebuild `to_keep`).
+fn partition_messages_system(messages: &[Message]) -> (Vec<Message>, Vec<Message>) {
+    let system = messages
+        .iter()
+        .filter(|m| matches!(m, Message::System(_)))
+        .cloned()
+        .collect();
+    let non_system = messages
+        .iter()
+        .filter(|m| !matches!(m, Message::System(_)))
+        .cloned()
+        .collect();
+    (system, non_system)
+}
+
+impl ContextCompressionMiddleware {
+    /// Consults the `before_compaction` hook, when one is installed;
+    /// defaults to [`CompactionDecision::Proceed`] otherwise.
+    fn hook_decision(
+        &self,
+        reason: CompactionReason,
+        tokens_before: u64,
+        to_summarize: &[Message],
+        to_keep: &[Message],
+    ) -> CompactionDecision {
+        match &self.before_compaction {
+            Some(hook) => hook(&CompactionContext {
+                reason,
+                tokens_before,
+                to_summarize_count: to_summarize.len(),
+                to_keep_count: to_keep.len(),
+            }),
+            None => CompactionDecision::Proceed,
+        }
+    }
+
+    /// Finalizes a successful compaction: records `record` in the in-process
+    /// history, updates [`Self::last_summary`] for the next iterative
+    /// compaction, builds a [`CompactionRecord`], persists it through
+    /// [`RunContext::compaction_sink`] when attached, and emits
+    /// [`AgentEvent::Compacted`]. Does **not** emit `Compressed` — callers
+    /// that also want the legacy event emit it themselves.
+    fn finish_compaction<Ctx: Send + Sync>(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        record: SummaryRecord,
+        first_kept_index: usize,
+        tokens_before: u64,
+        tokens_after: u64,
+        reason: CompactionReason,
+    ) {
+        *self
+            .last_summary
+            .lock()
+            .expect("last_summary mutex poisoned") = Some(record.summary.text());
+
+        let compaction_record = CompactionRecord {
+            summary: record.summary.text(),
+            first_kept_index,
+            tokens_before,
+            tokens_after,
+            usage: None,
+            details: serde_json::json!({ "source_ids": record.provenance.source_ids }),
+            reason,
+        };
+
+        if let Some(sink) = &ctx.compaction_sink
+            && let Err(err) = sink.persist(&compaction_record)
+        {
+            tracing::debug!("[context_compression] compaction sink persist failed: {err}");
+        }
 
         {
             let mut records = self.records.lock().expect("records mutex poisoned");
@@ -210,13 +546,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
                 records.push_back(record);
             }
         }
-        request.messages = new_messages;
 
-        ctx.emit(AgentEvent::Compressed {
-            from_tokens,
-            to_tokens,
+        ctx.emit(AgentEvent::Compacted {
+            reason,
+            tokens_before,
+            tokens_after,
         });
-        Ok(())
     }
 }
 
@@ -323,7 +658,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Microcompa
             } else {
                 total_message_tokens(&request.messages)
             };
-            if tokens <= budget {
+            // The schemas are part of what the model has to fit, so they are
+            // part of what is measured against the budget.
+            let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+                &request.tools,
+                &crate::token_estimation::TokenCountOptions::default(),
+            );
+            if tokens + schema_tokens <= budget {
                 return Ok(());
             }
         }
@@ -345,7 +686,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Microcompa
                 // of, a signature, a diff — so leave it intact and reclaim
                 // tokens elsewhere.
                 if t.trusted_verbatim {
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         target: "tinyagents::middleware",
                         tool_call_id = %t.tool_call_id,
                         "[microcompact] skipping a trusted_verbatim tool result"
@@ -438,7 +779,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for PromptCach
             && prev_run == &run_id
             && !prev.is_prefix_stable_against(&layout)
         {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 "[cache] prompt_cache_guard: prefix invalidated run={run_id} \
                  before={} after={}",
                 prev.fingerprint(),

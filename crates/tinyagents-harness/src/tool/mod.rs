@@ -4,11 +4,17 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+pub mod deferred;
+pub mod discover;
+pub mod effects;
 mod prompt;
 mod schema;
+mod schema_compact;
 mod schema_prepare;
 pub mod select;
+mod signature;
 mod timeout;
+pub mod toolset;
 mod types;
 
 use std::collections::HashMap;
@@ -17,11 +23,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use deferred::*;
+pub use effects::{
+    LedgerFailure, ToolEffect, ToolEffectLedger, ToolEffectSettle, ToolEffectStart,
+    ToolEffectStatus,
+};
 pub use prompt::*;
 pub use schema::*;
+pub use schema_compact::*;
 pub use schema_prepare::*;
 pub use select::*;
+pub use signature::*;
 pub use timeout::*;
+pub use toolset::{ToolExposureExplanation, ToolSet};
 pub use types::ToolExecutionContext;
 
 /// A host-owned dispatch hook for the rare canonical tool that must execute
@@ -69,9 +83,14 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     }
 
     /// Executes with the full typed parent run when the dispatch needs it.
+    ///
+    /// `call_id` is the admitted call's id — the one the transcript row and
+    /// the `ToolStarted`/`ToolCompleted` events carry — so a dispatch that
+    /// builds a [`ToolExecutionContext`] hands the tool the real id (B1).
     async fn execute(
         &self,
         state: &State,
+        call_id: crate::ids::CallId,
         arguments: Value,
         options: tinytools::ToolCallOptions,
         parent: &crate::context::RunContext<Ctx>,
@@ -91,11 +110,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
     async fn execute(
         &self,
         _state: &State,
+        call_id: crate::ids::CallId,
         arguments: Value,
         options: tinytools::ToolCallOptions,
         parent: &crate::context::RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
-        let context = ToolExecutionContext::from_run_context(parent);
+        let context = ToolExecutionContext::from_run_context(parent, call_id);
         self.tool
             .execute_with_context(arguments, options, Some(&context))
             .await
@@ -105,6 +125,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
 /// A name-keyed canonical tool registry.
 pub struct ToolRegistry<State: Send + Sync, Ctx: Send + Sync> {
     tools: HashMap<String, Arc<dyn ToolDispatch<State, Ctx>>>,
+}
+
+/// Outcome of a registration that reports whether it replaced an existing
+/// entry under the same name.
+///
+/// Returned by [`ToolRegistry::try_register`]/[`ToolRegistry::try_register_dispatch`]
+/// so a caller that cares can detect the collision instead of it silently
+/// overwriting the earlier registration (M-5; `docs/sdk-gaps/cost-and-model-catalog.md` §15 asks for
+/// duplicate-registration diagnostics).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegisterOutcome {
+    /// No prior registration existed under this name.
+    Registered,
+    /// A prior registration under this name was replaced. Carries the
+    /// replaced name (redundant with the call site's own `tool.name()`, but
+    /// convenient for a caller that registers in a loop and wants to report
+    /// which names collided without re-deriving them).
+    Replaced(String),
+}
+
+impl RegisterOutcome {
+    /// `true` when this call replaced an existing registration.
+    pub fn replaced(&self) -> bool {
+        matches!(self, RegisterOutcome::Replaced(_))
+    }
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
@@ -117,23 +162,113 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
     }
 
     /// Registers a canonical tool under its declared name.
+    ///
+    /// A duplicate name silently replaces the earlier registration (except
+    /// for logging a `tracing::warn!` diagnostic) so this method keeps its
+    /// chaining-friendly `&mut Self` return for existing callers; use
+    /// [`Self::try_register`] to detect and react to the collision instead.
     pub fn register(&mut self, tool: Arc<dyn tinytools::Tool>) -> &mut Self {
         let name = tool.name().to_owned();
-        self.tools
-            .insert(name, Arc::new(CanonicalDispatch { tool }));
+        if let RegisterOutcome::Replaced(name) =
+            self.insert_dispatch(name, Arc::new(CanonicalDispatch { tool }))
+        {
+            tracing::warn!(
+                target: "tinyagents::tool",
+                tool = %name,
+                "[tool] registration replaced an already-registered tool of the same name"
+            );
+        }
         self
+    }
+
+    /// Like [`Self::register`], but reports whether the name was already
+    /// registered instead of only logging it, so a caller can fail fast on a
+    /// collision it did not expect (M-5).
+    pub fn try_register(&mut self, tool: Arc<dyn tinytools::Tool>) -> RegisterOutcome {
+        let name = tool.name().to_owned();
+        self.insert_dispatch(name, Arc::new(CanonicalDispatch { tool }))
+    }
+
+    /// Registers a schema-only **external** tool (A2).
+    ///
+    /// The model sees `schema` like any other tool, but the harness never
+    /// executes it: every call is deferred under
+    /// [`DeferredToolRequests::calls`] for the host to run out of band, and
+    /// the host injects the outcome on resume as a [`DeferredCallResult`]
+    /// (or through a [`DeferredToolHandler`] inline). This is how a
+    /// client-side tool — a browser action, a device capability, a call the
+    /// host must broker — joins a run without a `Tool` implementation.
+    /// Mirrors Pydantic AI's `ExternalToolset`.
+    pub fn register_external(&mut self, schema: tinyinference_llm::tool::ToolSchema) -> &mut Self {
+        self.register(Arc::new(ExternalTool::new(schema)))
     }
 
     /// Registers an explicit typed-parent dispatcher for a canonical tool.
+    ///
+    /// See [`Self::register`] for the duplicate-name policy; use
+    /// [`Self::try_register_dispatch`] to detect it instead.
     pub fn register_dispatch(&mut self, dispatch: Arc<dyn ToolDispatch<State, Ctx>>) -> &mut Self {
         let name = dispatch.tool().name().to_owned();
-        self.tools.insert(name, dispatch);
+        if let RegisterOutcome::Replaced(name) = self.insert_dispatch(name, dispatch) {
+            tracing::warn!(
+                target: "tinyagents::tool",
+                tool = %name,
+                "[tool] registration replaced an already-registered tool of the same name"
+            );
+        }
         self
     }
 
-    /// Looks up the complete host dispatch entry.
+    /// Like [`Self::register_dispatch`], but reports whether the name was
+    /// already registered instead of only logging it (M-5).
+    pub fn try_register_dispatch(
+        &mut self,
+        dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
+    ) -> RegisterOutcome {
+        let name = dispatch.tool().name().to_owned();
+        self.insert_dispatch(name, dispatch)
+    }
+
+    /// Shared insertion path: inserts `dispatch` under `name`, returning
+    /// whether a prior entry under that name was replaced.
+    fn insert_dispatch(
+        &mut self,
+        name: String,
+        dispatch: Arc<dyn ToolDispatch<State, Ctx>>,
+    ) -> RegisterOutcome {
+        match self.tools.insert(name.clone(), dispatch) {
+            Some(_) => RegisterOutcome::Replaced(name),
+            None => RegisterOutcome::Registered,
+        }
+    }
+
+    /// Looks up the complete host dispatch entry, whatever its exposure.
+    ///
+    /// This is the host-side lookup: a `Hidden` tool resolves here so host code
+    /// (an unknown-tool rewrite target, a composite capability's inner step)
+    /// can still reach it. Model-originated calls go through
+    /// [`Self::model_dispatch`].
     pub(crate) fn dispatch(&self, name: &str) -> Option<Arc<dyn ToolDispatch<State, Ctx>>> {
         self.tools.get(name).cloned()
+    }
+
+    /// Looks up a dispatch entry the *model* is allowed to name.
+    ///
+    /// `Direct` and `Deferred` tools resolve; a `Hidden` tool does not, so a
+    /// model that guesses (or is told) a hidden name gets the same unknown-tool
+    /// answer as for a name that was never registered. The deferred case is
+    /// what makes discovery work: a tool `tool_search` revealed is callable by
+    /// its own name even though it never appeared in the request's `tools`.
+    pub(crate) fn model_dispatch(&self, name: &str) -> Option<Arc<dyn ToolDispatch<State, Ctx>>> {
+        self.dispatch(name)
+            .filter(|dispatch| dispatch.tool().exposure() != tinytools::ToolExposure::Hidden)
+    }
+
+    /// Returns how a registered tool enters the model-visible catalogue.
+    #[must_use]
+    pub fn exposure(&self, name: &str) -> Option<tinytools::ToolExposure> {
+        self.dispatch(name)
+            .map(|dispatch| dispatch.tool().exposure())
     }
 
     /// Looks up a canonical tool declaration.
@@ -141,7 +276,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         self.dispatch(name).map(|dispatch| dispatch.tool())
     }
 
-    /// Returns registered names in sorted order.
+    /// Returns registered names in sorted order, whatever their exposure.
     #[must_use]
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.tools.keys().cloned().collect();
@@ -149,13 +284,73 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolRegistry<State, Ctx> {
         names
     }
 
-    /// Returns provider request schemas projected from canonical declarations.
+    /// Returns the names a model may call (`Direct` and `Deferred`), sorted.
+    #[must_use]
+    pub fn model_callable_names(&self) -> Vec<String> {
+        let mut names: Vec<_> = self
+            .tools
+            .iter()
+            .filter(|(_, dispatch)| dispatch.tool().exposure() != tinytools::ToolExposure::Hidden)
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Returns the provider request schemas of every **directly advertised**
+    /// tool, projected from the canonical declarations and sorted by name.
+    ///
+    /// Only [`tinytools::ToolExposure::Direct`] tools are included. Deferred
+    /// tools are the model's to discover (see [`Self::deferred_schemas`] and
+    /// [`crate::tool::discover`]); hidden tools never reach a model. The sort
+    /// is what keeps the wire bytes stable across turns, which a provider
+    /// prompt cache depends on.
     #[must_use]
     pub fn schemas(&self) -> Vec<tinyinference_llm::tool::ToolSchema> {
+        self.schemas_with_exposure(tinytools::ToolExposure::Direct)
+    }
+
+    /// Returns the provider request schemas of every
+    /// [`tinytools::ToolExposure::Deferred`] tool, sorted by name.
+    ///
+    /// These are the schemas the agent loop indexes for `tool_search` instead
+    /// of sending on every request.
+    #[must_use]
+    pub fn deferred_schemas(&self) -> Vec<tinyinference_llm::tool::ToolSchema> {
+        self.schemas_with_exposure(tinytools::ToolExposure::Deferred)
+    }
+
+    /// [`Self::deferred_schemas`] paired with each tool's
+    /// [`tinytools::Tool::family`], name-sorted, so the discovery catalogue
+    /// can say where a hit came from.
+    #[must_use]
+    pub fn deferred_schemas_with_families(
+        &self,
+    ) -> Vec<(tinyinference_llm::tool::ToolSchema, Option<String>)> {
+        let mut entries: Vec<_> = self
+            .tools
+            .values()
+            .map(|dispatch| dispatch.tool())
+            .filter(|tool| tool.exposure() == tinytools::ToolExposure::Deferred)
+            .map(|tool| {
+                let family = tool.family().map(str::to_owned);
+                (provider_schema(tool.as_ref()), family)
+            })
+            .collect();
+        entries.sort_by(|left, right| left.0.name.cmp(&right.0.name));
+        entries
+    }
+
+    fn schemas_with_exposure(
+        &self,
+        exposure: tinytools::ToolExposure,
+    ) -> Vec<tinyinference_llm::tool::ToolSchema> {
         let mut schemas: Vec<_> = self
             .tools
             .values()
-            .map(|dispatch| provider_schema(dispatch.tool().as_ref()))
+            .map(|dispatch| dispatch.tool())
+            .filter(|tool| tool.exposure() == exposure)
+            .map(|tool| provider_schema(tool.as_ref()))
             .collect();
         schemas.sort_by(|left, right| left.name.cmp(&right.name));
         schemas
@@ -207,5 +402,7 @@ pub(crate) fn provider_schema(tool: &dyn tinytools::Tool) -> tinyinference_llm::
 
 #[cfg(test)]
 mod canonical_test;
+#[cfg(test)]
+mod context_test;
 #[cfg(test)]
 mod timeout_test;

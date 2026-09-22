@@ -36,6 +36,7 @@ use tinyinference_llm::usage::{Usage, UsageTotals};
 /// the event type without inspecting nested fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
+#[non_exhaustive]
 pub enum AgentEvent {
     /// A new harness run has been initiated.
     RunStarted {
@@ -95,6 +96,109 @@ pub enum AgentEvent {
         output: Option<serde_json::Value>,
     },
 
+    /// The agent loop fixed the run's **pre-middleware** tool surface: how
+    /// many schemas were assembled from the registry (direct tools plus the
+    /// bridge tools when any tool is deferred), how many are deferred behind
+    /// `tool_search`, and what that base set costs in bytes. Emitted once per
+    /// run, before the first model call and before `before_agent`/
+    /// `before_model` middleware runs.
+    ///
+    /// This is a fixed run-start baseline, not a live per-request wire
+    /// metric: exposure-narrowing middleware
+    /// (`ToolPolicyMiddleware::before_model`, dynamic/contextual tool
+    /// selection) can still shrink `request.tools` on any given turn, and a
+    /// structured-output tool-call fallback can still grow it. Track this
+    /// event for the ceiling the run started with, not for what a specific
+    /// request actually sent.
+    ToolsAdvertised {
+        /// Count of `Direct`-exposure tool schemas assembled before per-turn
+        /// middleware runs. Does **not** include the two intrinsic
+        /// `tool_search`/`tool_call` bridge schemas added to the wire set
+        /// when `deferred > 0` — those are implied by `deferred` being
+        /// nonzero, not double-counted here.
+        direct: usize,
+        /// Tools reachable only through `tool_search` / `tool_call`.
+        deferred: usize,
+        /// Compact-JSON size of the actual pre-middleware wire schema set
+        /// (the `direct` schemas plus the two bridge schemas when
+        /// `deferred > 0`), not of whatever a specific request's
+        /// `before_model` pass narrows or grows it to.
+        schema_bytes: usize,
+    },
+
+    /// The model searched the deferred-tool catalogue through the intrinsic
+    /// `tool_search` bridge.
+    ToolSearched {
+        /// Identifier of the `tool_search` call.
+        call_id: CallId,
+        /// The model's query, verbatim — but only when
+        /// [`RunPolicy::capture`][crate::runtime::RunPolicy::capture]`.tool_io`
+        /// is enabled (default `false`, payload-free); empty string
+        /// otherwise. Same privacy class and gate as a normal successful
+        /// tool call's arguments.
+        query: String,
+        /// Number of deferred tools returned.
+        matched: usize,
+        /// Which ranker's answer was served: `"bm25"`, or the host ranker's
+        /// [`tinytools::ToolRanker::kind`]. Empty when the query was rejected
+        /// before ranking.
+        #[serde(default)]
+        ranker: String,
+        /// The best hit's calibrated confidence, when the ranker gave one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        top_confidence: Option<f64>,
+        /// Why the host ranker was not served, when one was active.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fallback: Option<String>,
+        /// The BM25 ranking, when the policy asked to compare it against the
+        /// served one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shadow_matched: Option<Vec<String>>,
+        /// Wall time of the ranking, in milliseconds.
+        #[serde(default)]
+        latency_ms: u64,
+    },
+
+    /// The model invoked a deferred tool through the intrinsic `tool_call`
+    /// bridge; the call was unwrapped to `tool_name` before admission, so the
+    /// following `ToolStarted` names the real tool.
+    DeferredToolCall {
+        /// Identifier of the bridge call (shared with the unwrapped call).
+        call_id: CallId,
+        /// The real tool the call was unwrapped to.
+        tool_name: String,
+    },
+
+    /// A tool call was deferred out of the loop (A2): it needs a human
+    /// approval or host-side execution before it can be answered. The loop
+    /// finishes the batch's other calls and exits with
+    /// `AgentRun::deferred`, or resolves it inline through a registered
+    /// `DeferredToolHandler`. Terminal partner of a `ToolStarted` when the
+    /// tool itself raised the deferral mid-execution.
+    ToolDeferred {
+        /// Identifier of the deferred call.
+        call_id: CallId,
+        /// Why it was deferred (`approval_required`, `call_deferred`,
+        /// `external`, or a middleware-supplied reason).
+        reason: String,
+    },
+
+    /// A previously deferred call was approved on resume and is about to
+    /// execute (with the model's or the approver's edited arguments).
+    ToolApproved {
+        /// Identifier of the approved call.
+        call_id: CallId,
+    },
+
+    /// A previously deferred call was denied on resume; no tool runs and the
+    /// model sees `message` as a tool-error result.
+    ToolDenied {
+        /// Identifier of the denied call.
+        call_id: CallId,
+        /// The denial message handed to the model.
+        message: String,
+    },
+
     /// A tool-selection middleware filtered the model-visible tool set before a
     /// model call. Makes exposure decisions auditable: a UI or log can see
     /// which tools were withheld from the model and by which policy.
@@ -105,6 +209,17 @@ pub enum AgentEvent {
         excluded: Vec<String>,
         /// Number of tools left exposed to the model.
         remaining: usize,
+        /// Per-tool reason a [`crate::tool::toolset::ToolSet`] adaptor
+        /// changed or withheld a tool this turn, keyed by the tool's
+        /// original name.
+        ///
+        /// Additive (`docs/sdk-gaps/tools.md` §9's "explainable exposure
+        /// decisions"): `#[serde(default)]` keeps events recorded before
+        /// this field existed deserializable, and a middleware that only
+        /// reports `excluded` (no explanations) leaves this empty rather
+        /// than failing to construct the event.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        explanations: Vec<(String, crate::tool::ToolExposureExplanation)>,
     },
 
     /// A tool invocation has been dispatched.
@@ -142,13 +257,13 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
         /// Wall-clock duration of the call in milliseconds (completion minus
-        /// [`started_at_ms`]). Present regardless of payload capture, so an
+        /// `started_at_ms`). Present regardless of payload capture, so an
         /// exporter renders a real duration without a side-channel. `None` for
         /// events serialized before this field existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duration_ms: Option<u64>,
         /// Size, in bytes, of the tool's textual result content. Present even in
-        /// payload-free mode (unlike [`output`]), so an exporter can show result
+        /// payload-free mode (unlike `output`), so an exporter can show result
         /// size without capturing the body. `None` for older events.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output_bytes: Option<u64>,
@@ -157,6 +272,14 @@ pub enum AgentEvent {
         /// event itself rather than a live outcome side-channel.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// Host-only metadata the tool attached to its result
+        /// (`tinytools::ToolResult::metadata`, B2). Carried here and on
+        /// [`crate::middleware::AgentRun::tool_metadata`] for events,
+        /// persistence, and telemetry; **never** rendered into the transcript
+        /// the model sees. Present regardless of payload capture: it is the
+        /// tool's deliberate host-facing channel, not captured I/O.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<serde_json::Value>,
     },
 
     /// A tool invocation failed and the run is propagating the error rather
@@ -189,6 +312,24 @@ pub enum AgentEvent {
         duration_ms: Option<u64>,
         /// Human-readable failure description.
         error: String,
+    },
+
+    /// A resumed run reconciled an unresolved tool-effect-ledger row left
+    /// behind by an interrupted prior attempt (B5).
+    ///
+    /// Emitted by
+    /// [`crate::runtime::AgentHarness::reconcile_tool_effects`] for each
+    /// `started`-but-never-settled effect belonging to the last assistant
+    /// tool-call turn, once it has decided what to do per the tool's
+    /// [`tinytools::ToolReplay`] declaration.
+    ToolEffectReconciled {
+        /// Identifier of the reconciled tool call.
+        call_id: CallId,
+        /// What the reconciliation did: `"re_execute"` when the call was left
+        /// pending for the loop to run again (`ToolReplay::Safe`), or
+        /// `"interrupted"` when a synthesized tool-error result was appended
+        /// instead (`ToolReplay::Never`).
+        action: String,
     },
 
     /// A model call failed and the run is propagating the error.
@@ -418,7 +559,7 @@ pub enum AgentEvent {
     /// An existing sub-agent was *reused* for a follow-up turn rather than
     /// reconstructed, carrying the prior conversation context forward.
     ///
-    /// Emitted by [`crate::subagent::SubAgentSession`] on every send
+    /// Emitted by `SubAgentSession` in `tinyagents-orchestration` on every send
     /// after the first (i.e. `turn >= 1`), so post-completion reuse — the
     /// orchestrator → sub-agent → human input → *same* sub-agent pattern — is
     /// visible in the event stream and distinguishable from a fresh
@@ -458,6 +599,58 @@ pub enum AgentEvent {
         from_tokens: u64,
         /// Estimated total tokens of the transcript after compression.
         to_tokens: u64,
+    },
+
+    /// A durable, rule-driven compaction ran and produced a
+    /// [`crate::summarization::CompactionRecord`].
+    ///
+    /// Distinguished from [`Self::Compressed`] (the older, simpler
+    /// event `ContextCompressionMiddleware`'s original `before_model` path
+    /// emits) by carrying [`crate::summarization::CompactionReason`] and by
+    /// always being emitted for a compaction produced through
+    /// `crate::summarization::compaction` — including the
+    /// overflow → compact → retry recovery path, which has no other event of
+    /// its own. Both events fire for the same compaction on the `before_model`
+    /// path; a listener that only cares about *whether* the transcript shrank
+    /// can ignore `reason` and treat this exactly like `Compressed`.
+    Compacted {
+        /// Why this compaction ran.
+        reason: crate::summarization::CompactionReason,
+        /// Estimated total tokens of the transcript before compaction.
+        tokens_before: u64,
+        /// Estimated total tokens of the transcript after compaction.
+        tokens_after: u64,
+    },
+
+    /// The final turn's structured-output extraction failed schema
+    /// validation, or a registered
+    /// [`crate::structured::OutputValidator`] rejected the value with
+    /// [`crate::error::TinyAgentsError::ModelRetry`], and the loop is
+    /// re-asking the model instead of failing the run (A3's
+    /// output-validation retry loop; see
+    /// [`crate::runtime::RunPolicy::output_retry`]).
+    OutputRetry {
+        /// The 1-based retry attempt this event reports (1 is the first
+        /// re-ask after the original extraction failed).
+        attempt: u8,
+        /// The extraction/validation error handed back to the model as the
+        /// repair prompt.
+        error: String,
+    },
+
+    /// The agent loop appended one or more messages from a
+    /// [`crate::run_queue::RunQueue`] lane to the working transcript at a
+    /// safe turn boundary (A4): `Steer` after a tool batch or at a natural
+    /// finish, `Followup` at a natural finish. Emitted once per boundary
+    /// with the number of messages applied; `Collect` items never produce
+    /// this event because they are not applied to the transcript. Payload
+    /// text is deliberately not carried (events are payload-free by default).
+    QueuedMessageApplied {
+        /// Which lane the messages came from.
+        lane: crate::run_queue::QueueLane,
+        /// How many messages were appended at this boundary (`1` under
+        /// [`QueueMode::OneAtATime`][crate::run_queue::QueueMode::OneAtATime]).
+        count: usize,
     },
 
     /// A graph routing decision produced a named route.
@@ -566,15 +759,51 @@ pub enum AgentEvent {
         message: String,
     },
 
+    /// An application-defined event a tool (or any holder of the run's
+    /// [`EventSink`][crate::events::EventSink]) emitted through
+    /// [`ToolExecutionContext::custom`][crate::tool::ToolExecutionContext::custom]
+    /// (B1). The harness attaches no meaning to `payload`; it exists so a
+    /// tool can report structured progress — a download percentage, an
+    /// intermediate finding, a UI hint — on the same ordered stream as the
+    /// loop's own events, without the harness growing a variant per use.
+    Custom {
+        /// The tool call the event was emitted from, when it came from a
+        /// tool; `None` when emitted outside a call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call_id: Option<CallId>,
+        /// Application-defined payload, passed through verbatim.
+        payload: serde_json::Value,
+    },
+
     /// A middleware hook reported a failure.
     ///
-    /// Defined for future emit alongside [`AgentEvent::MiddlewareStarted`] /
-    /// [`AgentEvent::MiddlewareCompleted`] so a failing hook is observable.
+    /// Emitted by the lifecycle-hook driver ([`crate::middleware`]'s
+    /// `run_stack_hook!` macro) immediately after
+    /// [`AgentEvent::MiddlewareCompleted`] when a hook returns `Err`, so a
+    /// failing middleware is observable alongside
+    /// [`AgentEvent::MiddlewareStarted`] / [`AgentEvent::MiddlewareCompleted`]
+    /// instead of only surfacing as the run's terminal error.
     MiddlewareFailed {
         /// Registered name of the middleware that failed.
         name: String,
         /// Human-readable error description.
         error: String,
+    },
+
+    /// A cross-provider handoff transform rewrote part of the outgoing
+    /// transcript immediately before a model call, because it carried
+    /// assistant content from a different provider/api/model than the one
+    /// about to receive it (a mid-session model switch, an explicit
+    /// per-request override, or a fallback to a different provider). Emitted
+    /// only when at least one message changed — same-origin runs (the
+    /// common case) never emit this.
+    ///
+    /// See the harness's cross-provider handoff transform for the exact
+    /// rules (redacted/signed thinking, tool-call id normalization, image
+    /// downgrade).
+    HandoffTransformApplied {
+        /// Number of messages rewritten by the transform for this call.
+        changes: usize,
     },
 
     /// A streaming model call's chunk stream was closed (gracefully or by
@@ -635,10 +864,17 @@ impl AgentEvent {
             AgentEvent::ModelDelta { .. } => "model.delta",
             AgentEvent::ModelCompleted { .. } => "model.completed",
             AgentEvent::ControlApplied { .. } => "control.applied",
+            AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
+            AgentEvent::ToolSearched { .. } => "tool.searched",
+            AgentEvent::DeferredToolCall { .. } => "tool.deferred_call",
+            AgentEvent::ToolDeferred { .. } => "tool.deferred",
+            AgentEvent::ToolApproved { .. } => "tool.approved",
+            AgentEvent::ToolDenied { .. } => "tool.denied",
             AgentEvent::ToolsFiltered { .. } => "tool.filtered",
             AgentEvent::ToolStarted { .. } => "tool.started",
             AgentEvent::ToolCompleted { .. } => "tool.completed",
             AgentEvent::ToolFailed { .. } => "tool.failed",
+            AgentEvent::ToolEffectReconciled { .. } => "tool.effect_reconciled",
             AgentEvent::ModelFailed { .. } => "model.failed",
             AgentEvent::SubAgentFailed { .. } => "subagent.failed",
             AgentEvent::UnknownToolCall { .. } => "tool.unknown",
@@ -665,6 +901,9 @@ impl AgentEvent {
             AgentEvent::SubAgentReused { .. } => "subagent.reused",
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
+            AgentEvent::Compacted { .. } => "context.compacted",
+            AgentEvent::OutputRetry { .. } => "output.retry",
+            AgentEvent::QueuedMessageApplied { .. } => "queue.applied",
             AgentEvent::RouteSelected { .. } => "route.selected",
             AgentEvent::UsageRecorded { .. } => "usage.recorded",
             AgentEvent::CostRecorded { .. } => "cost.recorded",
@@ -672,7 +911,9 @@ impl AgentEvent {
             AgentEvent::MemoryLoaded => "memory.loaded",
             AgentEvent::MemorySaved => "memory.saved",
             AgentEvent::ToolProgress { .. } => "tool.progress",
+            AgentEvent::Custom { .. } => "custom",
             AgentEvent::MiddlewareFailed { .. } => "middleware.failed",
+            AgentEvent::HandoffTransformApplied { .. } => "handoff.transform_applied",
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",
@@ -749,6 +990,9 @@ pub struct EventSink {
     pub(crate) inner: Arc<Mutex<EventSinkInner>>,
 }
 
+type ListenerSnapshot = Arc<Vec<Arc<dyn EventListener>>>;
+type PendingEvent = (EventRecord, ListenerSnapshot);
+
 /// Interior state shared among all clones of an [`EventSink`].
 pub(crate) struct EventSinkInner {
     /// Stream-scoping prefix for emitted [`EventId`]s. Combined with the
@@ -758,12 +1002,14 @@ pub(crate) struct EventSinkInner {
     pub(crate) stream_id: String,
     /// Next offset to assign; incremented atomically on each `emit`.
     pub(crate) next_offset: u64,
-    /// Registered listeners, notified in insertion order.
-    pub(crate) listeners: Vec<Arc<dyn EventListener>>,
+    /// Registered listeners, notified in insertion order. Stored behind an
+    /// `Arc` so each emitted event takes a cheap immutable snapshot without
+    /// allocating and cloning the full listener vector.
+    pub(crate) listeners: ListenerSnapshot,
     /// Records assigned an offset but not yet delivered to listeners, in
     /// offset order. Each entry carries the listener snapshot taken when the
     /// offset was assigned so late subscribers never see earlier offsets.
-    pub(crate) pending: std::collections::VecDeque<(EventRecord, Vec<Arc<dyn EventListener>>)>,
+    pub(crate) pending: std::collections::VecDeque<PendingEvent>,
     /// `true` while some emitter is draining `pending`. Guarantees a single
     /// drainer at a time, which is what makes listener delivery globally
     /// ordered by offset (and keeps re-entrant emits from listeners safe:

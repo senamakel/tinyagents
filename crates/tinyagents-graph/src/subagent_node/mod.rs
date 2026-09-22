@@ -1,25 +1,25 @@
 //! Sub-agent nodes — the graph node that delegates to a harness *agent* (a
 //! model-driven agent loop) invoked through an explicit host capability.
 //!
-//! Where [`crate::subgraph`] embeds an entire [`CompiledGraph`] as a
+//! Where [`crate::subgraph`] embeds an entire [`CompiledGraph`](crate::CompiledGraph) as a
 //! node, this module embeds a *harness agent* as a node: a graph step hands its
 //! work to a host-selected, independently-observable agent and folds the agent's
 //! answer back into the parent graph state.
 //!
 //! The pieces:
 //!
-//! - [`SubAgentNode`] binds an agent [`ComponentId`] to an [`InputMapper`]
+//! - [`SubAgentNode`] binds an agent `ComponentId` to an [`InputMapper`]
 //!   (parent `State` → [`SubAgentInput`]), an [`OutputMapper`]
 //!   ([`SubAgentOutput`] → parent `Update`), and a [`SubAgentPolicy`].
 //! - [`subagent_node`] lowers a [`SubAgentNode`] into an ordinary graph node
-//!   [`Handler`]: it obtains the carried [`AgentInvoker`], creates a distinct
+//!   `Handler`: it obtains the carried [`AgentInvoker`], creates a distinct
 //!   child `run_id` that preserves the run tree's `root_run_id` and is parented
 //!   to the enclosing graph run, applies timeout/retry/budget policy, maps the
 //!   child output into the parent update, records the child run (with its usage)
 //!   onto the parent execution rollup, and forwards the child run's harness
 //!   events onto the host-provided event sink.
 //!
-//! See [`types`] for the data definitions and `test.rs` for focused tests.
+//! See `types` for the data definitions and `test.rs` for focused tests.
 
 mod types;
 
@@ -77,7 +77,7 @@ impl<State, Update> SubAgentNode<State, Update> {
 }
 
 /// Lowers a [`SubAgentNode`] plus a host-bound `invoker` into a graph node
-/// [`Handler`].
+/// `Handler`.
 ///
 /// At each activation the handler:
 ///
@@ -88,7 +88,7 @@ impl<State, Update> SubAgentNode<State, Update> {
 ///    `root_run_id` and is parented to the enclosing graph run,
 /// 4. runs the agent under the node's [`SubAgentPolicy`] (timeout/retry), then
 ///    enforces the work budget,
-/// 5. records the child run — with its rolled-up [`UsageTotals`] — onto the
+/// 5. records the child run — with its rolled-up [`UsageTotals`](tinyinference_llm::usage::UsageTotals) — onto the
 ///    enclosing run's child-run sink, and
 /// 6. folds the [`SubAgentOutput`] into a parent `Update` via the output mapper.
 pub fn subagent_node<State, Update>(node: SubAgentNode<State, Update>) -> Handler<State, Update>
@@ -188,6 +188,7 @@ fn record_child_run(ctx: &NodeContext, agent: &str, output: &SubAgentOutput) {
         run_id: RunId::new(format!("subagent-{}", next_seq())),
         root_run_id,
         usage: output.usage,
+        checkpoint_id: None,
     });
 }
 

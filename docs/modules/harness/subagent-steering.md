@@ -104,6 +104,18 @@ The default delivery rule should be conservative: steering becomes visible on
 the next agent-loop boundary, not in the middle of a provider stream or
 side-effecting tool call.
 
+Two mechanisms implement this today, side by side:
+
+- `SteeringHandle` / `SteeringCommand` — the **control** channel (pause,
+  resume, cancel, `InjectMessage`, `Redirect`, `SetMetadata`), policy-gated
+  and drained before each model call.
+- `RunQueue<Message>` via `RunContext::with_run_queue` — the **content**
+  channel (A4): `Steer` messages land after a tool batch or at a natural
+  finish, `Followup` messages add a turn once the model has finished,
+  `Collect` messages come back on `AgentRun::collected`. `RunPolicy::
+  queue_mode` (`All` | `OneAtATime`) sets how many a boundary takes. See
+  [runtime.md](runtime.md#queued-steering-and-follow-ups-a4).
+
 ## Graph-Level Steering
 
 Graph-backed steering is a command against graph state and task scheduling. It

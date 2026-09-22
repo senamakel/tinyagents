@@ -92,6 +92,7 @@ fn latency_metrics_correlate_started_and_completed_by_call_id() {
                 duration_ms: None,
                 output_bytes: None,
                 error: None,
+                metadata: None,
             },
         ),
         obs(

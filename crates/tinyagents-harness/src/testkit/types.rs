@@ -37,6 +37,10 @@ pub struct StreamingMock {
     pub(crate) items: Vec<ModelStreamItem>,
     /// Number of `stream`/`invoke` calls made so far.
     pub(crate) calls: Mutex<u64>,
+    /// The capability profile returned by [`tinyinference_llm::model::ChatModel::profile`],
+    /// when set via [`StreamingMock::with_profile`]. `None` reproduces the
+    /// trait's conservative default.
+    pub(crate) profile: Option<tinyinference_llm::model::ModelProfile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +103,10 @@ pub struct ScriptedModel {
     pub(crate) queue: Mutex<VecDeque<ModelResponse>>,
     /// Every `ModelRequest` received by `invoke`, in call order.
     pub(crate) received: Mutex<Vec<ModelRequest>>,
+    /// The capability profile returned by [`tinyinference_llm::model::ChatModel::profile`],
+    /// when set via [`ScriptedModel::with_profile`]. `None` reproduces the
+    /// trait's conservative default.
+    pub(crate) profile: Option<tinyinference_llm::model::ModelProfile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +121,7 @@ pub(crate) enum FakeToolBehavior {
     Fail(String),
 }
 
-/// A configurable [`crate::tool::Tool`] for testing.
+/// A configurable [`Tool`](tinytools::Tool) for testing.
 ///
 /// Created with one of three factory methods:
 ///
@@ -268,4 +276,37 @@ pub struct EventRecorder {
 pub struct Trajectory {
     /// The ordered sequence of events that make up this trajectory.
     pub(crate) events: Vec<AgentEvent>,
+}
+
+// ---------------------------------------------------------------------------
+// SchemaDrivenModel
+// ---------------------------------------------------------------------------
+
+/// A [`tinyinference_llm::model::ChatModel`] that exercises every tool
+/// declared on a request by calling it once with schema-generated arguments,
+/// then returns a configured final response.
+///
+/// On call `N` (0-indexed by the number of prior `invoke`/`stream` calls),
+/// if the request declares an `N`th tool, the mock returns a single tool call
+/// for that tool with arguments synthesized from its JSON Schema (see
+/// [`generate_args_from_schema`](super::generate_args_from_schema)). Once
+/// every declared tool has been called once, it returns the configured final
+/// response on every subsequent call. This exercises the harness's real tool
+/// dispatch and schema-validation path — every tool actually gets invoked
+/// with type-shaped arguments — without hand-writing a script per tool.
+///
+/// # Example
+///
+/// ```rust
+/// # use tinyagents_harness::testkit::SchemaDrivenModel;
+/// let model = SchemaDrivenModel::with_final_text("done");
+/// assert_eq!(model.call_count(), 0);
+/// ```
+pub struct SchemaDrivenModel {
+    /// Response returned once every declared tool has been called once.
+    pub(crate) final_response: ModelResponse,
+    /// Number of `invoke`/`stream` calls made so far.
+    pub(crate) calls: Mutex<u64>,
+    /// Every request received by `invoke`, in call order.
+    pub(crate) received: Mutex<Vec<ModelRequest>>,
 }

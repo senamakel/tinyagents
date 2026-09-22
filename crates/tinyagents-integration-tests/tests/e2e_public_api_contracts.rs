@@ -3,7 +3,7 @@
 //!
 //! These tests intentionally sit in `tests/` rather than module-local unit tests
 //! so the e2e coverage pass exercises the same public surface downstream users
-//! call: cache keys, prompt assembly, memory/store persistence, retry policies,
+//! call: cache keys, prompt assembly, store persistence, retry policies,
 //! channel reducers, and deterministic summarization.
 
 use std::sync::Arc;
@@ -18,9 +18,6 @@ use tinyagents_graph::{
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::cache::{
     CacheLayoutEvent, InMemoryResponseCache, PromptCacheLayout, ResponseCache, cache_key,
-};
-use tinyagents_harness::memory::{
-    ChatHistory, InMemoryChatHistory, MemoryScope, ShortTermMemory, StoreChatHistory,
 };
 use tinyagents_harness::prompt::{MessagesTemplate, PromptBuilder, PromptTemplate, TemplateRole};
 use tinyagents_harness::retry::{FallbackPolicy, RateLimiter, RetryPolicy, is_retryable};
@@ -116,7 +113,7 @@ async fn cache_and_prompt_contracts_produce_stable_behavior_keys() {
 }
 
 #[tokio::test]
-async fn stores_and_memory_round_trip_across_ephemeral_and_file_backends() {
+async fn stores_round_trip_across_ephemeral_and_file_backends() {
     let memory_store = InMemoryStore::new();
     memory_store
         .put("ns", "a", json!({ "value": 1 }))
@@ -187,55 +184,6 @@ async fn stores_and_memory_round_trip_across_ephemeral_and_file_backends() {
         Some(json!(true))
     );
 
-    assert_eq!(
-        serde_json::to_value(MemoryScope::ShortTerm).unwrap(),
-        "short_term"
-    );
-    let history = InMemoryChatHistory::new();
-    history.append("t1", Message::user("hello")).await.unwrap();
-    history
-        .append("t1", Message::assistant("world"))
-        .await
-        .unwrap();
-    assert_eq!(history.messages("t1").await.unwrap().len(), 2);
-
-    let memory = ShortTermMemory::new(history, "t1").with_trim(|messages| {
-        messages
-            .into_iter()
-            .rev()
-            .take(1)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
-    });
-    assert_eq!(memory.thread_id(), "t1");
-    assert_eq!(memory.load().await.unwrap().len(), 1);
-    memory
-        .save(vec![Message::user("old"), Message::assistant("new")])
-        .await
-        .unwrap();
-    assert_eq!(memory.load().await.unwrap()[0].text(), "new");
-    memory.clear().await.unwrap();
-    assert!(memory.load().await.unwrap().is_empty());
-
-    let store_history = StoreChatHistory::new(InMemoryStore::new());
-    store_history
-        .append("persisted", Message::user("stored"))
-        .await
-        .unwrap();
-    assert_eq!(
-        store_history.messages("persisted").await.unwrap()[0].text(),
-        "stored"
-    );
-    assert!(
-        store_history
-            .store()
-            .get(StoreChatHistory::<InMemoryStore>::NAMESPACE, "persisted")
-            .await
-            .unwrap()
-            .is_some()
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

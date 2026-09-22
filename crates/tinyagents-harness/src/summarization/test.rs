@@ -251,6 +251,27 @@ mod smoke {
     }
 
     #[test]
+    fn policy_charges_tool_schemas_against_the_trigger() {
+        let policy = SummarizationPolicy {
+            trigger_tokens: 20,
+            keep_last: 1,
+            ..Default::default()
+        };
+        // ~16 chars → 4 tokens: well under the trigger on its own.
+        let msgs = vec![Message::user("aaaaaaaaaaaaaaaa")];
+        assert!(!policy.should_summarize(&msgs));
+        assert!(!policy.should_summarize_with_tools(&msgs, &[]));
+
+        // A verbose schema pushes the same transcript over the line.
+        let tools = vec![tinyinference_llm::tool::ToolSchema::new(
+            "lookup",
+            "x".repeat(200),
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+        assert!(policy.should_summarize_with_tools(&msgs, &tools));
+    }
+
+    #[test]
     fn policy_plan_splits_keeping_system_and_recent() {
         let policy = SummarizationPolicy {
             trigger_tokens: 0,
@@ -402,6 +423,7 @@ mod pairing {
                 .map(|id| ToolCall::new(*id, "lookup", json!({"q": "rust"})))
                 .collect(),
             usage: None,
+            origin: None,
         })
     }
 
@@ -584,6 +606,7 @@ mod pairing {
                 json!({"query": "x".repeat(2000)}),
             )],
             usage: None,
+            origin: None,
         });
         assert!(
             heavy.estimated_char_weight() > 2000,
@@ -619,6 +642,7 @@ mod pairing {
             content: vec![ContentBlock::thinking("z".repeat(120))],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         });
         assert_eq!(msg.estimated_char_weight(), 120);
     }
@@ -644,6 +668,7 @@ mod rendering {
                 content: Vec::new(),
                 tool_calls: vec![ToolCall::new("c1", "get_weather", json!({"city": "Paris"}))],
                 usage: None,
+                origin: None,
             }),
             Message::tool("c1", r#"{"temp_c":21}"#),
         ];
@@ -667,10 +692,51 @@ mod rendering {
             ],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         });
         let rendered = render_message_for_summary(&msg);
         assert!(rendered.contains("weighing options"), "{rendered}");
         assert!(rendered.contains("\"k\""), "{rendered}");
+    }
+
+    #[test]
+    fn media_blocks_are_rendered_as_placeholders() {
+        use tinyinference_llm::message::{ContentBlock, MediaRef, UserMessage};
+
+        let msg = Message::User(UserMessage {
+            content: vec![
+                ContentBlock::Audio(MediaRef::url("https://example.com/a.wav")),
+                ContentBlock::Video(MediaRef::base64("AAAA", "video/mp4")),
+                ContentBlock::Document(MediaRef::path("/tmp/doc.pdf")),
+            ],
+        });
+        let rendered = render_message_for_summary(&msg);
+
+        assert!(rendered.contains("<audio />"), "{rendered}");
+        assert!(rendered.contains("<video />"), "{rendered}");
+        assert!(rendered.contains("<document />"), "{rendered}");
+    }
+
+    #[test]
+    fn custom_messages_render_the_display_or_an_empty_value() {
+        use tinyinference_llm::message::CustomMessage;
+
+        let displayed = Message::Custom(CustomMessage {
+            kind: "compaction".into(),
+            payload: json!({"summary": "host-only"}),
+            display: Some("Compacted 40 turns".into()),
+        });
+        let hidden = Message::Custom(CustomMessage {
+            kind: "label".into(),
+            payload: json!({"name": "checkpoint"}),
+            display: None,
+        });
+
+        assert_eq!(
+            render_message_for_summary(&displayed),
+            "custom: Compacted 40 turns"
+        );
+        assert_eq!(render_message_for_summary(&hidden), "custom: ");
     }
 
     #[test]

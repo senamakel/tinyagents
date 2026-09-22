@@ -1,3 +1,9 @@
+//! Workflow definition validation: structural checks and error detection.
+//!
+//! Validates a workflow definition for structural issues (missing phases,
+//! duplicate names, cycles, invalid concurrency) and host-specific issues
+//! (unknown agents). Errors are deterministic and host-independent.
+
 use tinyagents_graph::dag::{DagIssue, DagNode, validate_dag};
 
 use super::{DefinitionError, WorkflowDefinition};

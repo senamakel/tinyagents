@@ -1,4 +1,12 @@
 //! Host-free transcript statistics.
+//!
+//! [`context_statistics`] derives deterministic, tokenizer-free counts
+//! ([`ContextStatistics`]) directly from a message transcript, and
+//! [`estimate_context_tokens`] estimates a token count through a
+//! caller-supplied tokenizer. Neither function names a host tokenizer, memory
+//! system, or product message type, so callers — prompt budgeting,
+//! compaction heuristics, diagnostics — can use these without pulling host
+//! policy into the harness.
 
 use tinyinference_llm::message::{ContentBlock, Message};
 
@@ -12,6 +20,8 @@ pub struct ContextStatistics {
     pub text_chars: usize,
     /// Image blocks across every role.
     pub images: usize,
+    /// Audio, video, and document blocks across every role.
+    pub media: usize,
     /// Tool calls requested by assistant messages.
     pub tool_calls: usize,
     /// Tool result messages.
@@ -28,7 +38,7 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
     };
     let mut requested = std::collections::HashSet::new();
     for message in messages {
-        let content = match message {
+        let content: &[ContentBlock] = match message {
             Message::System(message) => &message.content,
             Message::User(message) => &message.content,
             Message::Assistant(message) => {
@@ -43,6 +53,8 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                 }
                 &message.content
             }
+            // Host-side out-of-band record; carries no content blocks.
+            Message::Custom(_) => &[],
         };
         for block in content {
             match block {
@@ -53,6 +65,9 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                     stats.text_chars += value.to_string().chars().count();
                 }
                 ContentBlock::Image(_) => stats.images += 1,
+                ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => {
+                    stats.media += 1;
+                }
                 ContentBlock::RedactedThinking { .. } => {}
             }
         }
@@ -69,11 +84,13 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
     messages
         .iter()
         .map(|message| {
-            let content = match message {
+            let content: &[ContentBlock] = match message {
                 Message::System(message) => &message.content,
                 Message::User(message) => &message.content,
                 Message::Assistant(message) => &message.content,
                 Message::Tool(message) => &message.content,
+                // Host-side out-of-band record; carries no content blocks.
+                Message::Custom(_) => &[],
             };
             let mut visible = content
                 .iter()

@@ -9,7 +9,7 @@
 //! each boundary is what lets a run be paused on an interrupt, resumed later,
 //! forked, or replayed for time-travel debugging.
 //!
-//! See [`types`] for the checkpoint record definitions. Checkpoints are written
+//! See `types` for the checkpoint record definitions. Checkpoints are written
 //! at superstep boundaries only — never mid-node — so resuming always reruns a
 //! node from its start.
 
@@ -21,10 +21,13 @@ mod types;
 pub use file::FileCheckpointer;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteCheckpointer;
+#[cfg(feature = "sqlite")]
+pub(crate) use sqlite::prepare_connection;
 pub use types::{
-    BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSource,
-    CheckpointTuple, DurabilityMode, PendingActivation, PendingWrite, WRITES_IDX_ERROR,
-    WRITES_IDX_INTERRUPT, WRITES_IDX_RESUME, merge_writes,
+    BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
+    CheckpointSource, CheckpointTuple, CompletedTask, DURABLE_TASK_CHANNEL_PREFIX, DurabilityMode,
+    INTERRUPT_AFTER_CHANNEL, PendingActivation, PendingWrite, WRITES_IDX_ERROR,
+    WRITES_IDX_INTERRUPT, WRITES_IDX_INTERRUPT_AFTER, WRITES_IDX_RESUME, merge_writes,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -126,8 +129,9 @@ where
     /// returned (last-write-wins, consistent with [`Checkpointer::get`]).
     ///
     /// Composed from [`Checkpointer::list`] + [`Checkpointer::get`] so every
-    /// backend inherits it; override for a cheaper scoped query — both durable
-    /// backends do, because the default costs a full thread scan per call and
+    /// backend inherits it; override for a cheaper scoped query — both
+    /// [`FileCheckpointer`] and [`SqliteCheckpointer`](crate::SqliteCheckpointer)
+    /// do, because the default costs a full thread scan per call and
     /// [`Checkpointer::state_history`] issues one per lineage hop.
     async fn get_scoped(
         &self,
@@ -186,6 +190,35 @@ where
         Ok(())
     }
 
+    /// Persists `checkpoint` and its `writes` together, at a superstep
+    /// boundary where both are produced at once.
+    ///
+    /// The default body is composed from [`Checkpointer::put`] followed by
+    /// [`Checkpointer::put_writes`] — two independent calls, so a crash
+    /// between them can leave the checkpoint durable with its writes lost.
+    /// That is no worse than calling the two methods separately (which is
+    /// what every caller did before this method existed), so every backend
+    /// keeps compiling and behaving exactly as before without overriding it.
+    ///
+    /// A backend that can share one transaction across both statements
+    /// should override this to do so — [`SqliteCheckpointer`] does, so a
+    /// crash between the two writes is impossible rather than merely
+    /// unlikely: either both are durable or neither is.
+    async fn put_with_writes(
+        &self,
+        checkpoint: Checkpoint<State>,
+        writes: &[PendingWrite],
+    ) -> Result<CheckpointId> {
+        let config = CheckpointConfig {
+            thread_id: checkpoint.thread_id.clone(),
+            checkpoint_id: Some(checkpoint.checkpoint_id.clone()),
+            namespace: checkpoint.namespace.clone(),
+        };
+        let id = self.put(checkpoint).await?;
+        self.put_writes(&config, writes).await?;
+        Ok(id)
+    }
+
     /// Reads back the writes recorded against the checkpoint addressed by
     /// `config`, in insertion order.
     ///
@@ -196,6 +229,60 @@ where
     /// The default body returns an empty vec.
     async fn get_writes(&self, _config: &CheckpointConfig) -> Result<Vec<PendingWrite>> {
         Ok(Vec::new())
+    }
+
+    // ---- Thread execution lease (C3/R4) ------------------------------------
+    //
+    // The durable half of the per-thread execution lock. The executor
+    // (`compiled::executor::execute`) already holds an in-process
+    // `ThreadLockMap` guard for a run's whole lifetime, which is sufficient
+    // to serialize concurrent calls *within one process*. This lease closes
+    // the cross-process gap: two different processes (or two restarts of the
+    // same host) racing `run_with_thread`/`resume` on the same thread id
+    // have no shared in-process lock to serialize on. A backend that
+    // implements this lets a dead owner's lease be reclaimed once it expires
+    // instead of stranding the thread forever, while a live owner's lease
+    // refuses a competing claim.
+    //
+    // Every method carries a default no-op body so an out-of-tree
+    // `Checkpointer` (and the in-memory backend, which has no cross-process
+    // audience to protect against) keeps compiling and behaves exactly as it
+    // did before this lease existed — `try_claim` always succeeds.
+
+    /// Attempts to claim the execution lease for `thread`, naming `owner`
+    /// (the run id) and expiring after `ttl`.
+    ///
+    /// Returns `Ok(true)` when the lease is unclaimed, already expired, or
+    /// already held by `owner` (idempotent re-claim); `Ok(false)` when a
+    /// different owner holds a still-live lease.
+    ///
+    /// The default body always returns `Ok(true)`.
+    async fn try_claim(
+        &self,
+        _thread: &str,
+        _owner: &str,
+        _ttl: std::time::Duration,
+    ) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Extends `owner`'s already-held lease on `thread` by `ttl` from now.
+    ///
+    /// Returns `Ok(false)` when `owner` does not currently hold the lease
+    /// (it expired and was reclaimed, or was never claimed).
+    ///
+    /// The default body always returns `Ok(true)`.
+    async fn renew(&self, _thread: &str, _owner: &str, _ttl: std::time::Duration) -> Result<bool> {
+        Ok(true)
+    }
+
+    /// Releases `owner`'s lease on `thread`, when it holds one.
+    ///
+    /// A no-op (not an error) when `owner` does not hold the lease.
+    ///
+    /// The default body is a no-op.
+    async fn release(&self, _thread: &str, _owner: &str) -> Result<()> {
+        Ok(())
     }
 
     /// Resolves the checkpoint id a **read** of writes addresses.
@@ -346,7 +433,7 @@ where
                 break;
             };
             if !visited.insert(tuple.checkpoint.checkpoint_id.clone()) {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     "[checkpoint] state_history: lineage cycle at checkpoint `{}` \
                      (thread `{thread_id}`); truncating the walk",
                     tuple.checkpoint.checkpoint_id
@@ -358,6 +445,41 @@ where
             match parent {
                 Some(parent) => cursor = Some(parent),
                 None => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// Replays a [`crate::channel::ChannelSet::with_delta`]-tracked
+    /// channel's per-step write history for `config.thread_id`/
+    /// `config.namespace` (I5/R3).
+    ///
+    /// The default implementation walks [`Checkpointer::state_history`]
+    /// (newest-first, so it is reversed to oldest-first here) and
+    /// concatenates each checkpoint's own
+    /// [`Checkpoint::channel_deltas`] entry for `channel`, in lineage
+    /// order — every checkpoint carries only *its own step's* writes to a
+    /// delta-tracked channel (not a cumulative history), which is what
+    /// keeps a single checkpoint's size bounded regardless of how long the
+    /// channel's append history grows. A checkpoint with no recorded delta
+    /// for `channel` (predates delta tracking, or `channel` was not
+    /// delta-tracked when it was written) contributes nothing.
+    ///
+    /// A backend may override this with a cheaper single-pass read; the
+    /// observable result must remain identical.
+    async fn delta_history(
+        &self,
+        config: &CheckpointConfig,
+        channel: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut tuples = self
+            .state_history(&config.thread_id, &config.namespace, None)
+            .await?;
+        tuples.reverse();
+        let mut out = Vec::new();
+        for tuple in &tuples {
+            if let Some(deltas) = tuple.checkpoint.channel_deltas.get(channel) {
+                out.extend(deltas.iter().cloned());
             }
         }
         Ok(out)
@@ -621,7 +743,10 @@ where
             Some(id) => list.iter().rfind(|c| c.checkpoint_id == id),
             None => list.last(),
         };
-        Ok(found.cloned())
+        Ok(found.cloned().map(|mut c| {
+            c.normalize();
+            c
+        }))
     }
 
     async fn list(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
@@ -636,7 +761,11 @@ where
         // Single-pass bulk read: clone the thread's records in insertion
         // order, instead of the default's one `get` per listed id.
         let map = self.inner.lock().map_err(|_| lock_err())?;
-        Ok(map.get(thread_id).cloned().unwrap_or_default())
+        let mut records = map.get(thread_id).cloned().unwrap_or_default();
+        for record in &mut records {
+            record.normalize();
+        }
+        Ok(records)
     }
 
     async fn list_threads(&self) -> Result<Vec<String>> {
@@ -688,7 +817,7 @@ where
         let mut map = self.writes.lock().map_err(|_| lock_err())?;
         let slot = map.entry(key).or_default();
         let changed = merge_writes(slot, writes);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[checkpoint:memory] put_writes thread={} checkpoint={:?} offered={} stored={}",
             config.thread_id,
             config.checkpoint_id,

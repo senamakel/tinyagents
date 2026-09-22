@@ -53,10 +53,12 @@
 use serde_json::{Map, Value, json};
 
 use super::schema::{CleaningStrategy, SchemaCleanr};
+use super::schema_compact::{SchemaCompaction, compact_tool_schema};
+use tinyinference_llm::model::{ModelProfile, SchemaTransform};
 use tinyinference_llm::tool::ToolSchema;
 
 /// How a [`ToolSchema`] should be projected for a specific provider.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SchemaPreparation {
     /// Which keyword subset the target provider accepts.
     pub strategy: CleaningStrategy,
@@ -68,6 +70,14 @@ pub struct SchemaPreparation {
     /// — a previously optional argument becomes mandatory — so it belongs to the
     /// adapter that actually sends `strict: true`, not to the tool author.
     pub strict: bool,
+    /// Byte budgets applied after cleaning (see
+    /// [`SchemaCompaction`]). Off by default: compaction is lossy, so it is a
+    /// deliberate choice for schemas a host does not author itself.
+    pub compaction: SchemaCompaction,
+    /// A resolved [`ModelProfile`]'s [`SchemaTransform`], applied last (after
+    /// cleaning and the strict sanitizer) as the final, model-specific wire
+    /// adjustment. `None` when no profile-level transform applies.
+    pub schema_transform: Option<SchemaTransform>,
 }
 
 impl SchemaPreparation {
@@ -77,6 +87,8 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::Gemini,
             strict: false,
+            compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -85,6 +97,8 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::Anthropic,
             strict: false,
+            compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -93,6 +107,8 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::OpenAI,
             strict: false,
+            compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
@@ -101,12 +117,36 @@ impl SchemaPreparation {
         Self {
             strategy: CleaningStrategy::Conservative,
             strict: false,
+            compaction: SchemaCompaction::NONE,
+            schema_transform: None,
         }
     }
 
     /// Enables the strict-mode sanitizer. See [`Self::strict`].
     pub const fn with_strict(mut self) -> Self {
         self.strict = true;
+        self
+    }
+
+    /// Applies byte budgets after cleaning. See [`SchemaCompaction`].
+    pub const fn with_compaction(mut self, compaction: SchemaCompaction) -> Self {
+        self.compaction = compaction;
+        self
+    }
+
+    /// Applies a resolved [`ModelProfile`]'s [`SchemaTransform`] as the final
+    /// step of preparation, after cleaning and the strict sanitizer.
+    pub fn with_schema_transform(mut self, transform: SchemaTransform) -> Self {
+        self.schema_transform = Some(transform);
+        self
+    }
+
+    /// Merges `profile.schema_transform` into this preparation, when set,
+    /// leaving an unset preparation transform untouched otherwise.
+    pub fn with_profile(mut self, profile: Option<&ModelProfile>) -> Self {
+        if let Some(transform) = profile.and_then(|p| p.schema_transform.clone()) {
+            self.schema_transform = Some(transform);
+        }
         self
     }
 }
@@ -136,7 +176,7 @@ fn empty_object_schema() -> Value {
 /// unambiguously what it meant.
 pub fn normalize_parameters(parameters: &Value) -> Value {
     let Some(object) = parameters.as_object() else {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[tool::schema] non-object tool parameters ({}) replaced with an empty object schema",
             parameters_kind(parameters)
         );
@@ -156,6 +196,8 @@ pub fn normalize_parameters(parameters: &Value) -> Value {
     Value::Object(normalized)
 }
 
+/// Names a JSON value's kind for the diagnostic logged when a tool's
+/// declared parameters are not an object.
 fn parameters_kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
@@ -246,23 +288,54 @@ pub fn set_additional_properties_false(mut schema: Value) -> Value {
 pub fn prepare_parameters(parameters: &Value, preparation: &SchemaPreparation) -> Value {
     let normalized = normalize_parameters(parameters);
     let cleaned = SchemaCleanr::clean(normalized, preparation.strategy);
-    if !preparation.strict {
-        return cleaned;
-    }
-    let required = require_all_properties(cleaned);
-    set_additional_properties_false(required)
+    let sanitized = if preparation.strict {
+        let required = require_all_properties(cleaned);
+        set_additional_properties_false(required)
+    } else {
+        cleaned
+    };
+    apply_schema_transform(&sanitized, preparation.schema_transform.as_ref())
 }
 
-/// Projects one [`ToolSchema`] for a provider, leaving name, description, and
-/// format untouched.
+/// Applies an optional [`SchemaTransform`] to `schema`, returning it
+/// unchanged when `transform` is `None`.
+///
+/// This is the seam a resolved [`ModelProfile`]'s
+/// [`schema_transform`][ModelProfile::schema_transform] goes through both for
+/// tool schemas (via [`SchemaPreparation::schema_transform`]) and for a
+/// structured-output schema, which is never a [`ToolSchema`] and so cannot go
+/// through [`prepare_tool_schema`].
+pub fn apply_schema_transform(schema: &Value, transform: Option<&SchemaTransform>) -> Value {
+    match transform {
+        Some(transform) => transform.apply(schema),
+        None => schema.clone(),
+    }
+}
+
+/// Applies `profile`'s [`SchemaTransform`] (if any) to `schema`. Convenience
+/// wrapper over [`apply_schema_transform`] for callers holding a
+/// `Option<&ModelProfile>` rather than the transform itself — the common
+/// shape at a structured-output call site.
+pub fn apply_profile_schema_transform(schema: &Value, profile: Option<&ModelProfile>) -> Value {
+    apply_schema_transform(schema, profile.and_then(|p| p.schema_transform.as_ref()))
+}
+
+/// Projects one [`ToolSchema`] for a provider: clean the parameters, then
+/// apply any byte budget. Name and format are untouched; the description is
+/// only touched by an explicit [`SchemaCompaction::max_description_bytes`].
 pub fn prepare_tool_schema(schema: &ToolSchema, preparation: &SchemaPreparation) -> ToolSchema {
-    let prepared = ToolSchema {
+    let cleaned = ToolSchema {
         name: schema.name.clone(),
         description: schema.description.clone(),
         parameters: prepare_parameters(&schema.parameters, preparation),
         format: schema.format.clone(),
     };
-    tinyagents_tracing::trace!(
+    let prepared = if preparation.compaction.is_none() {
+        cleaned
+    } else {
+        compact_tool_schema(&cleaned, &preparation.compaction)
+    };
+    tracing::trace!(
         "[tool::schema] prepared `{}` for {:?} (strict={})",
         schema.name,
         preparation.strategy,
@@ -276,7 +349,7 @@ pub fn prepare_tool_schemas(
     schemas: &[ToolSchema],
     preparation: &SchemaPreparation,
 ) -> Vec<ToolSchema> {
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[tool::schema] preparing {} tool declaration(s) for {:?} (strict={})",
         schemas.len(),
         preparation.strategy,
@@ -287,3 +360,7 @@ pub fn prepare_tool_schemas(
         .map(|schema| prepare_tool_schema(schema, preparation))
         .collect()
 }
+
+#[cfg(test)]
+#[path = "schema_prepare_test.rs"]
+mod test;

@@ -1,3 +1,17 @@
+//! Recording and querying operations over the session tables: sessions,
+//! messages, tool calls, and the FTS5 search index that shadows them.
+//!
+//! Every write that adds searchable content (a session, a message, a tool
+//! call) writes its row and its FTS entry inside one [`with_transaction`]
+//! call, since the two are one unit of work — see the repeated inline
+//! comment at each call site for why an autocommit connection would leave a
+//! permanently unsearchable row on partial failure.
+//!
+//! Read paths use [`with_connection`] (autocommit is fine; nothing here reads
+//! then acts on what it read). The `index_fts_*` and `map_session_row`
+//! helpers are shared plumbing between the write and read paths
+//! respectively.
+
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -12,11 +26,18 @@ use super::types::{
     SessionToolCall,
 };
 
+/// Cap on the bytes of tool output persisted per call; longer output is
+/// truncated on a character boundary with a marker appended.
 pub(super) const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
 
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Creates a new session row with `status = "running"` and indexes it in
+/// FTS, returning the row as stored.
+///
+/// Row insert and FTS index are written in one transaction — see the module
+/// docs for why.
 #[allow(clippy::too_many_arguments)]
 pub fn record_session_start(
     workspace_dir: &Path,
@@ -31,7 +52,7 @@ pub fn record_session_start(
     transcript_path: Option<&str>,
 ) -> Result<SessionRecord> {
     let now = Utc::now();
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[session_db] record_session_start id={id} agent={agent_definition_id} \
          parent={} thread={} channel={}",
         parent_session_id.unwrap_or("-"),
@@ -77,6 +98,8 @@ pub fn record_session_start(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Marks a session terminal (`status`, final token/cost totals, `ended_at`)
+/// and returns the updated row.
 #[allow(clippy::too_many_arguments)]
 pub fn record_session_end(
     workspace_dir: &Path,
@@ -89,7 +112,7 @@ pub fn record_session_end(
     cost_usd: f64,
 ) -> Result<SessionRecord> {
     let now = Utc::now();
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[session_db] record_session_end id={id} status={} turns={turn_count} \
          tokens_in={input_tokens} tokens_out={output_tokens} cost=${cost_usd:.6}",
         status.as_str(),
@@ -123,6 +146,8 @@ pub fn record_session_end(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Records a visible-text-only session message. Shorthand for
+/// [`record_message_with_reasoning`] with `reasoning_content: None`.
 #[allow(clippy::too_many_arguments)]
 pub fn record_message(
     workspace_dir: &Path,
@@ -165,7 +190,7 @@ pub fn record_message_with_reasoning(
     cost_usd: Option<f64>,
 ) -> Result<i64> {
     let now = Utc::now();
-    tinyagents_tracing::trace!(
+    tracing::trace!(
         "[session_db] record_message session={session_id} role={role} len={}",
         content.len()
     );
@@ -207,6 +232,13 @@ pub fn record_message_with_reasoning(
 // A record-shaped signature: each argument is one persisted column. Grouping
 // them into a struct is worth doing, but is an API change rather than part of
 // this move — tracked separately.
+/// Records a tool call, bounding its output to `MAX_TOOL_OUTPUT_BYTES`,
+/// and returns the new row's id.
+///
+/// Row insert and FTS index are written in one transaction — see the module
+/// docs for why. The row id is captured before indexing because
+/// `index_fts_tool` inserts into the `sessions_fts` virtual table, which
+/// would otherwise move `last_insert_rowid()` off the tool-call row.
 #[allow(clippy::too_many_arguments)]
 pub fn record_tool_call(
     workspace_dir: &Path,
@@ -219,7 +251,7 @@ pub fn record_tool_call(
     duration_ms: Option<i64>,
 ) -> Result<i64> {
     let now = Utc::now();
-    tinyagents_tracing::trace!(
+    tracing::trace!(
         "[session_db] record_tool_call session={session_id} tool={tool_name} status={status}"
     );
 
@@ -275,6 +307,11 @@ pub fn record_tool_call(
     })
 }
 
+/// Fetches a single session by id.
+///
+/// Returns `Err(TinyAgentsError::Storage)` (not `Option`) when no row
+/// matches, since every current caller reads back a session it expects to
+/// already exist.
 pub fn get_session(workspace_dir: &Path, id: &str) -> Result<SessionRecord> {
     with_connection(workspace_dir, |conn| {
         let mut stmt = conn.prepare(
@@ -296,6 +333,10 @@ pub fn get_session(workspace_dir: &Path, id: &str) -> Result<SessionRecord> {
     })
 }
 
+/// Lists sessions, most-recently-started first, with optional status/parent
+/// filters and pagination.
+///
+/// `limit` is capped at 500 regardless of the requested value.
 pub fn list_sessions(
     workspace_dir: &Path,
     limit: Option<u32>,
@@ -303,7 +344,7 @@ pub fn list_sessions(
     status: Option<&str>,
     parent_id: Option<&str>,
 ) -> Result<SessionSearchResult> {
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[session_db] list_sessions limit={} offset={} status={} parent={}",
         limit.unwrap_or(50),
         offset.unwrap_or(0),
@@ -370,11 +411,16 @@ pub fn list_sessions(
     })
 }
 
+/// Searches sessions by full text plus optional structured filters (agent,
+/// tool, channel, parent, status, thread), most-recently-started first.
+///
+/// `params.query` is plain text, not raw FTS5 syntax — see
+/// `fts_match_query` for how it is escaped. `limit` is capped at 500.
 pub fn search_sessions(
     workspace_dir: &Path,
     params: &SessionSearchParams,
 ) -> Result<SessionSearchResult> {
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[session_db] search_sessions query={} agent={} tool={} channel={} thread={}",
         params.query.as_deref().unwrap_or("-"),
         params.agent_id.as_deref().unwrap_or("-"),
@@ -386,6 +432,10 @@ pub fn search_sessions(
     with_connection(workspace_dir, |conn| search_sessions_inner(conn, params))
 }
 
+/// Connection-scoped implementation of [`search_sessions`], shared with any
+/// caller that already holds an open connection (currently just
+/// `search_sessions` itself, but kept split so a future transactional caller
+/// does not have to reopen one).
 pub(super) fn search_sessions_inner(
     conn: &Connection,
     params: &SessionSearchParams,
@@ -479,6 +529,9 @@ pub(super) fn search_sessions_inner(
     Ok(SessionSearchResult { sessions, total })
 }
 
+/// Lists a session's messages in insertion order (`id ASC`).
+///
+/// `limit` is capped at 1000 regardless of the requested value.
 pub fn list_messages(
     workspace_dir: &Path,
     session_id: &str,
@@ -519,6 +572,9 @@ pub fn list_messages(
     })
 }
 
+/// Lists a session's tool calls in insertion order (`id ASC`).
+///
+/// `limit` is capped at 1000 regardless of the requested value.
 pub fn list_tool_calls(
     workspace_dir: &Path,
     session_id: &str,
@@ -558,6 +614,8 @@ pub fn list_tool_calls(
     })
 }
 
+/// Lists direct child sessions of `session_id`, oldest first (`started_at
+/// ASC`).
 pub fn list_children(workspace_dir: &Path, session_id: &str) -> Result<Vec<SessionRecord>> {
     with_connection(workspace_dir, |conn| {
         let mut stmt = conn.prepare(
@@ -579,10 +637,14 @@ pub fn list_children(workspace_dir: &Path, session_id: &str) -> Result<Vec<Sessi
     })
 }
 
+/// Marks every session still `status = "running"` as `interrupted`,
+/// returning how many rows changed.
+///
+/// Called at host startup: any session still `running` in a freshly-opened
+/// database belongs to a process that is gone, so its status is stale by
+/// definition.
 pub fn mark_interrupted(workspace_dir: &Path) -> Result<usize> {
-    tinyagents_tracing::debug!(
-        "[session_db] mark_interrupted — marking all running sessions as interrupted"
-    );
+    tracing::debug!("[session_db] mark_interrupted — marking all running sessions as interrupted");
     with_connection(workspace_dir, |conn| {
         let now = Utc::now();
         let changed = conn.execute(
@@ -591,14 +653,13 @@ pub fn mark_interrupted(workspace_dir: &Path) -> Result<usize> {
             params![now.to_rfc3339()],
         )?;
         if changed > 0 {
-            tinyagents_tracing::info!(
-                "[session_db] marked {changed} running session(s) as interrupted"
-            );
+            tracing::info!("[session_db] marked {changed} running session(s) as interrupted");
         }
         Ok(changed)
     })
 }
 
+/// Inserts a session's FTS entry (content and tool_name columns empty).
 pub(super) fn index_fts_session(
     conn: &Connection,
     session_id: &str,
@@ -658,10 +719,12 @@ pub fn fts_snippet_bytes() -> usize {
 /// raising it does not retroactively widen what is already indexed. Pair it
 /// with [`super::retention::reindex_fts`] to rebuild the index at the new cap.
 pub fn set_fts_snippet_bytes(bytes: usize) {
-    tinyagents_tracing::debug!("[session_db] fts snippet cap set to {bytes} bytes");
+    tracing::debug!("[session_db] fts snippet cap set to {bytes} bytes");
     FTS_SNIPPET_BYTES.store(bytes, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Inserts a message's FTS entry, indexing at most [`fts_snippet_bytes`]
+/// bytes of `content` on a character boundary.
 pub(super) fn index_fts_content(conn: &Connection, session_id: &str, content: &str) -> Result<()> {
     // Slice on a character boundary, not a byte offset. `&content[..2000]`
     // panics whenever byte 2000 lands inside a multi-byte character, which any
@@ -688,6 +751,7 @@ pub(super) fn index_fts_content(conn: &Connection, session_id: &str, content: &s
     Ok(())
 }
 
+/// Inserts a tool call's FTS entry (session_id and content columns empty).
 pub(super) fn index_fts_tool(conn: &Connection, session_id: &str, tool_name: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO sessions_fts (session_id, agent_definition_name, content, tool_name)
@@ -698,6 +762,8 @@ pub(super) fn index_fts_tool(conn: &Connection, session_id: &str, tool_name: &st
     Ok(())
 }
 
+/// Maps one `sessions` row (columns in the fixed order every query in this
+/// module selects them) into a [`SessionRecord`].
 pub(super) fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
     let started_at_raw: String = row.get(15)?;
     let ended_at_raw: Option<String> = row.get(16)?;
@@ -726,6 +792,8 @@ pub(super) fn map_session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sessi
     })
 }
 
+/// Parses a stored RFC-3339 timestamp, converting a malformed value into a
+/// [`TinyAgentsError::Storage`] rather than panicking.
 pub(super) fn parse_rfc3339(raw: &str) -> Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)
         .storage_context(&format!("invalid RFC3339 timestamp in session DB: {raw}"))?;

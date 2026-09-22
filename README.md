@@ -27,23 +27,27 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
 
 - **`tinyagents-harness`** — provider-neutral model calls, typed tools,
   middleware, structured output, streaming, usage/cost accounting, retries,
-  caching, memory, and a Claude Code CLI model adapter with stream-json,
+  caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
   `tools`, `multimodal`, `tracing`.
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
   `tracing`.
-- **`tinyagents-language`** — the `.rag` blueprint format: a declarative,
-  side-effect-free workflow description that lexes, parses, and compiles into
-  the same graph and harness types as hand-written Rust.
 - **`tinyagents-registry`** — a named capability catalog (models, tools,
-  agents, graphs, routers) that `.rag` and application code bind against by
-  name, plus an offline model price/capability catalog.
+  agents, graphs, and routers), plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage.
-- **`tinyagents-tracing`** — the `tracing` macros the other crates gate behind
-  their `tracing` feature. Compiled out by default.
+- **`tinyagents-definition`** — the host-owned agent definition vocabulary:
+  identity, description, declared model/tools/delegates, and a read-only
+  catalogue seam. Authorization, prompt construction, and execution stay with
+  the host and harness.
+- **`tinyagents-runtime`** — host-neutral stateful turns over the harness and
+  append-only transcript seam; hosts retain policy, prompt composition,
+  authorization, and durable-dialect conversion.
+- **`tinyagents-orchestration`** — host-neutral composition of durable
+  multi-agent work (teams and workflows) over the graph, harness, and session
+  layers; depends one-way on those crates and stays host-free.
 - **`tinyagents-integration-tests`** — cross-crate tests and the runnable
   examples referenced below (not published, workspace-internal).
 
@@ -56,7 +60,6 @@ None of the crates are published to crates.io (`publish = false` in every
 [dependencies]
 tinyagents-harness = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-harness" }
 tinyagents-graph = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-graph" }
-tinyagents-language = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-language" }
 tinyagents-registry = { git = "https://github.com/tinyhumansai/tinyagents", package = "tinyagents-registry" }
 # The code samples below build `Message` and provider types directly from
 # TinyInference, the message/model crate TinyAgents is built on. It is a
@@ -140,31 +143,42 @@ inside a larger one.
 
 `tinyagents-harness` runs the model/tool agent loop: provider-neutral model
 calls, typed tool definitions, middleware, structured output, streaming,
-usage and cost accounting, retries and limits, response caching, memory, and
-a testkit for exercising the loop without a live provider. An agent can be
-wrapped as a tool and handed to another agent (`SubAgent` /
-`SubAgentSession` / `SubAgentTool`), which is how multi-agent orchestration
-is composed — plain function composition, not a distinct execution mode.
+usage and cost accounting, retries and limits, response caching, and a testkit
+for exercising the loop without a live provider. Memory, workspace lifecycle,
+authorization, and persistence policy stay in the host and can wrap a complete
+run with `AgentMiddleware`.
+
+## Subagent orchestration
+
+`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a
+typed parent-context dispatcher: it starts a child in the background and
+returns a stable job id immediately. `SubAgentJobsTool` queries job
+status/results and `SubAgentMessageTool` sends messages to a live job;
+hosts register these control tools over the same explicitly shared
+`SubAgentJobRegistry`. `SubAgentSession` covers retained post-completion
+conversations, while `SubagentDriver` coordinates durable lifecycle
+preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
+are intentionally outside this focused crate.
+
+## Session runtime
+
+`tinyagents-runtime` owns mutable model history for one host-owned
+conversation, a stable prompt prefix, a frozen tool declaration snapshot, and
+the sequencing around one append-only transcript commit. A host supplies the
+driver, its lossless transcript codec, and lifecycle hooks. On a driver error,
+the runtime can commit recoverable logical history with an interrupted,
+display-only partial in the same history operation; model-context replay omits
+that partial. A codec can also derive `TurnUsage` from its explicit host
+context after the driver runs; that usage is attached to the same atomic
+append's final assistant row for both success and recoverable partials. A
+post-commit hook observes durable successes but cannot change their result.
+See [the runtime module](docs/modules/runtime/README.md).
 
 ## Registry
 
 `tinyagents-registry` is a name-addressable catalog of models, tools, agents,
-graphs, and routers. `.rag` blueprints and application code both resolve
-capabilities by name against it rather than holding direct handles, which is
-what lets a blueprint be validated against exactly the capabilities a host
-chose to register.
-
-## `.rag` blueprint language
-
-`tinyagents-language` implements `.rag`: a declarative, side-effect-free
-format for describing a graph's state channels, nodes, routes, and named
-capability references. It compiles through a fixed pipeline —
-`source -> lexer -> tokens -> parser -> AST -> compiler -> Blueprint` — into
-the same `tinyagents-graph` and `tinyagents-harness` types produced by
-hand-written Rust. It can only reference capabilities by name; it has no way
-to embed arbitrary code, so a blueprint is bound and validated against a
-registry before it runs. See
-[`examples/rag_blueprint.rs`](crates/tinyagents-integration-tests/examples/rag_blueprint.rs).
+graphs, and routers. Application code resolves capabilities by name against it
+rather than holding direct handles.
 
 ## Providers
 
@@ -186,10 +200,6 @@ All live in
 - **`agent_loop_tools`** — the agent/tool loop the harness runs.
 - **`orchestrator_subagents`** — an orchestrator agent that resolves and calls
   sub-agents by name from the registry.
-- **`rag_blueprint`** — parse and compile a `.rag` workflow, then bind it
-  against a registry.
-- **`openai_self_blueprint`** — a model emits a `.rag` blueprint that is
-  compiled and run.
 - **`goals_and_todos`** — a durable goal driving a todo checklist on one
   thread.
 - **`openai_chat`**, **`openai_tools`**, **`openai_structured`**,
@@ -203,7 +213,7 @@ All live in
 
 - [`docs/spec/README.md`](docs/spec/README.md) — architecture specification.
 - [Wiki](https://github.com/tinyhumansai/tinyagents/wiki) — Harness, Graph
-  Runtime, Registry, Expressive Language, Providers, Quick Start,
+  Runtime, Registry, Providers, Quick Start,
   Examples, Development.
 
 ## Development

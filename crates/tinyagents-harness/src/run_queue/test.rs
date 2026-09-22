@@ -1,3 +1,6 @@
+//! Tests for [`RunQueue`]: per-lane push/drain FIFO ordering, status
+//! snapshots, `clear`, and lane independence.
+
 use super::*;
 
 #[tokio::test]
@@ -53,4 +56,40 @@ async fn clear_empties_every_lane_and_reports_the_drop_count() {
 
     assert_eq!(queue.clear().await, 3);
     assert_eq!(queue.status().await.total, 0);
+}
+
+#[tokio::test]
+async fn take_one_at_a_time_pops_only_the_oldest_item() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Steer, "first").await;
+    queue.push(QueueLane::Steer, "second").await;
+
+    assert_eq!(
+        queue.take(QueueLane::Steer, QueueMode::OneAtATime).await,
+        vec!["first"]
+    );
+    assert_eq!(queue.status().await.steers, 1);
+    assert_eq!(
+        queue.take(QueueLane::Steer, QueueMode::OneAtATime).await,
+        vec!["second"]
+    );
+    assert!(
+        queue
+            .take(QueueLane::Steer, QueueMode::OneAtATime)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn take_all_drains_the_whole_lane() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Followup, "first").await;
+    queue.push(QueueLane::Followup, "second").await;
+
+    assert_eq!(
+        queue.take(QueueLane::Followup, QueueMode::All).await,
+        vec!["first", "second"]
+    );
+    assert_eq!(queue.status().await.followups, 0);
 }

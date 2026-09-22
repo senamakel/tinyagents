@@ -11,9 +11,11 @@ server.
 
 ## Detailed Module Docs
 
-- [Design](design.md)
-  - [Events and persistence](events.md)
-  - [Operations and lifecycle](operations.md)
+- [Implementation status](implementation-status.md) — what actually exists in
+  `crates/tinyagents-registry/src` today; read this first.
+- [Design](design.md) (design proposal, not implemented)
+  - [Events and persistence](events.md) (design proposal, not implemented)
+  - [Operations and lifecycle](operations.md) (design proposal, not implemented)
 - [Model catalog and local snapshots](model-catalog.md)
 
 ## Responsibilities
@@ -118,7 +120,6 @@ live handles.
 
 `ComponentKind` partitions the registry namespace and now has **12** variants.
 Alongside `Model`, `Tool`, `Graph`, `Router`, `Reducer`, `Store`, `Agent`, and
-`Script` (a host-provided script a `repl_agent` node may reference by name),
 four kinds cover the
 runtime's durable roles:
 

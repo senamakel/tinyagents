@@ -49,7 +49,10 @@ const CONTINUATION_USER_TURN: &str = "Continue with the task described above.";
 
 /// Build the tool-use protocol block appended to the system prompt when native
 /// tool calling is unavailable. Describes the `<tool_call>` convention and lists
-/// each tool's name, description, and JSON-Schema parameters.
+/// each tool's name, description, and a compact TypeScript-style argument
+/// signature (see [`super::type_signature`]) with one note per described
+/// top-level argument — a fraction of the tokens of the raw JSON Schema, which
+/// used to be pasted here verbatim for every tool on every request.
 pub fn prompt_tool_instructions(tools: &[ToolSchema]) -> String {
     let mut out = String::new();
     out.push_str("## Tool Use Protocol\n\n");
@@ -64,11 +67,19 @@ pub fn prompt_tool_instructions(tools: &[ToolSchema]) -> String {
     out.push_str("After execution, results appear in <tool_result> tags. ");
     out.push_str("Continue reasoning with the results until you can give a final answer.\n\n");
     out.push_str("### Available Tools\n\n");
+    out.push_str("Arguments are shown as `{name: type, optional?: type}`.\n\n");
     for tool in tools {
-        let params = serde_json::to_string(&tool.parameters).unwrap_or_else(|_| "{}".to_string());
         // Infallible: writing to a String never errors.
         let _ = writeln!(out, "**{}**: {}", tool.name, tool.description);
-        let _ = writeln!(out, "Parameters: `{params}`\n");
+        let _ = writeln!(
+            out,
+            "Arguments: `{}`",
+            super::signature::type_signature(&tool.parameters)
+        );
+        for note in super::signature::argument_notes(&tool.parameters) {
+            let _ = writeln!(out, "  - {note}");
+        }
+        out.push('\n');
     }
     out
 }
@@ -170,7 +181,11 @@ fn is_resolvable_user_query(message: &Message) -> bool {
     }
     user.content.iter().any(|block| match block {
         ContentBlock::Text(text) => !text.trim().is_empty(),
-        ContentBlock::Json(_) | ContentBlock::Image(_) => true,
+        ContentBlock::Json(_)
+        | ContentBlock::Image(_)
+        | ContentBlock::Audio(_)
+        | ContentBlock::Video(_)
+        | ContentBlock::Document(_) => true,
         // Reasoning replay and opaque provider payloads are not user input.
         ContentBlock::Thinking { .. }
         | ContentBlock::RedactedThinking { .. }
@@ -587,7 +602,7 @@ pub const SYNTHETIC_CALL_ID_PREFIX: &str = "ptc";
 pub fn next_synthetic_call_id(slot: usize) -> String {
     let sequence = SYNTHETIC_CALL_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let id = format!("{SYNTHETIC_CALL_ID_PREFIX}_{sequence}_{slot}");
-    tinyagents_tracing::trace!("[tool::prompt] minted synthetic tool-call id {id}");
+    tracing::trace!("[tool::prompt] minted synthetic tool-call id {id}");
     id
 }
 
@@ -600,7 +615,13 @@ fn parse_relaxed_object(raw: &str) -> Option<Value> {
         // A non-object parsed strictly is not a tool call; do not try to
         // "repair" it into one.
         Ok(_) => None,
-        Err(_) => crate::relaxed_json::recover_relaxed_object(raw),
+        Err(_) => crate::relaxed_json::recover_relaxed_object(raw).or_else(|| {
+            // Python-style single-quoted objects are a common local-model
+            // spelling. The conservative parser already rejected the exact
+            // input; retrying its quote-normalized form keeps recovery scoped
+            // to a whole object rather than interpreting prose as a call.
+            crate::relaxed_json::recover_relaxed_object(&raw.replace('\'', "\""))
+        }),
     }
 }
 

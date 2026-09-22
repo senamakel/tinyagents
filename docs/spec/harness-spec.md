@@ -2,8 +2,9 @@
 
 The harness is the outer runtime for LLM applications. In LangChain terms, this
 is the layer around a model call that owns the agent loop, prompt/context
-assembly, tool execution, middleware, memory, streaming, tracing, retries, and
-testability.
+assembly, tool execution, middleware, streaming, tracing, retries, and
+testability. Hosts own memory and workspace policy through the harness's
+middleware and context seams.
 
 The harness must stay composable. It should not be a single monolithic `Agent`
 type that hides every behavior. A direct model call, a model-plus-tools loop, and
@@ -32,7 +33,8 @@ testing:
 - Resolve model calls from request overrides, reusable state, model hints,
   agent defaults, registry defaults, and fallback policy.
 - Register tools and validate tool calls against schemas.
-- Build model requests from state, prompts, memory, and runtime context.
+- Build model requests from state, prompts, host-provided memory, and runtime
+  context.
 - Apply prompt and message templates.
 - Preserve provider prompt/KV-cache stability by keeping cacheable prompt
   prefixes deterministic and isolating volatile context near the tail of model
@@ -231,7 +233,7 @@ portable across providers that are strict about tool naming.
 The default harness loop should be:
 
 1. Build `RunContext`.
-2. Load short-term memory for `thread_id` when configured.
+2. Host middleware loads short-term memory for `thread_id` when configured.
 3. Build a `ModelRequest`.
 4. Run pre-request middleware that can edit prompts, context, cache layout,
    compression state, and provider options.
@@ -245,7 +247,8 @@ The default harness loop should be:
 8. If the assistant produced tool calls, validate and execute them.
 9. Append tool result messages.
 10. Repeat until no tool calls remain or limits are reached.
-11. Persist updated short-term memory and return the final output.
+11. Host middleware persists updated short-term memory and the harness returns
+    the final output.
 
 Limits are not optional. The harness should enforce:
 
@@ -301,17 +304,18 @@ Expected middleware:
 
 ### Memory
 
-Memory should be a harness capability. The graph runtime should handle
-checkpointed graph execution; the harness should handle conversation and
-application memory.
+Memory is host policy applied through harness middleware. The graph runtime
+handles checkpointed graph execution; hosts decide how conversation and
+application memory are loaded and persisted.
 
 Memory is split into two concepts:
 
-- short-term memory: thread-scoped conversation state, usually backed by graph
-  checkpoints or a conversation checkpoint store
-- long-term memory: cross-thread application data exposed through a store trait
+- short-term memory: thread-scoped conversation state loaded and persisted by
+  host middleware
+- long-term memory: cross-thread application data exposed to the host through a
+  store trait
 
-Memory backends should start with:
+Host memory implementations may use:
 
 - in-memory store for tests
 - file-backed store for local development
