@@ -2033,8 +2033,23 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
             cacheable: true,
         });
     }
-    let harness_layout =
-        request.cache_segments.is_empty() || request.cache_segments == expected_layout;
+    // A text dialect (`RunDialect::apply_to_request`) folds the catalogue
+    // into the system prompt and clears `tools` *after* `before_model` ran,
+    // so a middleware that declared the harness layout while the schemas
+    // were still on the request legitimately carries a trailing `tools`
+    // segment the rebuilt layout no longer has. That is still the harness
+    // layout, not a custom annotation: demoting it to the whole-request
+    // digest below would re-roll the provider routing key on every call.
+    let declared_with_stripped_tools = request.tools.is_empty()
+        && request
+            .cache_segments
+            .split_last()
+            .is_some_and(|(last, head)| {
+                last.role == SegmentRole::Tools && last.id == "tools" && head == expected_layout
+            });
+    let harness_layout = request.cache_segments.is_empty()
+        || request.cache_segments == expected_layout
+        || declared_with_stripped_tools;
 
     if harness_layout {
         request.cache_segments = expected_layout;
