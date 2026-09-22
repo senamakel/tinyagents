@@ -395,8 +395,12 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
     let tmp_path = unique_tmp_path(path);
 
-    fs::write(&tmp_path, contents)
-        .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
+    if let Err(error) = fs::write(&tmp_path, contents) {
+        // Same orphaned-temp-file hazard as `atomic_write` — see its comment.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error)
+            .with_context(|| format!("write temp transcript {}", tmp_path.display()));
+    }
     let published = match fs::hard_link(&tmp_path, path) {
         Ok(()) => true,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
