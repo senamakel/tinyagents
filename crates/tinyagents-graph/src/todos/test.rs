@@ -373,8 +373,12 @@ mod tool_tests {
             "writing the list is not the work: {description}"
         );
         assert!(
-            description.contains("must also carry the tool call that does the next step"),
-            "the same response carries the next step: {description}"
+            description.contains("immediately carry out the next step"),
+            "the model advances after bookkeeping: {description}"
+        );
+        assert!(
+            description.contains("next model turn"),
+            "sequential providers may advance on their next turn: {description}"
         );
     }
 
