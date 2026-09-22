@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use tinyinference_llm::message::ContentBlock;
-use tinyinference_llm::model::{ModelRequest, ModelResponse, ToolChoice};
+use tinyinference_llm::message::{ContentBlock, Message};
+use tinyinference_llm::model::{ModelRequest, ModelResponse, PromptSegment, SegmentRole, ToolChoice};
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
 use tinytools_agent::dialect::{CodeDialect, CodeStyle, PFormatDialect};
 use tinytools_agent::types::{ParseOptions, ParsedToolCall};
