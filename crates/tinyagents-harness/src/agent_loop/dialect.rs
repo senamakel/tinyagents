@@ -198,6 +198,30 @@ impl RunDialect {
         };
         request.tool_choice = ToolChoice::Auto;
     }
+
+    /// Renders `tools` into this dialect's catalogue shape alone (no
+    /// protocol instructions): the `Self::Xml` full-schema form, the
+    /// `Self::PFormat` positional-signature form, or the `Self::Code`
+    /// function-signature form. Used to advertise a schema the host's own
+    /// static catalogue could not have carried — see
+    /// [`Self::apply_to_request`]'s `synthesized` parameter.
+    fn render_catalogue(&self, tools: &[ToolSchema]) -> String {
+        let specs: Vec<tinytools_agent::tinytools::ToolSpec> = tools
+            .iter()
+            .map(|schema| tinytools_agent::tinytools::ToolSpec {
+                name: schema.name.clone(),
+                description: schema.description.clone(),
+                parameters: schema.parameters.clone(),
+            })
+            .collect();
+        match self {
+            Self::Xml | Self::Native => tinytools_agent::render::render_json_catalogue(&specs),
+            Self::PFormat(_) => tinytools_agent::render::render_pformat_catalogue(&specs),
+            Self::Code(style, _) => {
+                tinytools_agent::render::render_code_catalogue(&specs, *style)
+            }
+        }
+    }
 }
 
 /// Builds the positional layout registry the P-Format and code dialects
