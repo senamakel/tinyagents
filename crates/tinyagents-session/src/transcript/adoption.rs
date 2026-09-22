@@ -178,11 +178,20 @@ pub fn adopt_legacy_session_transcripts(
         meta.updated = updated;
     }
 
-    // `write_transcript` writes through a temp file and an atomic rename, so
-    // `destination` only ever transitions from absent straight to complete —
-    // there is no truncated intermediate state for a crash to strand future
-    // callers on.
-    write_transcript(&destination, &messages, &meta, None)?;
+    // `write_transcript_if_absent` never overwrites an existing destination:
+    // the adoption lock only serializes competing *adopters*, not a normal
+    // session turn independently creating this same first transcript while
+    // adoption is still scanning. If that happened, `destination` now holds
+    // real conversation data that must not be clobbered with an adoption
+    // fold that started before it existed — so a lost race here discards
+    // this call's fold and reports `Ok(None)`, the same as "nothing to do".
+    if !write_transcript_if_absent(&destination, &messages, &meta)? {
+        tracing::debug!(
+            "[transcript-adoption] session={stem} lost the race to a concurrent write; \
+             discarding this fold"
+        );
+        return Ok(None);
+    }
     tracing::info!(
         "[transcript-adoption] session={stem} adopted {} legacy root(s) totalling {} message(s)",
         adopted.len(),
