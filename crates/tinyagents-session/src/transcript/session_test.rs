@@ -253,6 +253,12 @@ fn every_level_of_a_maximal_chain_stays_under_the_filesystem_limit() {
     );
 }
 
+/// A delegation chain several levels deep, each level with a long key, must
+/// not grow the final stem without bound — see `MAX_PARENT_CHAIN_PREFIX`.
+/// 50 levels of ~113-byte components would be several KB uncollapsed,
+/// comfortably past any sane bound; this pins that the collapse actually
+/// keeps growth from compounding rather than merely being "small enough in
+/// this one example".
 #[test]
 fn a_deeply_nested_delegation_chain_stays_bounded() {
     let long_key = "k".repeat(80);
