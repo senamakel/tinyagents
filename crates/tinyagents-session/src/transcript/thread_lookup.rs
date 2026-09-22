@@ -59,30 +59,39 @@ pub fn find_root_transcript_for_thread_scoped(
 /// agent-id filtering; exposed directly for callers that need the full
 /// ordered history rather than just the latest match.
 pub fn find_root_transcripts_for_thread(workspace_dir: &Path, thread_id: &str) -> Vec<PathBuf> {
-    let mut matches = Vec::new();
-    matches.extend(root_transcripts_for_thread_in_dir(
-        &raw_session_dir(workspace_dir),
-        thread_id,
-    ));
-    matches.sort_by_cached_key(|path| {
-        let created = read_transcript(path)
-            .ok()
-            .map(|transcript| transcript.meta.created)
-            .unwrap_or_default();
-        (created, path.clone())
-    });
-    matches
+    root_transcripts_for_thread_in_dir(&raw_session_dir(workspace_dir), thread_id).0
 }
 
-fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> Vec<PathBuf> {
+/// [`find_root_transcripts_for_thread`], additionally reporting whether the
+/// scan hit any root `.jsonl` file it could not read at all — matching or
+/// not, since a read failure happens *before* the thread-id comparison, so
+/// which thread an unreadable file belonged to can never be determined.
+///
+/// Exists for [`super::adoption::adopt_legacy_session_transcripts`]: that
+/// caller's idempotency marker is the destination file it writes, so folding
+/// only the *readable* matches and reporting success would permanently
+/// strand an unreadable file's turns — the marker's existence stops every
+/// later retry. [`find_root_transcripts_for_thread`] itself is used by
+/// callers (thread resume, usage summaries) that already treat "unreadable"
+/// as "absent" and are safe to keep doing so; only adoption's
+/// once-and-only-once contract needs to know the difference.
+pub fn find_root_transcripts_for_thread_reporting_unreadable(
+    workspace_dir: &Path,
+    thread_id: &str,
+) -> (Vec<PathBuf>, bool) {
+    root_transcripts_for_thread_in_dir(&raw_session_dir(workspace_dir), thread_id)
+}
+
+fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> (Vec<PathBuf>, bool) {
     let thread_id = thread_id.trim();
     if thread_id.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     let Ok(entries) = fs::read_dir(raw_dir) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
+    let mut any_unreadable = false;
     // Keyed by `meta.created` so the order is chronological rather than
     // lexicographic. Modern stems are `{unix_ts}_{agent_id}` and sort the same
     // either way, but a legacy `{agent}_{index}` root encodes no time at all —
@@ -110,6 +119,7 @@ fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> Vec<Pa
                     "[transcript] skipping unreadable root transcript candidate {}: {err}",
                     path.display()
                 );
+                any_unreadable = true;
                 None
             }
         })
@@ -118,7 +128,10 @@ fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> Vec<Pa
     // Path is the tiebreak so the order stays total and deterministic when two
     // transcripts share a `created` stamp.
     matches.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    matches.into_iter().map(|(_, path)| path).collect()
+    (
+        matches.into_iter().map(|(_, path)| path).collect(),
+        any_unreadable,
+    )
 }
 
 /// Summed token/cost usage for `thread_id` across its root transcripts, or
