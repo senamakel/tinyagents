@@ -434,21 +434,51 @@ fn concurrent_handles_on_one_session_both_extend_it() {
         .open_session(&session, meta())
         .unwrap();
 
-    left.append(TranscriptMessage::new("user", "from left"))
-        .unwrap();
-    right
-        .append(TranscriptMessage::new("user", "from right"))
-        .unwrap();
-    left.append(TranscriptMessage::new("user", "left again"))
-        .unwrap();
+    // Seed the file first, so both appends below exercise the append-only
+    // path — `write_logical_set` re-reading `persisted` fresh immediately
+    // before every write, which is the actual claim under test — rather than
+    // racing on first-write file creation, a distinct, pre-existing concern
+    // this test is not about.
+    left.append(TranscriptMessage::new("user", "seed")).unwrap();
 
-    let contents: Vec<String> = left
+    // Genuinely overlapping, not merely interleaved: both handles race to
+    // append from separate OS threads, released together by a barrier so
+    // neither can start before the other is ready. A handle that cached its
+    // own view of `persisted` instead of re-reading it fresh before every
+    // write could lose whichever append the barrier let land second.
+    let barrier = Arc::new(Barrier::new(2));
+    let left_barrier = Arc::clone(&barrier);
+    let left_thread = std::thread::spawn(move || {
+        left_barrier.wait();
+        left.append(TranscriptMessage::new("user", "from left"))
+            .unwrap();
+    });
+    let right_barrier = Arc::clone(&barrier);
+    let right_thread = std::thread::spawn(move || {
+        right_barrier.wait();
+        right
+            .append(TranscriptMessage::new("user", "from right"))
+            .unwrap();
+    });
+    left_thread.join().unwrap();
+    right_thread.join().unwrap();
+
+    let reread = FileTranscriptLocator::new(dir.path())
+        .open_session(&session, meta())
+        .unwrap();
+    let mut contents: Vec<String> = reread
         .messages()
         .unwrap()
         .into_iter()
         .map(|message| message.content)
         .collect();
-    assert_eq!(contents, ["from left", "from right", "left again"]);
+    assert_eq!(contents.remove(0), "seed");
+    contents.sort();
+    assert_eq!(
+        contents,
+        ["from left", "from right"],
+        "an overlapping append from either handle must not be lost"
+    );
 }
 
 /// The model reads only the head generation, but a host rendering or
