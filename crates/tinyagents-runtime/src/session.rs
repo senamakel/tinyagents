@@ -135,9 +135,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // regains the turns the newest-wins lookup had stranded.
                     // Adoption is best effort: it recovers history that would
                     // otherwise be stranded, but failing to recover it must not
-                    // fail the turn the user is waiting on. The session crate
-                    // logs the outcome either way.
-                    let _ = target.locator.adopt_legacy(&session, thread, &target.meta);
+                    // fail the turn the user is waiting on.
+                    if let Err(error) = target.locator.adopt_legacy(&session, thread, &target.meta)
+                    {
+                        tracing::warn!(
+                            "[session] legacy adoption failed session={} thread={thread}: {error}",
+                            session.session_id()
+                        );
+                    }
                     session_binding = Some(session.clone());
                 }
                 match read {
