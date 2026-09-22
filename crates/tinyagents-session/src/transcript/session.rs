@@ -300,7 +300,7 @@ fn bounded_parent_stem(parent: &SessionRef) -> String {
     if stem.len() <= MAX_PARENT_CHAIN_PREFIX {
         return stem;
     }
-    format!("chain{DIGEST_SEPARATOR}{:016x}", fnv1a64(stem.as_bytes()))
+    format!("chain{DIGEST_SEPARATOR}{:032x}", fnv1a128(stem.as_bytes()))
 }
 
 #[cfg(test)]
