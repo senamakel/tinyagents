@@ -219,9 +219,26 @@ fn adoption_lock_path(destination: &Path) -> PathBuf {
 /// Backed by [`std::fs::OpenOptions::create_new`] rather than an in-process
 /// mutex because concurrent adopters are typically separate processes (two
 /// hosts, or a process restarted mid-turn) with no shared memory to
-/// synchronize on. Released on drop so an early `?` return still clears it.
+/// synchronize on.
+///
+/// The correctness boundary that actually prevents data loss is
+/// [`write_transcript_if_absent`]'s atomic publish, not this lock — the lock
+/// is an efficiency optimization that lets concurrent *adopters* avoid
+/// redundant scanning, not the thing standing between two writers and a
+/// corrupted file. That is deliberate: reclaiming a lock purely by file age
+/// (below) can never be made fully race-free without OS-level leases this
+/// module does not have, so the design accepts an occasional double-scan
+/// under reclamation rather than a lock a crashed owner can block forever —
+/// knowing that even a full double-scan-and-write race resolves safely
+/// through the atomic publish underneath it.
 struct AdoptionLock {
     path: PathBuf,
+    /// Written into the lock file's content at creation. [`Drop`] reads the
+    /// file back and only removes it when the content still matches this
+    /// token, so a lock this instance *lost* ownership of (reclaimed by
+    /// another process as stale, see [`Self::acquire`]) is never unlinked
+    /// out from under its new, legitimate owner.
+    token: String,
 }
 
 impl AdoptionLock {
@@ -230,50 +247,76 @@ impl AdoptionLock {
     ///
     /// A lock older than [`STALE_LOCK_AGE`] is reclaimed on the assumption
     /// that its owner crashed before releasing it — otherwise a single crash
-    /// mid-adoption would block that session's adoption forever, which is
-    /// worse than the rare double-adoption a race under reclamation could
-    /// still cause.
+    /// mid-adoption would block that session's adoption forever. The
+    /// remaining reclaim-under-a-live-owner race this cannot fully close
+    /// (two processes both observe the same stale lock; see [`Self::token`]
+    /// for how `Drop` avoids compounding it) resolves safely because the
+    /// eventual writes still go through [`write_transcript_if_absent`].
     fn acquire(path: &Path) -> Result<Option<Self>> {
+        let token = lock_token();
+        match Self::create_exclusive(path, &token)? {
+            true => Ok(Some(Self {
+                path: path.to_path_buf(),
+                token,
+            })),
+            false if lock_is_stale(path) => {
+                tracing::warn!(
+                    "[transcript-adoption] reclaiming stale adoption lock {}",
+                    path.display()
+                );
+                let _ = std::fs::remove_file(path);
+                match Self::create_exclusive(path, &token)? {
+                    true => Ok(Some(Self {
+                        path: path.to_path_buf(),
+                        token,
+                    })),
+                    // Lost the race to reclaim it — the winner will finish
+                    // the adoption (or lose its own race to a normal write,
+                    // safely, via `write_transcript_if_absent`).
+                    false => Ok(None),
+                }
+            }
+            false => Ok(None),
+        }
+    }
+
+    /// Attempts to create `path` exclusively with `token` as its content.
+    /// Returns `Ok(true)` on success, `Ok(false)` when `path` already
+    /// exists.
+    fn create_exclusive(path: &Path, token: &str) -> Result<bool> {
+        use std::io::Write;
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
         {
-            Ok(_) => Ok(Some(Self {
-                path: path.to_path_buf(),
-            })),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if lock_is_stale(path) {
-                    tracing::warn!(
-                        "[transcript-adoption] reclaiming stale adoption lock {}",
-                        path.display()
-                    );
-                    let _ = std::fs::remove_file(path);
-                    return match std::fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(path)
-                    {
-                        Ok(_) => Ok(Some(Self {
-                            path: path.to_path_buf(),
-                        })),
-                        // Lost the race to reclaim it — the winner will
-                        // finish the adoption.
-                        Err(_) => Ok(None),
-                    };
-                }
-                Ok(None)
+            Ok(mut file) => {
+                // Best-effort: the exclusive create above is what actually
+                // establishes ownership. A failed or partial token write
+                // only widens `Drop`'s safety margin (it would then decline
+                // to remove a lock it cannot positively confirm as its own),
+                // it never narrows it.
+                let _ = file.write_all(token.as_bytes());
+                Ok(true)
             }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
             Err(error) => {
                 Err(error).with_context(|| format!("create adoption lock {}", path.display()))
             }
         }
     }
+
+    /// Whether this instance's token is still what is on disk at `path`.
+    fn still_owns(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|contents| contents == self.token)
+    }
 }
 
 impl Drop for AdoptionLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if self.still_owns() {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
 }
 
@@ -286,6 +329,19 @@ fn lock_is_stale(path: &Path) -> bool {
                 .map_err(|_| std::io::Error::other("clock went backwards"))
         })
         .is_ok_and(|age| age > STALE_LOCK_AGE)
+}
+
+/// A per-process-unique token for one lock acquisition: pid plus a
+/// monotonically increasing in-process counter. Not a cryptographic nonce —
+/// it only has to distinguish this acquisition from acquisitions by other
+/// processes and from earlier acquisitions in this one, which pid+counter
+/// already guarantees deterministically and without any external
+/// dependency.
+fn lock_token() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{nonce}", std::process::id())
 }
 
 #[cfg(test)]
