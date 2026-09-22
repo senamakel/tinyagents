@@ -727,11 +727,14 @@ impl TranscriptRead for FileTranscriptHistory {
     }
 }
 
-impl TranscriptHistory for FileTranscriptHistory {
-    /// Pure forwarder: every argument reaches [`append_transcript_turn`]
-    /// untouched, so the bytes this writes are identical to what the free
-    /// function would have written at the call site.
-    fn append_turn(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
+impl FileTranscriptHistory {
+    /// The actual `append_turn` write. Assumes the caller already holds
+    /// [`path_lock`] for [`Self::path`] — never call this directly; every
+    /// public entry point below acquires the lock once and then routes
+    /// through here (and [`Self::append_turn_with_partial_locked`]) so the
+    /// lock is taken exactly once per call, never nested (this crate's
+    /// `Mutex` is not reentrant).
+    fn append_turn_locked(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
         tracing::debug!(
             "[transcript-history] append_turn prev={} next={} usage={} request_id={:?} path={}",
             turn.prev.len(),
@@ -750,7 +753,9 @@ impl TranscriptHistory for FileTranscriptHistory {
         )
     }
 
-    fn append_turn_with_partial(
+    /// [`Self::append_turn_locked`]'s counterpart for the display-partial
+    /// variant. Same locking contract.
+    fn append_turn_with_partial_locked(
         &self,
         turn: TranscriptTurn<'_>,
         partial: Option<&TranscriptPartial>,
@@ -772,36 +777,77 @@ impl TranscriptHistory for FileTranscriptHistory {
             partial,
         )
     }
+
+    /// [`Self::write_logical_set`], assuming the caller already holds
+    /// [`path_lock`] for [`Self::path`].
+    fn write_logical_set_locked(&self, next: &[TranscriptMessage]) -> anyhow::Result<()> {
+        let prev = self.persisted()?;
+        let meta = self.meta_for_write()?;
+        self.append_turn_locked(TranscriptTurn {
+            prev: &prev,
+            next,
+            meta: &meta,
+            turn_usage: None,
+            request_id: None,
+        })
+    }
+}
+
+impl TranscriptHistory for FileTranscriptHistory {
+    /// Pure forwarder: every argument reaches [`append_transcript_turn`]
+    /// untouched, so the bytes this writes are identical to what the free
+    /// function would have written at the call site.
+    ///
+    /// This — not [`TranscriptHistory::append`] — is the turn path's own
+    /// write call (`Session::persist` in `tinyagents-runtime` calls
+    /// [`TranscriptHistory::append_turn_with_partial`] directly), so the
+    /// same [`path_lock`] serialization `append`/`replace`/`clear` need
+    /// applies here too: two `FileTranscriptHistory` handles bound to the
+    /// same successor generation (two compactions racing on
+    /// `TranscriptLocator::begin_generation` for one session) would
+    /// otherwise both see the file absent and both take the writer's
+    /// create-fresh path, and whichever `fs::write` lands last would
+    /// silently discard the other's retained set.
+    fn append_turn(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
+        let lock = path_lock(&self.path);
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.append_turn_locked(turn)
+    }
+
+    fn append_turn_with_partial(
+        &self,
+        turn: TranscriptTurn<'_>,
+        partial: Option<&TranscriptPartial>,
+    ) -> anyhow::Result<()> {
+        let lock = path_lock(&self.path);
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.append_turn_with_partial_locked(turn, partial)
+    }
+
     fn messages(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
         self.persisted()
     }
 
     fn append(&self, message: TranscriptMessage) -> anyhow::Result<()> {
-        let _lock = path_lock(&self.path);
-        let _guard = _lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = path_lock(&self.path);
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut next = self.persisted()?;
         next.push(message);
-        self.write_logical_set(&next)
+        self.write_logical_set_locked(&next)
     }
 
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
-        let _lock = path_lock(&self.path);
-        let _guard = _lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.write_logical_set(messages)
+        let lock = path_lock(&self.path);
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.write_logical_set_locked(messages)
     }
 
     fn clear(&self) -> anyhow::Result<()> {
-        let _lock = path_lock(&self.path);
-        let _guard = _lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = path_lock(&self.path);
+        let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if !self.path.exists() {
             return Ok(());
         }
-        self.write_logical_set(&[])
+        self.write_logical_set_locked(&[])
     }
 }
