@@ -459,6 +459,13 @@ impl TranscriptLocator for FileTranscriptLocator {
         seed: TranscriptMeta,
     ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
         let successor = session.next_generation();
+        anyhow::ensure!(
+            successor.generation <= MAX_GENERATIONS,
+            "session {} has reached the {MAX_GENERATIONS}-generation compaction limit; \
+             refusing to create generation {}",
+            session.session_id(),
+            successor.generation
+        );
         let stem = session_stem(&successor);
         let path = resolve_keyed_transcript_path(&self.workspace_dir, &stem)?;
         anyhow::ensure!(
