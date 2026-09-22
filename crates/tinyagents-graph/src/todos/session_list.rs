@@ -31,8 +31,10 @@ const SESSION_TODO_MARKER: &str = "session_todo";
 
 const DESCRIPTION: &str = "Your todo list for this conversation. Pass the complete list every \
     time; it replaces what was there. Use it for work with 3+ steps: write the steps up front, \
-    keep exactly one `in_progress`, mark each `completed` the moment it is done. Omit `todos` \
-    to read the current list.";
+    keep exactly one `in_progress`, mark each `completed` only after its work has actually run \
+    and its result is in this conversation. Writing the list is bookkeeping, not work: the same \
+    response that updates it must also carry the tool call that does the next step, and one \
+    update per response is enough. Omit `todos` to read the current list.";
 
 /// One item as the model writes it.
 #[derive(Debug, Deserialize)]
