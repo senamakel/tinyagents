@@ -113,14 +113,23 @@ impl RunDialect {
         use tinyinference_llm::prompt_tools;
 
         let tools = std::mem::take(&mut request.tools);
+        let messages = prompt_tools::coalesce_tool_results(&request.messages);
+        let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
         if host_renders_catalogue {
-            request.messages = prompt_tools::coalesce_tool_results(&request.messages);
-            request.messages = prompt_tools::ensure_resolvable_user_turn(&request.messages);
+            // Only a forced choice still has to be said, since the host's
+            // prompt was composed before the choice was known.
+            let forced = match &request.tool_choice {
+                ToolChoice::Required => Some("You must emit at least one tool call.\n".to_string()),
+                ToolChoice::Tool(name) => Some(format!("You must call the `{name}` tool.\n")),
+                ToolChoice::Auto | ToolChoice::None => None,
+            };
+            request.messages = match forced {
+                Some(block) => prompt_tools::append_system_block(&messages, &block),
+                None => messages,
+            };
             request.tool_choice = ToolChoice::Auto;
             return;
         }
-        let messages = prompt_tools::coalesce_tool_results(&request.messages);
-        let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
         request.messages = match self {
             Self::Xml | Self::Native => {
                 prompt_tools::with_tool_instructions(&messages, &tools, &request.tool_choice)
