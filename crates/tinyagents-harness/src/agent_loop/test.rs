@@ -1738,7 +1738,9 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
             _state: &(),
             request: &mut ModelRequest,
         ) -> Result<()> {
-            request.messages.insert(0, Message::system("tenant context"));
+            request
+                .messages
+                .insert(0, Message::system("tenant context"));
             request.messages.insert(0, Message::system("tenant policy"));
             // These resemble the harness IDs but their order is deliberately
             // middleware-owned. Dispatch must not normalize them.
