@@ -157,6 +157,6 @@ fn a_very_long_key_still_produces_a_filesystem_safe_stem() {
 fn two_long_keys_that_share_a_bounded_prefix_still_get_distinct_stems() {
     let base = "k".repeat(400);
     let a = session_stem(&SessionRef::root(&base));
-    let b = session_stem(&SessionRef::root(&format!("{base}-tail"))); // differs past the bound
+    let b = session_stem(&SessionRef::root(format!("{base}-tail"))); // differs past the bound
     assert_ne!(a, b);
 }
