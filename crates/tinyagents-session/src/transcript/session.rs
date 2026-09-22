@@ -139,11 +139,15 @@ impl SessionRef {
 /// `{parent}__` for a sub-agent.
 pub fn session_stem(session: &SessionRef) -> String {
     let mut stem = sanitize_component(&session.session_key);
-    if let Some(agent_id) = session
-        .agent_id
-        .as_deref()
-        .filter(|id| !id.trim().is_empty())
-    {
+    if let Some(agent_id) = session.agent_id.as_deref() {
+        // Emitted whenever `agent_id.is_some()`, blank or not: omitting a
+        // blank/whitespace-only agent component entirely made
+        // `SessionRef::scoped(key, "")` encode identically to
+        // `SessionRef::root(key)`, sharing one transcript between what are,
+        // by construction (`scoped` vs `root`), two distinct identities.
+        // `sanitize_component`'s own per-component digest is what actually
+        // keeps this collision-free even when the sanitized text is empty:
+        // it digests the raw (possibly blank) value, not the sanitized one.
         stem.push('.');
         stem.push_str(&sanitize_component(agent_id));
     }
