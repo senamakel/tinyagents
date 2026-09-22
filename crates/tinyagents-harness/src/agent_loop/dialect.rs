@@ -223,6 +223,64 @@ impl RunDialect {
     }
 }
 
+/// Keeps a harness-declared `cache_segments` layout in sync with a text
+/// dialect's rewrite, using the one thing only this call site still knows
+/// for certain: whether `pre_rewrite_messages` already had a leading system
+/// message *before* the protocol block gets folded in below.
+///
+/// `request.cache_segments` may declare a trailing canonical tools segment
+/// (`{id: "tools", role: Tools, cacheable: true}`) that is about to
+/// disappear once `request.tools` is cleared. When a leading system message
+/// already existed, dropping that trailing segment is all that is needed —
+/// the declared head still names the same messages it always did, and later
+/// fingerprinting (`refresh_prompt_cache_fingerprint`) can verify that by
+/// simple equality. But when none existed yet,
+/// `tinyinference_llm::prompt_tools::append_system_block` (used by both the
+/// host-rendered and ordinary rewrite paths below) synthesizes exactly one
+/// new leading system message for the protocol block — a segment no
+/// declaration could have named in advance. That case is resolved *here*,
+/// with certain knowledge of the pre-rewrite shape, rather than left for
+/// `refresh_prompt_cache_fingerprint` to guess from the rewritten request
+/// alone: reconstructing it after the fact from the post-rewrite shape alone
+/// cannot tell an actually-synthesized segment apart from a custom
+/// declaration that deliberately left an already-present system message out
+/// of the cache key, and conflating the two would silently widen what a
+/// middleware asked to keep out of the stable prefix.
+///
+/// A declaration that is not exactly `[.., tools_segment]` — anything with a
+/// head that does not otherwise account for the messages, or no declaration
+/// at all — is left untouched, so `refresh_prompt_cache_fingerprint` keeps
+/// taking the conservative whole-request digest for it.
+fn sync_stripped_tools_cache_segment(request: &mut ModelRequest, pre_rewrite_messages: &[Message]) {
+    let canonical_tools_segment = PromptSegment {
+        id: "tools".to_string(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    };
+    let Some((last, head)) = request.cache_segments.split_last() else {
+        return;
+    };
+    if *last != canonical_tools_segment {
+        return;
+    }
+    let had_leading_system = matches!(pre_rewrite_messages.first(), Some(Message::System(_)));
+    if had_leading_system {
+        request.cache_segments = head.to_vec();
+    } else if head.is_empty() {
+        // No declared head and no existing leading system message: the
+        // upcoming rewrite is the sole source of the new leading segment,
+        // so this is unambiguously the harness's own synthesis.
+        request.cache_segments = vec![PromptSegment {
+            id: crate::prompt::system_segment_id(0),
+            role: SegmentRole::System,
+            cacheable: true,
+        }];
+    }
+    // A non-empty head with no matching leading system message is an
+    // inconsistent declaration (middleware named system segments that are
+    // not actually there); left untouched rather than guessed at.
+}
+
 /// Builds the positional layout registry the P-Format and code dialects
 /// bind against, from the schemas offered this run.
 fn registry_from(tools: &[ToolSchema]) -> PFormatRegistry {
