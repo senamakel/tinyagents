@@ -547,6 +547,10 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 partial,
             )
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        // Captured before `pending_generation`/`self.transcript` are moved
+        // from below — `transcript` borrows out of whichever of the two held
+        // the just-appended handle.
+        let path = transcript.path().to_path_buf();
         // Only now that the append into the successor generation has
         // actually succeeded does the target move onto it.
         if let Some((successor, handle)) = pending_generation {
@@ -565,10 +569,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 next_len,
             }
         };
-        Ok(Some(TranscriptCommitReceipt {
-            path: transcript.path().to_path_buf(),
-            delta,
-        }))
+        Ok(Some(TranscriptCommitReceipt { path, delta }))
     }
 
     fn with_prefix(&self, history: Vec<Message>) -> Vec<Message> {
