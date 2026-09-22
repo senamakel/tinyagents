@@ -147,5 +147,5 @@ topology or executable code.
 - [Memory and stores boundary](memory-boundary.md)
 - [Visualization, introspection, and testkit](visualization-testkit.md)
 - [Per-thread goal and graph-native continuation](goals.md)
-- [Per-thread task board (kanban todos)](todos.md)
+- [Per-thread todo list](todos.md)
 - [Implementation milestones](milestones.md)
