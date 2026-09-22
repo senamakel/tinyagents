@@ -1353,6 +1353,45 @@ async fn lazy_target_is_opened_only_after_before_resume_selects_it() {
     assert_eq!(*history.opens.lock().unwrap(), 1);
 }
 
+/// `SessionBuilder::resume_agent` (new in this diff, distinct from
+/// `TranscriptTarget::with_resume_agent` exercised by the test below) must
+/// actually reach the resume lookup, not merely be stored and ignored.
+#[tokio::test]
+async fn session_builder_resume_agent_reaches_the_latest_for_agent_lookup() {
+    let (locator, _) = locator(Some(SessionTranscript {
+        meta: meta(),
+        messages: vec![TranscriptMessage::new("user", "resumed")],
+    }));
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("resumed"),
+        Message::assistant("next"),
+    ]))])))
+    .codec(Arc::new(Codec::default()))
+    .session(locator.clone(), SessionRef::scoped("thread-1", "agent-id"), meta())
+    .resume_agent("resume-agent")
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("next")),
+            TurnOptions {
+                session: None,
+                resume: ResumeMode::LatestForAgent,
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        locator.latest_agents.lock().unwrap().as_slice(),
+        ["resume-agent"],
+        "the configured resume_agent key, not the write stem, must drive the lookup"
+    );
+}
+
 #[tokio::test]
 async fn latest_resume_agent_is_distinct_from_the_write_stem() {
     let (locator, _) = locator(Some(SessionTranscript {
