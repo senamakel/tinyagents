@@ -145,10 +145,28 @@ impl TranscriptTarget {
         self
     }
 
+    /// Whether `other` addresses the same durable destination as `self`.
+    ///
+    /// For a session-bound target this compares `first_generation()` rather
+    /// than the `SessionRef`s (or stems) directly: `before_resume` runs on
+    /// every turn and is expected to keep returning the *same* logical
+    /// target, but `resume`/`persist` call [`Self::rebind_session`] on it as
+    /// soon as a later generation is discovered or a compaction opens one.
+    /// Comparing the raw `session`/`stem` fields would then reject that
+    /// still-identical target the moment its generation advanced, and
+    /// `apply_resume_preparation` would fail every subsequent turn with
+    /// `InvalidSessionState`. Generation 0 is the one identity that never
+    /// changes across a session's lifetime, so it is what identifies "the
+    /// same session" here. Non-session targets have no generation to anchor
+    /// on, so they keep comparing the raw stem.
     pub(crate) fn same_binding(&self, other: &Self) -> bool {
-        self.stem == other.stem
+        let same_destination = match (&self.session, &other.session) {
+            (Some(a), Some(b)) => a.first_generation() == b.first_generation(),
+            (None, None) => self.stem == other.stem,
+            _ => false,
+        };
+        same_destination
             && self.resume_agent == other.resume_agent
-            && self.session == other.session
             && Arc::ptr_eq(&self.locator, &other.locator)
     }
 }
