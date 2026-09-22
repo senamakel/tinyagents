@@ -255,11 +255,12 @@ pub struct RunPolicy {
     /// [`ToolDispatcher::Auto`] (the default) sends tool schemas on the wire
     /// and lets the provider adapter decide — the OpenAI-compatible adapter
     /// switches to the JSON-in-tag protocol by itself for a profile without
-    /// native tool calling. [`ToolDispatcher::Xml`] and
-    /// [`ToolDispatcher::Pformat`] force a text protocol regardless of
-    /// provider: the schemas are rendered into the system prompt, nothing goes
-    /// on the wire as `tools`, and the answer is parsed here. P-Format is the
-    /// cheapest on tokens and the most demanding on the model, which is why
+    /// native tool calling. [`ToolDispatcher::Xml`], [`ToolDispatcher::Pformat`],
+    /// [`ToolDispatcher::Python`] and [`ToolDispatcher::Typescript`] force a
+    /// text protocol regardless of provider: the schemas are rendered into the
+    /// system prompt, nothing goes on the wire as `tools`, and the answer is
+    /// parsed here. P-Format is the cheapest on tokens and the most demanding
+    /// on the model, and the code dialects sit between it and JSON, which is why
     /// it is opt-in only.
     ///
     /// Under a forced text dialect the answer is always read through every
@@ -314,7 +315,8 @@ pub struct RunPolicy {
     /// Whether the loop parses `<tool_call>`-style text-dialect markup out of
     /// an assistant's visible text under a native tool dialect (see
     /// [`RunPolicy::tool_dialect`]). A forced text dialect
-    /// ([`ToolDispatcher::Xml`] / [`ToolDispatcher::Pformat`], or
+    /// ([`ToolDispatcher::Xml`] / [`ToolDispatcher::Pformat`] /
+    /// [`ToolDispatcher::Python`] / [`ToolDispatcher::Typescript`], or
     /// [`ToolDispatcher::Auto`] falling back to Xml for a model without
     /// native tool calling) always parses the answer regardless of this
     /// policy, since the model can only answer in text.

@@ -74,13 +74,21 @@ that produces no error anywhere — the model emits a call, nothing recognises i
 and the iteration is spent. So they live behind a single trait, and a dialect is
 chosen once rather than assembled from parts that can disagree.
 
-Three ship:
+Four ship:
 
 | Dialect | Call syntax | Catalogue | Specs in the request |
 | --- | --- | --- | --- |
 | `XmlDialect` | `<tool_call>{"name":…,"arguments":{…}}</tool_call>` | full schemas, in its own protocol block | no |
-| `PFormatDialect` | `<tool_call>name[a\|b]</tool_call>` | signatures, in the prompt's tool section | no |
+| `PFormatDialect` | `<tool_call>name[0\|a\|1\|b]</tool_call>` | signatures, in the prompt's tool section | no |
+| `CodeDialect` | `<tool_call>name(a="x", b=1)</tool_call>` (Python) or `name({a: "x", b: 1})` (TypeScript) | `def name(a: str, b: int = None) -> str` / `function name(a: string, b?: number): string;` signatures, in the prompt's tool section | no |
 | `NativeDialect` | the provider's structured channel | none — the request carries the specs | yes |
+
+The agent loop selects one per run from `RunPolicy::tool_dialect`
+(`ToolDispatcher::{Auto, Native, Xml, Pformat, Python, Typescript}`). `Auto`
+resolves to native when the model profile supports it and to XML otherwise;
+P-Format and the code dialects are opt-in. When a host has already composed a
+`## Tool Use Protocol` block into the system prompt, the loop strips the
+schemas off the wire but does not append a second block.
 
 ## Which surface to use
 
