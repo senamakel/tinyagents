@@ -7,8 +7,8 @@ fn a_stem_is_deterministic_and_carries_no_timestamp() {
     let second = session_stem(&SessionRef::scoped("thread-9fa08c44", "orchestrator"));
 
     assert_eq!(first, second);
-    assert!(first.starts_with("thread-9fa08c44~"));
-    assert!(first.contains(".orchestrator~"));
+    assert!(first.starts_with("thread-9fa08c44-"));
+    assert!(first.contains(".orchestrator-"));
     // The whole point: no `{unix_ts}_` prefix, so nothing varies per launch.
     assert!(
         !first
