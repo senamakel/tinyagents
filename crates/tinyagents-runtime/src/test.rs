@@ -88,7 +88,9 @@ fn outcome(history: Vec<Message>) -> DriverOutcome {
 }
 
 fn meta() -> TranscriptMeta {
-    TranscriptMeta { session_id: None, parent_session_id: None,
+    TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
         agent_name: "agent".into(),
         agent_id: Some("agent-id".into()),
         agent_type: None,
@@ -2280,4 +2282,285 @@ fn runtime_stays_host_neutral() {
             .to_ascii_lowercase()
             .contains("openhuman")
     );
+}
+
+// ── Session-identity resume ───────────────────────────────────────────
+
+fn session_turn_options(resume: ResumeMode, thread: &str) -> TurnOptions {
+    TurnOptions {
+        thread_id: Some(thread.into()),
+        resume,
+        ..TurnOptions::default()
+    }
+}
+
+fn outcome(history: Vec<Message>, output: &str) -> Result<DriverOutcome, DriverFailure> {
+    Ok(DriverOutcome {
+        history,
+        output: Some(output.into()),
+        partial: None,
+        interrupted: false,
+    })
+}
+
+/// The regression this whole design exists for. Two cold sessions on one
+/// conversation used to mint two stems, and resume loaded only the newest —
+/// so a restart silently dropped the earlier turns. Now the second session
+/// reads and appends to the file the first one wrote.
+#[tokio::test]
+async fn a_restarted_session_continues_the_same_transcript() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-9fa08", "agent-id");
+
+    let mut first = SessionBuilder::new(Arc::new(Driver::new(vec![outcome(
+        vec![Message::user("plan a trip to kashmir"), Message::assistant("when?")],
+        "when?",
+    )])))
+    .codec(Arc::new(Codec::default()))
+    .session(
+        Arc::new(FileTranscriptLocator::new(directory.path())),
+        session_ref.clone(),
+        meta(),
+    )
+    .build()
+    .unwrap();
+    first
+        .turn(
+            SessionTurnRequest::new(Message::user("plan a trip to kashmir")),
+            session_turn_options(ResumeMode::Session, "thread-9fa08"),
+        )
+        .await
+        .unwrap();
+
+    // A brand-new Session over the same identity, as a restarted core builds.
+    let mut second = SessionBuilder::new(Arc::new(Driver::new(vec![outcome(
+        vec![
+            Message::user("plan a trip to kashmir"),
+            Message::assistant("when?"),
+            Message::user("what did i ask here?"),
+            Message::assistant("about kashmir"),
+        ],
+        "about kashmir",
+    )])))
+    .codec(Arc::new(Codec::default()))
+    .session(
+        Arc::new(FileTranscriptLocator::new(directory.path())),
+        session_ref.clone(),
+        meta(),
+    )
+    .build()
+    .unwrap();
+    let resumed = second
+        .resume(&session_turn_options(ResumeMode::Session, "thread-9fa08"))
+        .await
+        .unwrap();
+
+    assert!(resumed.loaded, "the restart must find the first session");
+    assert_eq!(
+        resumed.history.first().map(Message::text),
+        Some("plan a trip to kashmir".to_string()),
+        "the opening turn must survive the restart"
+    );
+
+    second
+        .turn(
+            SessionTurnRequest::new(Message::user("what did i ask here?")),
+            session_turn_options(ResumeMode::Session, "thread-9fa08"),
+        )
+        .await
+        .unwrap();
+
+    let roots: Vec<_> = std::fs::read_dir(directory.path().join("session_raw"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(roots.len(), 1, "one conversation, one transcript: {roots:?}");
+
+    let persisted = read_transcript(&directory.path().join("session_raw").join(&roots[0])).unwrap();
+    let contents: Vec<&str> = persisted
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert_eq!(
+        contents,
+        [
+            "plan a trip to kashmir",
+            "when?",
+            "what did i ask here?",
+            "about kashmir"
+        ]
+    );
+    assert_eq!(persisted.meta.session_id.as_deref(), Some("thread-9fa08.agent-id"));
+}
+
+/// A compaction must not rewrite the sealed file: the turns it drops are the
+/// conversation's own history.
+#[tokio::test]
+async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![
+        outcome(
+            vec![
+                Message::user("one"),
+                Message::assistant("first"),
+                Message::user("two"),
+                Message::assistant("second"),
+            ],
+            "second",
+        ),
+        // The driver trimmed: the next set is no longer an extension.
+        outcome(
+            vec![Message::user("three"), Message::assistant("third")],
+            "third",
+        ),
+    ])))
+    .codec(Arc::new(Codec::default()))
+    .session(locator.clone(), session_ref.clone(), meta())
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("one")),
+            session_turn_options(ResumeMode::Session, "thread-1"),
+        )
+        .await
+        .unwrap();
+    let sealed = directory
+        .path()
+        .join("session_raw/thread-1.agent-id.jsonl");
+    let sealed_bytes = std::fs::read(&sealed).unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("three")),
+            session_turn_options(ResumeMode::Never, "thread-1"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read(&sealed).unwrap(),
+        sealed_bytes,
+        "the sealed generation must be byte-identical after a compaction"
+    );
+    let successor = directory
+        .path()
+        .join("session_raw/thread-1.agent-id.g1.jsonl");
+    let carried = read_transcript(&successor).unwrap();
+    assert_eq!(
+        carried
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>(),
+        ["three", "third"]
+    );
+    assert_eq!(
+        carried.meta.parent_session_id.as_deref(),
+        Some("thread-1.agent-id")
+    );
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+}
+
+/// After a compaction, a restart must land on the head generation rather than
+/// replaying the sealed one.
+#[tokio::test]
+async fn a_restart_after_a_compaction_resumes_the_head_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let (_, handle) = locator.begin_generation(&session_ref, meta()).unwrap();
+    locator
+        .open_session(&session_ref, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "sealed"))
+        .unwrap();
+    handle
+        .append(TranscriptMessage::new("user", "current"))
+        .unwrap();
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(Codec::default()))
+        .session(locator, session_ref, meta())
+        .build()
+        .unwrap();
+    let resumed = session
+        .resume(&session_turn_options(ResumeMode::Session, "thread-1"))
+        .await
+        .unwrap();
+
+    assert!(resumed.loaded);
+    assert_eq!(
+        resumed.history.iter().map(Message::text).collect::<Vec<_>>(),
+        ["current"]
+    );
+}
+
+/// A conversation written before session identity existed is spread over
+/// timestamped stems. The first session resume folds them in, so the model
+/// regains the turns newest-wins lookup had stranded.
+#[tokio::test]
+async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut legacy = meta();
+    legacy.thread_id = Some("thread-9fa08".into());
+    legacy.created = "2026-09-22T07:30:47Z".into();
+    tinyagents_session::transcript::write_transcript(
+        &tinyagents_session::transcript::resolve_keyed_transcript_path(
+            directory.path(),
+            "1790062247_orchestrator",
+        )
+        .unwrap(),
+        &[TranscriptMessage::new("user", "plan a trip to kashmir")],
+        &legacy,
+        None,
+    )
+    .unwrap();
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(Codec::default()))
+        .session(
+            Arc::new(FileTranscriptLocator::new(directory.path())),
+            SessionRef::scoped("thread-9fa08", "agent-id"),
+            meta(),
+        )
+        .build()
+        .unwrap();
+    let resumed = session
+        .resume(&session_turn_options(ResumeMode::Session, "thread-9fa08"))
+        .await
+        .unwrap();
+
+    assert!(resumed.loaded, "the legacy conversation must be adopted");
+    assert_eq!(
+        resumed.history.iter().map(Message::text).collect::<Vec<_>>(),
+        ["plan a trip to kashmir"]
+    );
+}
+
+#[tokio::test]
+async fn a_session_resume_with_no_history_anywhere_loads_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(Codec::default()))
+        .session(
+            Arc::new(FileTranscriptLocator::new(directory.path())),
+            SessionRef::scoped("thread-fresh", "agent-id"),
+            meta(),
+        )
+        .build()
+        .unwrap();
+
+    let resumed = session
+        .resume(&session_turn_options(ResumeMode::Session, "thread-fresh"))
+        .await
+        .unwrap();
+
+    assert!(!resumed.loaded);
 }
