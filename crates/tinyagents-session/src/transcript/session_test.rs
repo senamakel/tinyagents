@@ -30,7 +30,7 @@ fn two_agents_on_one_key_get_distinct_stems() {
 #[test]
 fn an_unscoped_root_is_just_the_key_plus_a_digest() {
     let stem = session_stem(&SessionRef::root("thread-1"));
-    assert!(stem.starts_with("thread-1~"));
+    assert!(stem.starts_with("thread-1-"));
 }
 
 #[test]
