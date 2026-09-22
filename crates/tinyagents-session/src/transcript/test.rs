@@ -363,11 +363,11 @@ fn a_compaction_seals_a_generation_and_leaves_it_untouched() {
     let successor_meta = handle.read_session().unwrap().unwrap().meta;
     assert_eq!(
         successor_meta.session_id.as_deref(),
-        Some("thread-1.orchestrator.g1")
+        Some(session_stem(&successor).as_str())
     );
     assert_eq!(
         successor_meta.parent_session_id.as_deref(),
-        Some("thread-1.orchestrator")
+        Some(session_stem(&session).as_str())
     );
 }
 
