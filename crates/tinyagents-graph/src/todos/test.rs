@@ -648,8 +648,10 @@ mod session_list_tests {
 
     use serde_json::json;
 
+    use super::super::dispatch::pick_next_card;
     use super::super::session_list::SessionTodoTool;
     use tinyagents_harness::store::{InMemoryStore, Store};
+    use tinyagents_harness::tool::{SchemaPreparation, prepare_parameters};
     use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
 
     fn store() -> Arc<dyn Store> {
@@ -756,9 +758,14 @@ mod session_list_tests {
             ),
             (
                 json!({ "todos": [{ "content": "x", "status": "someday" }] }),
-                "invalid status",
+                "status must",
             ),
             (json!({ "todos": "not a list" }), "invalid `todos`"),
+            (json!({ "todos": null, "extra": true }), "unknown arguments"),
+            (
+                json!({ "todos": [{ "content": "x", "status": "ready" }] }),
+                "status must",
+            ),
             (
                 json!({ "cards": [{ "content": "x", "status": "todo" }] }),
                 "pass `todos`",
@@ -776,6 +783,10 @@ mod session_list_tests {
             let text = format!("{result:?}");
             assert!(text.contains(expect), "{args}: {text}");
         }
+        for args in [json!(null), json!([]), json!("not an object")] {
+            let result = run(&tool, Some("t"), args).await;
+            assert!(result.is_error, "non-object arguments must fail");
+        }
         let no_thread = run(&tool, None, json!({})).await;
         assert!(no_thread.is_error);
     }
@@ -791,5 +802,42 @@ mod session_list_tests {
         );
         assert_eq!(tool.name(), "todo");
         assert!(!tool.description().contains("board"));
+    }
+
+    #[tokio::test]
+    async fn strict_openai_schema_can_read_with_a_required_null_todos_field() {
+        let tool = SessionTodoTool::new(store());
+        let schema = prepare_parameters(
+            &tool.parameters_schema(),
+            &SchemaPreparation::openai().with_strict(),
+        );
+
+        assert_eq!(schema["required"], json!(["todos"]));
+        assert_eq!(
+            schema["properties"]["todos"]["type"],
+            json!(["array", "null"])
+        );
+        assert!(
+            !run(&tool, Some("t"), json!({ "todos": null }))
+                .await
+                .is_error
+        );
+    }
+
+    #[tokio::test]
+    async fn session_todos_are_not_dispatchable_board_cards() {
+        let backing_store = store();
+        let tool = SessionTodoTool::new(backing_store.clone());
+        run(
+            &tool,
+            Some("t"),
+            json!({ "todos": [{ "content": "Keep checklist", "status": "pending" }] }),
+        )
+        .await;
+
+        let snapshot = super::super::store::list(&backing_store, "t")
+            .await
+            .unwrap();
+        assert!(pick_next_card(&snapshot.cards).is_none());
     }
 }
