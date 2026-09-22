@@ -663,6 +663,45 @@ impl FileTranscriptHistory {
     }
 }
 
+/// A process-wide, per-path mutex serializing the read-modify-write sequence
+/// [`FileTranscriptHistory::append`]/`replace`/`clear` run against one file.
+///
+/// [`SessionRef`]'s own doc names this as a supported shape: two cores in one
+/// process sharing a workspace should both see and extend one conversation.
+/// Without this, two `FileTranscriptHistory` instances bound to the same
+/// path (a legitimate, common way to get there — `open_session` is called
+/// fresh per `Session::resume`) can each read the file's current content,
+/// compute a diff against that now-stale view, and write. Whichever finishes
+/// its own read first computes a `next` that does not extend what the file
+/// looks like by the time it *writes* — `append_transcript_turn_with_partial`
+/// then reads that mismatch as "the context was reduced" and appends a
+/// **compaction record** instead of a plain tail, and a compaction's
+/// replacement value is what canonical reads return going forward. The
+/// other write's whole contribution becomes unreachable, even though its
+/// bytes are still physically on disk as a now-superseded line — a silent
+/// lost update, not a crash.
+///
+/// Keyed by path rather than by `Arc<Mutex<_>>` identity because the two
+/// racing instances are typically *separate* `FileTranscriptHistory` values,
+/// not a shared handle. Entries are [`Weak`] and swept opportunistically so
+/// the registry does not grow for the lifetime of a long-running host: once
+/// every in-flight critical section for a path finishes, nothing keeps that
+/// path's entry alive, and the next unrelated call reclaims the slot.
+fn path_lock(path: &Path) -> Arc<Mutex<()>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.retain(|_, weak| weak.strong_count() > 0);
+    if let Some(existing) = locks.get(path).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let fresh = Arc::new(Mutex::new(()));
+    locks.insert(path.to_path_buf(), Arc::downgrade(&fresh));
+    fresh
+}
+
 impl TranscriptRead for FileTranscriptHistory {
     fn path(&self) -> &Path {
         &self.path
