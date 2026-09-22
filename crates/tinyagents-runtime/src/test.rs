@@ -2517,6 +2517,91 @@ async fn a_restart_after_a_compaction_resumes_the_head_generation() {
     );
 }
 
+/// A session-bound target's write destination is always its own session
+/// file — construction and `rebind_session` keep `target.session`/`stem` in
+/// lockstep, regardless of resume mode. `ResumeMode::Thread` can legitimately
+/// read a *different* file than that destination (its contract is "find
+/// this thread's newest root transcript", not "find the session's own
+/// file"). The pre-turn append-diff baseline must still reflect what is
+/// actually on the write destination — using the scanned read's rows
+/// instead would diff the next append against the wrong file's content and
+/// corrupt the destination.
+#[tokio::test]
+async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+
+    // The session's own destination already carries real content from an
+    // earlier session-mode turn.
+    locator
+        .open_session(&session_ref, meta())
+        .unwrap()
+        .append(TranscriptMessage::new(
+            "user",
+            "already on the session file",
+        ))
+        .unwrap();
+
+    // A newer, *different* root transcript for the same thread: what a
+    // Thread-mode newest-wins scan will find instead.
+    let mut legacy = meta();
+    legacy.thread_id = Some("thread-1".into());
+    legacy.created = "zzz-later".into();
+    tinyagents_session::transcript::write_transcript(
+        &directory.path().join("session_raw/legacy_other.jsonl"),
+        &[TranscriptMessage::new(
+            "user",
+            "from a different file entirely",
+        )],
+        &legacy,
+        None,
+    )
+    .unwrap();
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
+        vec![
+            Message::user("from a different file entirely"),
+            Message::assistant("new reply"),
+        ],
+        "new reply",
+    ))])))
+    .codec(Arc::new(Codec::default()))
+    .session(locator.clone(), session_ref.clone(), meta())
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("from a different file entirely")),
+            session_turn_options(ResumeMode::Thread, "thread-1"),
+        )
+        .await
+        .unwrap();
+
+    // The session's own destination must still contain its original turn:
+    // uncorrupted, with the new turn appended — never overwritten or
+    // diffed against the unrelated file's content.
+    let destination_path = directory
+        .path()
+        .join("session_raw")
+        .join(format!("{}.jsonl", session_stem(&session_ref)));
+    let on_disk = read_transcript(&destination_path).unwrap();
+    let contents: Vec<&str> = on_disk
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert!(
+        contents.contains(&"already on the session file"),
+        "the session's own prior turn must survive: {contents:?}"
+    );
+    assert!(
+        contents.contains(&"new reply"),
+        "the new turn must still be appended: {contents:?}"
+    );
+}
+
 /// A conversation written before session identity existed is spread over
 /// timestamped stems. The first session resume folds them in, so the model
 /// regains the turns newest-wins lookup had stranded.
