@@ -650,6 +650,7 @@ mod session_list_tests {
 
     use super::super::session_list::SessionTodoTool;
     use tinyagents_harness::store::{InMemoryStore, Store};
+    use tinyagents_harness::tool::{SchemaPreparation, prepare_parameters};
     use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
 
     fn store() -> Arc<dyn Store> {
@@ -787,5 +788,25 @@ mod session_list_tests {
         );
         assert_eq!(tool.name(), "todo");
         assert!(!tool.description().contains("board"));
+    }
+
+    #[tokio::test]
+    async fn strict_openai_schema_can_read_with_a_required_null_todos_field() {
+        let tool = SessionTodoTool::new(store());
+        let schema = prepare_parameters(
+            &tool.parameters_schema(),
+            &SchemaPreparation::openai().with_strict(),
+        );
+
+        assert_eq!(schema["required"], json!(["todos"]));
+        assert_eq!(
+            schema["properties"]["todos"]["type"],
+            json!(["array", "null"])
+        );
+        assert!(
+            !run(&tool, Some("t"), json!({ "todos": null }))
+                .await
+                .is_error
+        );
     }
 }

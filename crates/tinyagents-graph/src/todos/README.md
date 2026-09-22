@@ -69,6 +69,16 @@ argument); the bare `Tool::call` entry point errors without a thread. Domain
 errors (unknown id, invariant violation) are surfaced to the model as tool
 errors rather than failing the run.
 
+## Session checklist (`session_list.rs`)
+
+`SessionTodoTool` is the smaller `todo` surface for Claude Code and Codex-style
+sessions. Register it with `register_session_todo_tool(registry, store)` when a
+host needs a progress checklist rather than the board's dispatchable card
+machinery. Calls replace the complete `todos` list, and `{"todos": null}`
+(or an omitted `todos` field for non-strict schemas) reads the current list.
+Items expose only `content` and `status` (`pending`, `in_progress`, or
+`completed`). As with `TodoTool`, the thread ID comes from the tool context.
+
 ## Example
 
 ```rust,ignore
@@ -93,6 +103,7 @@ let tool = TodoTool::new(store.clone());
 | `types.rs` | Card/board model, `parse_status`, `render_markdown`, `normalise_board`, `CardPatch`, `TodosSnapshot`. |
 | `store.rs` | `Store`-backed CRUD, per-thread RMW lock, single-in-progress invariant, CAS `claim_card`. |
 | `tool.rs` | The `todo` multiplexer tool. |
+| `session_list.rs` | The `SessionTodoTool` whole-list session-checklist surface. |
 | `runs/` | Claim / heartbeat / reclaim log over the board — see [`runs/README.md`](runs/README.md). |
 | `dispatch/` | Selection, approval gate, poll cadence, prompts, in-flight run registry — see [`dispatch/README.md`](dispatch/README.md). |
 | `test.rs` | Unit tests (types, store, tool). |

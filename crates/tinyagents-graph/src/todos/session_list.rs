@@ -103,18 +103,27 @@ pub async fn read(store: &Arc<dyn Store>, key: &str) -> Result<TodosSnapshot> {
     store::list(store, key).await
 }
 
-/// Resolves one call against `key`: a write when `todos` is present, a read
-/// when the call carries no arguments, and a shape error for anything else
-/// (a write that used some other key such as the retired `cards`).
+/// Resolves one call against `key`: a write when `todos` is an array, a read
+/// when the call carries no arguments or `todos: null`, and a shape error for
+/// anything else (a write that used some other key such as the retired
+/// `cards`).
 pub async fn call(store: &Arc<dyn Store>, key: &str, args: &Value) -> Result<ToolResult> {
     let outcome = match args.get("todos") {
-        None | Some(Value::Null) => match args.as_object() {
+        None => match args.as_object() {
             Some(map) if !map.is_empty() => Err(format!(
                 "unknown arguments {:?}: pass `todos` (the full list of {{content, status}}), \
                  or no arguments to read the list",
                 map.keys().collect::<Vec<_>>()
             )),
             _ => read(store, key).await.map_err(|e| e.to_string()),
+        },
+        Some(Value::Null) => match args.as_object() {
+            Some(map) if map.len() == 1 => read(store, key).await.map_err(|e| e.to_string()),
+            Some(map) => Err(format!(
+                "unknown arguments {:?}: pass only `todos`, or no arguments to read the list",
+                map.keys().collect::<Vec<_>>()
+            )),
+            None => unreachable!("a value with `todos` is an object"),
         },
         Some(raw) => match parse_items(raw) {
             Ok(cards) => write(store, key, cards).await.map_err(|e| e.to_string()),
@@ -163,8 +172,8 @@ impl Tool for SessionTodoTool {
             "type": "object",
             "properties": {
                 "todos": {
-                    "type": "array",
-                    "description": "The full list, in order.",
+                    "type": ["array", "null"],
+                    "description": "The full list, in order. Pass null to read the current list.",
                     "items": {
                         "type": "object",
                         "properties": {

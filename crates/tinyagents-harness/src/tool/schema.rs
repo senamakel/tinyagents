@@ -3,8 +3,8 @@
 //! Different providers accept different JSON Schema subsets for model-visible
 //! tool declarations. This module normalizes schemas while preserving semantic
 //! intent: it resolves local refs, removes provider-rejected keywords, flattens
-//! simple literal unions, strips nullable variants, converts `const` to `enum`,
-//! and breaks circular local refs safely.
+//! simple literal unions, strips nullable variants where the provider rejects
+//! them, converts `const` to `enum`, and breaks circular local refs safely.
 
 use std::collections::{HashMap, HashSet};
 
@@ -201,7 +201,7 @@ impl SchemaCleanr {
                 // a sibling top-level `type` would be redundant or conflicting.
                 "type" if has_union => {}
                 "type" if matches!(value, Value::Array(_)) => {
-                    cleaned.insert(key, Self::clean_type_array(value));
+                    cleaned.insert(key, Self::clean_type_array(value, strategy));
                 }
                 "properties" => {
                     cleaned.insert(
@@ -408,12 +408,16 @@ impl SchemaCleanr {
         })
     }
 
-    /// Drops `"null"` out of a JSON Schema `type` array (used for nullable
-    /// types) and collapses the result: no non-null type left becomes
-    /// `"null"` itself, exactly one collapses to a scalar `type`, and more
-    /// than one is left as an array.
-    fn clean_type_array(value: Value) -> Value {
+    /// Preserves nullable type arrays for OpenAI, which accepts them (and uses
+    /// a required nullable property to represent an optional strict argument).
+    /// Other strategies drop `"null"` and collapse the result: no non-null type
+    /// left becomes `"null"` itself, exactly one collapses to a scalar `type`,
+    /// and more than one is left as an array.
+    fn clean_type_array(value: Value, strategy: CleaningStrategy) -> Value {
         if let Value::Array(types) = value {
+            if strategy == CleaningStrategy::OpenAI {
+                return Value::Array(types);
+            }
             let non_null: Vec<Value> = types
                 .into_iter()
                 .filter(|value| value.as_str() != Some("null"))
