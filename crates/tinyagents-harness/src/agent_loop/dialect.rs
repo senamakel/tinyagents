@@ -259,7 +259,7 @@ impl RunDialect {
 /// head that does not otherwise account for the messages, or no declaration
 /// at all — is left untouched, so `refresh_prompt_cache_fingerprint` keeps
 /// taking the conservative whole-request digest for it.
-fn sync_stripped_tools_cache_segment(request: &mut ModelRequest, pre_rewrite_messages: &[Message]) {
+fn sync_stripped_tools_cache_segment(request: &mut ModelRequest, had_leading_system: bool) {
     let canonical_tools_segment = PromptSegment {
         id: "tools".to_string(),
         role: SegmentRole::Tools,
@@ -271,30 +271,52 @@ fn sync_stripped_tools_cache_segment(request: &mut ModelRequest, pre_rewrite_mes
     if *last != canonical_tools_segment {
         return;
     }
-    let had_leading_system = matches!(pre_rewrite_messages.first(), Some(Message::System(_)));
-    if had_leading_system && !head.is_empty() {
-        // The declared head already names the existing leading system
-        // message(s); only the now-gone trailing tools segment is stale.
-        request.cache_segments = head.to_vec();
-    } else if !had_leading_system && head.is_empty() {
-        // No declared head and no existing leading system message: the
-        // upcoming rewrite is the sole source of the new leading segment,
-        // so this is unambiguously the harness's own synthesis.
-        request.cache_segments = vec![PromptSegment {
-            id: crate::prompt::system_segment_id(0),
+    // The real, post-rewrite leading-system-message count — the exact same
+    // thing `refresh_prompt_cache_fingerprint` will independently derive
+    // from `request.messages` a moment later. Deriving the comparison
+    // against this, rather than against `head`'s own declared shape, is
+    // what lets every case below be a plain equality check instead of a
+    // guess: whatever the rewrite actually did to the messages is the one
+    // fact this function can trust.
+    let final_system_end = request
+        .messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    let canonical_head: Vec<PromptSegment> = (0..final_system_end)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
             role: SegmentRole::System,
             cacheable: true,
-        }];
+        })
+        .collect();
+    if head == canonical_head {
+        // The declared head already names exactly the messages that are
+        // really there (including the trivial `final_system_end == 0`
+        // case, where both sides are empty because this rewrite turned out
+        // to touch nothing — e.g. a host-rendered request with no
+        // synthesized tool and an `Auto` choice leaves `messages`
+        // untouched); only the now-gone trailing tools segment is stale.
+        request.cache_segments = canonical_head;
+    } else if head.is_empty() && !had_leading_system && final_system_end == 1 {
+        // No declared head and no existing leading system message before
+        // this call: the rewrite is the sole source of the new leading
+        // segment (`prompt_tools::append_system_block` inserts exactly one
+        // when none exists), so this is unambiguously the harness's own
+        // synthesis rather than something a declaration could have named in
+        // advance.
+        request.cache_segments = canonical_head;
     }
-    // The remaining two combinations are left untouched rather than guessed
-    // at: `had_leading_system && head.is_empty()` is the declaration that
-    // deliberately named nothing ahead of the tools segment even though a
-    // system message already existed — dropping to `head` would leave an
-    // *empty* `cache_segments`, which `refresh_prompt_cache_fingerprint`
-    // reads as "nothing declared yet" and promotes just the same, so this
-    // case must not fall into the branch above. `!had_leading_system &&
-    // !head.is_empty()` is an inconsistent declaration (system segments
-    // named that are not actually there).
+    // Every other combination is left completely untouched, including the
+    // trailing tools segment: `head.is_empty() && had_leading_system` is a
+    // declaration that deliberately named nothing ahead of the tools
+    // segment even though a system message already existed (dropping to
+    // `head` would leave an *empty* `cache_segments`, which
+    // `refresh_prompt_cache_fingerprint` reads as "nothing declared yet"
+    // and promotes just the same); a non-empty `head` that does not match
+    // `canonical_head` is a custom declaration (a middleware-owned id, or a
+    // stale count) that must not be silently rewritten out from under it,
+    // partially or otherwise.
 }
 
 /// Builds the positional layout registry the P-Format and code dialects
