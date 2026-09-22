@@ -127,6 +127,7 @@ impl RunDialect {
         let tools = std::mem::take(&mut request.tools);
         let messages = prompt_tools::coalesce_tool_results(&request.messages);
         let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
+        sync_stripped_tools_cache_segment(request, &messages);
         if host_renders_catalogue {
             let mut block = String::new();
             if !synthesized.is_empty() {
