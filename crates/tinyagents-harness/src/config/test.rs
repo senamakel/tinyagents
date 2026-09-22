@@ -122,6 +122,8 @@ fn tool_dispatcher_round_trips_as_snake_case() {
         (ToolDispatcher::Native, "\"native\""),
         (ToolDispatcher::Xml, "\"xml\""),
         (ToolDispatcher::Pformat, "\"pformat\""),
+        (ToolDispatcher::Python, "\"python\""),
+        (ToolDispatcher::Typescript, "\"typescript\""),
     ] {
         let json = serde_json::to_string(&variant).expect("serializes");
         assert_eq!(json, wire);

@@ -162,6 +162,23 @@ fn image_blocks_preserve_text_order() {
 }
 
 #[test]
+fn literal_native_image_marker_stays_text() {
+    let s = String::from_utf8(build_stdin(
+        &[ChatMessage::user(
+            "literal [OH_IMAGE:data:image/png;base64,QUJD] then [OH_IMAGE_LITERAL:data:image/png;base64,REVG]",
+        )],
+        true,
+    ))
+    .unwrap();
+    let row: Value = serde_json::from_str(s.lines().next().unwrap()).unwrap();
+    let content = row["message"]["content"].as_array().unwrap();
+    assert_eq!(content[0]["text"], "literal ");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[2]["text"], " then ");
+    assert_eq!(content[3]["text"], "[OH_IMAGE:data:image/png;base64,REVG]");
+}
+
+#[test]
 fn literal_file_marker_is_not_read() {
     let s = String::from_utf8(build_stdin(
         &[ChatMessage::user("read [IMAGE:/etc/hostname]")],

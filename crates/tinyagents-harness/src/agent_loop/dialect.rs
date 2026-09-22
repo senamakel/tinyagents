@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tinyinference_llm::message::ContentBlock;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ToolChoice};
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
-use tinytools_agent::dialect::PFormatDialect;
+use tinytools_agent::dialect::{CodeDialect, CodeStyle, PFormatDialect};
 use tinytools_agent::types::{ParseOptions, ParsedToolCall};
 use tinytools_agent::{PFormatRegistry, StreamScrubber};
 
@@ -34,6 +34,10 @@ pub(super) enum RunDialect {
     Xml,
     /// Positional P-Format, rendered into the system prompt by the host.
     PFormat(Arc<PFormatRegistry>),
+    /// Code-style calls against Python or TypeScript signatures, rendered
+    /// into the system prompt by the host. Shares P-Format's registry: both
+    /// bind positional arguments against the same layout.
+    Code(CodeStyle, Arc<PFormatRegistry>),
 }
 
 impl RunDialect {
@@ -47,11 +51,11 @@ impl RunDialect {
             ToolDispatcher::Auto if native_tool_calling == Some(false) => Self::Xml,
             ToolDispatcher::Auto | ToolDispatcher::Native => Self::Native,
             ToolDispatcher::Xml => Self::Xml,
-            ToolDispatcher::Pformat => Self::PFormat(Arc::new(tinytools_agent::build_registry(
-                tools
-                    .iter()
-                    .map(|schema| (schema.name.clone(), schema.parameters.clone())),
-            ))),
+            ToolDispatcher::Pformat => Self::PFormat(Arc::new(registry_from(tools))),
+            ToolDispatcher::Python => Self::Code(CodeStyle::Python, Arc::new(registry_from(tools))),
+            ToolDispatcher::Typescript => {
+                Self::Code(CodeStyle::TypeScript, Arc::new(registry_from(tools)))
+            }
         }
     }
 
@@ -73,7 +77,7 @@ impl RunDialect {
     /// new tool this turn) a cheap `Arc::clone`.
     pub(super) fn registry_for(&self, tools: &[ToolSchema]) -> Option<Arc<PFormatRegistry>> {
         match self {
-            Self::PFormat(registry) => {
+            Self::PFormat(registry) | Self::Code(_, registry) => {
                 let extra: Vec<&ToolSchema> = tools
                     .iter()
                     .filter(|schema| !registry.contains_key(&schema.name))
@@ -110,7 +114,7 @@ impl RunDialect {
             Self::Xml | Self::Native => {
                 prompt_tools::with_tool_instructions(&messages, &tools, &request.tool_choice)
             }
-            Self::PFormat(_) => {
+            Self::PFormat(_) | Self::Code(..) => {
                 let specs: Vec<tinytools_agent::tinytools::ToolSpec> = tools
                     .iter()
                     .map(|schema| tinytools_agent::tinytools::ToolSpec {
@@ -119,8 +123,20 @@ impl RunDialect {
                         parameters: schema.parameters.clone(),
                     })
                     .collect();
-                let mut block = PFormatDialect::instructions();
-                block.push_str(&tinytools_agent::render::render_pformat_catalogue(&specs));
+                let mut block = match self {
+                    Self::Code(style, _) => {
+                        let mut block = CodeDialect::instructions(*style);
+                        block.push_str(&tinytools_agent::render::render_code_catalogue(
+                            &specs, *style,
+                        ));
+                        block
+                    }
+                    _ => {
+                        let mut block = PFormatDialect::instructions();
+                        block.push_str(&tinytools_agent::render::render_pformat_catalogue(&specs));
+                        block
+                    }
+                };
                 // The XML branch renders `tool_choice` into its instructions
                 // via `prompt_tools::tool_instructions`; P-Format has no
                 // schema on the wire either (the wire choice is reset to
@@ -143,6 +159,16 @@ impl RunDialect {
         };
         request.tool_choice = ToolChoice::Auto;
     }
+}
+
+/// Builds the positional layout registry the P-Format and code dialects
+/// bind against, from the schemas offered this run.
+fn registry_from(tools: &[ToolSchema]) -> PFormatRegistry {
+    tinytools_agent::build_registry(
+        tools
+            .iter()
+            .map(|schema| (schema.name.clone(), schema.parameters.clone())),
+    )
 }
 
 /// What a model call needs in order to recover text-dialect calls: the

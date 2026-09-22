@@ -111,14 +111,18 @@ pub enum AgentEvent {
     /// event for the ceiling the run started with, not for what a specific
     /// request actually sent.
     ToolsAdvertised {
-        /// Schemas assembled before per-turn middleware runs (direct tools
-        /// plus the bridge tools when any tool is deferred).
+        /// Count of `Direct`-exposure tool schemas assembled before per-turn
+        /// middleware runs. Does **not** include the two intrinsic
+        /// `tool_search`/`tool_call` bridge schemas added to the wire set
+        /// when `deferred > 0` — those are implied by `deferred` being
+        /// nonzero, not double-counted here.
         direct: usize,
         /// Tools reachable only through `tool_search` / `tool_call`.
         deferred: usize,
-        /// Compact-JSON size of the pre-middleware schemas above, not of
-        /// whatever a specific request's `before_model` pass narrows or grows
-        /// it to.
+        /// Compact-JSON size of the actual pre-middleware wire schema set
+        /// (the `direct` schemas plus the two bridge schemas when
+        /// `deferred > 0`), not of whatever a specific request's
+        /// `before_model` pass narrows or grows it to.
         schema_bytes: usize,
     },
 
@@ -127,7 +131,11 @@ pub enum AgentEvent {
     ToolSearched {
         /// Identifier of the `tool_search` call.
         call_id: CallId,
-        /// The model's query, verbatim.
+        /// The model's query, verbatim — but only when
+        /// [`RunPolicy::capture`][crate::runtime::RunPolicy::capture]`.tool_io`
+        /// is enabled (default `false`, payload-free); empty string
+        /// otherwise. Same privacy class and gate as a normal successful
+        /// tool call's arguments.
         query: String,
         /// Number of deferred tools returned.
         matched: usize,

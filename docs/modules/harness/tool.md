@@ -196,8 +196,8 @@ template by the serving runtime (LM Studio, llama.cpp, Ollama), so the outgoing
 message list has to satisfy that template, not just the wire schema. Three
 helpers in `tinyinference_llm::prompt_tools` normalize it, and both the
 OpenAI-compatible adapter (for a profile with `tool_calling = false`, or after a
-"tools unsupported" 400) and the harness (for a forced `Xml` / `Pformat`
-dialect) apply them:
+"tools unsupported" 400) and the harness (for a forced `Xml`, `Pformat`,
+`Python`, or `Typescript` dialect) apply them:
 
 - `coalesce_tool_results` renders assistant `tool_calls` back into
   `<tool_call>` text and folds consecutive `tool`-role results into one

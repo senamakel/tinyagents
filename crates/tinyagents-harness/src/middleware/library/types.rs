@@ -337,6 +337,22 @@ pub struct ToolPolicyMiddleware {
     /// When `true`, a tool result larger than its declared `max_result_bytes` is
     /// truncated and flagged, enforcing the declared payload cap.
     pub(crate) enforce_result_bytes: bool,
+    /// When `true`, the two reserved intrinsic discovery-bridge names
+    /// (`tool_search`/`tool_call`) are exempted from classification/side-effect
+    /// checks whenever `policies` has no entry for them.
+    ///
+    /// Off by default, including under [`Self::strict`]: exempting *every*
+    /// policy-less tool sharing these two magic names is only safe when the
+    /// caller can guarantee `policies` is the *complete* registry snapshot
+    /// (so "no entry" reliably means "not a registered tool, must be the
+    /// intrinsic bridge"). An incomplete or stale snapshot could otherwise let
+    /// a real, side-effecting host tool that happens to be registered under
+    /// one of these reserved names bypass `strict()`'s fail-closed checks.
+    /// Enable explicitly with
+    /// [`exempt_discovery_bridge`](Self::exempt_discovery_bridge) when using
+    /// the harness's own `tool_search`/`tool_call` bridge together with a
+    /// policy snapshot you trust to be complete.
+    pub(crate) exempt_discovery_bridge: bool,
 }
 
 // ── DynamicToolSelectionMiddleware ────────────────────────────────────────────
