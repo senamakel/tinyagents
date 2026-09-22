@@ -57,8 +57,8 @@ fn code_dialects_are_opt_in_and_share_the_positional_registry() {
 #[test]
 fn a_host_that_renders_the_catalogue_gets_the_schemas_stripped_but_nothing_appended() {
     use tinyinference_llm::message::Message;
-    use tinyinference_llm::model::ModelRequest;
-    use tinyinference_llm::tool::{ToolChoice, ToolSchema};
+    use tinyinference_llm::model::{ModelRequest, ToolChoice};
+    use tinyinference_llm::tool::ToolSchema;
 
     let tools = vec![ToolSchema::new(
         "lookup",
@@ -79,10 +79,8 @@ fn a_host_that_renders_the_catalogue_gets_the_schemas_stripped_but_nothing_appen
     let mut appended = ModelRequest::new(messages.clone()).with_tools(tools.clone());
     dialect.apply_to_request(&mut appended, false);
     assert!(appended.tools.is_empty());
-    let Message::System(system) = &appended.messages[0] else {
-        panic!("system message first");
-    };
-    assert!(system.text().contains("def lookup("), "{}", system.text());
+    let system = appended.messages[0].text();
+    assert!(system.contains("def lookup("), "{system}");
 
     // Host-rendered: schemas still leave the wire, the prompt is untouched.
     let mut host = ModelRequest::new(messages.clone()).with_tools(tools.clone());
@@ -95,10 +93,8 @@ fn a_host_that_renders_the_catalogue_gets_the_schemas_stripped_but_nothing_appen
     let mut forced = ModelRequest::new(messages).with_tools(tools);
     forced.tool_choice = ToolChoice::Tool("lookup".into());
     dialect.apply_to_request(&mut forced, true);
-    let Message::System(system) = &forced.messages[0] else {
-        panic!("system message first");
-    };
-    assert!(system.text().contains("You must call the `lookup` tool."));
-    assert!(!system.text().contains("def lookup("));
+    let system = forced.messages[0].text();
+    assert!(system.contains("You must call the `lookup` tool."), "{system}");
+    assert!(!system.contains("def lookup("));
     assert_eq!(forced.tool_choice, ToolChoice::Auto);
 }
