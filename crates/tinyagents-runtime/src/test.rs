@@ -14,7 +14,7 @@ use tinyagents_harness::{
 use tinyagents_session::transcript::{
     DisplayRecord, FileTranscriptLocator, SessionRef, SessionTranscript, TranscriptHistory,
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
-    TurnUsage, read_transcript, read_transcript_display,
+    TurnUsage, read_transcript, read_transcript_display, session_stem,
 };
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
