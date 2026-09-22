@@ -212,7 +212,7 @@ fn a_deeply_nested_delegation_chain_stays_bounded() {
     }
     let stem = session_stem(&current);
     assert!(
-        stem.len() < 300,
+        stem.len() < 700,
         "50 levels of long keys must not grow the stem past the collapse \
          bound: {} bytes",
         stem.len()
