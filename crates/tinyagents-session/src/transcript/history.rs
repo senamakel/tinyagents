@@ -230,6 +230,25 @@ pub trait TranscriptLocator: Send + Sync {
         self.read_session_transcript(session).is_some()
     }
 
+    /// Every generation of `session` that exists, oldest first.
+    ///
+    /// A compaction seals a generation and opens the next, so a long
+    /// conversation is a chain rather than one file. The model reads only the
+    /// head ([`Self::head_generation`]); a host rendering or exporting the
+    /// conversation wants the whole chain. Empty when nothing is written yet.
+    fn session_chain(&self, session: &SessionRef) -> Vec<SessionRef> {
+        let mut chain = Vec::new();
+        let mut generation = SessionRef {
+            generation: 0,
+            ..session.clone()
+        };
+        while generation.generation <= MAX_GENERATIONS && self.session_exists(&generation) {
+            chain.push(generation.clone());
+            generation = generation.next_generation();
+        }
+        chain
+    }
+
     /// Reads `session`'s transcript, or `None` when it has none yet.
     ///
     /// Unlike [`Self::root_for_thread`] this is an exact lookup, not a
