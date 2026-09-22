@@ -94,7 +94,10 @@ fn a_host_that_renders_the_catalogue_gets_the_schemas_stripped_but_nothing_appen
     forced.tool_choice = ToolChoice::Tool("lookup".into());
     dialect.apply_to_request(&mut forced, true);
     let system = forced.messages[0].text();
-    assert!(system.contains("You must call the `lookup` tool."), "{system}");
+    assert!(
+        system.contains("You must call the `lookup` tool."),
+        "{system}"
+    );
     assert!(!system.contains("def lookup("));
     assert_eq!(forced.tool_choice, ToolChoice::Auto);
 }

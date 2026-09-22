@@ -106,7 +106,11 @@ impl RunDialect {
     /// registry built from them before this call is what parses the answer),
     /// but nothing is appended: the host's own prompt already carries the
     /// protocol block and the catalogue for this dialect.
-    pub(super) fn apply_to_request(&self, request: &mut ModelRequest, host_renders_catalogue: bool) {
+    pub(super) fn apply_to_request(
+        &self,
+        request: &mut ModelRequest,
+        host_renders_catalogue: bool,
+    ) {
         if !self.is_text() || request.tools.is_empty() || request.tool_choice == ToolChoice::None {
             return;
         }
