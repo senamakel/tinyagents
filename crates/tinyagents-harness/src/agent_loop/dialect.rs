@@ -205,6 +205,7 @@ impl RunDialect {
             }
         };
         request.tool_choice = ToolChoice::Auto;
+        sync_stripped_tools_cache_segment(request, had_leading_system);
     }
 
     /// Renders `tools` into this dialect's catalogue shape alone (no
