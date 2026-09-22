@@ -238,6 +238,7 @@ impl Default for TurnOptions<()> {
             thread_id: None,
             stream: false,
             resume: ResumeMode::Never,
+            session: None,
             run_context: RunContext::new(RunConfig::new("session"), ())
                 .with_cancellation(cancellation.clone()),
             cancellation,
