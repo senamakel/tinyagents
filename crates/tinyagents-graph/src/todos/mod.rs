@@ -14,16 +14,24 @@
 //! policy — which card is next, whether it needs approval first, what prompt
 //! its run gets, and how an in-flight run is cancelled.
 //!
+//! [`session_list`] is the other model-facing shape over the same store: the
+//! Claude Code / Codex session todo list (`{"todos": [{content, status}]}`,
+//! whole-list writes, three states, no board machinery). Hosts that want a
+//! progress checklist rather than a dispatchable board register
+//! [`SessionTodoTool`] instead of [`TodoTool`].
+//!
 //! Ported from OpenHuman's task board / `todos` modules, minus the app-specific
 //! coupling (progress events, RPC envelopes, in-memory scratch fallback): a
 //! board is always `(Store, thread_id)`.
 
 pub mod dispatch;
 pub mod runs;
+pub mod session_list;
 pub mod store;
 mod tool;
 mod types;
 
+pub use session_list::{SessionTodoTool, register_session_todo_tool};
 pub use tool::{TodoTool, register_todo_tools, todo_tools};
 pub use types::{
     CardPatch, TaskApprovalMode, TaskBoard, TaskBoardCard, TaskCardStatus, TodosSnapshot,

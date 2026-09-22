@@ -138,6 +138,7 @@ pub use todos::runs::{
 };
 pub use todos::store as todo_store;
 pub use todos::{
-    CardPatch, TaskApprovalMode, TaskBoard, TaskBoardCard, TaskCardStatus, TodoTool, TodosSnapshot,
-    normalise_board, parse_status, register_todo_tools, render_markdown, todo_tools,
+    CardPatch, SessionTodoTool, TaskApprovalMode, TaskBoard, TaskBoardCard, TaskCardStatus,
+    TodoTool, TodosSnapshot, normalise_board, parse_status, register_session_todo_tool,
+    register_todo_tools, render_markdown, todo_tools,
 };

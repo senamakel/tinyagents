@@ -642,3 +642,129 @@ mod tool_tests {
         );
     }
 }
+
+mod session_list_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::super::session_list::SessionTodoTool;
+    use tinyagents_harness::store::{InMemoryStore, Store};
+    use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
+
+    fn store() -> Arc<dyn Store> {
+        Arc::new(InMemoryStore::default())
+    }
+
+    struct ThreadContext(Option<String>);
+
+    impl ToolRunContext for ThreadContext {
+        fn thread_id(&self) -> Option<&str> {
+            self.0.as_deref()
+        }
+    }
+
+    async fn run(tool: &SessionTodoTool, thread: Option<&str>, args: serde_json::Value) -> ToolResult {
+        let context = ThreadContext(thread.map(str::to_owned));
+        tool.execute_with_context(args, Default::default(), Some(&context))
+            .await
+            .unwrap()
+    }
+
+    fn raw(result: &ToolResult) -> &serde_json::Value {
+        result
+            .content
+            .iter()
+            .find_map(|block| match block {
+                ToolContent::Json { data } => Some(data),
+                _ => None,
+            })
+            .expect("json payload")
+    }
+
+    #[tokio::test]
+    async fn a_write_replaces_the_whole_list_and_a_read_returns_it() {
+        let tool = SessionTodoTool::new(store());
+
+        let written = run(
+            &tool,
+            Some("t"),
+            json!({ "todos": [
+                { "content": "Write tests", "status": "in_progress" },
+                { "content": "Ship it", "status": "pending" }
+            ] }),
+        )
+        .await;
+        assert!(!written.is_error, "{written:?}");
+        let p = raw(&written);
+        assert_eq!(p["todos"][0]["status"], "in_progress");
+        assert_eq!(p["todos"][1]["status"], "pending");
+        assert!(p["markdown"].as_str().unwrap().contains("[~] Write tests"));
+
+        let read = run(&tool, Some("t"), json!({})).await;
+        assert_eq!(raw(&read)["todos"].as_array().unwrap().len(), 2);
+
+        let rewritten = run(
+            &tool,
+            Some("t"),
+            json!({ "todos": [{ "content": "Write tests", "status": "completed" }] }),
+        )
+        .await;
+        let p = raw(&rewritten);
+        assert_eq!(p["todos"].as_array().unwrap().len(), 1, "a write is the whole list");
+        assert_eq!(p["todos"][0]["status"], "completed");
+
+        let cleared = run(&tool, Some("t"), json!({ "todos": [] })).await;
+        assert!(raw(&cleared)["todos"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lists_are_keyed_by_thread() {
+        let tool = SessionTodoTool::new(store());
+        run(&tool, Some("a"), json!({ "todos": [{ "content": "only a", "status": "pending" }] }))
+            .await;
+        let b = run(&tool, Some("b"), json!({})).await;
+        assert!(raw(&b)["todos"].as_array().unwrap().is_empty());
+    }
+
+    /// Every argument problem is a tool error the model can correct, never an
+    /// `Err` — an `Err` out of a dispatch is fatal to the run, and a host died
+    /// exactly that way when a model sent the retired `{"cards": …}` shape.
+    #[tokio::test]
+    async fn bad_input_is_a_tool_error_not_an_err() {
+        let tool = SessionTodoTool::new(store());
+        for (args, expect) in [
+            (json!({ "todos": [{ "content": "  ", "status": "pending" }] }), "content"),
+            (json!({ "todos": [{ "content": "x", "status": "someday" }] }), "invalid status"),
+            (json!({ "todos": "not a list" }), "invalid `todos`"),
+            (json!({ "cards": [{ "content": "x", "status": "todo" }] }), "pass `todos`"),
+            (
+                json!({ "todos": [
+                    { "content": "a", "status": "in_progress" },
+                    { "content": "b", "status": "in_progress" }
+                ] }),
+                "in_progress",
+            ),
+        ] {
+            let result = run(&tool, Some("t"), args.clone()).await;
+            assert!(result.is_error, "{args}");
+            let text = format!("{result:?}");
+            assert!(text.contains(expect), "{args}: {text}");
+        }
+        let no_thread = run(&tool, None, json!({})).await;
+        assert!(no_thread.is_error);
+    }
+
+    #[test]
+    fn schema_is_the_claude_shape() {
+        let tool = SessionTodoTool::new(store());
+        let schema = tool.parameters_schema();
+        assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
+        assert_eq!(
+            schema["properties"]["todos"]["items"]["properties"]["status"]["enum"],
+            json!(["pending", "in_progress", "completed"])
+        );
+        assert_eq!(tool.name(), "todo");
+        assert!(!tool.description().contains("board"));
+    }
+}
