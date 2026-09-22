@@ -22,7 +22,7 @@ use super::reader::read_transcript;
 use super::session::{SessionRef, session_stem};
 use super::thread_lookup::find_root_transcripts_for_thread;
 use super::types::{TranscriptMessage, TranscriptMeta};
-use super::writer::write_transcript;
+use super::writer::write_transcript_if_absent;
 
 /// What adoption did for one session.
 #[derive(Debug, Clone, PartialEq, Eq)]
