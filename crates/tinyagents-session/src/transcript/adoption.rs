@@ -89,10 +89,23 @@ pub fn adopt_legacy_session_transcripts(
     // Oldest first, by `_meta.created`. Anything already pointing at this
     // session's own file is excluded so a partially-adopted workspace cannot
     // fold a file into itself.
-    let legacy: Vec<PathBuf> = find_root_transcripts_for_thread(workspace_dir, thread_id)
-        .into_iter()
-        .filter(|path| path != &destination)
-        .collect();
+    //
+    // The scan itself (not just the fold loop below) can hit a candidate it
+    // cannot read at all — before it even knows whether that file's
+    // `_meta.thread_id` would have matched this thread. A silently-dropped
+    // candidate here would let the fold below complete and finalize on only
+    // the *other*, readable roots: the destination would then exist as the
+    // idempotency marker, and the unreadable file's turns would never be
+    // retried even once it became readable again. `unreadable` makes that
+    // case visible so it can defer the whole call instead.
+    let (legacy, unreadable): (Vec<PathBuf>, bool) =
+        find_root_transcripts_for_thread_reporting_unreadable(workspace_dir, thread_id);
+    let legacy: Vec<PathBuf> = legacy.into_iter().filter(|path| path != &destination).collect();
+    anyhow::ensure!(
+        !unreadable,
+        "deferring adoption: at least one root transcript in this workspace could not be read, \
+         and it may belong to thread {thread_id}"
+    );
     if legacy.is_empty() {
         return Ok(None);
     }
