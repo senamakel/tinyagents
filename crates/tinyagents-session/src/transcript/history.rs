@@ -778,7 +778,9 @@ impl TranscriptHistory for FileTranscriptHistory {
 
     fn append(&self, message: TranscriptMessage) -> anyhow::Result<()> {
         let _lock = path_lock(&self.path);
-        let _guard = _lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = _lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut next = self.persisted()?;
         next.push(message);
         self.write_logical_set(&next)
@@ -786,13 +788,17 @@ impl TranscriptHistory for FileTranscriptHistory {
 
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
         let _lock = path_lock(&self.path);
-        let _guard = _lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = _lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.write_logical_set(messages)
     }
 
     fn clear(&self) -> anyhow::Result<()> {
         let _lock = path_lock(&self.path);
-        let _guard = _lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = _lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if !self.path.exists() {
             return Ok(());
         }
