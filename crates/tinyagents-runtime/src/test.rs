@@ -2532,7 +2532,7 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
 
-    // The session's own destination already carries real content from an
+    // The session's own destination already carries one real message from an
     // earlier session-mode turn.
     locator
         .open_session(&session_ref, meta())
@@ -2543,28 +2543,31 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
         ))
         .unwrap();
 
-    // A newer, *different* root transcript for the same thread: what a
-    // Thread-mode newest-wins scan will find instead.
+    // A newer, *different* root transcript for the same thread, with a
+    // *different* message count (2, not 1) — what a Thread-mode newest-wins
+    // scan will find and seed `self.history` from instead.
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
     legacy.created = "zzz-later".into();
     tinyagents_session::transcript::write_transcript(
         &directory.path().join("session_raw/legacy_other.jsonl"),
-        &[TranscriptMessage::new(
-            "user",
-            "from a different file entirely",
-        )],
+        &[
+            TranscriptMessage::new("user", "legacy one"),
+            TranscriptMessage::new("user", "legacy two"),
+        ],
         &legacy,
         None,
     )
     .unwrap();
 
+    // The driver extends whatever it was handed by exactly one message.
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
-            Message::user("from a different file entirely"),
-            Message::assistant("new reply"),
+            Message::user("legacy one"),
+            Message::user("legacy two"),
+            Message::assistant("brand new turn"),
         ],
-        "new reply",
+        "brand new turn",
     ))])))
     .codec(Arc::new(Codec::default()))
     .session(locator.clone(), session_ref.clone(), meta())
@@ -2573,32 +2576,41 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
 
     session
         .turn(
-            SessionTurnRequest::new(Message::user("from a different file entirely")),
+            SessionTurnRequest::new(Message::user("legacy two")),
             session_turn_options(ResumeMode::Thread, "thread-1"),
         )
         .await
         .unwrap();
 
-    // The session's own destination must still contain its original turn:
-    // uncorrupted, with the new turn appended — never overwritten or
-    // diffed against the unrelated file's content.
+    // Sensitive invariant: with the append-diff baseline correctly re-derived
+    // from the destination's own real prior content (1 message), appending
+    // the driver's 1-message extension must leave the destination with
+    // exactly as many messages as the model's full candidate history (3) —
+    // regardless of what the unrelated scanned-from file contained. Using
+    // the scanned file's row count (2) as the wrong baseline instead makes
+    // the diff append too few tail rows, silently losing track of one
+    // message: this assertion catches exactly that class of bug rather than
+    // merely checking "some content survived", which an append-only writer
+    // satisfies by construction even when it drops the wrong number of rows.
     let destination_path = directory
         .path()
         .join("session_raw")
         .join(format!("{}.jsonl", session_stem(&session_ref)));
     let on_disk = read_transcript(&destination_path).unwrap();
-    let contents: Vec<&str> = on_disk
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect();
-    assert!(
-        contents.contains(&"already on the session file"),
-        "the session's own prior turn must survive: {contents:?}"
+    assert_eq!(
+        on_disk.messages.len(),
+        3,
+        "on-disk message count must match the full candidate history, not the \
+         scanned-from file's unrelated row count: {:?}",
+        on_disk
+            .messages
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>()
     );
-    assert!(
-        contents.contains(&"new reply"),
-        "the new turn must still be appended: {contents:?}"
+    assert_eq!(
+        on_disk.messages[0].content, "already on the session file",
+        "the destination's own pre-existing message must never be overwritten"
     );
 }
 
