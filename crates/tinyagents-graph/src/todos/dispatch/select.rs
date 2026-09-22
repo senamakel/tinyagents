@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use crate::todos::session_list::is_session_todo_card;
 use crate::todos::types::{TaskApprovalMode, TaskBoardCard, TaskCardStatus};
 
 /// A card's urgency, read from `source_metadata.urgency`. Cards without one
@@ -39,7 +40,10 @@ pub fn has_card_in_progress(cards: &[TaskBoardCard]) -> bool {
 pub fn pick_next_card(cards: &[TaskBoardCard]) -> Option<TaskBoardCard> {
     cards
         .iter()
-        .filter(|card| matches!(card.status, TaskCardStatus::Todo | TaskCardStatus::Ready))
+        .filter(|card| {
+            !is_session_todo_card(card)
+                && matches!(card.status, TaskCardStatus::Todo | TaskCardStatus::Ready)
+        })
         .max_by(|a, b| {
             card_urgency(a)
                 .partial_cmp(&card_urgency(b))

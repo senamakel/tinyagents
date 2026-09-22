@@ -45,6 +45,14 @@ fn only_todo_and_ready_cards_are_dispatchable() {
 }
 
 #[test]
+fn session_todo_cards_are_not_dispatchable() {
+    let mut card = card("checklist", TaskCardStatus::Todo, 0);
+    card.source_metadata = Some(json!({ "session_todo": true }));
+
+    assert!(pick_next_card(&[card]).is_none());
+}
+
+#[test]
 fn the_most_urgent_card_wins() {
     let cards = vec![
         with_urgency(card("low", TaskCardStatus::Todo, 0), 0.1),

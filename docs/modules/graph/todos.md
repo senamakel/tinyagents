@@ -85,3 +85,31 @@ Unit tests in `crates/tinyagents-graph/src/todos/test.rs` (types, store invarian
 end-to-end model-driven tool run in `tests/e2e_graph_todos.rs`; feature coverage
 for the run lifecycle in `tests/feature_graph_task_runs.rs`; and the full
 dispatch loop in `tests/e2e_graph_task_dispatch.rs`.
+
+## Session todo list (`todos::session_list`)
+
+Not every host wants a dispatchable kanban board. `SessionTodoTool` is the
+other model-facing shape over the same store: the session todo list Claude
+Code and Codex use.
+
+- One call writes the whole list: `{"todos": [{"content": "...", "status":
+  "pending" | "in_progress" | "completed"}]}`. An empty list clears it; a call
+  with no arguments reads it back. There is no `op`, no ids, no approval
+  gate, evidence, plan or blocker.
+- It shares `store::replace` / `store::list`, so ordering, the
+  single-`in_progress` invariant and the markdown rendering are the board's.
+  Board-only states fold on the way out (`ready`/`awaiting_approval`/
+  `blocked` → `pending`, `rejected` → `completed`).
+- The list is keyed by `ToolRunContext::thread_id`. A host that scopes lists
+  by something else (an agent session id, say) calls
+  `session_list::call(store, key, &args)` or `write` / `read` with its own
+  key instead of the `Tool` entry point.
+- Every argument problem — wrong key (`cards`), a non-array, empty content,
+  an unknown status, two `in_progress` items — is a `ToolResult::error` the
+  model can correct. It is never an `Err`: an `Err` out of a tool dispatch is
+  fatal to the run, and a host lost a turn exactly that way when a model sent
+  the retired `{"cards": …}` shape to a host-side copy of this tool.
+
+Register with `register_session_todo_tool(&mut registry, store)` in place of
+`register_todo_tools`; the two share the name `todo`, so a registry holds one
+or the other.
