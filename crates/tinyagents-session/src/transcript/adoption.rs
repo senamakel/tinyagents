@@ -100,7 +100,10 @@ pub fn adopt_legacy_session_transcripts(
     // case visible so it can defer the whole call instead.
     let (legacy, unreadable): (Vec<PathBuf>, bool) =
         find_root_transcripts_for_thread_reporting_unreadable(workspace_dir, thread_id);
-    let legacy: Vec<PathBuf> = legacy.into_iter().filter(|path| path != &destination).collect();
+    let legacy: Vec<PathBuf> = legacy
+        .into_iter()
+        .filter(|path| path != &destination)
+        .collect();
     anyhow::ensure!(
         !unreadable,
         "deferring adoption: at least one root transcript in this workspace could not be read, \

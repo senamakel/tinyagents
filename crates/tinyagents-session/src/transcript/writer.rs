@@ -360,8 +360,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         // since nothing else ever looks for or cleans up a name only this
         // call ever mints.
         let _ = fs::remove_file(&tmp_path);
-        return Err(error)
-            .with_context(|| format!("write temp transcript {}", tmp_path.display()));
+        return Err(error).with_context(|| format!("write temp transcript {}", tmp_path.display()));
     }
     fs::rename(&tmp_path, path).with_context(|| {
         let _ = fs::remove_file(&tmp_path);
@@ -398,8 +397,7 @@ fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
     if let Err(error) = fs::write(&tmp_path, contents) {
         // Same orphaned-temp-file hazard as `atomic_write` — see its comment.
         let _ = fs::remove_file(&tmp_path);
-        return Err(error)
-            .with_context(|| format!("write temp transcript {}", tmp_path.display()));
+        return Err(error).with_context(|| format!("write temp transcript {}", tmp_path.display()));
     }
     let published = match fs::hard_link(&tmp_path, path) {
         Ok(()) => true,

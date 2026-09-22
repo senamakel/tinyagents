@@ -1368,7 +1368,11 @@ async fn session_builder_resume_agent_reaches_the_latest_for_agent_lookup() {
         Message::assistant("next"),
     ]))])))
     .codec(Arc::new(Codec::default()))
-    .session(locator.clone(), SessionRef::scoped("thread-1", "agent-id"), meta())
+    .session(
+        locator.clone(),
+        SessionRef::scoped("thread-1", "agent-id"),
+        meta(),
+    )
     .resume_agent("resume-agent")
     .build()
     .unwrap();

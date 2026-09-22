@@ -519,7 +519,13 @@ fn a_session_identified_root_on_the_same_thread_is_never_folded_in() {
 fn an_unreadable_root_the_scan_itself_drops_defers_adoption_rather_than_finalizing() {
     let dir = tempdir().unwrap();
     let thread = "thread-1";
-    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "readable", thread);
+    write_legacy(
+        dir.path(),
+        "1000_a",
+        "2026-01-01T00:00:00Z",
+        "readable",
+        thread,
+    );
     // A `.jsonl` file the scan cannot parse at all — `find_root_transcripts_for_thread`
     // would silently exclude this from its result and only log a warning.
     let corrupt_path = resolve_keyed_transcript_path(dir.path(), "2000_a").unwrap();
