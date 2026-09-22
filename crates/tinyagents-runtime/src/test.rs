@@ -2400,7 +2400,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
     );
     assert_eq!(
         persisted.meta.session_id.as_deref(),
-        Some("thread-9fa08.agent-id")
+        Some(session_stem(&session_ref).as_str())
     );
 }
 
