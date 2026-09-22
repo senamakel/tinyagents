@@ -346,6 +346,62 @@ impl TranscriptLocator for FileTranscriptLocator {
             seed,
         )?))
     }
+
+    fn session_exists(&self, session: &SessionRef) -> bool {
+        // A direct path probe, not a read: `head_generation` calls this once
+        // per generation and only needs to know whether the file is there.
+        resolve_keyed_transcript_path(&self.workspace_dir, &session_stem(session))
+            .is_ok_and(|path| path.exists())
+    }
+
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        let stem = session_stem(session);
+        let path = resolve_keyed_transcript_path(&self.workspace_dir, &stem).ok()?;
+        if !path.exists() {
+            return None;
+        }
+        tracing::debug!(
+            "[transcript-history] locator read_session session={stem} path={}",
+            path.display()
+        );
+        Some(Arc::new(FileTranscriptHistory::opened_at(
+            path,
+            seed_meta_for_discovered(&stem),
+        )))
+    }
+
+    fn begin_generation(
+        &self,
+        session: &SessionRef,
+        replacement: &[TranscriptMessage],
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        let successor = session.next_generation();
+        let stem = session_stem(&successor);
+        let path = resolve_keyed_transcript_path(&self.workspace_dir, &stem)?;
+        anyhow::ensure!(
+            !path.exists(),
+            "session generation {stem} already exists; refusing to overwrite a sealed transcript"
+        );
+
+        let mut meta = seed;
+        meta.session_id = Some(successor.session_id());
+        meta.parent_session_id = successor.parent_session_id();
+        // The successor opens with the compacted set already in place, so its
+        // very first line after `_meta` is the retained history rather than an
+        // empty file the next turn would have to diff against.
+        write_transcript(&path, replacement, &meta, None)?;
+        tracing::info!(
+            "[transcript-history] sealed session={} and opened generation {} at {}",
+            session.session_id(),
+            successor.generation,
+            path.display()
+        );
+        Ok((
+            successor,
+            Arc::new(FileTranscriptHistory::opened_at(path, meta)),
+        ))
+    }
 }
 
 /// A placeholder `_meta` for a handle bound to an already-existing transcript.
