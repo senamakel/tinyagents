@@ -635,32 +635,6 @@ impl FileTranscriptHistory {
             .unwrap_or_else(|| self.seed_meta.clone()))
     }
 
-    /// Writes `next` as the new logical set, diffing against what is persisted.
-    ///
-    /// Routes through [`TranscriptHistory::append_turn`] so every write in this
-    /// module — trait-driven and turn-path alike — funnels through one call to
-    /// [`append_transcript_turn`], and the extension-vs-compaction decision
-    /// stays with the format owner rather than drifting here.
-    ///
-    /// The `self.persisted()` disk re-read is what the generic trait path has
-    /// to do, and is deliberately **not** what the turn path does.
-    /// [`read_transcript`] reconstructs `TranscriptMessage`s from line records: the
-    /// `failure` / `failure_detail` fields have been lifted out of
-    /// `extra_metadata` and turn-usage fields hoisted to top-level line fields.
-    /// Feeding that back in as `prev` would make `common_prefix_len` mismatch
-    /// at the first such message, so the writer would emit a full compaction
-    /// record — re-appending the entire message set — on every single turn.
-    fn write_logical_set(&self, next: &[TranscriptMessage]) -> anyhow::Result<()> {
-        let prev = self.persisted()?;
-        let meta = self.meta_for_write()?;
-        self.append_turn(TranscriptTurn {
-            prev: &prev,
-            next,
-            meta: &meta,
-            turn_usage: None,
-            request_id: None,
-        })
-    }
 }
 
 /// A process-wide, per-path mutex serializing the read-modify-write sequence
