@@ -12,6 +12,7 @@ use tinyagents_harness::{
     runtime::AgentHarness,
 };
 use tinyagents_session::transcript::{
+    SessionRef,
     DisplayRecord, FileTranscriptLocator, SessionTranscript, TranscriptHistory, TranscriptLocator,
     TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, read_transcript,
     read_transcript_display,
