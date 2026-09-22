@@ -30,6 +30,22 @@ picks the fix up.
 | `Xml` | the transcript is folded into text forms (assistant calls → `<tool_call>` markup, `tool` results → one `[Tool results]` turn), a continuation user turn is inserted when no user query is resolvable, the JSON protocol block plus catalogue goes into the system prompt, **no** schema goes on the wire | every text grammar |
 | `Pformat` | as `Xml`, with the P-Format block and signature catalogue | every text grammar, with the positional registry built from the run's schemas |
 
+A host that composes its own system prompt from the same dialect — the
+protocol block and the catalogue already in place, inside its cacheable
+prefix — sets `RunPolicy::host_renders_tool_catalogue`. The text dialects
+then still fold the transcript, strip the schemas off the wire and bind the
+positional registry, but append nothing from the run's *ordinary* catalogue;
+only a forced `tool_choice` (`Required` / `Tool(name)`) is still spelled out,
+since the host's prompt predates it. Without the flag the loop appends the
+block itself, and a host that also rendered one ships every signature twice.
+
+One exception: a structured-output fallback tool synthesized for *this turn*
+(`StructuredStrategy::ToolCall` / `ToolCallUnion`, pushed onto the request
+after the host's static prompt was already composed) is not something the
+host could ever have advertised in its own catalogue. Its schema and
+signature are appended anyway, even under `host_renders_tool_catalogue`, or
+the model has nothing to answer the forced call against.
+
 Whatever the dialect, a response carrying no structured call is read through
 every grammar with the offered tool names supplied, so a damaged name
 (`terminal" parameter=…`, `functions.read_file`, `Read File`) resolves to the
@@ -87,10 +103,15 @@ The agent loop selects one per run from `RunPolicy::tool_dialect`
 (`ToolDispatcher::{Auto, Native, Xml, Pformat, Python, Typescript}`). `Auto`
 resolves to native when the model profile supports it and to XML otherwise;
 P-Format and the code dialects are opt-in. When a host has already composed a
-tool protocol into the system prompt, the loop still appends its authoritative
-block from the final post-middleware tool set. A heading in arbitrary prompt
-text cannot prove that the host block matches the selected dialect, current
-catalogue, or effective tool choice.
+tool protocol into the system prompt but has not set
+`RunPolicy::host_renders_tool_catalogue`, the loop still appends its own
+authoritative block from the final post-middleware tool set — a heading in
+arbitrary prompt text cannot prove that the host block matches the selected
+dialect, current catalogue, or effective tool choice, so the loop does not
+trust it and the host ends up shipping the catalogue twice. Setting the flag
+is the host's explicit assertion that its own block *is* that authoritative
+one (see "Selecting a dialect" above for what the loop still does — and does
+not — append once it is set).
 
 ## Which surface to use
 

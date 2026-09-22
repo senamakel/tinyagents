@@ -6798,3 +6798,371 @@ async fn tiered_system_messages_become_one_cacheable_segment_each() {
     );
     assert!(request.provider_options[PROMPT_CACHE_KEY_OPTION].is_string());
 }
+
+/// A middleware that declares the harness layout while the schemas are still
+/// on the request (`system`, `tools`) must keep its stable-prefix fingerprint
+/// under a text dialect, which folds the catalogue into the prompt and clears
+/// `tools` afterwards. Before, the rebuilt layout (`system` only) no longer
+/// matched the declaration, the request fell through to the whole-request
+/// digest, and the provider routing key changed on every call of a thread.
+#[test]
+fn stripped_tools_segment_still_counts_as_the_harness_layout() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+    let system = Message::system("identity and rules");
+    let declared = |request: &mut ModelRequest| {
+        request.cache_segments = vec![
+            PromptSegment {
+                id: "system".to_string(),
+                role: SegmentRole::System,
+                cacheable: true,
+            },
+            PromptSegment {
+                id: "tools".to_string(),
+                role: SegmentRole::Tools,
+                cacheable: true,
+            },
+        ];
+    };
+
+    // Same declaration, two turns of one thread, schemas already stripped.
+    let mut turn_one = ModelRequest::new(vec![system.clone(), Message::user("hi")]);
+    declared(&mut turn_one);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut turn_one);
+    let mut turn_two = ModelRequest::new(vec![
+        system.clone(),
+        Message::user("hi"),
+        Message::assistant("hello"),
+        Message::user("later"),
+    ]);
+    declared(&mut turn_two);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut turn_two);
+
+    let ids: Vec<&str> = turn_one
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system"], "the stripped tools segment is dropped");
+    let mut expected = crate::prompt::PromptBuilder::new();
+    expected.push_system_messages(std::slice::from_ref(&system));
+    assert_eq!(
+        turn_one.prompt_fingerprint,
+        expected.build(Vec::new()).prompt_fingerprint,
+        "the fingerprint is the stable-prefix one, not a whole-request digest"
+    );
+    assert_eq!(turn_one.prompt_fingerprint, turn_two.prompt_fingerprint);
+
+    // A genuinely custom annotation still takes the conservative path.
+    let mut custom = ModelRequest::new(vec![system, Message::user("hi")]);
+    custom.cache_segments = vec![PromptSegment {
+        id: "system:abc".to_string(),
+        role: SegmentRole::System,
+        cacheable: true,
+    }];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut custom);
+    assert_ne!(custom.prompt_fingerprint, turn_one.prompt_fingerprint);
+}
+
+/// A text-dialect run that starts with *no* leading system message declares
+/// only the `tools` segment (`PromptBuilder` has no system prefix to name
+/// yet). The dialect then synthesizes exactly one new leading system message
+/// for its protocol block (`prompt_tools::append_system_block` inserts one
+/// when none exists) and clears `tools`. That single synthesized segment is
+/// still the harness's own dialect rewrite, not a custom annotation, and
+/// must keep the stable-prefix fingerprint rather than falling through to
+/// the whole-request digest — which would re-roll the provider routing key
+/// as the transcript grows even though the leading system content itself
+/// (the dialect's protocol block) never changes.
+///
+/// Runs the actual dialect rewrite (`RunDialect::apply_to_request`), not a
+/// hand-constructed post-rewrite `cache_segments`: the synthesis is resolved
+/// there (`sync_stripped_tools_cache_segment`), using the pre-rewrite
+/// message shape this test needs to be real for.
+#[test]
+fn a_dialect_synthesized_first_system_segment_still_counts_as_the_harness_layout() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole, ToolChoice};
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new(
+        "lookup",
+        "Looks something up.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"]
+        }),
+    );
+    let dialect = super::dialect::RunDialect::resolve(
+        crate::config::ToolDispatcher::Xml,
+        std::slice::from_ref(&tool),
+        Some(false),
+    );
+    let build_turn = |history: Vec<Message>| {
+        let mut request = ModelRequest::new(history).with_tools(vec![tool.clone()]);
+        request.tool_choice = ToolChoice::Auto;
+        // Declared before the rewrite: no leading system message exists yet
+        // (`history` is user-only), so only the tools segment is named.
+        request.cache_segments = vec![PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        }];
+        dialect.apply_to_request(&mut request, false, &[]);
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let turn_one = build_turn(vec![Message::user("hi")]);
+    let turn_two = build_turn(vec![
+        Message::user("hi"),
+        Message::assistant("hello"),
+        Message::user("later"),
+    ]);
+
+    let ids: Vec<&str> = turn_one
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system"], "the stripped tools segment is dropped");
+    assert!(turn_one.prompt_fingerprint.is_some());
+    assert_eq!(
+        turn_one.prompt_fingerprint, turn_two.prompt_fingerprint,
+        "the routing key must not change as the transcript grows, since the \
+         synthesized protocol block is identical every turn"
+    );
+}
+
+/// The counterexample to the synthesis case above: a leading system message
+/// *already exists* at declare time, but middleware deliberately names only
+/// the trailing `tools` segment — omitting that system message from the
+/// cache key on purpose, e.g. because it carries per-request volatile
+/// content. The dialect rewrite folds its protocol block into that existing
+/// message in place (`prompt_tools::append_system_block` only ever inserts a
+/// *new* leading message when none exists), so nothing was synthesized here.
+/// The declaration must be left exactly as the middleware wrote it, not
+/// promoted to a fresh cacheable system segment the middleware never named.
+#[test]
+fn a_custom_layout_omitting_an_existing_system_message_is_not_promoted_by_the_dialect_rewrite() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole, ToolChoice};
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new(
+        "lookup",
+        "Looks something up.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"]
+        }),
+    );
+    let dialect = super::dialect::RunDialect::resolve(
+        crate::config::ToolDispatcher::Xml,
+        std::slice::from_ref(&tool),
+        Some(false),
+    );
+    let system = Message::system("volatile per-request content middleware keeps out of the key");
+    let mut request = ModelRequest::new(vec![system, Message::user("hi")]).with_tools(vec![tool]);
+    request.tool_choice = ToolChoice::Auto;
+    request.cache_segments = vec![PromptSegment {
+        id: "tools".to_string(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    }];
+
+    dialect.apply_to_request(&mut request, false, &[]);
+
+    assert!(
+        !request
+            .cache_segments
+            .iter()
+            .any(|segment| segment.role == SegmentRole::System),
+        "the rewrite must not invent a system segment the declaration never named: {:?}",
+        request.cache_segments
+    );
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+    // Falls through to the conservative whole-request digest, not the
+    // stable-prefix fingerprint a harness-owned layout would get.
+    let mut harness_owned = request.clone();
+    harness_owned.cache_segments = vec![
+        PromptSegment {
+            id: "system".to_string(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        },
+    ];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut harness_owned);
+    assert_ne!(request.prompt_fingerprint, harness_owned.prompt_fingerprint);
+}
+
+/// A middleware that deliberately opts a custom trailing `tools` segment out
+/// of caching (`cacheable: false`) is not the harness's own canonical
+/// segment, even though its role and id match. Stripping the schemas off the
+/// wire must not silently promote that opt-out to cacheable by matching it
+/// against the harness layout on role/id alone.
+#[test]
+fn a_custom_tools_segment_opted_out_of_caching_is_not_mistaken_for_the_harness_layout() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let system = Message::system("identity and rules");
+    let mut request = ModelRequest::new(vec![system.clone(), Message::user("hi")]);
+    request.cache_segments = vec![
+        PromptSegment {
+            id: "system".to_string(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: false,
+        },
+    ];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+
+    // Declared segments are left untouched: this is treated as a genuinely
+    // custom annotation, not silently rewritten to the harness's stripped
+    // layout.
+    assert_eq!(request.cache_segments.len(), 2);
+    assert!(!request.cache_segments[1].cacheable);
+
+    // And the fingerprint takes the conservative whole-request digest path,
+    // not the stable-prefix one a harness-owned layout would get.
+    let mut harness_owned = ModelRequest::new(vec![system, Message::user("hi")]);
+    harness_owned.cache_segments = vec![
+        PromptSegment {
+            id: "system".to_string(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        },
+    ];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut harness_owned);
+    assert_ne!(request.prompt_fingerprint, harness_owned.prompt_fingerprint);
+}
+
+/// A second custom-layout counterexample: middleware names a *non-empty*
+/// but middleware-owned head ahead of the canonical trailing `tools`
+/// segment — `[system:tenant, tools]` — while a leading system message
+/// really does exist. `head` is non-empty here (unlike the omission case
+/// above), so an earlier, less careful version of the sync helper dropped
+/// the trailing tools segment unconditionally whenever `head` was
+/// non-empty, silently mutating this declaration down to `[system:tenant]`
+/// before `refresh_prompt_cache_fingerprint` ever got a chance to recognize
+/// it as custom and take the conservative path over the *original* bytes.
+/// The declaration must survive completely intact — trailing tools segment
+/// included — since it never matched the harness's own canonical shape in
+/// the first place.
+#[test]
+fn a_custom_head_that_does_not_match_the_canonical_shape_is_left_completely_untouched() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole, ToolChoice};
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new(
+        "lookup",
+        "Looks something up.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"]
+        }),
+    );
+    let dialect = super::dialect::RunDialect::resolve(
+        crate::config::ToolDispatcher::Xml,
+        std::slice::from_ref(&tool),
+        Some(false),
+    );
+    let system = Message::system("tenant-scoped instructions");
+    let original_segments = vec![
+        PromptSegment {
+            id: "system:tenant".to_string(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        },
+    ];
+    let mut request = ModelRequest::new(vec![system, Message::user("hi")]).with_tools(vec![tool]);
+    request.tool_choice = ToolChoice::Auto;
+    request.cache_segments = original_segments.clone();
+
+    dialect.apply_to_request(&mut request, false, &[]);
+
+    assert_eq!(
+        request.cache_segments, original_segments,
+        "a non-canonical custom head must not be partially rewritten"
+    );
+}
+
+/// The exact edge case tinysweeper flagged: a host-rendered, no-tools-
+/// synthesized, `Auto`-choice turn with no leading system message leaves
+/// `request.messages` completely untouched (see the `block.is_empty()`
+/// branch of `apply_to_request`) — no system message is ever inserted. The
+/// sync helper must not synthesize a leading system cache segment for a
+/// message that was never created, or `refresh_prompt_cache_fingerprint`
+/// mismatches the (fictitious) declared segment against the real, empty
+/// message layout and falls back to the conservative digest for a turn that
+/// is actually the trivial empty-declaration case.
+#[test]
+fn host_rendered_with_nothing_to_say_drops_the_stale_tools_segment_without_inventing_one() {
+    use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole, ToolChoice};
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new(
+        "lookup",
+        "Looks something up.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"]
+        }),
+    );
+    let dialect = super::dialect::RunDialect::resolve(
+        crate::config::ToolDispatcher::Xml,
+        std::slice::from_ref(&tool),
+        Some(false),
+    );
+    let mut request = ModelRequest::new(vec![Message::user("hi")]).with_tools(vec![tool]);
+    request.tool_choice = ToolChoice::Auto;
+    request.cache_segments = vec![PromptSegment {
+        id: "tools".to_string(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    }];
+
+    // host_renders_catalogue = true, no synthesized tools, tool_choice::Auto:
+    // `block` stays empty, so the rewrite leaves `messages` untouched.
+    dialect.apply_to_request(&mut request, true, &[]);
+
+    assert!(
+        !matches!(request.messages[0], Message::System(_)),
+        "no system message was actually inserted: {:?}",
+        request.messages
+    );
+    assert!(
+        request.cache_segments.is_empty(),
+        "the stale tools segment must be dropped without inventing a system \
+         segment for a message that does not exist: {:?}",
+        request.cache_segments
+    );
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+    assert_eq!(
+        request.prompt_fingerprint, None,
+        "an empty declared layout with no system messages fingerprints as \
+         nothing (the trivial stable-prefix case), not a whole-request digest"
+    );
+}

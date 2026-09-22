@@ -734,6 +734,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
             // uses provider-native mode. The chosen strategy drives extraction of
             // the final response below.
+            // Marks where any structured-output fallback tool gets pushed
+            // below, so it can be told apart afterward from what was already
+            // on `request.tools` — see `synthesized_tools`.
+            let tools_before_structured_plan = request.tools.len();
             let structured_plan: Option<(StructuredStrategy, String, Value)> =
                 match request.response_format.clone() {
                     Some(ResponseFormat::Auto { name, schema })
@@ -899,6 +903,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            // Tool schemas minted by the structured-output plan above (the
+            // `ToolCall` / `ToolCallUnion` fallback tools), pushed onto
+            // `request.tools` after `tools_before_structured_plan` was
+            // recorded. A host that renders its own static tool catalogue
+            // composed it before this turn's structured-output planning ran,
+            // so it cannot have advertised these; `RunDialect::apply_to_request`
+            // appends their catalogue entries even in the host-rendered case.
+            let synthesized_tools: Vec<ToolSchema> =
+                request.tools[tools_before_structured_plan..].to_vec();
+
             // What was offered is fixed here, before a text dialect strips
             // the schemas off the wire: recovery and the stream scrubber need
             // the names, and the structured-output schema tool counts. The
@@ -944,7 +958,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `max_input_tokens` pass admission on the small structured
             // request and then send a materially larger rendered-text one,
             // defeating the pre-call budget limit.
-            dialect.apply_to_request(&mut request);
+            dialect.apply_to_request(
+                &mut request,
+                self.policy.host_renders_tool_catalogue,
+                &synthesized_tools,
+            );
 
             // A host budget is acquired only for an explicit host-driven run.
             // Do it after structured-output planning: a synthetic schema tool
@@ -2033,8 +2051,44 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
             cacheable: true,
         });
     }
-    let harness_layout =
-        request.cache_segments.is_empty() || request.cache_segments == expected_layout;
+    // The canonical harness-owned trailing tools segment: only *this* exact
+    // segment (including `cacheable: true`) is recognized as the harness's
+    // own below, so middleware that deliberately annotated its own trailing
+    // `tools` segment `cacheable: false` keeps that opt-out instead of being
+    // silently promoted to cacheable once a text dialect strips the schemas.
+    let canonical_tools_segment = PromptSegment {
+        id: "tools".to_string(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    };
+    // A text dialect (`RunDialect::apply_to_request`) folds the catalogue
+    // into the system prompt and clears `tools` *after* `before_model` ran,
+    // so a middleware that declared the harness layout while the schemas
+    // were still on the request legitimately carries a trailing `tools`
+    // segment the rebuilt layout no longer has. That is still the harness
+    // layout, not a custom annotation: demoting it to the whole-request
+    // digest below would re-roll the provider routing key on every call.
+    //
+    // The declared head has to equal the rebuilt system-segment prefix
+    // exactly. The one case that legitimately would not — no leading system
+    // message at declare time, so the dialect synthesizes one — is already
+    // resolved before this function ever runs, by
+    // `RunDialect::sync_stripped_tools_cache_segment`, which has the
+    // pre-rewrite message shape this function does not: reconstructing that
+    // distinction from the rewritten request alone cannot tell an
+    // actually-synthesized leading segment apart from a custom declaration
+    // that deliberately left an already-present system message out of the
+    // cache key.
+    let declared_with_stripped_tools = request.tools.is_empty()
+        && request
+            .cache_segments
+            .split_last()
+            .is_some_and(|(last, head)| {
+                *last == canonical_tools_segment && head == expected_layout
+            });
+    let harness_layout = request.cache_segments.is_empty()
+        || request.cache_segments == expected_layout
+        || declared_with_stripped_tools;
 
     if harness_layout {
         request.cache_segments = expected_layout;
