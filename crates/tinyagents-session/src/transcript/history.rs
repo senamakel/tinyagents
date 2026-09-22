@@ -26,7 +26,7 @@ use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptMeta, TurnUsage, append_transcript_turn,
     find_latest_transcript, find_root_transcript_for_thread,
     find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
-    session_stem, write_transcript,
+    session_stem,
 };
 
 /// Upper bound on the compaction generations one session may accumulate.
@@ -251,19 +251,22 @@ pub trait TranscriptLocator: Send + Sync {
         self.open_stem(&session_stem(session), seed)
     }
 
-    /// Seals `session` and opens its successor, starting from `replacement`.
+    /// Seals `session` and binds its successor generation.
     ///
     /// Called when a turn's logical message set is no longer an extension of
     /// what is persisted — a compaction. Rewriting the sealed file in place
     /// would destroy the replaced turns; instead generation `n` is left
-    /// byte-for-byte as it was and generation `n+1` begins from the compacted
-    /// set, recording `n` as its parent. The conversation therefore stays fully
-    /// recoverable by walking the chain even though the model only sees the
-    /// head.
+    /// byte-for-byte as it was and generation `n+1` takes the compacted set as
+    /// its opening write, recording `n` as its parent. The conversation stays
+    /// fully recoverable by walking the chain even though the model only sees
+    /// the head.
+    ///
+    /// The returned handle is bound but empty: the caller writes the retained
+    /// set through the ordinary turn path (`prev: &[]`), so usage, request ids
+    /// and display partials are recorded exactly as on any other turn.
     fn begin_generation(
         &self,
         session: &SessionRef,
-        replacement: &[TranscriptMessage],
         seed: TranscriptMeta,
     ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)>;
 }
@@ -373,7 +376,6 @@ impl TranscriptLocator for FileTranscriptLocator {
     fn begin_generation(
         &self,
         session: &SessionRef,
-        replacement: &[TranscriptMessage],
         seed: TranscriptMeta,
     ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
         let successor = session.next_generation();
@@ -387,10 +389,6 @@ impl TranscriptLocator for FileTranscriptLocator {
         let mut meta = seed;
         meta.session_id = Some(successor.session_id());
         meta.parent_session_id = successor.parent_session_id();
-        // The successor opens with the compacted set already in place, so its
-        // very first line after `_meta` is the retained history rather than an
-        // empty file the next turn would have to diff against.
-        write_transcript(&path, replacement, &meta, None)?;
         tracing::info!(
             "[transcript-history] sealed session={} and opened generation {} at {}",
             session.session_id(),
@@ -399,7 +397,11 @@ impl TranscriptLocator for FileTranscriptLocator {
         );
         Ok((
             successor,
-            Arc::new(FileTranscriptHistory::opened_at(path, meta)),
+            Arc::new(FileTranscriptHistory::new(
+                &self.workspace_dir,
+                &stem,
+                meta,
+            )?),
         ))
     }
 }
