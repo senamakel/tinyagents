@@ -104,12 +104,20 @@ impl RunDialect {
     ///
     /// With `host_renders_catalogue` the schemas still leave the wire (the
     /// registry built from them before this call is what parses the answer),
-    /// but nothing is appended: the host's own prompt already carries the
-    /// protocol block and the catalogue for this dialect.
+    /// and nothing from the run's ordinary catalogue is appended: the host's
+    /// own prompt already carries the protocol block and the catalogue for
+    /// this dialect. `synthesized` is the exception — tool schemas minted
+    /// *this turn*, after the host's static prompt was already composed (the
+    /// structured-output fallback tool `StructuredStrategy::ToolCall` /
+    /// `ToolCallUnion` push onto `request.tools`). The host cannot have
+    /// rendered a schema it did not know about yet, so their catalogue
+    /// entries are appended here even in the host-rendered case, or the
+    /// model never learns the shape it is being forced to call.
     pub(super) fn apply_to_request(
         &self,
         request: &mut ModelRequest,
         host_renders_catalogue: bool,
+        synthesized: &[ToolSchema],
     ) {
         if !self.is_text() || request.tools.is_empty() || request.tool_choice == ToolChoice::None {
             return;
@@ -120,16 +128,23 @@ impl RunDialect {
         let messages = prompt_tools::coalesce_tool_results(&request.messages);
         let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
         if host_renders_catalogue {
+            let mut block = String::new();
+            if !synthesized.is_empty() {
+                block.push_str(&self.render_catalogue(synthesized));
+            }
             // Only a forced choice still has to be said, since the host's
             // prompt was composed before the choice was known.
-            let forced = match &request.tool_choice {
-                ToolChoice::Required => Some("You must emit at least one tool call.\n".to_string()),
-                ToolChoice::Tool(name) => Some(format!("You must call the `{name}` tool.\n")),
-                ToolChoice::Auto | ToolChoice::None => None,
-            };
-            request.messages = match forced {
-                Some(block) => prompt_tools::append_system_block(&messages, &block),
-                None => messages,
+            match &request.tool_choice {
+                ToolChoice::Required => block.push_str("You must emit at least one tool call.\n"),
+                ToolChoice::Tool(name) => {
+                    block.push_str(&format!("You must call the `{name}` tool.\n"));
+                }
+                ToolChoice::Auto | ToolChoice::None => {}
+            }
+            request.messages = if block.is_empty() {
+                messages
+            } else {
+                prompt_tools::append_system_block(&messages, &block)
             };
             request.tool_choice = ToolChoice::Auto;
             return;
