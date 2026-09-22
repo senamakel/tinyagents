@@ -734,6 +734,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
             // uses provider-native mode. The chosen strategy drives extraction of
             // the final response below.
+            // Marks where any structured-output fallback tool gets pushed
+            // below, so it can be told apart afterward from what was already
+            // on `request.tools` — see `synthesized_tools`.
+            let tools_before_structured_plan = request.tools.len();
             let structured_plan: Option<(StructuredStrategy, String, Value)> =
                 match request.response_format.clone() {
                     Some(ResponseFormat::Auto { name, schema })
