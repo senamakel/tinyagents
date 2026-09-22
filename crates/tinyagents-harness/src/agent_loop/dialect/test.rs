@@ -53,3 +53,52 @@ fn code_dialects_are_opt_in_and_share_the_positional_registry() {
         RunDialect::Code(CodeStyle::TypeScript, _)
     ));
 }
+
+#[test]
+fn a_host_that_renders_the_catalogue_gets_the_schemas_stripped_but_nothing_appended() {
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::ModelRequest;
+    use tinyinference_llm::tool::{ToolChoice, ToolSchema};
+
+    let tools = vec![ToolSchema::new(
+        "lookup",
+        "Looks something up.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"q": {"type": "string"}},
+            "required": ["q"]
+        }),
+    )];
+    let dialect = RunDialect::resolve(ToolDispatcher::Python, &tools, Some(true));
+    let messages = vec![
+        Message::system("host prompt with its own ## Tools block"),
+        Message::user("hi"),
+    ];
+
+    // Default: the loop appends the protocol block and the catalogue.
+    let mut appended = ModelRequest::new(messages.clone()).with_tools(tools.clone());
+    dialect.apply_to_request(&mut appended, false);
+    assert!(appended.tools.is_empty());
+    let Message::System(system) = &appended.messages[0] else {
+        panic!("system message first");
+    };
+    assert!(system.text().contains("def lookup("), "{}", system.text());
+
+    // Host-rendered: schemas still leave the wire, the prompt is untouched.
+    let mut host = ModelRequest::new(messages.clone()).with_tools(tools.clone());
+    dialect.apply_to_request(&mut host, true);
+    assert!(host.tools.is_empty());
+    assert_eq!(host.messages, messages);
+    assert_eq!(host.tool_choice, ToolChoice::Auto);
+
+    // A forced choice is the one thing the host could not have said.
+    let mut forced = ModelRequest::new(messages).with_tools(tools);
+    forced.tool_choice = ToolChoice::Tool("lookup".into());
+    dialect.apply_to_request(&mut forced, true);
+    let Message::System(system) = &forced.messages[0] else {
+        panic!("system message first");
+    };
+    assert!(system.text().contains("You must call the `lookup` tool."));
+    assert!(!system.text().contains("def lookup("));
+    assert_eq!(forced.tool_choice, ToolChoice::Auto);
+}
