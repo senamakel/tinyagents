@@ -506,3 +506,40 @@ fn a_session_chain_lists_every_generation_oldest_first() {
     // Asking from any generation returns the same whole chain.
     assert_eq!(locator.session_chain(&chain[1]), chain);
 }
+
+/// [`write_transcript_if_absent`] is what keeps adoption from clobbering a
+/// destination a concurrent normal turn created while adoption was still
+/// scanning legacy roots (see `adoption::adopt_legacy_session_transcripts`).
+/// The guarantee has to hold at the level of this primitive: it must publish
+/// when nothing is there, and never overwrite when something already is —
+/// regardless of *why* the destination already exists.
+#[test]
+fn write_transcript_if_absent_publishes_once_and_never_overwrites() {
+    let dir = tempdir().unwrap();
+    let path = resolve_keyed_transcript_path(dir.path(), "identity").unwrap();
+
+    let published = write_transcript_if_absent(
+        &path,
+        &[TranscriptMessage::new("user", "first writer")],
+        &meta(),
+    )
+    .unwrap();
+    assert!(published, "nothing was there yet");
+    assert_eq!(
+        read_transcript(&path).unwrap().messages[0].content,
+        "first writer"
+    );
+
+    let published_again = write_transcript_if_absent(
+        &path,
+        &[TranscriptMessage::new("user", "second writer, loses the race")],
+        &meta(),
+    )
+    .unwrap();
+    assert!(!published_again, "the destination already exists");
+    // The loser's content must never have touched disk.
+    assert_eq!(
+        read_transcript(&path).unwrap().messages[0].content,
+        "first writer"
+    );
+}
