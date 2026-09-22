@@ -355,6 +355,33 @@ mod tool_tests {
             .expect("successful todo result has a JSON payload")
     }
 
+    /// The description is what makes a model treat the list as bookkeeping
+    /// rather than as the work itself: without the "same response carries the
+    /// next call" rule, models write a list, stop, and wait to be prompted;
+    /// without the "only after its work has run" rule they tick items off
+    /// ahead of doing them.
+    #[test]
+    fn description_states_when_an_item_may_be_completed_and_that_writing_is_not_working() {
+        let tool = TodoTool::new(store());
+        let description = Tool::description(&tool);
+        assert!(
+            description.contains("only after its work has actually run"),
+            "an item is completed after its result exists: {description}"
+        );
+        assert!(
+            description.contains("bookkeeping, not work"),
+            "writing the list is not the work: {description}"
+        );
+        assert!(
+            description.contains("immediately carry out the next step"),
+            "the model advances after bookkeeping: {description}"
+        );
+        assert!(
+            description.contains("next model turn"),
+            "sequential providers may advance on their next turn: {description}"
+        );
+    }
+
     #[test]
     fn todo_tools_builds_a_single_tool() {
         let tools = todo_tools(store());
