@@ -212,12 +212,12 @@ fn the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs() {
     );
 }
 
-/// A delegation chain several levels deep, each level with a long key, must
-/// not grow the final stem without bound — see `MAX_PARENT_CHAIN_PREFIX`.
-/// 50 levels of ~97-byte components would be ~4.8KB uncollapsed, comfortably
-/// past any sane bound; this pins that the collapse actually keeps growth
-/// from compounding rather than merely being "small enough in this one
-/// example".
+/// Pins the exact worst-case arithmetic documented on
+/// `MAX_PARENT_CHAIN_PREFIX`: every level of a maximally-sized chain (a
+/// maximal `session_key`, a maximal `agent_id` on the root, and an existing
+/// compaction at every level) must stay under the 255-byte filesystem name
+/// limit, whether or not that level's own resolved stem was itself the
+/// trigger for a collapse one level up.
 #[test]
 fn every_level_of_a_maximal_chain_stays_under_the_filesystem_limit() {
     // The worst single (unparented) level: a maximal session_key, a maximal
