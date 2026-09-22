@@ -112,7 +112,10 @@ async fn model_drives_the_todo_tool_and_list_persists_to_the_thread() {
     assert_eq!(snapshot.items[0].content, "Write the integration test");
     assert_eq!(snapshot.items[0].status, TodoStatus::Completed);
     assert_eq!(snapshot.items[1].status, TodoStatus::InProgress);
-    assert_eq!(snapshot.markdown, "- [x] Write the integration test\n- [~] Run it");
+    assert_eq!(
+        snapshot.markdown,
+        "- [x] Write the integration test\n- [~] Run it"
+    );
 
     // A different thread has its own (empty) list.
     let other = todo_store::list(&store, "other-thread")

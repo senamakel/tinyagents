@@ -17,7 +17,9 @@ use std::sync::{Arc, OnceLock};
 
 use tokio::sync::Mutex;
 
-use super::types::{TodoItem, TodoList, TodoStatus, TodosSnapshot, normalise_list, now_stamp, render_markdown};
+use super::types::{
+    TodoItem, TodoList, TodoStatus, TodosSnapshot, normalise_list, now_stamp, render_markdown,
+};
 use crate::thread_locks::ThreadLockMap;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::store::Store;

@@ -28,7 +28,10 @@ fn parse_status_accepts_aliases() {
     assert_eq!(parse_status("pending").unwrap(), TodoStatus::Pending);
     assert_eq!(parse_status("TODO").unwrap(), TodoStatus::Pending);
     assert_eq!(parse_status("in-progress").unwrap(), TodoStatus::InProgress);
-    assert_eq!(parse_status(" in_progress ").unwrap(), TodoStatus::InProgress);
+    assert_eq!(
+        parse_status(" in_progress ").unwrap(),
+        TodoStatus::InProgress
+    );
     assert_eq!(parse_status("done").unwrap(), TodoStatus::Completed);
     assert_eq!(parse_status("completed").unwrap(), TodoStatus::Completed);
     assert!(parse_status("blocked").is_err(), "kanban states are gone");
@@ -201,7 +204,10 @@ mod store_tests {
         let snap = store::replace(
             &s,
             "t",
-            items(&[("  spaced  ", TodoStatus::Pending), ("", TodoStatus::Pending)]),
+            items(&[
+                ("  spaced  ", TodoStatus::Pending),
+                ("", TodoStatus::Pending),
+            ]),
         )
         .await
         .unwrap();
@@ -289,12 +295,7 @@ mod store_tests {
         concrete.armed.store(true, Ordering::SeqCst);
         let replace_store = s.clone();
         let replace = tokio::spawn(async move {
-            store::replace(
-                &replace_store,
-                "t",
-                vec![TodoItem::new("original")],
-            )
-            .await
+            store::replace(&replace_store, "t", vec![TodoItem::new("original")]).await
         });
         concrete.first_put_started.notified().await;
 

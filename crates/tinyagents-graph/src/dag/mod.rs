@@ -9,7 +9,7 @@
 //! Two entry points:
 //!
 //! - [`has_cycle`] — the cycle question alone, for a caller that already
-//!   validated ids and edges its own way (a task board admitting one new node
+//!   validated ids and edges its own way (a scheduler admitting one new node
 //!   at a time, say, where a dangling edge on an *existing* node is not the new
 //!   node's fault).
 //! - [`validate_dag`] — duplicates, dangling edges and cycles in one pass,
