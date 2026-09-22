@@ -77,16 +77,43 @@ because `tool_call` is unwrapped first. A host that needs per-turn exposure
 narrowing of deferred tools should apply it at registration or via the
 allow-list.
 
+### Using `ToolPolicyMiddleware::strict` with discovery
+
+The bridge tools (`tool_search`/`tool_call`) are never registered, so a
+fail-closed `ToolPolicyMiddleware::strict(policies)` rejects them by default
+like any other unclassified name — which would make every deferred tool
+undiscoverable. Call
+`.exempt_discovery_bridge(true)` to exempt the two reserved names from
+classification/side-effect checks:
+
+```rust,ignore
+let policy = ToolPolicyMiddleware::strict(registry.policies())
+    .exempt_discovery_bridge(true);
+```
+
+This is opt-in rather than automatic because it is only safe when `policies`
+is the *complete* registry snapshot (as `ToolRegistry::policies()` is): the
+exemption only fires for a name with no entry in `policies`, so an incomplete
+or stale snapshot could otherwise let a real, side-effecting host tool that
+happens to be registered under `tool_search`/`tool_call` bypass strict mode's
+fail-closed checks. A host-registered tool under either name always wins over
+the intrinsic bridge and is evaluated by its own policy entry regardless of
+this flag.
+
 ## Events
 
 - `ToolsAdvertised { direct, deferred, schema_bytes }` — once per run after
   `before_agent`: the run's pre-middleware tool surface (the registry-derived
   set before any `before_model` middleware narrows it and before a
   structured-output tool-call fallback, if any, is appended) and what that
-  baseline costs in compact-JSON bytes. Track it as the ceiling a run started
-  with, not as a live per-request wire metric — exposure-narrowing middleware
-  (`ToolPolicyMiddleware::before_model`, dynamic/contextual selection) can
-  still shrink an individual request below it.
+  baseline costs in compact-JSON bytes. `direct` counts only `Direct`-exposure
+  tool schemas — the two intrinsic bridge schemas are implied by `deferred`
+  being nonzero, not folded into `direct` — while `schema_bytes` covers the
+  actual wire set (direct schemas plus the bridge, when present). Track it as
+  the ceiling a run started with, not as a live per-request wire metric —
+  exposure-narrowing middleware (`ToolPolicyMiddleware::before_model`,
+  dynamic/contextual selection) can still shrink an individual request below
+  it.
 - `ToolSearched { call_id, query, matched }` and
   `DeferredToolCall { call_id, tool_name }` — every discovery, auditable.
 

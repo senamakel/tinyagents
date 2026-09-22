@@ -31,8 +31,13 @@
 //! assert!(!request.cache_segments.is_empty());
 //! ```
 
+mod model_guidance;
 mod types;
 
+pub use model_guidance::{
+    EXECUTION_DISCIPLINE, NEEDS_EXECUTION_DISCIPLINE, execution_discipline_for,
+    execution_discipline_for_profile, needs_execution_discipline,
+};
 pub use types::*;
 
 use serde_json::{Map, Value, json};
@@ -109,6 +114,35 @@ pub fn assemble_sections_with_budget(
 }
 
 /// Renders a stable Markdown heading.
+/// Segment id of the first leading system message (see
+/// [`PromptBuilder::push_system_messages`]).
+pub const SYSTEM_SEGMENT_ID: &str = "system";
+
+/// Segment id for the `index`-th leading system message: `"system"` for the
+/// first, `"system.1"`, `"system.2"`, ... for the following ones.
+#[must_use]
+pub fn system_segment_id(index: usize) -> String {
+    if index == 0 {
+        SYSTEM_SEGMENT_ID.to_string()
+    } else {
+        format!("{SYSTEM_SEGMENT_ID}.{index}")
+    }
+}
+
+/// Whether `id` is one the harness assigns to a leading system message.
+#[must_use]
+pub fn is_system_segment_id(id: &str) -> bool {
+    id == SYSTEM_SEGMENT_ID
+        || id
+            .strip_prefix(SYSTEM_SEGMENT_ID)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .is_some_and(|suffix| {
+                suffix
+                    .parse::<usize>()
+                    .is_ok_and(|index| index > 0 && suffix == index.to_string())
+            })
+}
+
 pub fn render_heading(title: &str) -> String {
     format!("## {title}")
 }
@@ -265,6 +299,41 @@ impl PromptBuilder {
                 cacheable: true,
             },
         });
+        self
+    }
+
+    /// Appends the leading system messages of a transcript as **one cacheable
+    /// segment per message**.
+    ///
+    /// A host that renders its system prompt in tiers (identity and rules
+    /// that never change, then per-deployment context, then per-session
+    /// material such as connected services) sends them as consecutive
+    /// `Message::System` values. Keeping each one its own segment lets the
+    /// cache layout guard tell a rewritten stable tier from a volatile one
+    /// and lets provider adapters place a breakpoint at the tier boundary
+    /// instead of only at the end of the whole prompt. Segment ids follow
+    /// [`SYSTEM_SEGMENT_ID`] for the first message and
+    /// `"{SYSTEM_SEGMENT_ID}.{n}"` for the rest, which
+    /// [`is_system_segment_id`] recognises.
+    pub fn push_system_messages(&mut self, system_messages: &[Message]) -> &mut Self {
+        let mut index = self
+            .segments
+            .iter()
+            .filter(|segment| {
+                segment.meta.role == SegmentRole::System && is_system_segment_id(&segment.meta.id)
+            })
+            .count();
+        for message in system_messages {
+            while self
+                .segments
+                .iter()
+                .any(|segment| segment.meta.id == system_segment_id(index))
+            {
+                index += 1;
+            }
+            self.push_system(system_segment_id(index), vec![message.clone()]);
+            index += 1;
+        }
         self
     }
 

@@ -1738,12 +1738,24 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
             _state: &(),
             request: &mut ModelRequest,
         ) -> Result<()> {
+            request
+                .messages
+                .insert(0, Message::system("tenant context"));
             request.messages.insert(0, Message::system("tenant policy"));
-            request.cache_segments = vec![PromptSegment {
-                id: "tenant-policy".to_string(),
-                role: SegmentRole::Instructions,
-                cacheable: true,
-            }];
+            // These resemble the harness IDs but their order is deliberately
+            // middleware-owned. Dispatch must not normalize them.
+            request.cache_segments = vec![
+                PromptSegment {
+                    id: "system.1".to_string(),
+                    role: SegmentRole::System,
+                    cacheable: true,
+                },
+                PromptSegment {
+                    id: "system".to_string(),
+                    role: SegmentRole::System,
+                    cacheable: true,
+                },
+            ];
             Ok(())
         }
     }
@@ -1770,7 +1782,8 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
         .into_iter()
         .next()
         .expect("model received one request");
-    assert_eq!(request.cache_segments[0].id, "tenant-policy");
+    assert_eq!(request.cache_segments[0].id, "system.1");
+    assert_eq!(request.cache_segments[1].id, "system");
     assert!(request.prompt_fingerprint.is_some());
     assert!(prompt_cache_key(&request).is_some());
 }
@@ -6732,4 +6745,56 @@ mod tool_effects_test {
             "the crashed sibling was reconciled"
         );
     }
+}
+
+#[tokio::test]
+async fn tiered_system_messages_become_one_cacheable_segment_each() {
+    use crate::cache::PROMPT_CACHE_KEY_OPTION;
+    use tinyinference_llm::cache::CachePolicy;
+    // A host that renders its system prompt in tiers sends them as consecutive
+    // leading system messages. The request the model sees must keep one
+    // segment per tier (so a rewritten volatile tier is attributable) and the
+    // fingerprint must cover both, in order.
+    let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_policy(RunPolicy {
+        cache: CachePolicy {
+            protect_prompt_prefix: true,
+            ..CachePolicy::default()
+        },
+        ..RunPolicy::default()
+    });
+
+    let stable = Message::system("identity and rules");
+    let volatile = Message::system("connected services this session");
+    harness
+        .invoke_default(
+            &(),
+            vec![stable.clone(), volatile.clone(), Message::user("hello")],
+        )
+        .await
+        .expect("run succeeds");
+
+    let request = model
+        .requests()
+        .into_iter()
+        .next()
+        .expect("model received one request");
+    let ids: Vec<&str> = request
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system", "system.1"]);
+    assert_eq!(request.messages[0], stable);
+    assert_eq!(request.messages[1], volatile);
+
+    let mut expected = crate::prompt::PromptBuilder::new();
+    expected.push_system_messages(&[stable, volatile]);
+    assert_eq!(
+        request.prompt_fingerprint,
+        expected.build(Vec::new()).prompt_fingerprint
+    );
+    assert!(request.provider_options[PROMPT_CACHE_KEY_OPTION].is_string());
 }
