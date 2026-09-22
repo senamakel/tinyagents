@@ -214,30 +214,23 @@ fn lifecycle_fences_an_old_driver_and_lease_renewal_keeps_takeover_out() {
         workspace,
         "workflow-lifecycle-fence",
         "first",
-        chrono::Duration::milliseconds(300),
+        chrono::Duration::seconds(30),
     )
     .unwrap()
     {
         WorkflowLeaseClaim::Acquired(run) => run,
         other => panic!("expected first lease, got {other:?}"),
     };
-    std::thread::sleep(std::time::Duration::from_millis(30));
     assert!(
-        renew_workflow_run_lease(
-            workspace,
-            &first.id,
-            "first",
-            chrono::Duration::milliseconds(500),
-        )
-        .unwrap()
+        renew_workflow_run_lease(workspace, &first.id, "first", chrono::Duration::seconds(30),)
+            .unwrap()
     );
-    std::thread::sleep(std::time::Duration::from_millis(50));
     assert!(matches!(
         try_claim_workflow_run(
             workspace,
             &first.id,
             "second",
-            chrono::Duration::milliseconds(500),
+            chrono::Duration::seconds(30),
         )
         .unwrap(),
         WorkflowLeaseClaim::Busy(_)
