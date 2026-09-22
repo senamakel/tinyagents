@@ -1,5 +1,8 @@
 use super::*;
-use crate::transcript::{FileTranscriptLocator, TranscriptLocator, read_transcript};
+use crate::transcript::{
+    FileTranscriptLocator, MessageUsage, TranscriptLocator, TranscriptToolCall, TurnUsage,
+    append_transcript_turn, read_transcript,
+};
 use tempfile::tempdir;
 
 fn legacy_meta(created: &str, updated: &str, thread_id: &str) -> TranscriptMeta {
@@ -186,4 +189,242 @@ fn an_adopted_session_is_what_the_locator_then_resolves() {
         read.read_session().unwrap().unwrap().messages[0].content,
         "one"
     );
+}
+
+// ── Legacy OpenHuman layouts ──────────────────────────────────────────
+//
+// OpenHuman wrote transcripts several ways before session identity existed.
+// Adoption has to recover a conversation from each of them, because these are
+// exactly the files sitting in users' workspaces today.
+
+/// A sub-agent transcript shares its parent's `thread_id`. Folding one into the
+/// root conversation would splice a delegated worker's private reasoning into
+/// the user's chat, so the `parent__child` stems must stay out.
+#[test]
+fn subagent_siblings_are_never_folded_into_the_root_conversation() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "1000_orchestrator", "2026-01-01T00:00:00Z", "user ask", thread);
+    write_legacy(
+        dir.path(),
+        "1000_orchestrator__1001_researcher",
+        "2026-01-01T00:00:01Z",
+        "worker chatter",
+        thread,
+    );
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption =
+        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
+            .unwrap()
+            .unwrap();
+
+    let contents: Vec<String> = read_transcript(&adoption.path)
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(contents, ["user ask"]);
+    assert_eq!(adoption.adopted.len(), 1);
+}
+
+/// OpenHuman's pre-session-key naming was `{agent}_{index}` with no timestamp
+/// at all. Those stems carry a `thread_id` in `_meta` just the same, so they
+/// must adopt like any other root.
+#[test]
+fn legacy_indexed_openhuman_stems_are_adopted() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "orchestrator_1", "2026-01-01T00:00:00Z", "first", thread);
+    write_legacy(dir.path(), "orchestrator_2", "2026-01-02T00:00:00Z", "second", thread);
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption =
+        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
+            .unwrap()
+            .unwrap();
+
+    let contents: Vec<String> = read_transcript(&adoption.path)
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(contents, ["first", "second"]);
+}
+
+/// The date-grouped `session_raw/DDMMYYYY/` layout is only reachable to the
+/// thread scan after the layout migration has flattened it, so the two steps
+/// have to compose: migrate, then adopt.
+#[test]
+fn date_grouped_openhuman_transcripts_adopt_after_the_layout_migration() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    let legacy_dir = dir.path().join("session_raw").join("01012026");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    write_transcript(
+        &legacy_dir.join("1000_orchestrator.jsonl"),
+        &[TranscriptMessage::new("user", "from the dated layout")],
+        &legacy_meta("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", thread),
+        None,
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let seed = legacy_meta("", "", thread);
+    // Before flattening, the dated file is invisible to the root scan.
+    assert!(
+        adopt_legacy_session_transcripts(dir.path(), &session, thread, &seed)
+            .unwrap()
+            .is_none()
+    );
+
+    crate::transcript::migrate_layout_if_needed(dir.path()).unwrap();
+    let adoption = adopt_legacy_session_transcripts(dir.path(), &session, thread, &seed)
+        .unwrap()
+        .expect("the flattened transcript is adoptable");
+
+    assert_eq!(
+        read_transcript(&adoption.path).unwrap().messages[0].content,
+        "from the dated layout"
+    );
+}
+
+/// Transcripts written before `_meta.session_id` existed deserialize with it
+/// absent. Adoption must not require it — it is the whole population being
+/// migrated.
+#[test]
+fn transcripts_without_session_identity_still_adopt() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "pre-identity", thread);
+    let legacy = read_transcript(&resolve_keyed_transcript_path(dir.path(), "1000_a").unwrap())
+        .unwrap();
+    assert_eq!(legacy.meta.session_id, None);
+    assert_eq!(legacy.meta.parent_session_id, None);
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption =
+        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
+            .unwrap()
+            .unwrap();
+
+    let adopted = read_transcript(&adoption.path).unwrap();
+    assert_eq!(adopted.messages[0].content, "pre-identity");
+    assert_eq!(adopted.meta.session_id, Some(session.session_id()));
+}
+
+/// Tool calls, tool results and usage are the reason the transcript is the
+/// resume source rather than the prose conversation log. Adoption must carry
+/// them across intact.
+#[test]
+fn adoption_preserves_tool_rounds_and_usage_of_legacy_transcripts() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    let mut assistant = TranscriptMessage::assistant("calling a tool");
+    assistant.id = Some("call-1".into());
+    assistant.turn_usage = Some(TurnUsage {
+        provider: "openrouter".into(),
+        model: "model".into(),
+        usage: MessageUsage {
+            input: 11,
+            output: 7,
+            cached_input: 3,
+            context_window: Some(1000),
+            cost_usd: 0.25,
+        },
+        ts: "2026-01-01T00:00:00Z".into(),
+        reasoning_content: Some("thinking".into()),
+        tool_calls: vec![TranscriptToolCall {
+            id: "call-1".into(),
+            name: "web_search".into(),
+            arguments: "{\"q\":\"kashmir\"".into(),
+            extra_content: None,
+        }],
+        iteration: 2,
+    });
+    let mut tool_result = TranscriptMessage::new("tool", "search results");
+    tool_result.id = Some("call-1".into());
+    tool_result.cache_breakpoints = vec![1];
+
+    write_transcript(
+        &resolve_keyed_transcript_path(dir.path(), "1000_a").unwrap(),
+        &[
+            TranscriptMessage::new("user", "find me something"),
+            assistant,
+            tool_result,
+        ],
+        &legacy_meta("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", thread),
+        None,
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption =
+        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
+            .unwrap()
+            .unwrap();
+
+    let adopted = read_transcript(&adoption.path).unwrap();
+    assert_eq!(adopted.messages.len(), 3);
+    let usage = adopted.messages[1]
+        .turn_usage
+        .as_ref()
+        .expect("assistant usage survives adoption");
+    assert_eq!(usage.usage.input, 11);
+    assert_eq!(usage.reasoning_content.as_deref(), Some("thinking"));
+    assert_eq!(usage.tool_calls[0].name, "web_search");
+    // Raw, unrepaired provider JSON is preserved verbatim.
+    assert_eq!(usage.tool_calls[0].arguments, "{\"q\":\"kashmir\"");
+    assert_eq!(adopted.messages[2].role, "tool");
+    assert_eq!(adopted.messages[2].cache_breakpoints, vec![1]);
+}
+
+/// A legacy transcript whose turns were compacted replays as its reduced set.
+/// Adoption folds what the model would actually have seen, not the raw lines.
+#[test]
+fn adoption_folds_the_replayed_context_of_a_compacted_legacy_transcript() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    let path = resolve_keyed_transcript_path(dir.path(), "1000_a").unwrap();
+    let meta = legacy_meta("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", thread);
+    write_transcript(
+        &path,
+        &[
+            TranscriptMessage::new("user", "one"),
+            TranscriptMessage::new("user", "two"),
+        ],
+        &meta,
+        None,
+    )
+    .unwrap();
+    // A compaction record reduces the logical set, as OpenHuman's trim did.
+    let retained = [TranscriptMessage::new("user", "two")];
+    append_transcript_turn(
+        &path,
+        &[
+            TranscriptMessage::new("user", "one"),
+            TranscriptMessage::new("user", "two"),
+        ],
+        &retained,
+        &meta,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption =
+        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
+            .unwrap()
+            .unwrap();
+
+    let contents: Vec<String> = read_transcript(&adoption.path)
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(contents, ["two"]);
 }
