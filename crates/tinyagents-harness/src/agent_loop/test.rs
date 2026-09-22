@@ -1738,12 +1738,22 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
             _state: &(),
             request: &mut ModelRequest,
         ) -> Result<()> {
+            request.messages.insert(0, Message::system("tenant context"));
             request.messages.insert(0, Message::system("tenant policy"));
-            request.cache_segments = vec![PromptSegment {
-                id: "tenant-policy".to_string(),
-                role: SegmentRole::Instructions,
-                cacheable: true,
-            }];
+            // These resemble the harness IDs but their order is deliberately
+            // middleware-owned. Dispatch must not normalize them.
+            request.cache_segments = vec![
+                PromptSegment {
+                    id: "system.1".to_string(),
+                    role: SegmentRole::System,
+                    cacheable: true,
+                },
+                PromptSegment {
+                    id: "system".to_string(),
+                    role: SegmentRole::System,
+                    cacheable: true,
+                },
+            ];
             Ok(())
         }
     }
@@ -1770,7 +1780,8 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
         .into_iter()
         .next()
         .expect("model received one request");
-    assert_eq!(request.cache_segments[0].id, "tenant-policy");
+    assert_eq!(request.cache_segments[0].id, "system.1");
+    assert_eq!(request.cache_segments[1].id, "system");
     assert!(request.prompt_fingerprint.is_some());
     assert!(prompt_cache_key(&request).is_some());
 }
