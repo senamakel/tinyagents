@@ -500,24 +500,38 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // the next one rather than appending a replacement record: rewriting
         // the logical set in place would make the replaced turns unreadable
         // forever, and they are the conversation's own history.
+        //
+        // The successor generation and handle are kept in locals, not written
+        // onto `target`/`self.transcript`, until the append into them below
+        // actually succeeds. Committing them first — as this used to — left
+        // `target` pointing at `.g{n+1}` even when the append failed to
+        // create it: the next turn's `begin_generation` would then find no
+        // file at `.g{n+1}`, mint `.g{n+2}` instead, and `head_generation`
+        // would keep resolving the old sealed generation as the head,
+        // orphaning both the failed generation and the one after it.
         let mut prev: &[TranscriptMessage] = &self.persisted;
         let empty: [TranscriptMessage; 0] = [];
+        let mut pending_generation: Option<(SessionRef, Arc<dyn TranscriptHistory>)> = None;
+        let mut meta = target.meta.clone();
         if !extends && let Some(session) = target.session.clone() {
             let (successor, handle) = target
                 .locator
                 .begin_generation(&session, target.meta.clone())
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
-            target.rebind_session(successor);
             // The successor starts empty, so the retained set is written
-            // through the ordinary turn path and keeps its usage, request ids
-            // and display partial.
-            target.meta.turn_count = 0;
-            self.transcript = Some(handle);
+            // through the ordinary turn path below and keeps its usage,
+            // request ids and display partial.
+            meta.turn_count = 0;
+            meta.session_id = Some(successor.session_id());
+            meta.parent_session_id = successor.parent_session_id();
+            pending_generation = Some((successor, handle));
             prev = &empty;
         }
 
-        let transcript = self.transcript.as_ref().expect("bound above");
-        let mut meta = target.meta.clone();
+        let transcript: &dyn TranscriptHistory = match pending_generation.as_ref() {
+            Some((_, handle)) => handle.as_ref(),
+            None => self.transcript.as_deref().expect("bound above"),
+        };
         meta.turn_count += 1;
         meta.updated = chrono::Utc::now().to_rfc3339();
         meta.thread_id = thread_id.map(str::to_owned).or(meta.thread_id);
@@ -533,6 +547,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 partial,
             )
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        // Only now that the append into the successor generation has
+        // actually succeeded does the target move onto it.
+        if let Some((successor, handle)) = pending_generation {
+            target.rebind_session(successor);
+            self.transcript = Some(handle);
+        }
         target.meta = meta;
         let delta = if extends {
             TranscriptDelta::Append {
