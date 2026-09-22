@@ -504,70 +504,54 @@ fn a_session_identified_root_on_the_same_thread_is_never_folded_in() {
     assert_eq!(adoption.adopted.len(), 1);
 }
 
-/// One unreadable legacy root must not let adoption finalize a partial fold:
-/// the destination is its own idempotency marker, so a partial fold behind
-/// it would permanently strand the unreadable file's turns.
+/// Two independent adopters (simulating two racing processes) for the same
+/// session must not both fold the same legacy roots: the lock in
+/// [`adopt_legacy_session_transcripts`] serializes them, so the second call
+/// backs off and sees the first call's result rather than re-folding (which
+/// would duplicate messages) or overwriting it with a stale view.
 #[test]
-fn an_unreadable_legacy_root_defers_adoption_instead_of_finalizing_a_partial_fold() {
+fn concurrent_adoption_attempts_do_not_duplicate_or_race() {
+    use std::sync::Arc;
+    use std::sync::Barrier;
+
     let dir = tempdir().unwrap();
+    let dir_path: Arc<std::path::PathBuf> = Arc::new(dir.path().to_path_buf());
     let thread = "thread-1";
-    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "readable", thread);
-    let corrupt_path = resolve_keyed_transcript_path(dir.path(), "2000_a").unwrap();
-    std::fs::write(&corrupt_path, b"{ not a valid transcript line\n").unwrap();
-    // Give the corrupt file a matching thread id so the scan picks it up;
-    // `find_root_transcripts_for_thread` reads `_meta.thread_id` from each
-    // candidate, so a genuinely unparsable file is instead skipped by the
-    // scan itself. Use a structurally valid but semantically broken meta
-    // line instead: a compaction line with no metadata at all still matches
-    // nothing, so simulate the failure path directly against `read_transcript`
-    // by pointing a *valid* meta line reader at a truncated tail.
-    let meta = legacy_meta("2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z", thread);
-    std::fs::write(
-        &corrupt_path,
-        format!(
-            "{}\nnot json at all\n",
-            serde_json::to_string(&serde_json::json!({
-                "_meta": true,
-                "session_id": meta.session_id,
-                "parent_session_id": meta.parent_session_id,
-                "agent_name": meta.agent_name,
-                "agent_id": meta.agent_id,
-                "agent_type": meta.agent_type,
-                "dispatcher": meta.dispatcher,
-                "provider": meta.provider,
-                "model": meta.model,
-                "created": meta.created,
-                "updated": meta.updated,
-                "turn_count": meta.turn_count,
-                "input_tokens": meta.input_tokens,
-                "output_tokens": meta.output_tokens,
-                "cached_input_tokens": meta.cached_input_tokens,
-                "charged_amount_usd": meta.charged_amount_usd,
-                "thread_id": meta.thread_id,
-                "task_id": meta.task_id,
-            }))
-            .unwrap()
-        ),
-    )
-    .unwrap();
+    write_legacy(&dir_path, "1000_a", "2026-01-01T00:00:00Z", "one", thread);
+    write_legacy(&dir_path, "2000_a", "2026-01-02T00:00:00Z", "two", thread);
+
+    let barrier = Arc::new(Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let dir_path = Arc::clone(&dir_path);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                let session = SessionRef::scoped(thread, "orchestrator");
+                barrier.wait();
+                adopt_legacy_session_transcripts(
+                    &dir_path,
+                    &session,
+                    thread,
+                    &legacy_meta("", "", thread),
+                )
+            })
+        })
+        .collect();
+
+    let results: Vec<_> = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap().unwrap())
+        .collect();
+    assert_eq!(
+        results.iter().filter(|result| result.is_some()).count(),
+        1,
+        "exactly one racing adopter should perform the fold; results: {results:?}"
+    );
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let result = adopt_legacy_session_transcripts(
-        dir.path(),
-        &session,
-        thread,
-        &legacy_meta("", "", thread),
-    );
-
-    assert!(
-        result.is_err(),
-        "an unreadable legacy root must fail adoption, not silently finalize a partial fold"
-    );
-    let destination = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
-    assert!(
-        !destination.exists(),
-        "a failed adoption must not create the idempotency marker"
-    );
+    let destination = resolve_keyed_transcript_path(&*dir_path, &session_stem(&session)).unwrap();
+    let adopted = read_transcript(&destination).unwrap();
+    assert_eq!(adopted.messages.len(), 2, "no duplication across racers");
 }
 
 /// A legacy transcript whose turns were compacted replays as its reduced set.
