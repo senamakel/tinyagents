@@ -7095,8 +7095,7 @@ fn a_custom_head_that_does_not_match_the_canonical_shape_is_left_completely_unto
             cacheable: true,
         },
     ];
-    let mut request =
-        ModelRequest::new(vec![system, Message::user("hi")]).with_tools(vec![tool]);
+    let mut request = ModelRequest::new(vec![system, Message::user("hi")]).with_tools(vec![tool]);
     request.tool_choice = ToolChoice::Auto;
     request.cache_segments = original_segments.clone();
 
