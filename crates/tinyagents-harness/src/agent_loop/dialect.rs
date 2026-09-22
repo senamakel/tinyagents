@@ -264,9 +264,11 @@ fn sync_stripped_tools_cache_segment(request: &mut ModelRequest, pre_rewrite_mes
         return;
     }
     let had_leading_system = matches!(pre_rewrite_messages.first(), Some(Message::System(_)));
-    if had_leading_system {
+    if had_leading_system && !head.is_empty() {
+        // The declared head already names the existing leading system
+        // message(s); only the now-gone trailing tools segment is stale.
         request.cache_segments = head.to_vec();
-    } else if head.is_empty() {
+    } else if !had_leading_system && head.is_empty() {
         // No declared head and no existing leading system message: the
         // upcoming rewrite is the sole source of the new leading segment,
         // so this is unambiguously the harness's own synthesis.
@@ -276,9 +278,15 @@ fn sync_stripped_tools_cache_segment(request: &mut ModelRequest, pre_rewrite_mes
             cacheable: true,
         }];
     }
-    // A non-empty head with no matching leading system message is an
-    // inconsistent declaration (middleware named system segments that are
-    // not actually there); left untouched rather than guessed at.
+    // The remaining two combinations are left untouched rather than guessed
+    // at: `had_leading_system && head.is_empty()` is the declaration that
+    // deliberately named nothing ahead of the tools segment even though a
+    // system message already existed — dropping to `head` would leave an
+    // *empty* `cache_segments`, which `refresh_prompt_cache_fingerprint`
+    // reads as "nothing declared yet" and promotes just the same, so this
+    // case must not fall into the branch above. `!had_leading_system &&
+    // !head.is_empty()` is an inconsistent declaration (system segments
+    // named that are not actually there).
 }
 
 /// Builds the positional layout registry the P-Format and code dialects
