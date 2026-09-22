@@ -30,6 +30,15 @@ picks the fix up.
 | `Xml` | the transcript is folded into text forms (assistant calls → `<tool_call>` markup, `tool` results → one `[Tool results]` turn), a continuation user turn is inserted when no user query is resolvable, the JSON protocol block plus catalogue goes into the system prompt, **no** schema goes on the wire | every text grammar |
 | `Pformat` | as `Xml`, with the P-Format block and signature catalogue | every text grammar, with the positional registry built from the run's schemas |
 
+A host that composes its own system prompt from the same dialect — the
+protocol block and the catalogue already in place, inside its cacheable
+prefix — sets `RunPolicy::host_renders_tool_catalogue`. The text dialects
+then still fold the transcript, strip the schemas off the wire and bind the
+positional registry, but append nothing to the prompt; only a forced
+`tool_choice` (`Required` / `Tool(name)`) is still spelled out, since the
+host's prompt predates it. Without the flag the loop appends the block itself,
+and a host that also rendered one ships every signature twice.
+
 Whatever the dialect, a response carrying no structured call is read through
 every grammar with the offered tool names supplied, so a damaged name
 (`terminal" parameter=…`, `functions.read_file`, `Read File`) resolves to the
