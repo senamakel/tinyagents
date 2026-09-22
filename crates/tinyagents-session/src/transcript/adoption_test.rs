@@ -573,6 +573,95 @@ fn concurrent_adoption_attempts_do_not_duplicate_or_race() {
     assert_eq!(adopted.messages.len(), 2, "no duplication across racers");
 }
 
+/// The lock above only serializes competing *adopters* — it says nothing
+/// about a normal session turn independently creating this same session's
+/// first transcript while adoption is mid-scan (the CodeRabbit-reported
+/// gap). `write_transcript_if_absent`, not the lock, is what has to make
+/// that safe: whichever of the two legitimately wins the race to publish
+/// first must never be silently destroyed by the other.
+#[test]
+fn a_concurrent_normal_write_and_an_adoption_never_destroy_each_other() {
+    use std::sync::{Arc, Barrier};
+
+    for _ in 0..20 {
+        let dir = tempdir().unwrap();
+        let dir_path: Arc<std::path::PathBuf> = Arc::new(dir.path().to_path_buf());
+        let thread = "thread-1";
+        write_legacy(
+            dir_path.as_path(),
+            "1000_a",
+            "2026-01-01T00:00:00Z",
+            "legacy",
+            thread,
+        );
+
+        let barrier = Arc::new(Barrier::new(2));
+
+        let adopt_dir = Arc::clone(&dir_path);
+        let adopt_barrier = Arc::clone(&barrier);
+        let adopt_thread = std::thread::spawn(move || {
+            let session = SessionRef::scoped(thread, "orchestrator");
+            adopt_barrier.wait();
+            adopt_legacy_session_transcripts(
+                adopt_dir.as_path(),
+                &session,
+                thread,
+                &legacy_meta("", "", thread),
+            )
+            .unwrap()
+        });
+
+        let write_dir = Arc::clone(&dir_path);
+        let write_barrier = Arc::clone(&barrier);
+        let write_thread = std::thread::spawn(move || {
+            let session = SessionRef::scoped(thread, "orchestrator");
+            let destination =
+                resolve_keyed_transcript_path(write_dir.as_path(), &session_stem(&session))
+                    .unwrap();
+            let mut turn_meta =
+                legacy_meta("2026-01-01T00:00:05Z", "2026-01-01T00:00:05Z", thread);
+            turn_meta.session_id = Some(session.session_id());
+            write_barrier.wait();
+            write_transcript_if_absent(
+                &destination,
+                &[TranscriptMessage::new("user", "real first turn")],
+                &turn_meta,
+            )
+            .unwrap()
+        });
+
+        let adopt_result = adopt_thread.join().unwrap();
+        let write_result = write_thread.join().unwrap();
+
+        let session = SessionRef::scoped(thread, "orchestrator");
+        let destination =
+            resolve_keyed_transcript_path(dir_path.as_path(), &session_stem(&session)).unwrap();
+        assert!(destination.exists(), "one of the two must have published");
+        let contents: Vec<String> = read_transcript(&destination)
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|message| message.content)
+            .collect();
+
+        // Exactly one side wins, and the file reflects that winner alone —
+        // never a mix, and the loser's data never touched disk.
+        if adopt_result.is_some() {
+            assert_eq!(contents, ["legacy"]);
+            assert!(
+                !write_result,
+                "adoption published first; the concurrent write must have lost"
+            );
+        } else {
+            assert_eq!(contents, ["real first turn"]);
+            assert!(
+                write_result,
+                "the concurrent write published first; adoption must have lost"
+            );
+        }
+    }
+}
+
 /// A legacy transcript whose turns were compacted replays as its reduced set.
 /// Adoption folds what the model would actually have seen, not the raw lines.
 #[test]
