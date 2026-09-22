@@ -903,6 +903,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            // Tool schemas minted by the structured-output plan above (the
+            // `ToolCall` / `ToolCallUnion` fallback tools), pushed onto
+            // `request.tools` after `tools_before_structured_plan` was
+            // recorded. A host that renders its own static tool catalogue
+            // composed it before this turn's structured-output planning ran,
+            // so it cannot have advertised these; `RunDialect::apply_to_request`
+            // appends their catalogue entries even in the host-rendered case.
+            let synthesized_tools: Vec<ToolSchema> =
+                request.tools[tools_before_structured_plan..].to_vec();
+
             // What was offered is fixed here, before a text dialect strips
             // the schemas off the wire: recovery and the stream scrubber need
             // the names, and the structured-output schema tool counts. The
