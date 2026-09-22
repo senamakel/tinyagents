@@ -17,8 +17,9 @@
 //! rewrite. [`TranscriptHistory::clear`] is therefore an empty compaction.
 //!
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::transcript::types::TranscriptMessage;
 
