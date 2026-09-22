@@ -159,19 +159,51 @@ pub fn session_stem(session: &SessionRef) -> String {
     }
 }
 
-/// One component of a stem: path-safe, and with runs of `_` collapsed so a
-/// component can never reproduce [`SUBAGENT_SEPARATOR`]. Without the collapse a
-/// thread id like `chat__2` would build a root stem that every root scan skips
-/// as a delegated worker, and the conversation would be invisible to resume.
+/// Longest human-readable prefix kept before the disambiguating digest.
+/// Bounds every component (and therefore the filenames built from it) well
+/// under common filesystem name limits (255 bytes), even after a `.g{n}`
+/// suffix, an agent id, and a chain of `__`-joined sub-agent ancestors.
+const MAX_COMPONENT_PREFIX: usize = 80;
+
+/// One component of a stem: path-safe, bounded in length, and encoded so
+/// that no two *different* raw values can ever collide on the same
+/// filename — including collisions introduced by the sanitization itself.
+///
+/// Two lossy transforms are needed to keep [`SUBAGENT_SEPARATOR`] and the
+/// `.` separators (agent id, `.g{n}` generation suffix) unambiguous:
+///   * runs of `_` are collapsed, so a component can never reproduce
+///     `__` and be mistaken for the sub-agent separator; and
+///   * `.` is replaced with `-`, so a literal `.` in a raw component can
+///     never be mistaken for the reserved agent/generation separator.
+///
+/// Both are lossy: distinct raw values (`a_b` vs `a__b`, `t.a` vs a `t` root
+/// scoped to agent `a`, `thread-1.g1` vs `thread-1`'s next generation) could
+/// otherwise sanitize to the *same* text and silently share one transcript.
+/// A short deterministic digest of the untouched raw value is appended to
+/// rule that out: two components produce the same encoded stem only when
+/// their raw values are identical. `DefaultHasher::new()` uses fixed keys
+/// (not the per-process-random keys `RandomState` uses for hash maps), so
+/// the digest — like the rest of this module — carries no randomness and no
+/// timestamp: the same raw value always re-derives the same stem.
 fn sanitize_component(value: &str) -> String {
     let sanitized = sanitize_stem(value);
-    let mut out = String::with_capacity(sanitized.len());
+    let mut out = String::with_capacity(sanitized.len().min(MAX_COMPONENT_PREFIX));
     for ch in sanitized.chars() {
+        if out.chars().count() >= MAX_COMPONENT_PREFIX {
+            break;
+        }
+        // `.` is reserved for the agent-id and generation separators.
+        let ch = if ch == '.' { '-' } else { ch };
         if ch == '_' && out.ends_with('_') {
             continue;
         }
         out.push(ch);
     }
+
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    out.push('~');
+    out.push_str(&format!("{:016x}", hasher.finish()));
     out
 }
 
