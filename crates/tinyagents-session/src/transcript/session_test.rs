@@ -175,18 +175,22 @@ fn the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs() {
 
 /// A delegation chain several levels deep, each level with a long key, must
 /// not grow the final stem without bound — see `MAX_PARENT_CHAIN_PREFIX`.
+/// 50 levels of ~97-byte components would be ~4.8KB uncollapsed, comfortably
+/// past any sane bound; this pins that the collapse actually keeps growth
+/// from compounding rather than merely being "small enough in this one
+/// example".
 #[test]
 fn a_deeply_nested_delegation_chain_stays_bounded() {
     let long_key = "k".repeat(80);
     let mut current = SessionRef::scoped(&long_key, "orchestrator");
-    for level in 0..10 {
+    for level in 0..50 {
         current = SessionRef::child_of(&current, format!("{long_key}-{level}"));
     }
     let stem = session_stem(&current);
     assert!(
-        stem.len() < 2000,
-        "{} levels of long keys must not grow the stem linearly: {} bytes",
-        10,
+        stem.len() < 300,
+        "50 levels of long keys must not grow the stem past the collapse \
+         bound: {} bytes",
         stem.len()
     );
     // Still never fabricates or destroys the sub-agent separator.
