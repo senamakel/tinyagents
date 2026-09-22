@@ -7002,6 +7002,8 @@ fn a_custom_layout_omitting_an_existing_system_message_is_not_promoted_by_the_di
         },
     ];
     super::run_loop::refresh_prompt_cache_fingerprint(&mut harness_owned);
+    eprintln!("DEBUG harness_owned.cache_segments = {:?}", harness_owned.cache_segments);
+    eprintln!("DEBUG harness_owned.prompt_fingerprint = {:?}", harness_owned.prompt_fingerprint);
     assert_ne!(request.prompt_fingerprint, harness_owned.prompt_fingerprint);
 }
 
