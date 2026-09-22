@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use super::paths::resolve_keyed_transcript_path;
 use super::reader::read_transcript;
 use super::session::{SessionRef, session_stem};
-use super::thread_lookup::find_root_transcripts_for_thread;
+use super::thread_lookup::find_root_transcripts_for_thread_reporting_unreadable;
 use super::types::{TranscriptMessage, TranscriptMeta};
 use super::writer::write_transcript_if_absent;
 
