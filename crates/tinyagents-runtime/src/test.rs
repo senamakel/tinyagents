@@ -2459,9 +2459,10 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         sealed_bytes,
         "the sealed generation must be byte-identical after a compaction"
     );
-    let successor = directory
-        .path()
-        .join("session_raw/thread-1.agent-id.g1.jsonl");
+    let successor = directory.path().join("session_raw").join(format!(
+        "{}.jsonl",
+        session_stem(&session_ref.next_generation())
+    ));
     let carried = read_transcript(&successor).unwrap();
     assert_eq!(
         carried
@@ -2473,7 +2474,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
     );
     assert_eq!(
         carried.meta.parent_session_id.as_deref(),
-        Some("thread-1.agent-id")
+        Some(session_stem(&session_ref).as_str())
     );
     assert_eq!(locator.head_generation(&session_ref).generation, 1);
 }
