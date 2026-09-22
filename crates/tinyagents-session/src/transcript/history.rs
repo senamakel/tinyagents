@@ -23,7 +23,8 @@ use std::sync::Arc;
 use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
-    SessionRef, SessionTranscript, TranscriptMeta, TurnUsage, append_transcript_turn,
+    SessionAdoption, SessionRef, SessionTranscript, TranscriptMeta, TurnUsage,
+    adopt_legacy_session_transcripts, append_transcript_turn,
     find_latest_transcript, find_root_transcript_for_thread,
     find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
     session_stem,
@@ -251,6 +252,26 @@ pub trait TranscriptLocator: Send + Sync {
         self.open_stem(&session_stem(session), seed)
     }
 
+    /// Folds any pre-identity transcripts of `thread_id` into `session`, once.
+    ///
+    /// A conversation written before session identity existed is spread across
+    /// one or more timestamped stems, of which resume only ever loaded the
+    /// newest — so its opening turns became unreachable to the model. This
+    /// recovers them the first time the session is resumed. Returns `Ok(None)`
+    /// when the session already has a transcript or the thread has no legacy
+    /// roots, which makes repeat calls harmless.
+    ///
+    /// Defaults to doing nothing, for locators that are not file-backed.
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread_id: &str,
+        seed: &TranscriptMeta,
+    ) -> anyhow::Result<Option<SessionAdoption>> {
+        let _ = (session, thread_id, seed);
+        Ok(None)
+    }
+
     /// Seals `session` and binds its successor generation.
     ///
     /// Called when a turn's logical message set is no longer an extension of
@@ -371,6 +392,15 @@ impl TranscriptLocator for FileTranscriptLocator {
             path,
             seed_meta_for_discovered(&stem),
         )))
+    }
+
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread_id: &str,
+        seed: &TranscriptMeta,
+    ) -> anyhow::Result<Option<SessionAdoption>> {
+        adopt_legacy_session_transcripts(&self.workspace_dir, session, thread_id, seed)
     }
 
     fn begin_generation(
