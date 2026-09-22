@@ -27,6 +27,18 @@
 //! A host that keeps its own transcript files (the source of truth for
 //! KV-cache resume) still wants this module for indexing and search over them.
 //!
+//! # The entry tree
+//!
+//! [`entry_tree`] adds a second, opt-in shape over the same session
+//! database: an append-only, branchable tree of entries (`id`/`parent_id`)
+//! rather than a flat list. It exists alongside the linear
+//! `record_message`/[`transcript`] paths above, not in place of them — a
+//! host that never forks a conversation can ignore it entirely, and the
+//! linear JSONL/SQLite writers are unchanged. See
+//! `docs/modules/session/README.md` for the full design (entry kinds, the
+//! context-projection rule, fork semantics) and [`entry_tree::legacy`] for
+//! how pre-tree data is deterministically read into the same model.
+//!
 //! # Layout
 //!
 //! Every entry point takes the workspace root and derives the database path,
@@ -62,22 +74,23 @@
 //! See [`README.md`](./README.md) for the schema, the FTS behaviour, and the
 //! coordination guarantees.
 
-#![cfg_attr(
-    not(feature = "tracing"),
-    allow(dead_code, unused_imports, unused_variables)
-)]
-
 mod context;
+pub mod entry_tree;
 mod migrations;
 pub mod ops;
 pub mod retention;
 pub mod run_ledger;
 mod store;
+pub mod testkit;
 pub mod transcript;
 pub mod types;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
+pub use entry_tree::{
+    Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind, EntryTree,
+    Fork, ForkPosition, ForkScope, LabelEntry, SessionCompactionSink,
+};
 pub use ops::{
     DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, get_session, list_children, list_messages,
     list_sessions, list_tool_calls, mark_interrupted, record_message,

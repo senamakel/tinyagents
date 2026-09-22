@@ -1,17 +1,33 @@
+//! Phase state projection and advancement for workflow runs.
+//!
+//! This module owns the JSON phase-state document (a BTreeMap of phase names
+//! to status + outputs) that the workflow engine persists. It provides queries
+//! (what phases are runnable?) and mutations (mark complete, reset after
+//! interruption) over this state without touching the underlying persistence layer.
+
 use serde_json::{Value, json};
 
 use super::{WorkflowDefinition, WorkflowPhase};
 
 /// Durable status of one phase in a workflow run.
+///
+/// Phases transition: Pending → Running → (Completed | Failed). A phase
+/// interrupted while running can be reset to Pending for retry; completed
+/// phases are immutable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseStatus {
+    /// Phase has not yet started.
     Pending,
+    /// Phase is currently executing (likely in a child).
     Running,
+    /// Phase completed successfully; immutable.
     Completed,
+    /// Phase failed; may be retried by resetting to Pending.
     Failed,
 }
 
 impl PhaseStatus {
+    /// Returns the string representation of this status (used in JSON).
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -22,6 +38,10 @@ impl PhaseStatus {
     }
 }
 
+/// Initializes a phase-state document from a workflow definition.
+///
+/// All phases start in the Pending status with empty outputs. The returned
+/// JSON structure maps phase names to `{ status, outputs, ... }` objects.
 pub fn init_phase_states(definition: &WorkflowDefinition) -> Value {
     Value::Object(
         definition
@@ -37,6 +57,7 @@ pub fn init_phase_states(definition: &WorkflowDefinition) -> Value {
     )
 }
 
+/// Queries the current status string of a phase, or None if the phase is unknown.
 pub fn phase_status<'a>(phase_states: &'a Value, name: &str) -> Option<&'a str> {
     phase_states.get(name)?.get("status")?.as_str()
 }
@@ -87,6 +108,11 @@ pub fn reset_running_phases(phase_states: &mut Value, reason: &str) {
     }
 }
 
+/// Finds the next phase that should run: a phase that is not already
+/// completed, running, or failed, and all of whose dependencies are completed.
+///
+/// Returns the first such phase in definition order, or `None` if no phase is
+/// ready (either all are done, or some have unmet dependencies).
 pub fn next_runnable_phase<'a>(
     definition: &'a WorkflowDefinition,
     phase_states: &Value,
@@ -94,7 +120,7 @@ pub fn next_runnable_phase<'a>(
     definition.phases.iter().find(|phase| {
         !matches!(
             phase_status(phase_states, &phase.name),
-            Some("completed" | "running")
+            Some("completed" | "running" | "failed")
         ) && phase
             .depends_on
             .iter()
@@ -102,6 +128,7 @@ pub fn next_runnable_phase<'a>(
     })
 }
 
+/// Checks whether all phases in the workflow have completed.
 pub fn all_phases_completed(definition: &WorkflowDefinition, phase_states: &Value) -> bool {
     definition
         .phases
@@ -109,6 +136,8 @@ pub fn all_phases_completed(definition: &WorkflowDefinition, phase_states: &Valu
         .all(|phase| phase_status(phase_states, &phase.name) == Some("completed"))
 }
 
+/// Collects outputs from all upstream (dependency) phases for a given phase.
+/// Filters out empty and null outputs to yield only meaningful results.
 pub fn upstream_outputs(phase: &WorkflowPhase, phase_states: &Value) -> Vec<Value> {
     phase
         .depends_on
@@ -133,6 +162,10 @@ pub fn upstream_outputs(phase: &WorkflowPhase, phase_states: &Value) -> Vec<Valu
         .collect()
 }
 
+/// Composes the prompt for a worker in a phase.
+///
+/// Includes the phase name and description, the input question, the worker's
+/// index (if multiple workers), and relevant upstream outputs from dependencies.
 pub fn phase_prompt(
     input: &Value,
     phase: &WorkflowPhase,
@@ -169,6 +202,10 @@ pub fn phase_prompt(
     prompt
 }
 
+/// Composes a workflow summary from all final phase outputs.
+///
+/// Returns `None` if all phases are complete and there are no outputs;
+/// otherwise returns a formatted summary of all non-empty outputs in phase order.
 pub fn synthesize_summary(definition: &WorkflowDefinition, phase_states: &Value) -> Option<String> {
     let outputs_for = |name: &str| {
         phase_states

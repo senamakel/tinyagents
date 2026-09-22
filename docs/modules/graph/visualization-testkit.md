@@ -34,8 +34,8 @@ Export formats:
   `goto` edges render dotted)
 - DOT — later
 
-All three extraction sources — `CompiledGraph::topology`,
-`GraphBuilder::topology`, and `blueprint_to_topology` — produce the same
+Both extraction sources — `CompiledGraph::topology` and
+`GraphBuilder::topology` — produce the same
 `GraphTopology`, so visualization and test snapshots share one truth.
 
 ## Testkit

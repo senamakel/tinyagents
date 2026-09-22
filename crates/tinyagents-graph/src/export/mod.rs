@@ -2,9 +2,8 @@
 //! recursive harness read back the shape of any graph, including ones a model
 //! authored or assembled at runtime.
 //!
-//! Because graphs in this runtime can be built by hand, compiled from a `.rag`
-//! blueprint, or emitted by a model and run on the same runtime, it matters
-//! that all three reduce to one inspectable description. Export captures that
+//! Because graphs in this runtime can be built by hand or assembled at runtime,
+//! it matters that both reduce to one inspectable description. Export captures that
 //! description as a behavior-free [`GraphTopology`] — never the runnable
 //! handler/router closures — so a graph can be diffed, snapshotted in tests, or
 //! drawn for a human reviewing what an agent just constructed.
@@ -15,13 +14,12 @@
 //! the spec's "graph serialization to JSON" and "Mermaid export" future
 //! features (see `docs/modules/graph/visualization-testkit.md`).
 //!
-//! Topology can be extracted from three sources, all yielding the same
+//! Topology can be extracted from two sources, both yielding the same
 //! [`GraphTopology`] shape so visualization and test snapshots share one truth:
 //!
 //! - [`crate::CompiledGraph::topology`] — a validated, frozen graph.
 //! - [`crate::GraphBuilder::topology`] — a graph still under
 //!   construction (entry may be unresolved).
-//! - [`blueprint_to_topology`] — a `.rag` [`tinyagents_language::Blueprint`].
 //!
 //! None of these expose runnable behavior (handler/router closures, reducers);
 //! only structure is captured.
@@ -57,7 +55,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::Result;
 use crate::builder::{END, GraphBuilder, START};
 use crate::compiled::CompiledGraph;
-use tinyagents_language::{Blueprint, Routing};
 
 /// A behavior-free description of one node, fed into [`build_topology`].
 struct NodePart {
@@ -445,7 +442,11 @@ impl<State, Update> CompiledGraph<State, Update> {
         let edges = self
             .edges
             .iter()
-            .map(|(from, to)| (from.to_string(), to.to_string()))
+            .flat_map(|(from, targets)| {
+                targets
+                    .iter()
+                    .map(move |to| (from.to_string(), to.to_string()))
+            })
             .collect();
         let conditional = self
             .branches
@@ -500,7 +501,11 @@ impl<State, Update> GraphBuilder<State, Update> {
         let edges = self
             .edges
             .iter()
-            .map(|(from, to)| (from.to_string(), to.to_string()))
+            .flat_map(|(from, targets)| {
+                targets
+                    .iter()
+                    .map(move |to| (from.to_string(), to.to_string()))
+            })
             .collect();
         let conditional = self
             .branches
@@ -538,82 +543,6 @@ impl<State, Update> GraphBuilder<State, Update> {
             channels: Vec::new(),
         })
     }
-}
-
-/// Builds a [`GraphTopology`] from a `.rag` [`Blueprint`].
-///
-/// The blueprint already describes topology declaratively, so this is a direct
-/// structural mapping: [`Routing::Next`] becomes a direct edge,
-/// [`Routing::Conditional`] becomes a conditional edge, and
-/// [`Routing::Terminal`] marks a finish node. State channels and their reducer
-/// names are carried over. `recursion_limit` is read from the blueprint
-/// `defaults` when present (0 otherwise).
-pub fn blueprint_to_topology(blueprint: &Blueprint) -> GraphTopology {
-    let recursion_limit = blueprint
-        .defaults
-        .iter()
-        .find(|(key, _)| key == "recursion_limit")
-        .and_then(|(_, value)| match value {
-            tinyagents_language::Literal::Num(n) if *n >= 0.0 => Some(*n as usize),
-            _ => None,
-        })
-        .unwrap_or(0);
-
-    let nodes = blueprint
-        .nodes
-        .iter()
-        .map(|n| {
-            let subgraph = n.kind == "subgraph";
-            NodePart {
-                id: n.name.clone(),
-                kind: Some(n.kind.clone()),
-                command_routing: false,
-                subgraph,
-                interrupt: false,
-                deferred: false,
-                command_destinations: Vec::new(),
-                metadata: BTreeMap::new(),
-            }
-        })
-        .collect();
-
-    let mut edges: Vec<(String, String)> = blueprint
-        .edges
-        .iter()
-        .map(|e| (e.from.clone(), e.to.clone()))
-        .collect();
-    edges.push((START.to_string(), blueprint.start.clone()));
-
-    let mut conditional: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    for node in &blueprint.nodes {
-        match &node.routing {
-            Routing::Next(target) => edges.push((node.name.clone(), target.clone())),
-            Routing::Terminal => edges.push((node.name.clone(), END.to_string())),
-            Routing::Conditional(routes) => {
-                conditional.push((node.name.clone(), routes.clone()));
-            }
-        }
-    }
-
-    let channels = blueprint
-        .channels
-        .iter()
-        .map(|c| (c.name.clone(), c.reducer.clone()))
-        .collect();
-
-    build_topology(TopologyParts {
-        graph_id: blueprint.graph_id.clone(),
-        name: None,
-        recursion_limit,
-        parallel: false,
-        max_concurrency: None,
-        node_timeout_ms: None,
-        nodes,
-        edges,
-        conditional,
-        waiting: Vec::new(),
-        channels,
-    })
 }
 
 /// Serializes a [`GraphTopology`] to a pretty-printed JSON document.
@@ -737,16 +666,6 @@ fn emit_marker_class(
     for node in matching {
         out.push_str(&format!("    class {} {class}\n", mermaid_id(&node.id)));
     }
-}
-
-/// Convenience: render a `.rag` [`Blueprint`] directly to Mermaid.
-pub fn blueprint_to_mermaid(blueprint: &Blueprint) -> String {
-    to_mermaid(&blueprint_to_topology(blueprint))
-}
-
-/// Convenience: render a `.rag` [`Blueprint`] directly to pretty JSON.
-pub fn blueprint_to_json(blueprint: &Blueprint) -> String {
-    to_json(&blueprint_to_topology(blueprint))
 }
 
 /// Maps a node id to its Mermaid reference token. The reserved `START`/`END`

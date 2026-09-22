@@ -1,4 +1,7 @@
-//! Unit tests for the task-board domain types.
+//! Unit tests for the task board: domain-type serialization/markdown/
+//! normalisation, `store` CRUD and the single-`InProgress` / approval-flow
+//! invariants (`store_tests`), and the `todo` multiplexer tool's dispatch and
+//! argument validation (`tool_tests`).
 
 use super::types::*;
 
@@ -523,7 +526,9 @@ mod tool_tests {
             .iter()
             .find_map(|block| match block {
                 ToolContent::Json { data } => Some(data),
-                ToolContent::Text { .. } => None,
+                ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => {
+                    None
+                }
             })
             .expect("successful todo result has a JSON payload")
     }

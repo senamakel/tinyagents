@@ -57,6 +57,8 @@ pub struct TranscriptMessage {
 }
 
 impl TranscriptMessage {
+    /// Builds a bare message with `role` and `content` set and every other
+    /// field at its default (no usage, no id, not interrupted).
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             id: None,
@@ -72,6 +74,7 @@ impl TranscriptMessage {
         }
     }
 
+    /// Shorthand for [`TranscriptMessage::new`] with `role = "assistant"`.
     pub fn assistant(content: impl Into<String>) -> Self {
         Self::new("assistant", content)
     }

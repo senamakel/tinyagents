@@ -14,7 +14,7 @@ use crate::Result;
 /// Prepares and tears down per-agent execution environments.
 ///
 /// Implementations create a worktree/sandbox for one agent run and clean it up
-/// afterward. The returned [`WorkspaceDescriptor`] is what the run threads into
+/// afterward. The returned [`WorkspaceDescriptor`](tinytools::WorkspaceDescriptor) is what the run threads into
 /// tool execution contexts.
 #[async_trait]
 pub trait WorkspaceIsolation: Send + Sync {

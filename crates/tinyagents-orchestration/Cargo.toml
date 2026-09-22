@@ -5,32 +5,40 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Host-neutral composition primitives for TinyAgents work."
+rust-version.workspace = true
+description = "Host-neutral subagent invocation and lifecycle orchestration."
 
 [dependencies]
-anyhow = "1"
-async-trait = "0.1"
-chrono = { version = "0.4", features = ["serde"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2"
 parking_lot = "0.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 tinyagents-graph = { path = "../tinyagents-graph", version = "2.1.2", default-features = false }
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.2", default-features = false }
 tinyagents-session = { path = "../tinyagents-session", version = "2.1.2", default-features = false }
-tokio = { version = "1", default-features = false, features = ["sync", "rt", "macros"] }
+tinyagents-runtime = { path = "../tinyagents-runtime", version = "2.1.2", default-features = false }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.3.0" }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = []
 tracing = [
-    "tinyagents-graph/tracing",
     "tinyagents-harness/tracing",
-    "tinyagents-session/tracing",
 ]
 
 [dev-dependencies]
+dotenvy = "0.15"
+futures = { workspace = true }
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tinyagents-definition = { path = "../tinyagents-definition", version = "2.1.2" }
+tinyagents-graph = { path = "../tinyagents-graph", version = "2.1.2" }
+tinyagents-registry = { path = "../tinyagents-registry", version = "2.1.2" }
+tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true

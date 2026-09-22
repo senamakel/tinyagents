@@ -15,7 +15,7 @@ use super::types::{CliStatus, MIN_CLI_VERSION};
 /// Resolution order:
 /// 1. `OPENHUMAN_CLAUDE_CLI` env override (tests / power users / a fixed path).
 /// 2. `PATH` search.
-/// 3. Well-known absolute install locations ([`well_known_candidates`]).
+/// 3. Well-known absolute install locations (`well_known_candidates`).
 ///
 /// Step 3 exists because a macOS app launched from Finder/Dock inherits only
 /// the stripped launchd `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), which never
@@ -37,7 +37,7 @@ pub fn resolve_binary() -> Option<PathBuf> {
     // Finder/Dock-launch case where `~/.local/bin` is absent from `PATH`.
     let found = first_existing(&well_known_candidates());
     if let Some(p) = found.as_ref() {
-        log::debug!(
+        tracing::debug!(
             "[claude-code][version] `claude` not on PATH; resolved via well-known location {}",
             p.display()
         );
@@ -120,7 +120,7 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
 /// Probe the `claude` CLI and return its status.
 pub fn probe() -> CliStatus {
     let Some(path) = resolve_binary() else {
-        log::debug!("[claude-code][version] no `claude` binary on PATH");
+        tracing::debug!("[claude-code][version] no `claude` binary on PATH");
         return CliStatus::NotInstalled;
     };
     let path_str = path.display().to_string();
@@ -132,7 +132,7 @@ pub fn probe() -> CliStatus {
     {
         Ok(o) => o,
         Err(e) => {
-            log::warn!("[claude-code][version] spawn failed path={path_str} err={e}");
+            tracing::warn!("[claude-code][version] spawn failed path={path_str} err={e}");
             return CliStatus::Unusable {
                 path: path_str,
                 reason: format!("spawn failed: {e}"),
@@ -176,6 +176,8 @@ pub fn probe() -> CliStatus {
     }
 }
 
+/// Extracts the leading semver-looking token from `claude --version` output
+/// (e.g. `"2.0.4 (Claude Code)"` → `"2.0.4"`).
 fn parse_version(stdout: &str) -> Option<String> {
     stdout
         .split_whitespace()

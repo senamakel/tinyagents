@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, TinyAgentsError};
-use tinyagents_harness::ids::{GraphId, NodeId, RunId, TaskId};
+use tinyagents_harness::ids::{CheckpointId, GraphId, NodeId, RunId, TaskId};
 
 /// One level of the graph/subgraph/sub-agent recursion tree.
 ///
@@ -196,11 +196,19 @@ pub struct ChildRun {
     /// Token usage rolled up from the child run, when the child reported any.
     ///
     /// Subgraph children leave this at the default (their usage is tracked by
-    /// their own model calls); a [`crate::subagent_node`] sub-agent child
-    /// folds the delegated harness agent's [`UsageTotals`] here so it is visible
+    /// their own model calls); a [`mod@crate::subagent_node`] sub-agent child
+    /// folds the delegated harness agent's [`UsageTotals`](tinyinference_llm::usage::UsageTotals) here so it is visible
     /// on the parent [`GraphExecution`](crate::GraphExecution) rollup.
     #[serde(default)]
     pub usage: tinyinference_llm::usage::UsageTotals,
+    /// The child run's latest persisted checkpoint id, when checkpointing was
+    /// enabled (C4). Recorded so the parent's own checkpoint metadata
+    /// (`child_runs`) carries an explicit pointer to the exact child
+    /// checkpoint a subsequent `drive_child` continuation
+    /// (retry/resume) would act on, rather than leaving the association
+    /// implicit in the shared thread id + namespace.
+    #[serde(default)]
+    pub checkpoint_id: Option<CheckpointId>,
 }
 
 /// A thread-safe collector the executor hands to node contexts so that a

@@ -42,18 +42,39 @@ A turn's tool calls are driven in three phases — serial **admission**
 (cancellation/deadline/limit checks, `before_tool`, unknown-tool policy,
 schema validation, `ToolStarted`), **execution**, and a serial **fold** in
 original call order (`after_tool`, `ToolCompleted`, transcript append).
+The fold also records a result's host-only `metadata` on the event and on
+`AgentRun::tool_metadata`, and hands back its `follow_up` content as a user
+message that the batch driver appends only after the batch's last tool row
+(B2) — a provider requires every tool row to follow its assistant row
+directly, so follow-ups never interleave with tool rows. The same holds for
+the deferred-resume batch in `apply_deferred_results`.
 
-When a turn requests two or more tools and **no tool-wrap middleware**
-(`ToolMiddleware`) is registered, execution runs concurrently (`join_all`),
-so turn latency is the slowest tool instead of the sum. Tool-wrap middleware
-holds `&mut RunContext` across each wrapped call — part of its public
-contract — so its presence keeps the historical serial path. In both modes
-results are attached to their original `tool_call_id` in the calls' original
-order, every call's `ToolStarted` precedes its `ToolCompleted`, and
-`ToolCompleted` events are emitted in call order. The first failing call (in
-call order) fails the turn; in concurrent mode already-launched siblings run
-to completion before the error surfaces. See `tools.rs` for the full design
-notes.
+Execution runs concurrently only when *all* of the following hold: the turn
+requests two or more tools, zero tool-wrap middleware (`ToolMiddleware`) is
+registered, and every call's tool reports `Tool::is_concurrency_safe() ==
+true` (the trait default is `false`, so a tool must opt in). See
+`should_execute_tools_concurrently` and `batch_is_canonical_parallel_safe` in
+`tools.rs`. Tool-wrap middleware holds `&mut RunContext` across each wrapped
+call — part of its public contract — so its presence keeps the historical
+serial path. Lifecycle middleware does **not** force the serial path: every
+`before_tool` hook runs during serial admission, which completes in full for
+every call in the batch before any concurrent future is built, so there is
+nothing left for a lifecycle middleware to mutate once execution starts
+(I-8; this used to force serial execution unconditionally).
+
+When concurrency does trigger, the batch runs via `futures::stream::iter(..)
+.buffered(n)` — not an unbounded `join_all` — where `n` is
+`RunPolicy::limits.max_tool_concurrency` (unbounded, i.e. every eligible call
+starts at once, when `None`, the default). `buffered` yields results in input
+order, same as `join_all` did, so downstream folding is unaffected; it just
+caps how many calls are in flight simultaneously. Turn latency is then the
+slowest *batch* of at most `n` tools instead of the slowest single tool. In
+both modes results are attached to their original `tool_call_id` in the
+calls' original order, every call's `ToolStarted` precedes its
+`ToolCompleted`, and `ToolCompleted` events are emitted in call order. The
+first failing call (in call order) fails the turn; in concurrent mode
+already-launched siblings run to completion before the error surfaces. See
+`tools.rs` for the full design notes.
 
 ## Limits
 
@@ -63,6 +84,22 @@ wall-clock deadline (from the run config) is checked each iteration and
 surfaces as `TinyAgentsError::Timeout`. The run context's own
 `limits::LimitTracker` is also advanced so its counters stay consistent with
 the enforced caps.
+
+## Cancellation and wall-clock bounding
+
+Every host/provider I/O boundary on the loop path (model resolution, budget
+admission and usage recording, tool authorization, tool-output screening,
+host turn preparation, the unary provider call) races cooperative
+cancellation against an optional wall-clock deadline through one shared
+helper, `context::RunContext::bounded(deadline, fut, timeout_message)`,
+instead of each call site copying its own `tokio::select! { biased; _ =
+cancelled() => .., _ = timeout(remaining, fut) => .. }` block (R-1 from
+`docs/runtime-comparison/code-review-harness.md`). `timeout_message` is a
+closure so the call-specific message is only built on the timeout path, not
+on every call. The streaming provider loop's per-chunk pull races
+cancellation against `stream.next()` directly — its future yields an
+`Option`, not a `Result`, so it does not fit `bounded`'s signature and stays
+a bespoke `select!`.
 
 ## Backoff
 
@@ -102,8 +139,24 @@ it applies identically to the unary and streaming paths.
   also returns a compact `HarnessRunStatus` snapshot (phase, counters, timing,
   error summary) alongside the `AgentRun`.
 - `AgentLoopResult { run: AgentRun, status: HarnessRunStatus }` — the richer
-  return type; the only public type this module owns beyond the
-  `AgentHarness` methods themselves.
+  return type; also returned by `AgentHarness::invoke_in_context_with_status`.
+- `AgentHarness::invoke_collecting_partial(..) -> PartialRunOutcome` (and its
+  `invoke_in_context_collecting_partial` / streaming counterparts) — like
+  `invoke`, but never discards the accumulated `AgentRun` on error; useful for
+  inspecting, repairing, or resuming a run that hit a limit or a tool failure.
+- `AgentHarness::invoke_streaming` / `invoke_streaming_default` /
+  `invoke_streaming_in_context[_with_status]` — the streaming counterparts of
+  the `invoke*` family: each model call goes through
+  `ChatModel::stream` instead of `ChatModel::invoke`, threading deltas through
+  every middleware's `on_model_delta` hook, but the loop still only returns
+  once the run is over.
+- `AgentHarness::invoke_stream` / `invoke_stream_in_context` — a caller-facing
+  event stream (`stream.rs`): yields every `AgentEvent` emitted during the run
+  as `AgentStreamItem::Event`, then a single terminal
+  `AgentStreamItem::Completed`/`Failed`. Driving the loop and consuming the
+  stream are the same task, so a caller that stops polling pauses the run.
+- `AgentStreamItem { Event(EventRecord), Completed(Box<AgentRun>), Failed { error, run } }`
+  — the item type yielded by `invoke_stream`.
 
 ## Errors
 
@@ -118,11 +171,12 @@ error surfaced by a model, tool, middleware, or structured-output extraction.
 | File | Role |
 | --- | --- |
 | `mod.rs` | Module wiring: shared imports and the module-level doc comment. |
-| `entry.rs` | Public entry points (`invoke`/`invoke_with_status`/`invoke_streaming*`) and the shared `drive` lifecycle wrapper. |
-| `run_loop.rs` | The core loop body (`run_loop`) and response-cache decision logic. |
+| `entry.rs` | Public entry points (`invoke`/`invoke_with_status`/`invoke_streaming*`/`invoke_collecting_partial`) and the shared `drive`/`drive_collecting` lifecycle wrapper. |
+| `run_loop.rs` | The core loop body (`run_loop`), response-cache decision logic, and host budget/prompt-cache helpers. |
 | `tools.rs` | Tool execution for one turn: serial admission, serial or concurrent execution, ordered fold. |
-| `model_call.rs` | Cache-aware retry/fallback model dispatch, the streaming variant, and the innermost `ModelBaseCall`/`ToolBaseCall` impls the middleware wrap-onion terminates into. |
-| `types.rs` | `AgentLoopResult`. |
+| `model_call.rs` | Cache-aware retry/fallback model dispatch, the streaming variant, host model resolution, and the innermost `ModelBaseCall`/`ToolBaseCall` impls the middleware wrap-onion terminates into. |
+| `stream.rs` | Caller-consumable streaming entry point (`invoke_stream`/`invoke_stream_in_context`) that projects the run's `EventSink` into an `AgentStreamItem` stream. |
+| `types.rs` | `AgentLoopResult`, `PartialRunOutcome`, and the private `LoopExit`. |
 | `test.rs` | Unit tests (limits, retry/fallback, tool execution, structured extraction). |
 
 ## Operational constraints

@@ -1,3 +1,7 @@
+//! Unit tests for provider construction, CLI argument/stdin building,
+//! transcript rendering, system-prompt coalescing, and NDJSON response
+//! assembly (including the timeout and error-propagation paths).
+
 use super::*;
 use tinyinference_llm::tool::ToolCall;
 
@@ -230,11 +234,13 @@ printf '%s\n' '{"type":"result","result":"Calling.<tool_call>{\"name\":\"lookup\
         Some(serde_json::json!({"name": "lookup", "arguments": {"query": "needle"}})),
         "prior structured tool call must survive in CLI stdin: {stdin:?}"
     );
+    // Results are replayed under the protocol crate's envelope, keyed by the
+    // call id they answer.
     assert!(
-        stdin.contains("[Tool results]\n<tool_result>\nfirst result\n</tool_result>"),
+        stdin.contains("[Tool results]\n<tool_result id=\"call-1\">\nfirst result\n</tool_result>"),
         "unexpected CLI stdin: {stdin:?}"
     );
-    assert!(stdin.contains("<tool_result>\nsecond result\n</tool_result>"));
+    assert!(stdin.contains("<tool_result id=\"call-2\">\nsecond result\n</tool_result>"));
     let args =
         std::fs::read_to_string(format!("{}.args", script.display())).expect("captured args");
     assert!(args.contains("request-model"));

@@ -1,12 +1,24 @@
 //! Subprocess lifecycle for the Claude Agent SDK provider.
+//!
+//! [`ClaudeAgentSdkProvider`] implements `ChatModel<()>` by shelling out to
+//! `claude -p --output-format stream-json` once per [`invoke`][ChatModel::invoke]
+//! call: the harness never links against the Claude Agent SDK directly, it
+//! only speaks the CLI's stdin/stdout contract. This is the "prompt-guided"
+//! sibling of [`crate::providers::claude_code`], which drives the same CLI in
+//! full agentic (multi-turn, tool-using) mode via a long-lived session
+//! instead of a single stateless invocation; use this module when a plain
+//! one-shot completion is enough. Wire message shapes for the NDJSON stream
+//! live in `protocol`.
 
 mod protocol;
 
-use crate::tool::{coalesce_prompt_tool_results, with_prompt_tool_instructions};
 use anyhow::Context;
 use async_trait::async_trait;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
+use tinyinference_llm::prompt_tools::{
+    coalesce_tool_results, recover_tool_calls, with_tool_instructions,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{Duration, timeout};
@@ -43,11 +55,19 @@ pub struct ClaudeAgentSdkProvider {
     profile: ModelProfile,
 }
 
+/// Fully-formed CLI arguments and stdin payload for one `claude -p` call.
 struct ClaudeInvocation {
     args: Vec<String>,
     stdin: String,
 }
 
+/// Builds the argv and stdin payload for one `claude -p` invocation.
+///
+/// The system prompt, when present, is wrapped in `[SYSTEM]...[/SYSTEM]`
+/// tags and prepended to stdin rather than passed as a CLI flag, keeping the
+/// full request off argv (see [`ClaudeAgentSdkProvider::invoke_cli`]). A
+/// `max_budget_usd` also pins `--max-turns 10` so a budget-capped run cannot
+/// wander indefinitely before the budget check kicks in.
 fn build_invocation(
     system_prompt: Option<&str>,
     message: &str,
@@ -85,9 +105,11 @@ fn build_invocation(
 /// transcript is present so the model can distinguish its own prior output
 /// from the next user turn.
 fn render_transcript(messages: &[Message]) -> String {
+    // `Message::Custom` is a host-side out-of-band record (e.g. a compaction
+    // marker); it never rides to a provider transcript.
     let non_system: Vec<&Message> = messages
         .iter()
-        .filter(|message| !matches!(message, Message::System(_)))
+        .filter(|message| !matches!(message, Message::System(_) | Message::Custom(_)))
         .collect();
     if non_system.len() == 1 {
         return non_system[0].text();
@@ -101,6 +123,7 @@ fn render_transcript(messages: &[Message]) -> String {
                 Message::Assistant(_) => "ASSISTANT",
                 Message::Tool(_) => "TOOL",
                 Message::System(_) => unreachable!("system messages were filtered"),
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             format!("[{role}]\n{}\n[/{role}]", message.text())
         })
@@ -108,17 +131,23 @@ fn render_transcript(messages: &[Message]) -> String {
         .join("\n\n")
 }
 
+/// Wraps a subprocess spawn failure with the binary name for a legible error.
 fn spawn_error(binary: &str, source: std::io::Error) -> anyhow::Error {
     let message = format!("failed to spawn claude binary '{binary}': {source}");
     anyhow::Error::new(source).context(message)
 }
 
 impl ClaudeAgentSdkProvider {
+    /// Creates a provider that defaults to `config.default_model` for every
+    /// call.
     pub fn new(config: ClaudeAgentSdkConfig) -> Self {
         let model = config.default_model.clone();
         Self::for_model(config, model)
     }
 
+    /// Creates a provider pinned to `model`, overriding `config.default_model`
+    /// for this instance's [`ModelProfile`]. A `model` set explicitly on a
+    /// given [`ModelRequest`] still takes precedence over both.
     pub fn for_model(config: ClaudeAgentSdkConfig, model: impl Into<String>) -> Self {
         Self {
             config,
@@ -130,6 +159,17 @@ impl ClaudeAgentSdkProvider {
         }
     }
 
+    /// Spawns `claude -p`, streams and decodes its NDJSON stdout, and
+    /// returns the assembled response text.
+    ///
+    /// The request body goes over stdin rather than argv (see
+    /// [`build_invocation`]) so large prompts do not hit OS argv-length
+    /// limits. Stderr is drained on a concurrent task while stdout is read,
+    /// because leaving either pipe unread while the other fills can deadlock
+    /// the child process. Reading stdout is bounded by a 120s timeout and
+    /// waiting for process exit by a separate 30s timeout; either firing
+    /// kills the child and returns an error. When the CLI streams no final
+    /// `Result` message, the joined `Text` chunks are used as a fallback.
     async fn invoke_cli(
         &self,
         system_prompt: Option<&str>,
@@ -154,7 +194,7 @@ impl ClaudeAgentSdkProvider {
             .stdin(std::process::Stdio::piped())
             .kill_on_drop(true);
 
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[claude_agent_sdk] spawning claude binary={} model={} message_len={}",
             self.config.binary,
             model,
@@ -162,7 +202,7 @@ impl ClaudeAgentSdkProvider {
         );
 
         let mut child = cmd.spawn().map_err(|source| {
-            tinyagents_tracing::warn!(
+            tracing::warn!(
                 error = %source,
                 binary = %self.config.binary,
                 "[claude_agent_sdk] failed to spawn claude binary"
@@ -217,7 +257,7 @@ impl ClaudeAgentSdkProvider {
                 if line.is_empty() {
                     continue;
                 }
-                tinyagents_tracing::trace!(
+                tracing::trace!(
                     "[claude_agent_sdk] ndjson line received line_len={}",
                     line.len()
                 );
@@ -231,7 +271,7 @@ impl ClaudeAgentSdkProvider {
                         total_cost_usd,
                     }) => {
                         if let Some(cost) = total_cost_usd {
-                            tinyagents_tracing::debug!(
+                            tracing::debug!(
                                 "[claude_agent_sdk] request completed total_cost_usd={:.6}",
                                 cost
                             );
@@ -248,12 +288,10 @@ impl ClaudeAgentSdkProvider {
                         error_message = Some(error.message);
                     }
                     Ok(SdkMessage::Unknown) => {
-                        tinyagents_tracing::trace!(
-                            "[claude_agent_sdk] unknown ndjson message type, skipping"
-                        );
+                        tracing::trace!("[claude_agent_sdk] unknown ndjson message type, skipping");
                     }
                     Err(e) => {
-                        tinyagents_tracing::warn!(
+                        tracing::warn!(
                             error = %e,
                             line_len = line.len(),
                             "[claude_agent_sdk] failed to parse ndjson line"
@@ -279,7 +317,7 @@ impl ClaudeAgentSdkProvider {
                 anyhow::anyhow!("[claude_agent_sdk] subprocess timed out while waiting for exit")
             })??;
         let stderr_output = stderr_task.await.unwrap_or_default();
-        tinyagents_tracing::debug!("[claude_agent_sdk] subprocess exited status={}", status);
+        tracing::debug!("[claude_agent_sdk] subprocess exited status={}", status);
 
         if !status.success() {
             anyhow::bail!(
@@ -298,7 +336,7 @@ impl ClaudeAgentSdkProvider {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| text_parts.join(""));
 
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[claude_agent_sdk] response collected output_len={}",
             output.len()
         );
@@ -331,8 +369,8 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         _state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        let messages = coalesce_prompt_tool_results(&request.messages);
-        let messages = with_prompt_tool_instructions(&messages, &request.tools);
+        let messages = coalesce_tool_results(&request.messages);
+        let messages = with_tool_instructions(&messages, &request.tools, &request.tool_choice);
         let system = coalesce_system_prompt(&messages);
         let transcript = render_transcript(&messages);
         let model = request
@@ -349,7 +387,7 @@ impl ChatModel<()> for ClaudeAgentSdkProvider {
         Ok(if request.tools.is_empty() {
             response
         } else {
-            crate::tool::apply_prompt_tool_calls(response)
+            recover_tool_calls(response, &request.tools)
         })
     }
 }

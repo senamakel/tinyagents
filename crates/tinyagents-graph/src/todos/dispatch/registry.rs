@@ -2,7 +2,7 @@
 //!
 //! Autonomous card runs are detached tasks, not turns a chat channel knows
 //! about, so a "stop" arriving through the normal path has nothing to cancel.
-//! Registering each run's [`AbortHandle`](tokio::task::AbortHandle) here gives
+//! Registering each run's [`AbortHandle`] here gives
 //! that path a handle to pull.
 //!
 //! The registry's real job is **deciding who cleans up**. A run that finishes
@@ -90,7 +90,7 @@ impl<Context> ActiveRunRegistry<Context> {
         if let Some(run_id) = run_id {
             match runs.get(thread_id) {
                 None => {
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         thread_id = %thread_id,
                         request_run_id = %run_id,
                         "[graph:todos:dispatch] scoped cancel ignored: no active run on thread"
@@ -98,7 +98,7 @@ impl<Context> ActiveRunRegistry<Context> {
                     return None;
                 }
                 Some(active) if active.run_id != run_id => {
-                    tinyagents_tracing::debug!(
+                    tracing::debug!(
                         thread_id = %thread_id,
                         request_run_id = %run_id,
                         active_run_id = %active.run_id,

@@ -16,6 +16,8 @@ use super::bridge::ChatMessage;
 use base64::Engine as _;
 use serde_json::{Value, json};
 
+/// Upper bound on a single decoded inline image's byte size; larger images
+/// are dropped rather than inlined (see [`image_block`]).
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 /// Build the bytes to write to claude's stdin. Returns an empty `Vec`
@@ -165,8 +167,8 @@ fn content_blocks(raw: &str) -> Vec<Value> {
     let mut cursor = 0;
     while let Some((relative, prefix)) = [
         IMAGE_PREFIX,
-        NATIVE_IMAGE_PREFIX,
         LITERAL_NATIVE_IMAGE_PREFIX,
+        NATIVE_IMAGE_PREFIX,
     ]
     .iter()
     .filter_map(|prefix| raw[cursor..].find(prefix).map(|offset| (offset, *prefix)))
@@ -245,7 +247,8 @@ fn image_block(reference: &str, native_marker: bool) -> Option<Value> {
     }))
 }
 
-/// Best-effort media type from a file extension. Claude accepts jpeg/png/gif/webp.
+/// Serializes `v` compactly and appends a trailing newline, matching the
+/// NDJSON shape `claude --input-format stream-json` expects on stdin.
 fn push_json_line(buf: &mut String, v: &Value) {
     buf.push_str(&serde_json::to_string(v).unwrap_or_default());
     buf.push('\n');

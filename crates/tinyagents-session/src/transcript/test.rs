@@ -1,3 +1,10 @@
+//! Module-local unit tests for [`crate::transcript`]: full-rewrite and
+//! append-only writers, model-context and display readers, compaction replay,
+//! interrupted partials, path resolution/resume, thread-usage summaries, and
+//! the [`super::history`] locator/handle seam.
+//!
+//! Consolidated here per AGENTS.md: one `test.rs` per module directory.
+
 use super::*;
 use tempfile::tempdir;
 

@@ -36,6 +36,9 @@ pub const GEMINI_UNSUPPORTED_KEYWORDS: &[&str] = &[
     "examples",
 ];
 
+/// Descriptive keys copied onto a simplified/resolved node so cleaning never
+/// drops a human-facing `description`, `title`, or `default` even when the
+/// surrounding schema shape (a `$ref`, a union) is replaced wholesale.
 const SCHEMA_META_KEYS: &[&str] = &["description", "title", "default"];
 
 /// Schema cleaning strategies for different LLM providers.
@@ -116,6 +119,10 @@ impl SchemaCleanr {
         Ok(())
     }
 
+    /// Collects `$defs`/`definitions` entries from the schema's top level so
+    /// local `$ref`s can be resolved inline. Both keywords are merged into one
+    /// table; JSON Schema drafts disagree on which name to use and callers may
+    /// pass either.
     fn extract_defs(obj: &Map<String, Value>) -> HashMap<String, Value> {
         let mut defs = HashMap::new();
 
@@ -134,6 +141,10 @@ impl SchemaCleanr {
         defs
     }
 
+    /// Recursion entry point shared by every cleaning path: dispatches on the
+    /// JSON value's shape and threads `defs`/`ref_stack` through nested
+    /// objects and arrays so ref resolution and cycle detection stay
+    /// consistent at every depth.
     fn clean_with_defs(
         schema: Value,
         defs: &HashMap<String, Value>,
@@ -151,6 +162,9 @@ impl SchemaCleanr {
         }
     }
 
+    /// Cleans a single schema object: resolves a `$ref` or simplifies a union
+    /// before falling through to per-keyword filtering, since both of those
+    /// cases replace the object wholesale rather than editing it in place.
     fn clean_object(
         obj: Map<String, Value>,
         defs: &HashMap<String, Value>,
@@ -161,6 +175,9 @@ impl SchemaCleanr {
             return Self::resolve_ref(ref_value, &obj, defs, strategy, ref_stack);
         }
 
+        // A union that simplifies to a single non-null variant or a flat
+        // literal enum is preferred over keeping `anyOf`/`oneOf`, which some
+        // strategies reject outright.
         if (obj.contains_key("anyOf") || obj.contains_key("oneOf"))
             && let Some(simplified) = Self::try_simplify_union(&obj, defs, strategy, ref_stack)
         {
@@ -180,6 +197,8 @@ impl SchemaCleanr {
                 "const" => {
                     cleaned.insert("enum".to_string(), json!([value]));
                 }
+                // An unsimplified union already carries per-variant `type`s;
+                // a sibling top-level `type` would be redundant or conflicting.
                 "type" if has_union => {}
                 "type" if matches!(value, Value::Array(_)) => {
                     cleaned.insert(key, Self::clean_type_array(value));
@@ -211,6 +230,10 @@ impl SchemaCleanr {
         Value::Object(cleaned)
     }
 
+    /// Inlines a local `$ref` by looking it up in `defs` and recursively
+    /// cleaning the target. A ref already on `ref_stack` (a cycle) or one
+    /// that cannot be resolved locally degrades to an empty object rather
+    /// than erroring, since providers reject `$ref` outright anyway.
     fn resolve_ref(
         ref_value: &str,
         obj: &Map<String, Value>,
@@ -225,6 +248,9 @@ impl SchemaCleanr {
         if let Some(def_name) = Self::parse_local_ref(ref_value)
             && let Some(definition) = defs.get(def_name.as_str())
         {
+            // Push/pop around the recursive clean so a self-referential or
+            // mutually-referential def is detected via `ref_stack.contains`
+            // above instead of recursing forever.
             ref_stack.insert(ref_value.to_string());
             let cleaned = Self::clean_with_defs(definition.clone(), defs, strategy, ref_stack);
             ref_stack.remove(ref_value);
@@ -234,6 +260,10 @@ impl SchemaCleanr {
         Self::preserve_meta(obj, Value::Object(Map::new()))
     }
 
+    /// Extracts the def name from a local `#/$defs/<name>` or
+    /// `#/definitions/<name>` pointer, decoding it per RFC 6901. Returns
+    /// `None` for any non-local (external/remote) ref, which this cleaner
+    /// does not attempt to resolve.
     fn parse_local_ref(ref_value: &str) -> Option<String> {
         ref_value
             .strip_prefix("#/$defs/")
@@ -241,6 +271,7 @@ impl SchemaCleanr {
             .map(Self::decode_json_pointer)
     }
 
+    /// Decodes the `~0`/`~1` escapes JSON Pointer uses for literal `~`/`/`.
     fn decode_json_pointer(segment: &str) -> String {
         if !segment.contains('~') {
             return segment.to_string();
@@ -270,6 +301,11 @@ impl SchemaCleanr {
         decoded
     }
 
+    /// Attempts to replace an `anyOf`/`oneOf` union with something a
+    /// restrictive provider will accept: a single non-null variant, or a flat
+    /// literal `enum` when every non-null variant is a same-typed constant.
+    /// Returns `None` when the union genuinely needs multiple distinct
+    /// schemas and cannot be simplified.
     fn try_simplify_union(
         obj: &Map<String, Value>,
         defs: &HashMap<String, Value>,
@@ -305,6 +341,9 @@ impl SchemaCleanr {
         None
     }
 
+    /// Recognizes the three JSON Schema shapes that denote "null" so a
+    /// nullable union variant (`X | null`) can be dropped when a provider
+    /// disallows nullable types outright.
     fn is_null_schema(value: &Value) -> bool {
         if let Some(obj) = value.as_object() {
             if let Some(Value::Null) = obj.get("const") {
@@ -325,6 +364,10 @@ impl SchemaCleanr {
         false
     }
 
+    /// Collapses variants that are each a single-value `const`/`enum` of the
+    /// same `type` into one `{ "type", "enum": [...] }` schema. Any variant
+    /// that isn't a same-typed single literal aborts the flatten (`None`),
+    /// leaving the caller to keep the union as-is.
     fn try_flatten_literal_union(variants: &[Value]) -> Option<Value> {
         if variants.is_empty() {
             return None;
@@ -365,6 +408,10 @@ impl SchemaCleanr {
         })
     }
 
+    /// Drops `"null"` out of a JSON Schema `type` array (used for nullable
+    /// types) and collapses the result: no non-null type left becomes
+    /// `"null"` itself, exactly one collapses to a scalar `type`, and more
+    /// than one is left as an array.
     fn clean_type_array(value: Value) -> Value {
         if let Value::Array(types) = value {
             let non_null: Vec<Value> = types
@@ -385,6 +432,8 @@ impl SchemaCleanr {
         }
     }
 
+    /// Cleans each value in an object's `properties` map, leaving the key set
+    /// unchanged.
     fn clean_properties(
         value: Value,
         defs: &HashMap<String, Value>,
@@ -402,6 +451,9 @@ impl SchemaCleanr {
         }
     }
 
+    /// Cleans each variant of an `anyOf`/`oneOf`/`allOf` array in place
+    /// (called only when [`try_simplify_union`][Self::try_simplify_union]
+    /// could not collapse the union to a single schema).
     fn clean_union(
         value: Value,
         defs: &HashMap<String, Value>,
@@ -419,6 +471,9 @@ impl SchemaCleanr {
         }
     }
 
+    /// Copies [`SCHEMA_META_KEYS`] from `source` onto `target` when `target`
+    /// is an object, so replacing a node's shape (ref resolution, union
+    /// simplification) does not lose its `description`/`title`/`default`.
     fn preserve_meta(source: &Map<String, Value>, mut target: Value) -> Value {
         if let Value::Object(target_obj) = &mut target {
             for &key in SCHEMA_META_KEYS {
@@ -430,3 +485,34 @@ impl SchemaCleanr {
         target
     }
 }
+
+/// Validates `value` against `schema`, a JSON-schema subset (`type`,
+/// `required`, `properties`, `additionalProperties`, `items`, `enum`).
+///
+/// This is a *value* validator, unlike [`SchemaCleanr::validate`], which
+/// checks a schema's own shape. It reuses the inference layer's tool-call
+/// argument validator (`tinyinference_llm::tool::ToolSchema::validate_call`)
+/// by wrapping `schema` in a throwaway tool schema and `value` in a matching
+/// call, so a tool's arguments and, say, a graph interrupt's resume value are
+/// held to exactly the same rules. A `null` or empty-object `schema` accepts
+/// every value. Any rejection is reported as
+/// [`TinyAgentsError::Validation`] naming the offending path relative to
+/// `value`.
+pub fn validate_against_schema(schema: &Value, value: &Value) -> Result<()> {
+    const TOOL_NAME: &str = "response";
+    let tool = tinyinference_llm::tool::ToolSchema::new(TOOL_NAME, "", schema.clone());
+    let call = tinyinference_llm::tool::ToolCall::new("resume", TOOL_NAME, value.clone());
+    tool.validate_call(&call).map_err(|err| {
+        // The inference validator prefixes every path with the tool's
+        // argument slot; re-root it on `value` so the message reads as a
+        // plain value-validation error.
+        let message = err
+            .to_string()
+            .replace(&format!("tool `{TOOL_NAME}` arguments"), "value");
+        TinyAgentsError::Validation(message)
+    })
+}
+
+#[cfg(test)]
+#[path = "schema_test.rs"]
+mod test;

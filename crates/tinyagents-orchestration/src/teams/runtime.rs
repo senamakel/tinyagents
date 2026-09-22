@@ -122,7 +122,7 @@ pub fn deliver_pending_messages<L: TeamLedger>(
         }
     }
 
-    let delivered_up_to = (!messages.is_empty()).then_some(up_to_sequence);
+    let delivered_up_to = (up_to_sequence > watermark).then_some(up_to_sequence);
     if let Some(up_to_sequence) = delivered_up_to {
         ledger.append_event(RunEventAppend {
             run_id: team_id.to_string(),

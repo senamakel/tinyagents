@@ -277,7 +277,7 @@ pub fn prompt_cache_key(request: &ModelRequest) -> Option<String> {
 ///
 /// This is the *active* half of the prompt-cache tooling: until now the layout
 /// types only ever **observed** a prefix, while
-/// [`CachePolicy::protect_prompt_prefix`][super::CachePolicy::protect_prompt_prefix]
+/// [`CachePolicy::protect_prompt_prefix`](tinyinference_llm::cache::CachePolicy::protect_prompt_prefix)
 /// had no reader anywhere in the crate and so could not change any behaviour.
 ///
 /// Precedence follows the rest of the crate: a caller who already set
@@ -297,13 +297,13 @@ pub fn apply_prompt_cache_breakpoints(request: &mut ModelRequest) -> bool {
         .get(PROMPT_CACHE_KEY_OPTION)
         .is_some()
     {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[cache] prompt_cache_key already set by caller; leaving provider_options untouched"
         );
         return false;
     }
     let Some(derived) = prompt_cache_key(request) else {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[cache] protect_prompt_prefix is on but the request declares no cacheable prefix; \
              no prompt_cache_key derived"
         );
@@ -318,6 +318,6 @@ pub fn apply_prompt_cache_breakpoints(request: &mut ModelRequest) -> bool {
             Value::String(derived.clone()),
         );
     }
-    tinyagents_tracing::debug!(prompt_cache_key = %derived, "[cache] injected provider prompt-cache breakpoint");
+    tracing::debug!(prompt_cache_key = %derived, "[cache] injected provider prompt-cache breakpoint");
     true
 }

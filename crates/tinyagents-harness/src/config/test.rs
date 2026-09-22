@@ -1,3 +1,10 @@
+//! Unit tests for the config module.
+//!
+//! Covers `SessionConfig::new`'s defaulting behaviour, `effective_lead_model`/
+//! `effective_subagent_model` fallback rules, `may_delegate_at` depth checks,
+//! `RequiredOutput`'s inert-when-blank contract, and serde round-tripping with
+//! partially-specified (defaulted) fields.
+
 use super::*;
 use std::path::PathBuf;
 

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
-use crate::context::{RunConfig, RunContext};
+use crate::context::{MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
@@ -114,6 +114,51 @@ async fn retry_middleware_retries_then_succeeds() {
         .filter(|e| matches!(e, AgentEvent::RetryScheduled { .. }))
         .count();
     assert_eq!(scheduled, 2);
+}
+
+#[tokio::test]
+async fn retry_middleware_correlates_retry_scheduled_with_the_loops_call_id() {
+    // R-3: the loop's `invoke_model_resolving` mirrors its own call id onto
+    // `ctx.active_model_call` specifically so a retrying middleware's
+    // `RetryScheduled` events carry the same id as that attempt's
+    // `ModelStarted`/`ModelCompleted` pair, letting a consumer join retries to
+    // the call they belong to instead of only to the run.
+    let (mut ctx, recorder) = ctx_with_recorder();
+    let call_id = crate::ids::CallId::new("run-model-3");
+    ctx.active_model_call = Some(call_id.clone());
+
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(Arc::new(RetryMiddleware::new(
+        RetryPolicy::default().with_max_attempts(3),
+    )));
+
+    let base = FakeModelBase::new(|n, _req| {
+        if n < 2 {
+            Err(TinyAgentsError::Model("transient".to_string()))
+        } else {
+            Ok(ok_response())
+        }
+    });
+
+    stack
+        .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &base)
+        .await
+        .expect("retry should eventually succeed");
+
+    let scheduled: Vec<_> = events(&recorder)
+        .into_iter()
+        .filter_map(|e| match e {
+            AgentEvent::RetryScheduled { call_id, attempt } => Some((call_id, attempt)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scheduled.len(), 2);
+    for (event_call_id, _attempt) in &scheduled {
+        assert_eq!(
+            *event_call_id, call_id,
+            "RetryScheduled must carry the same call id as the attempt it retries"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -603,12 +648,17 @@ async fn budget_warns_then_blocks_on_token_exhaustion() {
             .any(|e| matches!(e, AgentEvent::BudgetExceeded { blocked: false, .. }))
     );
 
-    // Now preflight fails closed.
-    let err = stack
+    // Now preflight fails closed — gracefully (A1): the control-outcome hook
+    // the stack actually drives (`before_model_control`) requests
+    // `JumpTo(End)` instead of erroring the whole run out.
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("budget exhausted should block");
-    assert!(matches!(err, TinyAgentsError::LimitExceeded(_)));
+        .expect("an exhausted budget stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(crate::context::LoopTarget::End))
+    ));
 }
 
 #[tokio::test]
@@ -647,11 +697,14 @@ async fn budget_prices_usage_and_enforces_cost() {
     );
 
     let mut req = ModelRequest::new(vec![Message::user("go")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("cost budget exhausted should block");
-    assert!(matches!(err, TinyAgentsError::LimitExceeded(_)));
+        .expect("a cost budget exhausted stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(crate::context::LoopTarget::End))
+    ));
 }
 
 #[tokio::test]
@@ -679,11 +732,14 @@ async fn budget_enforces_cached_input_token_limit() {
         .unwrap();
 
     let mut req = ModelRequest::new(vec![Message::user("next")]);
-    let err = stack
+    stack
         .run_before_model(&mut ctx, &(), &mut req)
         .await
-        .expect_err("cached input budget exhausted should block");
-    assert!(matches!(err, TinyAgentsError::LimitExceeded(_)));
+        .expect("a cached-input budget exhausted stops the run gracefully, not with an error");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::JumpTo(crate::context::LoopTarget::End))
+    ));
 }
 
 #[tokio::test]
@@ -1292,11 +1348,19 @@ async fn human_approval_interrupts_without_callback() {
     stack.push(Arc::new(HumanApprovalMiddleware::new(["wire_transfer"])));
 
     let mut call = tool_call("wire_transfer");
-    let err = stack
+    // A1: the flagged call now requests `MiddlewareControl::Interrupt`
+    // through the control-outcome hook the stack actually drives
+    // (`before_tool_control`), rather than erroring `run_before_tool` out
+    // directly — the agent loop honors the queued control at its next safe
+    // checkpoint with the same `TinyAgentsError::Interrupted`.
+    stack
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
-        .expect_err("flagged tool requires approval");
-    assert!(matches!(err, TinyAgentsError::Interrupted { .. }));
+        .expect("the hook itself succeeds; the interrupt is queued as control");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::Interrupt { .. })
+    ));
 }
 
 #[tokio::test]
@@ -1315,11 +1379,14 @@ async fn human_approval_consults_callback() {
         .expect("callback approves wire_transfer");
 
     let mut rejected = tool_call("delete");
-    let err = stack
+    stack
         .run_before_tool(&mut ctx, &(), &mut rejected)
         .await
-        .expect_err("callback rejects delete");
-    assert!(matches!(err, TinyAgentsError::Interrupted { .. }));
+        .expect("the hook itself succeeds; the rejection is queued as control");
+    assert!(matches!(
+        ctx.take_control(),
+        Some(MiddlewareControl::Interrupt { .. })
+    ));
 }
 
 // ── StructuredOutputValidatorMiddleware ─────────────────────────────────────

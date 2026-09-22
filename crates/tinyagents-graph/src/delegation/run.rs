@@ -71,7 +71,7 @@ where
 /// durable human-approval interrupt.
 ///
 /// When [`DelegationConfig::require_review_approval`] is set and the reviewer
-/// approves, the `approval` node emits [`NodeResult::Interrupt`]; the executor
+/// approves, the `approval` node emits [`NodeResult::Interrupt`](crate::NodeResult::Interrupt); the executor
 /// persists a checkpoint (Sync durability — the crate default) and returns
 /// control here with the interrupt in [`DelegationOutcome::pending`]. Deliver the
 /// approver's decision later with [`resume_delegation`] — it may run after a
@@ -117,7 +117,7 @@ where
         graph = graph.with_checkpointer(cp);
     }
 
-    tinyagents_tracing::info!(
+    tracing::info!(
         max_revisions = config.max_revisions,
         durable = thread_id.is_some(),
         human_gated = config.require_review_approval,
@@ -139,9 +139,9 @@ where
 ///
 /// The graph is rebuilt (its node closures are not serializable — only the typed
 /// state is checkpointed) with the same checkpointer + `thread_id`, then
-/// re-entered at the interrupted node via [`CompiledGraph::resume`] (the
+/// re-entered at the interrupted node via [`CompiledGraph::resume`](crate::CompiledGraph::resume) (the
 /// `ResumeTarget::Latest` checkpoint). `decision` maps to approve/deny via
-/// [`decision_is_approve`], so passing the approval RPC's `ApprovalDecision`
+/// `decision_is_approve`, so passing the approval RPC's `ApprovalDecision`
 /// (serialized with its stable `as_str()` wire value — `approve_once` /
 /// `approve_always_for_tool` / `deny`) routes the existing decision contract
 /// into the resume **without changing that contract**.
@@ -200,7 +200,7 @@ where
     }
 
     let approved = decision_is_approve(&decision);
-    tinyagents_tracing::info!(
+    tracing::info!(
         approved,
         "[interrupt] resuming durable delegation graph with approval decision"
     );
@@ -217,9 +217,9 @@ where
 ///
 /// Classifies the thread's latest checkpoint and routes accordingly:
 /// - **resumable** (a crash/failure left a mid-run boundary) → re-run only the
-///   not-yet-completed nodes from that boundary via [`CompiledGraph::resume`]
+///   not-yet-completed nodes from that boundary via [`CompiledGraph::resume`](crate::CompiledGraph::resume)
 ///   with an empty command — never restarting from `plan`, and never re-running
-///   an already-completed step (its [`StepRecord`] is restored from the state);
+///   an already-completed step (its [`StepRecord`](crate::StepRecord) is restored from the state);
 /// - **terminal** (already finalized/cancelled) → return the stored final state
 ///   without re-running (idempotent re-invocation of a stable thread);
 /// - **absent** (no checkpoint) → a fresh durable run;
@@ -273,7 +273,7 @@ where
         // guard must treat any version it does not explicitly recognize as
         // incompatible, not merely an older one.
         Ok(Some(checkpoint)) if checkpoint.state.schema_version != CURRENT_SCHEMA_VERSION => {
-            tinyagents_tracing::warn!(
+            tracing::warn!(
                 thread_id = %tid,
                 schema_version = checkpoint.state.schema_version,
                 current = CURRENT_SCHEMA_VERSION,
@@ -283,7 +283,7 @@ where
             run_delegation_durable(config, run_stage).await
         }
         Ok(Some(checkpoint)) if checkpoint_is_resumable(&checkpoint) => {
-            tinyagents_tracing::info!(
+            tracing::info!(
                 thread_id = %tid,
                 "[delegation] resuming durable delegation from its last checkpoint boundary"
             );
@@ -305,12 +305,12 @@ where
                 thread_id: tid.clone(),
             });
             if pending.is_some() {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     thread_id = %tid,
                     "[delegation] terminal-classified checkpoint carried a pending interrupt; surfacing it"
                 );
             } else {
-                tinyagents_tracing::info!(
+                tracing::info!(
                     thread_id = %tid,
                     "[delegation] thread already terminal; returning finalized state without re-running"
                 );
@@ -321,7 +321,7 @@ where
             })
         }
         Ok(None) => {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 thread_id = %tid,
                 "[delegation] no checkpoint for thread; starting a fresh durable run"
             );
@@ -332,7 +332,7 @@ where
         // must NOT silently restart a valid resumable run — it is propagated so
         // durable work is retried by the caller, not dropped.
         Err(e) if is_incompatible_checkpoint_error(&e) => {
-            tinyagents_tracing::warn!(
+            tracing::warn!(
                 thread_id = %tid,
                 error = %e,
                 "[delegation] undecodable/incompatible checkpoint; pruning and starting fresh"
@@ -341,7 +341,7 @@ where
             run_delegation_durable(config, run_stage).await
         }
         Err(e) => {
-            tinyagents_tracing::error!(
+            tracing::error!(
                 thread_id = %tid,
                 error = %e,
                 "[delegation] checkpoint read failed (operational); not restarting — propagating error"
@@ -357,7 +357,7 @@ where
 /// forever. Failure to prune is non-fatal (logged at debug).
 async fn prune_thread(cp: &dyn Checkpointer<DelegationState>, thread_id: &str) {
     if let Err(e) = cp.delete_thread(thread_id).await {
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             thread_id = %thread_id,
             error = %e,
             "[delegation] could not prune checkpoint thread (non-fatal)"
@@ -402,7 +402,10 @@ fn checkpoint_is_resumable(checkpoint: &Checkpoint<DelegationState>) -> bool {
     if checkpoint.state.final_output.is_some() {
         return false;
     }
-    checkpoint.next_nodes.iter().any(|n| n.as_str() != END)
+    // `checkpoint` was already normalized on read (every backend's decode
+    // path calls `Checkpoint::normalize`), so `tasks` is the single source
+    // of truth regardless of the stored record's original format version.
+    checkpoint.tasks.iter().any(|t| t.node.as_str() != END)
 }
 
 /// Rebuild the delegation graph (its node closures are not serializable — only
@@ -460,7 +463,7 @@ fn into_outcome(
     thread_id: Option<String>,
 ) -> DelegationOutcome {
     let pending = execution.interrupts.first().map(|i| {
-        tinyagents_tracing::info!(
+        tracing::info!(
             interrupt_id = %i.id,
             node = %i.node.as_str(),
             "[interrupt] delegation run parked on durable human-approval interrupt"

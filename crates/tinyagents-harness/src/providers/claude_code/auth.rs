@@ -7,10 +7,13 @@
 //!      *not* setting `ANTHROPIC_API_KEY`; the CLI then reads its own
 //!      credentials file.
 //!
-//! v1.1 will wire OpenHuman `AuthService` (auth-profiles.json) so an
-//! Anthropic key stored in settings is picked up automatically.
-//! Subscription / OAuth auth (Claude Pro/Max) deferred to v2.
+//! v1.1 will wire a host-provided auth-profile store so an Anthropic key
+//! saved in the embedding application's settings is picked up automatically.
+//! Subscription / OAuth auth (Claude Pro/Max) is deferred to v2. See
+//! `auth_status::probe` for the complementary read-only status check used by
+//! settings UIs.
 
+/// Where the resolved Anthropic credential came from, for logging and UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthSource {
     /// Explicit API key — pass via `ANTHROPIC_API_KEY` env var.

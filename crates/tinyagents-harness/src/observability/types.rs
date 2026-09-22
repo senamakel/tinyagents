@@ -258,7 +258,7 @@ pub(crate) struct EventJournalState {
 /// Cheaply clonable through an inner [`Arc`]; clones share the same streams.
 /// There is no durability — entries are lost when the last clone drops.
 ///
-/// Retains at most [`InMemoryEventJournal::max_runs`] distinct `run_id`
+/// Retains at most `max_runs` distinct `run_id`
 /// streams (default [`DEFAULT_JOURNAL_MAX_RUNS`]); once exceeded, the oldest
 /// run (by first-append order) is evicted wholesale to keep memory bounded
 /// across long-lived processes that journal many runs.
@@ -351,7 +351,7 @@ pub(crate) struct StatusStoreState {
 ///
 /// Cheaply clonable through an inner [`Arc`]; clones share the same map.
 ///
-/// Retains at most [`InMemoryStatusStore::max_runs`] distinct runs (default
+/// Retains at most `max_runs` distinct runs (default
 /// [`DEFAULT_STATUS_STORE_MAX_RUNS`]). Once exceeded, the oldest **terminal**
 /// runs (anything not `Pending`/`Running`/`Interrupted`) are evicted first so
 /// an in-flight run's status is never dropped out from under it; active runs
@@ -401,6 +401,18 @@ pub struct RedactingSink {
     pub(crate) secrets: Vec<String>,
     /// Replacement text substituted for each secret occurrence.
     pub(crate) mask: String,
+}
+
+/// Loss counters for a best-effort durable observability sink.
+///
+/// Both counters are lifetime totals shared by every clone of the sink.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SinkHealth {
+    /// Observations rejected before persistence because the bounded drain queue
+    /// was full or disconnected.
+    pub dropped: u64,
+    /// Observations accepted by the worker whose backend append later failed.
+    pub append_failures: u64,
 }
 
 /// An [`EventListener`] that writes each event as an [`AgentObservation`] into

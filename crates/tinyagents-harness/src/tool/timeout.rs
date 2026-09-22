@@ -1,4 +1,11 @@
 //! Shared, dynamically updateable tool-timeout resolution.
+//!
+//! [`ToolTimeoutSettings`] turns a `tinytools::ToolTimeout` policy (inherit /
+//! unbounded / explicit millis) into an enforced [`ResolvedToolTimeout`] the
+//! agent loop wraps a tool call with. It is cloned onto every harness that
+//! shares a host process, but the inherited deadline lives behind an atomic
+//! so a config reload or operator override takes effect on all of them
+//! without rebuilding a harness or invalidating in-flight calls.
 
 use std::fmt;
 use std::sync::Arc;
@@ -7,11 +14,19 @@ use std::time::Duration;
 
 use tinytools::ToolTimeout;
 
+/// Shared state behind every [`ToolTimeoutSettings`] clone.
 #[derive(Debug)]
 struct ToolTimeoutSettingsInner {
+    /// Timeout applied to `ToolTimeout::Inherit`; `0` means disabled. Mutable
+    /// at runtime, hence the atomic rather than a plain `u64`.
     inherited_ms: AtomicU64,
+    /// Lower bound an explicit or inherited budget is clamped to.
     min_ms: u64,
+    /// Upper bound an explicit or inherited budget is clamped to.
     max_ms: u64,
+    /// Extra slack added to the enforced deadline beyond the reported budget,
+    /// to absorb scheduling jitter without prematurely cancelling a tool that
+    /// finished within its budget.
     grace_ms: u64,
 }
 
@@ -126,6 +141,8 @@ pub struct ResolvedToolTimeout {
     pub budget_ms: u64,
 }
 
+/// Clamps a millisecond value into `[min_ms, max_ms]`, except that `0` always
+/// passes through unchanged since it is the sentinel for "disabled".
 fn clamp_or_disabled(timeout_ms: u64, min_ms: u64, max_ms: u64) -> u64 {
     if timeout_ms == 0 {
         0

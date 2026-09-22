@@ -69,7 +69,7 @@ pub struct MessagesTemplate {
     pub entries: Vec<(TemplateRole, PromptTemplate)>,
 }
 
-/// Assembles a [`ModelRequest`] while tracking prompt-cache segments.
+/// Assembles a [`ModelRequest`](tinyinference_llm::model::ModelRequest) while tracking prompt-cache segments.
 ///
 /// Callers push segments in logical order — system, tools, instructions (all
 /// cacheable), then history and volatile context (not cacheable).  The stable
@@ -150,7 +150,9 @@ pub struct PromptAssembly {
 /// Caller-supplied byte and token ceilings for pure prompt assembly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PromptBudget {
+    /// Maximum total bytes of assembled text.
     pub max_bytes: usize,
+    /// Maximum total tokens of assembled text, per the caller's tokenizer.
     pub max_tokens: usize,
 }
 

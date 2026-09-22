@@ -1,7 +1,7 @@
 //! Public types for the built-in middleware library.
 //!
 //! This module holds the type definitions for the ready-to-use middleware that
-//! ship with the harness. They build on the two extension surfaces defined in
+//! ship with the harness. They build on extension surfaces defined in
 //! [`crate::middleware`]:
 //!
 //! - the lifecycle [`Middleware`][crate::middleware::Middleware] trait
@@ -41,14 +41,36 @@ use tinytools::{ToolPolicy, ToolSideEffects};
 /// the configured [`RetryPolicy`][crate::retry::RetryPolicy] still
 /// permits another attempt, retries. Each scheduled retry emits an
 /// [`AgentEvent::RetryScheduled`][crate::events::AgentEvent::RetryScheduled]
-/// with a [`CallId`][crate::ids::CallId] derived from the run id.
+/// with the same [`CallId`][crate::ids::CallId] the agent loop is using for
+/// the in-flight call (mirrored onto
+/// [`RunContext::active_model_call`][crate::context::RunContext::active_model_call]),
+/// falling back to a run-scoped id only when this middleware runs outside the
+/// agent loop.
+///
+/// # An alternative to `RunPolicy::retry`, not a companion
+///
+/// This middleware and the loop's own [`RunPolicy::retry`][crate::runtime::RunPolicy::retry]
+/// are two implementations of the same idea. Registering both does not
+/// compose them: [`crate::middleware::MiddlewareStack::has_retry_override`]
+/// tells the loop's base call to skip its own retry loop whenever any
+/// `ModelMiddleware` reports [`ModelMiddleware::overrides_retry`][crate::middleware::ModelMiddleware::overrides_retry]
+/// (this middleware always does), so only this middleware's `RetryPolicy`
+/// governs the attempt count — `RunPolicy::retry` is ignored for the base
+/// call while it is registered. Without that guard the two layers would
+/// multiply attempts (`mw.max_attempts x policy.retry.max_attempts x
+/// |fallback|` provider calls for one logical failure); see I-7. Prefer
+/// `RunPolicy::retry` for the common case (it also drives the fallback
+/// chain) and reach for this middleware only when retry needs to run at a
+/// specific point in the wrap onion (e.g. after a guardrail middleware has
+/// already inspected the request). Full unification into one retry engine is
+/// tracked as a later phase.
 ///
 /// # Sleeping
 ///
-/// Like the agent loop's own retry path, this middleware *computes* the backoff
-/// from the policy but does **not** sleep, keeping the loop fast and tests
-/// deterministic. A production integration may sleep for
-/// [`RetryMiddleware::backoff_for_attempt`] before each retry.
+/// This middleware sleeps for the policy's computed backoff between attempts
+/// only when the policy opts in via
+/// [`RetryPolicy::with_backoff_sleep`][crate::retry::RetryPolicy::with_backoff_sleep];
+/// otherwise it retries back-to-back, keeping tests fast and deterministic.
 ///
 /// # Failure mode
 ///
@@ -230,7 +252,7 @@ pub struct BudgetSpend {
 ///   [`TinyAgentsError::LimitExceeded`][crate::error::TinyAgentsError::LimitExceeded],
 ///   so a recursive run stops once a root budget is exhausted.
 /// - `after_model` (spend + reconcile): folds the response usage into the
-///   tracker, prices it via the configured per-model [`ModelPricing`] table
+///   tracker, prices it via the configured per-model [`ModelPricing`](crate::cost::ModelPricing) table
 ///   (wiring cost into the loop, emitting
 ///   [`AgentEvent::UsageRecorded`][crate::events::AgentEvent::UsageRecorded]
 ///   and [`AgentEvent::CostRecorded`][crate::events::AgentEvent::CostRecorded]),
@@ -268,7 +290,7 @@ pub struct BudgetMiddleware {
 /// Unlike [`ToolAllowlistMiddleware`] (name lists) and
 /// [`DynamicToolSelectionMiddleware`] (schema-only predicates), this middleware
 /// reads the structured [`ToolPolicy`] each tool advertises via
-/// [`Tool::policy`][crate::tool::Tool::policy]. Build it from a
+/// [`Tool::policy`](tinytools::Tool::policy). Build it from a
 /// registry snapshot with
 /// [`ToolRegistry::policies`][crate::tool::ToolRegistry::policies].
 ///
@@ -278,13 +300,24 @@ pub struct BudgetMiddleware {
 ///   default via [`strict`](Self::strict)), a tool whose policy is *unclassified*
 ///   (`ToolPolicy::classified == false`) — or has no snapshot entry at all — is
 ///   hidden from the model and rejected if called.
-/// - Tools declaring any side effect in the [`deny`](Self::deny) mask are hidden
+/// - Tools declaring any side effect in the `deny` mask are hidden
 ///   and rejected.
 /// - When [`require_background_safe`](Self::require_background_safe) is set, tools
 ///   that are not `access.background_safe` are hidden and rejected.
 ///
 /// Rejections at `before_tool` surface as
 /// [`TinyAgentsError::Validation`][crate::error::TinyAgentsError::Validation].
+///
+/// # Relationship to `crate::tool::toolset`
+///
+/// This middleware's policy classification (side-effect/background-safe/
+/// approval enforcement from the vendor `tinytools` declaration) is a
+/// different axis from [`crate::tool::toolset::FilteredToolSet`] (an
+/// arbitrary per-tool predicate) and
+/// [`crate::tool::toolset::ApprovalRequiredToolSet`] (which only *sets* the
+/// approval flag this middleware enforces) — kept as its own implementation
+/// rather than rebased onto either, since neither adaptor reads
+/// [`ToolPolicy`] as a whole.
 pub struct ToolPolicyMiddleware {
     pub(crate) label: &'static str,
     pub(crate) policies: std::collections::HashMap<String, ToolPolicy>,
@@ -377,6 +410,17 @@ pub type ContextualToolPredicate =
 /// or from explicit allow/deny lists with
 /// [`from_lists`](Self::from_lists) (deny wins; when an allow-list is present a
 /// tool must appear in it — fail-closed for unknown tools).
+///
+/// # Relationship to `crate::tool::toolset`
+///
+/// [`DynamicToolSelectionMiddleware`] and
+/// [`crate::tool::toolset::PreparedToolSet`] both operate on a bare
+/// [`ToolSchema`] predicate; this middleware additionally reads
+/// [`ToolSelectionContext`] (depth, tags, the requested model), which a
+/// `ToolSet::tools`'s own `ctx: &RunContext<Ctx>` argument can already carry
+/// through `Ctx` — kept as its own predicate type rather than folded into
+/// [`crate::tool::toolset::PreparedToolSet::filtering`] to avoid coupling
+/// every `Ctx` to this specific context shape.
 pub struct ContextualToolSelectionMiddleware {
     pub(crate) label: &'static str,
     pub(crate) predicate: ContextualToolPredicate,
@@ -390,6 +434,28 @@ pub struct ContextualToolSelectionMiddleware {
 /// middleware then raises an interrupt).
 pub type ApprovalFn = Arc<dyn Fn(&ToolCall) -> bool + Send + Sync>;
 
+/// What an approval callback decided about one flagged [`ToolCall`] (A2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApprovalOutcome {
+    /// Run the call now.
+    Allow,
+    /// Do not run it; the model sees the message as a tool-error result and
+    /// the run continues (no interrupt, no deferral).
+    Deny(String),
+    /// Hand the call back to the host: the loop finishes the batch's other
+    /// calls and exits with `AgentRun::deferred` listing this call under
+    /// `approvals` (or resolves it through a registered
+    /// [`DeferredToolHandler`][crate::tool::DeferredToolHandler]). On resume
+    /// the middleware sees the approval through
+    /// [`RunContext::is_call_approved`][crate::context::RunContext::is_call_approved]
+    /// and lets the call through.
+    Defer,
+}
+
+/// A richer approval callback returning an [`ApprovalOutcome`] instead of a
+/// bare `bool`; see [`HumanApprovalMiddleware::with_approval_outcome`].
+pub type ApprovalOutcomeFn = Arc<dyn Fn(&ToolCall) -> ApprovalOutcome + Send + Sync>;
+
 /// Lifecycle middleware implementing a simple human-in-the-loop gate for
 /// sensitive tools.
 ///
@@ -399,6 +465,11 @@ pub type ApprovalFn = Arc<dyn Fn(&ToolCall) -> bool + Send + Sync>;
 /// callback returns `false`, it raises
 /// [`TinyAgentsError::Interrupted`][crate::error::TinyAgentsError::Interrupted]
 /// (node `"tool"`) so the run pauses for human input.
+///
+/// An [`ApprovalOutcomeFn`] (see [`Self::with_approval_outcome`]) replaces
+/// the bare `bool` with [`ApprovalOutcome::{Allow, Deny, Defer}`]: `Deny`
+/// answers the model with a tool-error result instead of interrupting, and
+/// `Defer` turns the call into a resumable deferred request (A2).
 ///
 /// # HITL hookup
 ///
@@ -410,6 +481,8 @@ pub struct HumanApprovalMiddleware {
     pub(crate) label: &'static str,
     pub(crate) flagged: std::collections::HashSet<String>,
     pub(crate) approve: Option<ApprovalFn>,
+    /// Takes precedence over `approve` when set (A2).
+    pub(crate) outcome: Option<ApprovalOutcomeFn>,
 }
 
 // ── StructuredOutputValidatorMiddleware ───────────────────────────────────────
@@ -445,7 +518,7 @@ pub type PromptFn<State> = Arc<dyn Fn(&State, &RunConfig) -> Option<String> + Se
 /// Implements [`Middleware`][crate::middleware::Middleware]'s
 /// `before_model` hook: it calls the configured [`PromptFn`] with the shared
 /// `&State` and the run's [`RunConfig`]; when it returns `Some(text)` a
-/// [`Message::system`] is inserted at the front of
+/// [`Message::system`](tinyinference_llm::message::Message::system) is inserted at the front of
 /// [`ModelRequest::messages`][tinyinference_llm::model::ModelRequest::messages].
 ///
 /// Generic over `State`/`Ctx` because the closure reads application state.

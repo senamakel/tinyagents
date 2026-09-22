@@ -23,6 +23,10 @@ pub const DEFAULT_REPEAT_OUTPUT_THRESHOLD: u32 = 4;
 pub const DEFAULT_REPEAT_CALL_THRESHOLD: u32 = 3;
 
 impl Streak {
+    /// Hashes `signature` and either extends the current run (same hash as
+    /// last time) or starts a new one, returning the run length after the
+    /// update. Hashing rather than storing the signature keeps the tracker
+    /// cheap to hold for a whole turn.
     fn record(&mut self, signature: &str) -> u32 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         signature.hash(&mut hasher);
@@ -36,6 +40,7 @@ impl Streak {
         self.consecutive
     }
 
+    /// Clears the run back to its default (no streak).
     fn reset(&mut self) {
         *self = Self::default();
     }

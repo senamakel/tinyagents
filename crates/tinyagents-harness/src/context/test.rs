@@ -186,8 +186,12 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
             .with_max_turn_output_tokens(123),
         (),
     );
-    let child = parent.child(RunConfig::new("child"), "child-data").unwrap();
-    let grandchild = child.child(RunConfig::new("grandchild"), ()).unwrap();
+    let child = parent
+        .child_with_data(RunConfig::new("child"), "child-data")
+        .unwrap();
+    let grandchild = child
+        .child_with_data(RunConfig::new("grandchild"), ())
+        .unwrap();
 
     assert_eq!(parent.lineage().root_run_id.as_str(), "root");
     assert_eq!(parent.lineage().parent_run_id, None);
@@ -211,7 +215,7 @@ fn child_carries_explicit_lineage_and_rejects_the_depth_cap() {
     assert_eq!(grandchild.thread_id().unwrap().as_str(), "thread");
     assert_eq!(grandchild.config.max_turn_output_tokens, Some(123));
     assert!(matches!(
-        grandchild.child(RunConfig::new("too-deep"), ()),
+        grandchild.child_with_data(RunConfig::new("too-deep"), ()),
         Err(crate::TinyAgentsError::SubAgentDepth(2))
     ));
 }
@@ -373,6 +377,7 @@ fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
             content: vec![ContentBlock::Text("call it".into())],
             tool_calls: vec![ToolCall::new("call-1", "lookup", serde_json::json!({}))],
             usage: None,
+            origin: None,
         }),
         Message::Tool(tinyinference_llm::message::ToolMessage {
             tool_call_id: "call-1".into(),
@@ -394,11 +399,29 @@ fn context_statistics_preserve_tool_request_result_pairing_and_image_counts() {
             messages: 3,
             text_chars: 13,
             images: 1,
+            media: 0,
             tool_calls: 1,
             tool_results: 1,
             paired_tool_results: 1,
         }
     );
+}
+
+#[test]
+fn context_statistics_counts_audio_video_and_document_blocks_as_media() {
+    use tinyinference_llm::message::{ContentBlock, MediaRef, Message, UserMessage};
+
+    let messages = vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Audio(MediaRef::url("https://example.com/a.wav")),
+            ContentBlock::Video(MediaRef::base64("AAAA", "video/mp4")),
+            ContentBlock::Document(MediaRef::path("/tmp/doc.pdf")),
+        ],
+    })];
+
+    let stats = context_statistics(&messages);
+    assert_eq!(stats.media, 3);
+    assert_eq!(stats.images, 0);
 }
 
 #[test]
@@ -435,6 +458,7 @@ fn token_estimation_includes_structured_blocks_for_every_role() {
     let messages = vec![
         Message::System(SystemMessage {
             content: vec![ContentBlock::ProviderExtension(json.clone())],
+            ..Default::default()
         }),
         Message::User(UserMessage {
             content: vec![ContentBlock::Json(json.clone())],
@@ -444,6 +468,7 @@ fn token_estimation_includes_structured_blocks_for_every_role() {
             content: vec![ContentBlock::ProviderExtension(json.clone())],
             tool_calls: vec![],
             usage: None,
+            origin: None,
         }),
         Message::Tool(ToolMessage {
             tool_call_id: "call".into(),
@@ -472,6 +497,7 @@ fn token_estimation_includes_assistant_tool_names_and_arguments() {
             serde_json::json!({"query": "one two three"}),
         )],
         usage: None,
+        origin: None,
     })];
 
     let rendered = std::cell::RefCell::new(String::new());
@@ -485,4 +511,91 @@ fn token_estimation_includes_assistant_tool_names_and_arguments() {
     let rendered = rendered.into_inner();
     assert!(rendered.contains("search_docs"));
     assert!(rendered.contains("one two three"));
+}
+
+// ── RunContext::bounded (R-1) ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn bounded_returns_the_futures_ok_value_with_no_deadline() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-ok"), ());
+    let result: Result<u32> = ctx
+        .bounded(None, async { Ok(42) }, || "unused".to_string())
+        .await;
+    assert_eq!(result.unwrap(), 42);
+}
+
+#[tokio::test]
+async fn bounded_passes_through_the_futures_own_error() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-err"), ());
+    let result: Result<u32> = ctx
+        .bounded(
+            None,
+            async { Err(crate::error::TinyAgentsError::Model("boom".to_string())) },
+            || "unused".to_string(),
+        )
+        .await;
+    match result {
+        Err(crate::error::TinyAgentsError::Model(message)) => assert_eq!(message, "boom"),
+        other => panic!("expected a passthrough Model error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bounded_fires_the_timeout_message_only_when_the_deadline_elapses() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-timeout"), ());
+    let mut message_built = false;
+    let result: Result<u32> = ctx
+        .bounded(
+            Some(std::time::Duration::from_millis(5)),
+            async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(1)
+            },
+            || {
+                message_built = true;
+                "call-specific timeout message".to_string()
+            },
+        )
+        .await;
+    assert!(message_built);
+    match result {
+        Err(crate::error::TinyAgentsError::Timeout(message)) => {
+            assert_eq!(message, "call-specific timeout message");
+        }
+        other => panic!("expected Timeout, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bounded_does_not_build_the_timeout_message_on_the_success_path() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-no-timeout"), ());
+    let result: Result<u32> = ctx
+        .bounded(
+            Some(std::time::Duration::from_secs(60)),
+            async { Ok(7) },
+            || panic!("timeout_message must not be called when the future finishes first"),
+        )
+        .await;
+    assert_eq!(result.unwrap(), 7);
+}
+
+#[tokio::test]
+async fn bounded_returns_cancelled_when_the_run_is_cancelled_before_the_future_resolves() {
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-bounded-cancel"), ());
+    let cancellation = ctx.cancellation.clone();
+    cancellation.cancel();
+    let result: Result<u32> = ctx
+        .bounded(
+            None,
+            async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                Ok(1)
+            },
+            || "unused".to_string(),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(crate::error::TinyAgentsError::Cancelled)
+    ));
 }

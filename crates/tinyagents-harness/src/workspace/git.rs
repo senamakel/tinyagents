@@ -147,6 +147,7 @@ pub enum GitWorktreeError {
     Io(#[from] std::io::Error),
 }
 
+/// Shorthand for a result carrying [`GitWorktreeError`].
 type GitResult<T> = std::result::Result<T, GitWorktreeError>;
 
 /// Creates an isolated worktree for `run_id` and returns its status snapshot.
@@ -173,7 +174,16 @@ pub fn create_git_worktree(
         &repo_top,
         &["worktree", "add", "-b", &branch, &worktree, &base],
     )?;
-    git_worktree_status(&repo_top, &worktree_path)
+    match git_worktree_status(&repo_top, &worktree_path) {
+        Ok(status) => Ok(status),
+        Err(error) => {
+            // Do not leave a registered checkout behind when validation of a
+            // newly-created worktree fails.
+            let _ = git(&repo_top, &["worktree", "remove", "--force", &worktree]);
+            let _ = git(&repo_top, &["branch", "-D", &branch]);
+            Err(error)
+        }
+    }
 }
 
 /// Lists worktrees registered on the repository at `repo_root`.
@@ -184,9 +194,9 @@ pub fn list_git_worktrees(repo_root: &Path) -> GitResult<Vec<GitWorktreeStatus>>
     let mut cur_path: Option<PathBuf> = None;
     let mut cur_branch: Option<String> = None;
 
-    let mut flush = |path: &mut Option<PathBuf>, branch: &mut Option<String>| {
+    let mut flush = |path: &mut Option<PathBuf>, branch: &mut Option<String>| -> GitResult<()> {
         if let Some(path) = path.take() {
-            let (is_dirty, changed_files) = dirty_state(&path).unwrap_or((false, Vec::new()));
+            let (is_dirty, changed_files) = dirty_state(&path)?;
             out.push(GitWorktreeStatus {
                 path,
                 branch: branch.take(),
@@ -196,11 +206,12 @@ pub fn list_git_worktrees(repo_root: &Path) -> GitResult<Vec<GitWorktreeStatus>>
         } else {
             *branch = None;
         }
+        Ok(())
     };
 
     for line in porcelain.lines() {
         if let Some(rest) = line.strip_prefix("worktree ") {
-            flush(&mut cur_path, &mut cur_branch);
+            flush(&mut cur_path, &mut cur_branch)?;
             cur_path = Some(PathBuf::from(rest.trim()));
         } else if let Some(rest) = line.strip_prefix("branch ") {
             let trimmed = rest.trim();
@@ -214,17 +225,22 @@ pub fn list_git_worktrees(repo_root: &Path) -> GitResult<Vec<GitWorktreeStatus>>
             cur_branch = Some("(detached HEAD)".to_string());
         }
     }
-    flush(&mut cur_path, &mut cur_branch);
+    flush(&mut cur_path, &mut cur_branch)?;
     Ok(out)
 }
 
 /// Returns branch, dirty, and changed-file status for one worktree.
 pub fn git_worktree_status(repo_root: &Path, worktree_path: &Path) -> GitResult<GitWorktreeStatus> {
-    validate_repo_root(repo_root)?;
+    let repo_top = validate_repo_root(repo_root)?;
+    let worktree_path = if worktree_path.is_absolute() {
+        worktree_path.to_path_buf()
+    } else {
+        repo_top.join(worktree_path)
+    };
     if !worktree_path.exists() {
-        return Err(GitWorktreeError::NotAGitRepo(worktree_path.to_path_buf()));
+        return Err(GitWorktreeError::NotAGitRepo(worktree_path));
     }
-    let branch = git(worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"])
+    let branch = git(&worktree_path, &["rev-parse", "--abbrev-ref", "HEAD"])
         .ok()
         .map(|branch| {
             if branch == "HEAD" {
@@ -233,9 +249,9 @@ pub fn git_worktree_status(repo_root: &Path, worktree_path: &Path) -> GitResult<
                 branch
             }
         });
-    let (is_dirty, changed_files) = dirty_state(worktree_path)?;
+    let (is_dirty, changed_files) = dirty_state(&worktree_path)?;
     Ok(GitWorktreeStatus {
-        path: worktree_path.to_path_buf(),
+        path: worktree_path,
         branch,
         is_dirty,
         changed_files,
@@ -270,9 +286,14 @@ pub fn git_worktree_diff_summary(repo_root: &Path, worktree_path: &Path) -> GitR
 /// Removes a worktree. Dirty worktrees are refused unless `force = true`.
 pub fn remove_git_worktree(repo_root: &Path, worktree_path: &Path, force: bool) -> GitResult<()> {
     let repo_top = validate_repo_root(repo_root)?;
-    let (is_dirty, _) = dirty_state(worktree_path).unwrap_or((false, Vec::new()));
+    let worktree_path = if worktree_path.is_absolute() {
+        worktree_path.to_path_buf()
+    } else {
+        repo_top.join(worktree_path)
+    };
+    let (is_dirty, _) = dirty_state(&worktree_path)?;
     if is_dirty && !force {
-        return Err(GitWorktreeError::DirtyRefused(worktree_path.to_path_buf()));
+        return Err(GitWorktreeError::DirtyRefused(worktree_path));
     }
 
     let worktree = worktree_path.to_string_lossy().to_string();
@@ -313,6 +334,8 @@ pub fn detect_worktree_overlaps(
         .collect()
 }
 
+/// Runs `git` in `cwd` with `args`, returning trimmed stdout on success or a
+/// [`GitWorktreeError::GitFailed`] carrying stderr on a non-zero exit.
 fn git(cwd: &Path, args: &[&str]) -> GitResult<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if !output.status.success() {
@@ -325,6 +348,9 @@ fn git(cwd: &Path, args: &[&str]) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Like [`git`], but returns raw (untrimmed) stdout — used where leading
+/// column characters (e.g. `git status --porcelain` status codes) are
+/// significant.
 fn git_raw(cwd: &Path, args: &[&str]) -> GitResult<String> {
     let output = Command::new("git").current_dir(cwd).args(args).output()?;
     if !output.status.success() {
@@ -337,6 +363,10 @@ fn git_raw(cwd: &Path, args: &[&str]) -> GitResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Confirms `repo_root` is inside a git work tree and returns the repo's
+/// top-level directory (`git rev-parse --show-toplevel`), which every
+/// worktree operation anchors on regardless of which subdirectory of the repo
+/// `repo_root` names.
 fn validate_repo_root(repo_root: &Path) -> GitResult<PathBuf> {
     if !repo_root.exists() {
         return Err(GitWorktreeError::NotAGitRepo(repo_root.to_path_buf()));
@@ -351,6 +381,9 @@ fn validate_repo_root(repo_root: &Path) -> GitResult<PathBuf> {
     Ok(PathBuf::from(top.trim()))
 }
 
+/// Resolves the ref [`GitWorktreeBaseRef::Fresh`] branches from: the remote's
+/// default branch (`origin/HEAD`) if set, else the local `HEAD`'s symbolic
+/// name, else the literal `"main"` as a last resort.
 fn resolve_fresh_base(repo_top: &Path) -> String {
     if let Ok(sym) = git(
         repo_top,
@@ -367,6 +400,9 @@ fn resolve_fresh_base(repo_top: &Path) -> String {
     "main".to_string()
 }
 
+/// Parses `git status --porcelain` for `worktree_path` into a dirty flag plus
+/// the sorted, deduplicated list of changed paths (rename entries `a -> b` are
+/// reduced to `b`).
 fn dirty_state(worktree_path: &Path) -> GitResult<(bool, Vec<PathBuf>)> {
     let porcelain = git_raw(worktree_path, &["status", "--porcelain"])?;
     let mut changed = Vec::new();
@@ -382,6 +418,9 @@ fn dirty_state(worktree_path: &Path) -> GitResult<(bool, Vec<PathBuf>)> {
     Ok((!changed.is_empty(), changed))
 }
 
+/// Maps `run_id` to a filesystem- and git-ref-safe slug: non-alphanumeric
+/// characters (other than `_`/`-`) become `-`, leading/trailing `-` is
+/// trimmed, and an empty result falls back to `"worker"`.
 fn sanitize_run_id(run_id: &str) -> String {
     let cleaned: String = run_id
         .chars()

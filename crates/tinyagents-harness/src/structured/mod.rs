@@ -4,8 +4,7 @@
 //! out of a model call rather than free-form prose — the boundary that lets a
 //! model's output become a program input. It underpins agents that return
 //! machine-checkable results to their caller and, at the deepest level, a model
-//! emitting a schema-conformant `.rag` blueprint or REPL plan that the same
-//! runtime then compiles and runs.
+//! emitting schema-conformant data that the runtime consumes next.
 //!
 //! Owns response formats, JSON schema validation, provider-native structured
 //! output, tool-call fallback structured output, parsed typed responses, and
@@ -21,7 +20,7 @@
 //! | `ToolCall`              | An artificial tool call carries the arguments as JSON         |
 //!
 //! Use [`response_format_for_strategy`] to obtain the correct
-//! [`ResponseFormat`] to include in a [`ModelRequest`], then call
+//! [`ResponseFormat`] to include in a [`ModelRequest`](tinyinference_llm::model::ModelRequest), then call
 //! [`StructuredExtractor::extract`] on the completed [`ModelResponse`].
 //!
 //! # Repair, validation, and non-fatal extraction
@@ -29,11 +28,11 @@
 //! Extraction is not a bare `serde_json::from_str` any more. Three things
 //! happen around it, each in its own submodule:
 //!
-//! * [`repair`] climbs a conservative ladder — code fence, prose slice,
+//! * `repair` climbs a conservative ladder — code fence, prose slice,
 //!   relaxed JSON, truncation close — so a fenced, chatty, or cut-off answer is
 //!   recovered instead of ending a run. It never invents structure: a rung is
 //!   accepted only when the repaired text parses strictly.
-//! * [`validate`] checks the parsed value against the declared schema, so
+//! * `validate` checks the parsed value against the declared schema, so
 //!   `{"wrong_key": 1}` against a `score` schema is a reported error naming the
 //!   failing instance path — not a silent success.
 //! * [`StructuredExtractor::extract_outcome`] returns a [`StructuredOutcome`]
@@ -65,11 +64,71 @@ mod validate;
 pub use repair::JsonRepair;
 pub use types::*;
 
+use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use tinyinference_llm::model::{ModelProfile, ModelResponse, ResponseFormat};
+
+// ---------------------------------------------------------------------------
+// OutputValidator
+// ---------------------------------------------------------------------------
+
+/// Validates an already schema-valid structured output, driving the
+/// output-validation retry loop (A3, `RunPolicy::output_retry`).
+///
+/// Registered on a harness via
+/// [`crate::runtime::AgentHarness::with_output_validator`]. Called once per
+/// final-turn extraction, after [`StructuredExtractor::extract_outcome`]
+/// already succeeded — a schema-invalid value never reaches the validator; it
+/// retries through the same loop for the extraction-failure reason instead.
+///
+/// Returning `Err(TinyAgentsError::ModelRetry(message))` asks the agent loop
+/// to push `message` back to the model as a repair prompt and try again
+/// (bounded by [`crate::runtime::RunPolicy::output_retry`]'s
+/// `max_attempts`); any other `Err` variant fails the run immediately,
+/// exactly like an error from any other fallible call in the loop. Mirrors
+/// Pydantic AI's `@agent.output_validator`.
+///
+/// # Example
+///
+/// ```rust
+/// use async_trait::async_trait;
+/// use tinyagents_harness::context::RunContext;
+/// use tinyagents_harness::error::{Result, TinyAgentsError};
+/// use tinyagents_harness::structured::OutputValidator;
+///
+/// struct NonEmpty;
+///
+/// #[async_trait]
+/// impl OutputValidator<()> for NonEmpty {
+///     async fn validate(
+///         &self,
+///         _ctx: &mut RunContext<()>,
+///         _state: &(),
+///         output: &serde_json::Value,
+///     ) -> Result<()> {
+///         if output.get("answer").and_then(|v| v.as_str()).is_none_or(str::is_empty) {
+///             return Err(TinyAgentsError::ModelRetry(
+///                 "`answer` must be a non-empty string".to_string(),
+///             ));
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
+#[async_trait]
+pub trait OutputValidator<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
+    /// Validates `output`. See the trait docs for how `Err` is handled.
+    async fn validate(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        output: &Value,
+    ) -> Result<()>;
+}
 
 // ---------------------------------------------------------------------------
 // Strategy selection
@@ -94,7 +153,7 @@ impl StructuredStrategy {
     /// forced choice is dropped — leaving a request that asks for nothing in
     /// particular and an extractor waiting for a tool call that can never
     /// arrive. Provider-schema mode at least asks for JSON and, with the repair
-    /// ladder in [`super::structured::repair`], parses what a JSON-mode model
+    /// ladder in `repair`, parses what a JSON-mode model
     /// actually returns.
     ///
     /// [tc]: tinyinference_llm::model::ToolChoice::Tool
@@ -134,6 +193,23 @@ impl StructuredStrategy {
     /// );
     /// ```
     pub fn for_profile(profile: Option<&ModelProfile>) -> StructuredStrategy {
+        // A profile's `default_structured_mode` is an explicit authoring
+        // decision about *this* model — it wins over the generic
+        // capability-based inference below, which only guesses from
+        // `native_structured_output`/`tool_calling`.
+        if let Some(mode) = profile.and_then(|p| p.default_structured_mode) {
+            return match mode {
+                tinyinference_llm::model::StructuredMode::Native => {
+                    StructuredStrategy::ProviderSchema
+                }
+                tinyinference_llm::model::StructuredMode::Tool => StructuredStrategy::ToolCall,
+                tinyinference_llm::model::StructuredMode::Prompted => {
+                    StructuredStrategy::Prompted {
+                        template: profile.and_then(|p| p.prompted_output_template.clone()),
+                    }
+                }
+            };
+        }
         match profile {
             Some(p) if p.native_structured_output && p.json_schema => {
                 StructuredStrategy::ProviderSchema
@@ -181,7 +257,7 @@ impl StructuredExtractor {
     /// * `schema_name` – the schema's logical name; used as the tool name when
     ///   matching tool calls in [`StructuredStrategy::ToolCall`] mode.
     /// * `schema` – the JSON Schema document. Enforced: every extracted value
-    ///   is validated against it (see [`validate`]).
+    ///   is validated against it (see `validate`).
     pub fn new(
         strategy: StructuredStrategy,
         schema_name: impl Into<String>,
@@ -191,15 +267,38 @@ impl StructuredExtractor {
             strategy,
             schema_name: schema_name.into(),
             schema,
+            variants: Vec::new(),
+        }
+    }
+
+    /// Creates a [`StructuredStrategy::ToolCallUnion`] extractor over
+    /// `variants` (`(name, schema)` pairs, one per synthetic tool).
+    ///
+    /// `schema_name` is used only to label errors when *no* variant matched;
+    /// it need not be one of the variant names.
+    pub fn new_union(schema_name: impl Into<String>, variants: Vec<(String, Value)>) -> Self {
+        Self {
+            strategy: StructuredStrategy::ToolCallUnion,
+            schema_name: schema_name.into(),
+            schema: Value::Null,
+            variants,
         }
     }
 
     /// Returns the JSON Schema document this extractor was configured with.
     ///
     /// Used for local validation and for echoing the schema back into a
-    /// [`ResponseFormat`] when re-requesting structured output.
+    /// [`ResponseFormat`] when re-requesting structured output. Meaningless
+    /// for [`StructuredStrategy::ToolCallUnion`] (use [`Self::variants`]).
     pub fn schema(&self) -> &Value {
         &self.schema
+    }
+
+    /// Returns the `(name, schema)` variants this
+    /// [`StructuredStrategy::ToolCallUnion`] extractor was configured with.
+    /// Empty for every other strategy.
+    pub fn variants(&self) -> &[(String, Value)] {
+        &self.variants
     }
 
     /// Extracts a [`StructuredOutput`] from `response` using the configured
@@ -213,14 +312,14 @@ impl StructuredExtractor {
     ///
     /// * **[`StructuredStrategy::ToolCall`]** – scans the response's tool
     ///   calls for the first one whose `name` matches
-    ///   [`StructuredExtractor::schema_name`] and returns its `arguments` as
+    ///   `schema_name` and returns its `arguments` as
     ///   the structured value.  Returns [`TinyAgentsError::Validation`] when no
     ///   matching call is found.
     ///
     /// # Validation
     ///
     /// Both strategies validate the extracted value against this extractor's
-    /// schema before returning it (see [`validate`]). A value that parses but
+    /// schema before returning it (see `validate`). A value that parses but
     /// does not conform is an error naming the failing instance path — not a
     /// success carrying the wrong shape.
     ///
@@ -228,12 +327,19 @@ impl StructuredExtractor {
     ///
     /// See strategy descriptions above.
     pub fn extract(&self, response: &ModelResponse) -> Result<StructuredOutput> {
-        let output = match self.strategy {
-            StructuredStrategy::ProviderSchema => self.extract_provider_schema(response)?,
-            StructuredStrategy::ToolCall => self.extract_tool_call(response)?,
-        };
-        validate::validate_value(&self.schema, &output.value, &self.instance_root())?;
-        Ok(output)
+        match &self.strategy {
+            StructuredStrategy::ProviderSchema | StructuredStrategy::Prompted { .. } => {
+                let output = self.extract_provider_schema(response)?;
+                validate::validate_value(&self.schema, &output.value, &self.instance_root())?;
+                Ok(output)
+            }
+            StructuredStrategy::ToolCall => {
+                let output = self.extract_tool_call(response)?;
+                validate::validate_value(&self.schema, &output.value, &self.instance_root())?;
+                Ok(output)
+            }
+            StructuredStrategy::ToolCallUnion => self.extract_tool_call_union(response),
+        }
     }
 
     /// Extracts without failing: records the error instead of raising it.
@@ -254,10 +360,11 @@ impl StructuredExtractor {
                 value: Some(output.value),
                 raw: response.clone(),
                 error: None,
+                variant: output.variant,
             },
             Err(error) => {
                 let error = error.to_string();
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     "[structured] extraction failed for schema '{}': {error}",
                     self.schema_name
                 );
@@ -265,6 +372,7 @@ impl StructuredExtractor {
                     value: None,
                     raw: response.clone(),
                     error: Some(error),
+                    variant: None,
                 }
             }
         }
@@ -277,6 +385,9 @@ impl StructuredExtractor {
         format!("schema '{}'", self.schema_name)
     }
 
+    /// [`StructuredStrategy::ProviderSchema`] extraction: parses the
+    /// response's text as JSON (via the repair ladder), after special-casing
+    /// an empty response caused by hitting the output-token limit.
     fn extract_provider_schema(&self, response: &ModelResponse) -> Result<StructuredOutput> {
         let raw = response.text();
 
@@ -320,7 +431,7 @@ impl StructuredExtractor {
             )));
         };
         if repair.is_repaired() {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 "[structured] schema '{}': recovered the value with repair `{}`",
                 self.schema_name,
                 repair.as_str()
@@ -329,9 +440,14 @@ impl StructuredExtractor {
         Ok(StructuredOutput {
             value,
             raw_text: Some(raw),
+            variant: None,
         })
     }
 
+    /// [`StructuredStrategy::ToolCall`] extraction: finds the tool call named
+    /// `schema_name` and takes its arguments as the structured value,
+    /// running the repair ladder over a preserved raw string when the
+    /// provider itself could not parse the call's arguments.
     fn extract_tool_call(&self, response: &ModelResponse) -> Result<StructuredOutput> {
         let call = response
             .tool_calls()
@@ -352,7 +468,7 @@ impl StructuredExtractor {
             && let Some((value, repair)) = repair::parse_lenient(raw)
         {
             if repair.is_repaired() {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     "[structured] schema '{}': recovered tool-call arguments with repair `{}`",
                     self.schema_name,
                     repair.as_str()
@@ -361,12 +477,67 @@ impl StructuredExtractor {
             return Ok(StructuredOutput {
                 value,
                 raw_text: Some(raw.to_string()),
+                variant: None,
             });
         }
 
         Ok(StructuredOutput {
             value: call.arguments.clone(),
             raw_text: None,
+            variant: None,
+        })
+    }
+
+    /// [`StructuredStrategy::ToolCallUnion`] extraction: scans the response's
+    /// tool calls for the first one whose name matches a variant, validates
+    /// its arguments against *that variant's* schema (running the same
+    /// repair ladder [`Self::extract_tool_call`] does for unparseable
+    /// provider arguments), and records the matched variant name.
+    fn extract_tool_call_union(&self, response: &ModelResponse) -> Result<StructuredOutput> {
+        let variant_names: Vec<&str> = self.variants.iter().map(|(n, _)| n.as_str()).collect();
+        let call = response
+            .tool_calls()
+            .iter()
+            .find(|tc| variant_names.contains(&tc.name.as_str()))
+            .ok_or_else(|| {
+                TinyAgentsError::Validation(format!(
+                    "schema '{}': no tool call matching any of the union's variants {:?} was \
+                     found in response",
+                    self.schema_name, variant_names
+                ))
+            })?;
+        let (variant_name, variant_schema) = self
+            .variants
+            .iter()
+            .find(|(name, _)| name == &call.name)
+            .expect("matched call name came from variant_names");
+
+        let (value, raw_text) = if let Some(raw) = call.arguments.as_str()
+            && let Some((value, repair)) = repair::parse_lenient(raw)
+        {
+            if repair.is_repaired() {
+                tracing::debug!(
+                    "[structured] union variant '{}': recovered tool-call arguments with \
+                     repair `{}`",
+                    variant_name,
+                    repair.as_str()
+                );
+            }
+            (value, Some(raw.to_string()))
+        } else {
+            (call.arguments.clone(), None)
+        };
+
+        validate::validate_value(
+            variant_schema,
+            &value,
+            &format!("union variant '{variant_name}'"),
+        )?;
+
+        Ok(StructuredOutput {
+            value,
+            raw_text,
+            variant: Some(variant_name.clone()),
         })
     }
 }
@@ -386,7 +557,7 @@ impl StructuredExtractor {
 /// [`StructuredExtractor::extract`] after the model responds.
 ///
 /// For `ToolCall` the caller is responsible for registering an artificial
-/// tool with the given `name` and `schema` in the [`ModelRequest`]; the
+/// tool with the given `name` and `schema` in the [`ModelRequest`](tinyinference_llm::model::ModelRequest); the
 /// response format is plain text because the structure arrives via tool
 /// arguments.
 pub fn response_format_for_strategy(
@@ -396,8 +567,27 @@ pub fn response_format_for_strategy(
 ) -> ResponseFormat {
     match strategy {
         StructuredStrategy::ProviderSchema => ResponseFormat::json_schema(name, schema),
-        StructuredStrategy::ToolCall => ResponseFormat::Text,
+        // Both send the structure through a channel other than the
+        // provider's native schema field: `ToolCall` through a forced tool
+        // call, `Prompted` through instructions plus free text the repair
+        // ladder parses. Neither wants the provider attempting its own
+        // (possibly conflicting) schema enforcement on top.
+        StructuredStrategy::ToolCall
+        | StructuredStrategy::Prompted { .. }
+        | StructuredStrategy::ToolCallUnion => ResponseFormat::Text,
     }
+}
+
+/// The default instructions [`StructuredStrategy::Prompted`] injects ahead of
+/// the schema when no custom `template` is configured.
+///
+/// Mirrors Pydantic AI's `PromptedOutput` default wording: state the
+/// requirement, then let the schema (appended separately by the caller) speak
+/// for itself.
+pub fn default_prompted_template() -> &'static str {
+    "Respond with a single JSON object that conforms exactly to this JSON Schema. \
+     Do not include any text before or after the JSON object, and do not wrap it in \
+     a code fence."
 }
 
 #[cfg(test)]

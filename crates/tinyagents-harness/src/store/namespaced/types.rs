@@ -219,7 +219,7 @@ pub struct ListNamespacesQuery {
     pub offset: usize,
 }
 
-/// One operation in a [`NamespacedStore::batch`] request.
+/// One operation in a [`NamespacedStore::batch`](super::NamespacedStore::batch) request.
 #[derive(Clone, Debug)]
 pub enum StoreOp {
     /// Read one item.
@@ -288,6 +288,9 @@ impl StoreResult {
     }
 }
 
+/// Builds the error for a [`StoreResult::into_item`]/`into_items`/
+/// `into_namespaces` shape mismatch, naming both the expected and actual
+/// variant.
 fn mismatch(expected: &str, got: &StoreResult) -> TinyAgentsError {
     TinyAgentsError::Validation(format!(
         "store batch returned a {got:?} result where {expected} was expected — \

@@ -155,7 +155,7 @@ impl BudgetMiddleware {
         self
     }
 
-    /// Supplies a per-model-name [`ModelPricing`] table so `after_model` can
+    /// Supplies a per-model-name [`ModelPricing`](crate::cost::ModelPricing) table so `after_model` can
     /// price usage and enforce the money budget.
     pub fn with_pricing(
         mut self,
@@ -213,6 +213,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for BudgetMidd
         self.label
     }
 
+    /// Control-outcome override (A1): a budget already exhausted *before*
+    /// this call is not a run failure — it is exactly the "stop cleanly with
+    /// whatever the run produced so far" case `MiddlewareControl::JumpTo`
+    /// `(LoopTarget::End)` exists for, so this stops the loop gracefully
+    /// instead of erroring the whole run out from under a partial transcript.
+    /// The preflight *reservation* check (a single oversized call, handled in
+    /// [`Self::before_model`] below) stays a hard `Err`: it is an admission
+    /// refusal for one call, not "the run is over".
+    async fn before_model_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: &mut ModelRequest,
+    ) -> Result<MiddlewareControl> {
+        {
+            let guard = self.tracker.lock_recovering();
+            if let Some(reason) = self.limits.exceeded_reason(&guard) {
+                drop(guard);
+                ctx.emit(AgentEvent::BudgetExceeded {
+                    reason,
+                    blocked: true,
+                });
+                return Ok(MiddlewareControl::JumpTo(crate::context::LoopTarget::End));
+            }
+        }
+        self.before_model(ctx, state, request).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
     async fn before_model(
         &self,
         ctx: &mut RunContext<Ctx>,
@@ -227,7 +256,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for BudgetMidd
         let estimated = estimated_input_tokens(request);
         {
             let mut guard = self.tracker.lock_recovering();
-            // (1) Already exhausted before this call.
+            // (1) Already exhausted before this call. Reachable when this
+            // hook is invoked directly (bypassing `before_model_control`,
+            // which the agent loop actually drives) — kept as a hard `Err`
+            // here for that direct-call case; see `before_model_control` for
+            // the loop's actual (graceful) behavior.
             if let Some(reason) = self.limits.exceeded_reason(&guard) {
                 drop(guard);
                 ctx.emit(AgentEvent::BudgetExceeded {
@@ -296,7 +329,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for BudgetMidd
         // on a budget it never actually touched. The reservation is still
         // released above — that part is real bookkeeping.
         if response.served_from_cache {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 target: "tinyagents::middleware",
                 label = self.label,
                 "[budget] skipping accounting for a cache-served response"

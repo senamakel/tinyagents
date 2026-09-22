@@ -19,11 +19,16 @@
 //! All policy decisions are explicit data types, never hidden behaviour. Callers
 //! choose when to call, what to pass, and how to handle the result.
 
+pub mod compaction;
 pub mod pairing;
 mod render;
 mod trim;
 mod types;
 
+pub use compaction::{
+    CompactionContext, CompactionDecision, CutPoint, OverflowClassifier, OverflowInfo,
+    OverflowProbe, find_cut_point, summarize_with_split,
+};
 pub use pairing::{
     advance_past_orphan_tools, find_safe_cutoff_point, is_tool_calling_assistant,
     retract_orphan_tool_calls, tool_pairing_is_intact,
@@ -131,7 +136,7 @@ impl Summarizer for ConcatSummarizer {
 // ---------------------------------------------------------------------------
 
 impl SummarizationPolicy {
-    /// Builds a policy from a model [`ModelProfile`], reading its
+    /// Builds a policy from a model [`ModelProfile`](tinyinference_llm::model::ModelProfile), reading its
     /// [`max_input_tokens`][tinyinference_llm::model::ModelProfile::max_input_tokens]
     /// as the context window and using `threshold` as the trigger fraction.
     ///
@@ -253,7 +258,7 @@ impl SummarizationPolicy {
         let requested_split = non_system.len() - self.keep_last;
         let split = find_safe_cutoff_point(&non_system, requested_split);
         if split != requested_split {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 "[summarization::plan] keep_last={} moved split {requested_split} -> {split} to preserve tool-call pairing",
                 self.keep_last
             );

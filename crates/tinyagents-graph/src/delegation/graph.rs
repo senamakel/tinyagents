@@ -208,7 +208,7 @@ where
                             "executions": s.executions_texts(),
                             "revisions": s.revisions,
                         });
-                        tinyagents_tracing::info!(
+                        tracing::info!(
                             revisions = s.revisions,
                             "[interrupt] delegation review reached durable human-approval gate; pausing"
                         );
@@ -220,7 +220,7 @@ where
                     }
                     Some(decision) => {
                         let approved = decision_is_approve(&decision);
-                        tinyagents_tracing::info!(
+                        tracing::info!(
                             approved,
                             "[interrupt] delegation review resumed with human decision"
                         );
@@ -275,9 +275,16 @@ where
         .mark_command_routing("finalize");
 
     if require_review_approval {
-        builder = builder
-            .mark_command_routing("approval")
-            .mark_interrupt("approval");
+        // `approval` pauses *itself* (its handler returns the interrupt
+        // carrying the review payload), so it must not also be an
+        // `interrupt_before` node — `mark_interrupt` is that selector now,
+        // and would pause a second time ahead of the handler with a bare
+        // `{"phase": "before"}` payload. Annotate it for the export instead.
+        builder = builder.mark_command_routing("approval").with_node_metadata(
+            "approval",
+            "interrupt",
+            "node-emitted",
+        );
     }
 
     let graph = builder

@@ -214,17 +214,31 @@ fn openhuman_internal_root(workspace_dir: &std::path::Path) -> std::path::PathBu
 
 /// One CC chat turn.
 pub(crate) struct TurnContext<'a> {
+    /// Resolved path to the `claude` CLI binary to spawn.
     pub bin_path: PathBuf,
+    /// Directory holding this provider's session store and settings
+    /// (`claude-code-sessions.json`, `claude_code_settings.json`); also the
+    /// root the macOS Seatbelt jail walls off from the CLI's own tools.
     pub workspace_dir: PathBuf,
-    /// The user's project root (`config.action_dir`). Claude Code runs here
+    /// The user's project root. Claude Code runs here
     /// (cwd + `--add-dir`) so its file tools act on the user's code, not the
-    /// internal OpenHuman workspace.
+    /// internal workspace.
     pub project_dir: PathBuf,
+    /// Caller-provided logical conversation id, used to look up or create a
+    /// CC session UUID in `session_store`.
     pub thread_id: String,
+    /// Model name passed to `--model`.
     pub model: String,
+    /// Combined system prompt (all `system` messages joined), written to a
+    /// scratch file and passed via `--append-system-prompt-file`.
     pub append_system_prompt: Option<String>,
+    /// Full conversation for a new session, or just the trailing user turn
+    /// when resuming (see `input_builder::build_stdin`).
     pub messages: &'a [ChatMessage],
+    /// Thread-key → CC session UUID persistence, shared across turns.
     pub session_store: Arc<SessionStore>,
+    /// Channel to forward streaming deltas on, when the caller wants a
+    /// streamed response rather than only the final aggregate.
     pub stream: Option<&'a mpsc::Sender<ProviderDelta>>,
     /// Optional explicit `ANTHROPIC_API_KEY` to set on the child. When
     /// `None`, the CLI falls back to its own `~/.claude/.credentials.json`.
@@ -309,20 +323,20 @@ fn append_system_prompt_args(
     };
 
     let path = dir.join("append-system-prompt.txt");
-    log::debug!(
+    tracing::debug!(
         "[claude-code][driver] append-system-prompt file write start path={} bytes={}",
         path.display(),
         prompt.len()
     );
     if let Err(error) = std::fs::write(&path, prompt) {
-        log::warn!(
+        tracing::warn!(
             "[claude-code][driver] append-system-prompt file write failed path={} error={}",
             path.display(),
             error
         );
         return Err(error);
     }
-    log::debug!(
+    tracing::debug!(
         "[claude-code][driver] append-system-prompt file write complete path={} bytes={}",
         path.display(),
         prompt.len()
@@ -359,19 +373,19 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
             Ok(endpoint) => {
                 match write_mcp_http_config(scratch.path(), endpoint.addr, &endpoint.token) {
                     Ok(p) => {
-                        log::debug!(
+                        tracing::debug!(
                             "[claude-code][driver] wrote http mcp-config path={} url=http://{}/ (authenticated)",
                             p.display(),
                             endpoint.addr
                         );
                         mcp_config_path = Some(p);
                     }
-                    Err(e) => log::warn!(
+                    Err(e) => tracing::warn!(
                         "[claude-code][driver] failed to write mcp-config: {e}; CC will run without OpenHuman MCP tools"
                     ),
                 }
             }
-            Err(e) => log::warn!(
+            Err(e) => tracing::warn!(
                 "[claude-code][driver] in-process MCP HTTP server unavailable: {e}; CC running without OpenHuman MCP tools"
             ),
         }
@@ -448,7 +462,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
         anyhow::bail!("[claude-code][driver] no input messages to deliver");
     }
 
-    log::debug!(
+    tracing::debug!(
         "[claude-code][driver] spawn bin={} model={} is_new={} cc_session_id={}",
         ctx.bin_path.display(),
         ctx.model,
@@ -470,7 +484,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
             ctx.bin_path.display().to_string(),
         ];
         wrapped.extend(args.iter().cloned());
-        log::debug!(
+        tracing::debug!(
             "[claude-code][driver] seatbelt jail active root={}",
             ctx.project_dir.display()
         );
@@ -553,7 +567,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
             }
             for ev in parser.feed_bytes(&buf[..n]) {
                 if let Some(msg) = parse_error_log_line(&ev) {
-                    log::warn!("{msg}");
+                    tracing::warn!("{msg}");
                 }
                 for delta in mapper.handle(ev) {
                     if let Some(tx) = ctx.stream {
@@ -564,7 +578,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
         }
         for ev in parser.end() {
             if let Some(msg) = parse_error_log_line(&ev) {
-                log::warn!("{msg}");
+                tracing::warn!("{msg}");
             }
             for delta in mapper.handle(ev) {
                 if let Some(tx) = ctx.stream {
@@ -584,7 +598,9 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     let status = match timed {
         Ok(inner) => inner?,
         Err(_elapsed) => {
-            log::error!("[claude-code][driver] turn timeout ({timeout:?}) exceeded; killing child");
+            tracing::error!(
+                "[claude-code][driver] turn timeout ({timeout:?}) exceeded; killing child"
+            );
             // kill_on_drop handles cleanup, but explicit kill gives us
             // a chance to collect stderr.
             let _ = child.kill().await;
@@ -612,7 +628,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     if is_new {
         let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
         if let Err(error) = ctx.session_store.set(&ctx.thread_id, accepted_id) {
-            log::warn!(
+            tracing::warn!(
                 "[claude-code][driver] failed to persist accepted session uuid for thread {}: {}",
                 ctx.thread_id,
                 error

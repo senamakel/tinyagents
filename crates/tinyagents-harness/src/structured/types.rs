@@ -19,16 +19,37 @@ use tinyinference_llm::model::ModelResponse;
 ///   from the raw response text.
 /// * [`ToolCall`] – an artificial tool was exposed to the model; the structured
 ///   value is read from the matching tool-call's `arguments` field.
+/// * [`Prompted`] – for a model with no native schema or tool-calling support:
+///   the schema is injected into the system prompt as instructions instead of
+///   a provider API field, and extraction falls back to the same repair
+///   ladder as [`ProviderSchema`]. Mirrors Pydantic AI's `PromptedOutput`.
+/// * [`ToolCallUnion`] – one synthetic tool per schema variant; extraction
+///   matches whichever variant's tool the model actually called and records
+///   which one (see [`StructuredOutput::variant`]).
 ///
 /// [`ProviderSchema`]: StructuredStrategy::ProviderSchema
 /// [`ToolCall`]: StructuredStrategy::ToolCall
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// [`Prompted`]: StructuredStrategy::Prompted
+/// [`ToolCallUnion`]: StructuredStrategy::ToolCallUnion
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StructuredStrategy {
     /// Parse the JSON from the model's text response (provider-native mode).
     ProviderSchema,
     /// Read the arguments of a matching tool call.
     ToolCall,
+    /// Provider-native/tool-calling structured output is unavailable: the
+    /// schema is described in the system prompt instead, and extraction
+    /// parses the response text through the same repair ladder as
+    /// [`Self::ProviderSchema`].
+    Prompted {
+        /// Custom instructions template injected ahead of the schema; `None`
+        /// uses [`super::default_prompted_template`].
+        template: Option<String>,
+    },
+    /// A union output type: the model may satisfy the request by calling any
+    /// one of several synthetic tools, one per schema variant.
+    ToolCallUnion,
 }
 
 // ---------------------------------------------------------------------------
@@ -41,13 +62,18 @@ pub enum StructuredStrategy {
 /// text that was parsed (useful for debugging or provider-native mode).
 ///
 /// [`ModelResponse`]: tinyinference_llm::model::ModelResponse
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StructuredOutput {
     /// The extracted JSON value.
     pub value: Value,
     /// The raw assistant text that was parsed, when applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_text: Option<String>,
+    /// Which schema variant matched, for
+    /// [`StructuredStrategy::ToolCallUnion`]. `None` for every other
+    /// strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +106,10 @@ pub struct StructuredOutcome {
     /// verbatim: it names the schema and, for a validation failure, the exact
     /// failing instance path.
     pub error: Option<String>,
+    /// Which schema variant matched, when extraction succeeded under
+    /// [`StructuredStrategy::ToolCallUnion`]. Mirrors
+    /// [`StructuredOutput::variant`].
+    pub variant: Option<String>,
 }
 
 impl StructuredOutcome {
@@ -139,6 +169,11 @@ pub struct StructuredExtractor {
     /// The JSON Schema document. **Enforced**: every extracted value is checked
     /// against it by [`super::validate`] before it is returned, so a
     /// well-formed value of the wrong shape is a reported error rather than
-    /// silent garbage in `run.structured`.
+    /// silent garbage in `run.structured`. Unused (empty object) for
+    /// [`StructuredStrategy::ToolCallUnion`], which validates each match
+    /// against its own entry in [`Self::variants`] instead.
     pub(crate) schema: Value,
+    /// `(name, schema)` pairs for [`StructuredStrategy::ToolCallUnion`], one
+    /// per synthetic tool the model may call. Empty for every other strategy.
+    pub(crate) variants: Vec<(String, Value)>,
 }

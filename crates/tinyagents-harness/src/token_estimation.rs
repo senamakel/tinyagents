@@ -5,7 +5,7 @@
 //! Several independent places in the harness need "roughly how many tokens is
 //! this transcript?" — compaction gating, context middleware, and budget
 //! preflight. Each grew its own `chars / 4` loop over
-//! [`Message::text`][super::Message::text], and every one of them silently
+//! [`Message::text`], and every one of them silently
 //! under-counted the same way: a transcript's *structure* (tool calls, tool
 //! result correlation ids, role labels, per-message framing) is invisible to
 //! `text()`, and an assistant turn that only calls tools has **no text at
@@ -20,7 +20,7 @@
 //!
 //! | Part | Source |
 //! | ---- | ------ |
-//! | content blocks (text, JSON, reasoning, provider extensions) | [`ContentBlock::estimated_char_weight`][super::ContentBlock::estimated_char_weight] |
+//! | content blocks (text, JSON, reasoning, provider extensions) | [`ContentBlock::estimated_char_weight`](tinyinference_llm::message::ContentBlock::estimated_char_weight) |
 //! | images | flat per-image weight, not the base64 length |
 //! | assistant `tool_calls` | JSON rendering of the call array |
 //! | tool `tool_call_id` | the id string |
@@ -140,6 +140,7 @@ pub fn message_role_label(message: &Message) -> &'static str {
         Message::User(_) => "user",
         Message::Assistant(_) => "assistant",
         Message::Tool(_) => "tool",
+        Message::Custom(_) => "custom",
     }
 }
 
@@ -180,7 +181,7 @@ pub fn count_tokens_approximately_with(messages: &[Message], options: &TokenCoun
         let message_tokens = (chars as f64 / divisor).ceil() + options.extra_tokens_per_message;
         total += message_tokens;
 
-        tinyagents_tracing::trace!(
+        tracing::trace!(
             "[tokens] message index={index} role={role} chars={chars} tokens={message_tokens} running={total}",
             role = message_role_label(message)
         );
@@ -203,14 +204,14 @@ pub fn count_tokens_approximately_with(messages: &[Message], options: &TokenCoun
     {
         let raw_factor = reported as f64 / approx;
         let factor = raw_factor.clamp(USAGE_SCALE_MIN, USAGE_SCALE_MAX);
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             "[tokens] usage calibration reported={reported} approx={approx} raw_factor={raw_factor} clamped={factor}"
         );
         total *= factor;
     }
 
     let result = total.ceil().max(0.0) as u64;
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[tokens] counted messages={} tokens={result}",
         messages.len()
     );
@@ -243,7 +244,7 @@ pub fn count_tool_schema_tokens(schemas: &[ToolSchema], options: &TokenCountOpti
         chars += rendered.to_string().chars().count();
     }
     let tokens = (chars as f64 / options.divisor()).ceil().max(0.0) as u64;
-    tinyagents_tracing::debug!(
+    tracing::debug!(
         "[tokens] counted tool schemas count={} chars={chars} tokens={tokens}",
         schemas.len()
     );

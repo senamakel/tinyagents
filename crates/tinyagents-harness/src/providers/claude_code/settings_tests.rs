@@ -1,3 +1,5 @@
+//! Unit tests for `ClaudeCodeSettings` load/save round-tripping.
+
 use super::*;
 
 #[test]

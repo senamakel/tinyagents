@@ -41,6 +41,7 @@ fn role_label(message: &Message) -> &'static str {
         Message::User(_) => "user",
         Message::Assistant(_) => "assistant",
         Message::Tool(_) => "tool",
+        Message::Custom(_) => "custom",
     }
 }
 
@@ -76,6 +77,9 @@ fn render_content(content: &[ContentBlock]) -> Vec<String> {
                 "<image mime=\"{}\" />",
                 image.mime_type.as_deref().unwrap_or("unknown")
             )),
+            ContentBlock::Audio(_) => Some("<audio />".to_string()),
+            ContentBlock::Video(_) => Some("<video />".to_string()),
+            ContentBlock::Document(_) => Some("<document />".to_string()),
             ContentBlock::Thinking { text, .. } if text.trim().is_empty() => None,
             ContentBlock::Thinking { text, .. } => {
                 Some(format!("<reasoning>{}</reasoning>", elide(text)))
@@ -95,13 +99,14 @@ fn render_content(content: &[ContentBlock]) -> Vec<String> {
 /// `<role>: <parts>`, with tool calls rendered as
 /// `<tool_call id="…" name="…">{args}</tool_call>` and tool results as
 /// `<tool_result id="…">…</tool_result>`. Large payloads are elided (see
-/// [`MAX_RENDERED_PAYLOAD_CHARS`]).
+/// `MAX_RENDERED_PAYLOAD_CHARS`).
 pub fn render_message_for_summary(message: &Message) -> String {
     let mut parts: Vec<String> = match message {
         Message::System(m) => render_content(&m.content),
         Message::User(m) => render_content(&m.content),
         Message::Assistant(m) => render_content(&m.content),
         Message::Tool(m) => render_content(&m.content),
+        Message::Custom(m) => return format!("custom: {}", m.display.clone().unwrap_or_default()),
     };
 
     match message {

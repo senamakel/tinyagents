@@ -3,10 +3,10 @@
 //! Where [`graph::goals`](crate::goals) holds a single durable objective
 //! per thread, a task board holds the concrete work items: an ordered list of
 //! [`TaskBoardCard`]s with a small kanban lifecycle. This module owns the data
-//! model and markdown rendering ([`types`]),
+//! model and markdown rendering (`types`),
 //! harness-[`Store`](tinyagents_harness::store::Store)-backed CRUD with the
 //! single-`InProgress` invariant ([`store`]), and the model-facing multiplexer
-//! tool ([`tool`]).
+//! tool (`tool`).
 //!
 //! Two layers sit on top of the board for hosts that run cards autonomously:
 //! [`runs`] records who claimed a card, heartbeats while they work, and hands

@@ -7,7 +7,7 @@
 //! here the units under test are graph nodes and supersteps, so the doubles are
 //! node handlers and the assertions read a run's export/event/checkpoint truth.
 //! Because a node can recurse into a [subgraph](crate::subgraph) or a
-//! [sub-agent](crate::subagent_node), the same recorder that observes a
+//! [sub-agent](mod@crate::subagent_node), the same recorder that observes a
 //! top-level run also captures the events and child-run rollups of the nested
 //! runs it spawns, so recursion stays observable in tests.
 //!
@@ -191,7 +191,7 @@ where
 /// value arrives, then emits `on_resume`.
 ///
 /// On an activation with no resume value it returns
-/// [`NodeResult::Interrupt`](crate::NodeResult::Interrupt) carrying
+/// [`NodeResult::Interrupt`] carrying
 /// `payload`; on a resumed activation (a non-empty
 /// [`NodeContext::resume`](crate::NodeContext)) it returns
 /// `NodeResult::Update(on_resume)`. Requires a checkpointer to actually pause
@@ -237,7 +237,7 @@ where
 /// A fake sub-agent node: records a [`ChildRun`] (with `usage`) onto the
 /// enclosing run's child-run sink and emits `update`.
 ///
-/// This mimics what [`subagent_node`](crate::subagent_node) records,
+/// This mimics what [`subagent_node`](crate::subagent_node()) records,
 /// without needing a registry or a live agent, so tests can assert the
 /// parent-run child rollup ([`GraphExecution::child_runs`] /
 /// [`run_tree`](crate::GraphExecution::run_tree)) deterministically. The
@@ -270,6 +270,7 @@ where
                     )),
                     root_run_id,
                     usage,
+                    checkpoint_id: None,
                 });
             }
             Ok(NodeResult::Update(update))

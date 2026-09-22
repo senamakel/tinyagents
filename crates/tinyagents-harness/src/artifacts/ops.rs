@@ -1,5 +1,15 @@
 //! Write, pointer-render, and handoff plumbing for the artifact-offload
 //! convention.
+//!
+//! [`ArtifactOffload`] is the per-run writer: it resolves a target path via
+//! [`super::paths::resolve_artifact_path`], applies the host redactor from
+//! [`super::policy`], and writes the redacted body to disk. [`should_offload`]
+//! and [`effective_offload_threshold`] decide *whether* a result should be
+//! written; [`offload_oversized_result`] ties threshold decision, write, and
+//! pointer rendering into the single entry point most callers use.
+//! [`extract_artifact_paths`] and [`note_artifact_handoff`] are the reader
+//! side: parsing pointers back out of a handoff payload and logging both ends
+//! of the exchange. See [`super`] for the convention this module implements.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -115,7 +125,7 @@ pub fn note_artifact_handoff(
     paths: &[String],
 ) -> usize {
     for path in paths {
-        tinyagents_tracing::info!(
+        tracing::info!(
             stage = %stage,
             agent_id = %agent_id,
             task_id = %task_id,
@@ -294,7 +304,7 @@ impl ArtifactOffload {
             redacted: stored.changed,
         };
 
-        tinyagents_tracing::info!(
+        tracing::info!(
             agent_id = %self.agent_id,
             task_id = %self.task_id,
             kind = artifact.kind.as_str(),
@@ -385,7 +395,7 @@ pub async fn offload_oversized_result(
             // credentials `write` just scrubbed out of the file.
             let abstract_text = build_abstract(&stored, ABSTRACT_BUDGET_CHARS);
             let pointer = render_artifact_pointer(&artifact, &abstract_text, read_tool);
-            tinyagents_tracing::info!(
+            tracing::info!(
                 path = %artifact.relative_path,
                 inline_bytes = output.len(),
                 pointer_bytes = pointer.len(),
@@ -395,7 +405,7 @@ pub async fn offload_oversized_result(
             (pointer, Some(artifact))
         }
         Err(err) => {
-            tinyagents_tracing::warn!(
+            tracing::warn!(
                 error = %err,
                 inline_bytes = output.len(),
                 threshold_bytes,

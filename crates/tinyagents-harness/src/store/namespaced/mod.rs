@@ -2,7 +2,7 @@
 //!
 //! # Why this exists next to [`Store`]
 //!
-//! The original [`Store`](crate::store::Store) trait is get/put/
+//! The original [`Store`] trait is get/put/
 //! delete/list over a **flat** `&str` namespace. That is enough to key values
 //! by bucket, and not enough for anything a long-term memory layer actually
 //! needs: there is no way to ask for everything under `users/alice`, no way to
@@ -187,6 +187,8 @@ impl InMemoryNamespacedStore {
         self
     }
 
+    /// Locks the item map, converting mutex poisoning into a
+    /// [`TinyAgentsError::Validation`] instead of panicking.
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<(Namespace, String), Item>>> {
         self.items
             .lock()
@@ -247,7 +249,7 @@ impl NamespacedStore for InMemoryNamespacedStore {
         items.retain(|_, item| !item.is_expired(now));
         let reclaimed = before - items.len();
         if reclaimed > 0 {
-            tinyagents_tracing::debug!("[store:namespaced] sweep_expired reclaimed={reclaimed}");
+            tracing::debug!("[store:namespaced] sweep_expired reclaimed={reclaimed}");
         }
         Ok(reclaimed)
     }

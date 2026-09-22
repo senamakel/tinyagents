@@ -181,7 +181,11 @@ fn is_resolvable_user_query(message: &Message) -> bool {
     }
     user.content.iter().any(|block| match block {
         ContentBlock::Text(text) => !text.trim().is_empty(),
-        ContentBlock::Json(_) | ContentBlock::Image(_) => true,
+        ContentBlock::Json(_)
+        | ContentBlock::Image(_)
+        | ContentBlock::Audio(_)
+        | ContentBlock::Video(_)
+        | ContentBlock::Document(_) => true,
         // Reasoning replay and opaque provider payloads are not user input.
         ContentBlock::Thinking { .. }
         | ContentBlock::RedactedThinking { .. }
@@ -598,7 +602,7 @@ pub const SYNTHETIC_CALL_ID_PREFIX: &str = "ptc";
 pub fn next_synthetic_call_id(slot: usize) -> String {
     let sequence = SYNTHETIC_CALL_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let id = format!("{SYNTHETIC_CALL_ID_PREFIX}_{sequence}_{slot}");
-    tinyagents_tracing::trace!("[tool::prompt] minted synthetic tool-call id {id}");
+    tracing::trace!("[tool::prompt] minted synthetic tool-call id {id}");
     id
 }
 
@@ -611,7 +615,13 @@ fn parse_relaxed_object(raw: &str) -> Option<Value> {
         // A non-object parsed strictly is not a tool call; do not try to
         // "repair" it into one.
         Ok(_) => None,
-        Err(_) => crate::relaxed_json::recover_relaxed_object(raw),
+        Err(_) => crate::relaxed_json::recover_relaxed_object(raw).or_else(|| {
+            // Python-style single-quoted objects are a common local-model
+            // spelling. The conservative parser already rejected the exact
+            // input; retrying its quote-normalized form keeps recovery scoped
+            // to a whole object rather than interpreting prose as a call.
+            crate::relaxed_json::recover_relaxed_object(&raw.replace('\'', "\""))
+        }),
     }
 }
 
