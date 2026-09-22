@@ -556,9 +556,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .take_while(|message| matches!(message, Message::System(_)))
                 .count();
             let mut prompt = crate::prompt::PromptBuilder::new();
-            if system_end > 0 {
-                prompt.push_system("system", messages[..system_end].to_vec());
-            }
+            prompt.push_system_messages(&messages[..system_end]);
             if !tool_schemas.is_empty() {
                 prompt.push_tools_segment("tools", tool_schemas.clone());
             }
@@ -2014,38 +2012,32 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
-    let harness_layout = request.cache_segments.is_empty()
-        || request.cache_segments.iter().all(|segment| {
-            segment.cacheable
-                && ((segment.id == "system" && segment.role == SegmentRole::System)
-                    || (segment.id == "tools" && segment.role == SegmentRole::Tools))
+    let mut expected_layout = (0..system_end)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    if !request.tools.is_empty() {
+        expected_layout.push(PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
         });
+    }
+    let harness_layout =
+        request.cache_segments.is_empty() || request.cache_segments == expected_layout;
 
     if harness_layout {
-        request.cache_segments.clear();
-        if system_end > 0 {
-            request.cache_segments.push(PromptSegment {
-                id: "system".to_string(),
-                role: SegmentRole::System,
-                cacheable: true,
-            });
-        }
-        if !request.tools.is_empty() {
-            request.cache_segments.push(PromptSegment {
-                id: "tools".to_string(),
-                role: SegmentRole::Tools,
-                cacheable: true,
-            });
-        }
+        request.cache_segments = expected_layout;
         if request.cache_segments.is_empty() {
             request.prompt_fingerprint = None;
             return;
         }
 
         let mut prompt = crate::prompt::PromptBuilder::new();
-        if system_end > 0 {
-            prompt.push_system("system", request.messages[..system_end].to_vec());
-        }
+        prompt.push_system_messages(&request.messages[..system_end]);
         if !request.tools.is_empty() {
             prompt.push_tools_segment("tools", request.tools.clone());
         }
