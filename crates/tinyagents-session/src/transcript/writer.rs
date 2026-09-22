@@ -278,20 +278,11 @@ fn common_prefix_len(a: &[TranscriptMessage], b: &[TranscriptMessage]) -> usize 
         .count()
 }
 
-/// Writes `contents` to `path` via a same-directory temp file and an atomic
-/// rename, rather than truncating `path` in place.
-///
-/// [`write_transcript`] is a full rewrite of the source-of-truth JSONL — used
-/// directly by adoption to materialize a session's very first transcript, and
-/// as the idempotency marker that tells the next call "already adopted, don't
-/// redo it". A plain `fs::write` truncates the destination before the new
-/// bytes land, so a process or filesystem failure partway through leaves a
-/// truncated file that nonetheless satisfies `destination.exists()` — the
-/// truncated, incomplete transcript would then serve as that marker forever.
-/// Writing to a temp file first and renaming it into place means the
-/// destination only ever transitions from "absent" straight to "complete";
-/// there is no truncated intermediate state a crash can strand callers on.
-fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+/// A same-directory temp path for `path`, unique per call within this
+/// process. Shared by [`atomic_write`] and [`publish_transcript_if_absent`],
+/// both of which stage full contents in a temp file before publishing it
+/// with one atomic filesystem operation.
+fn unique_tmp_path(path: &Path) -> PathBuf {
     static NONCE: AtomicU64 = AtomicU64::new(0);
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -300,7 +291,27 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         .and_then(|name| name.to_str())
         .unwrap_or("transcript");
     let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
-    let tmp_path = dir.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+    dir.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()))
+}
+
+/// Writes `contents` to `path` via a same-directory temp file and an atomic
+/// rename, rather than truncating `path` in place.
+///
+/// [`write_transcript`] is a full rewrite of the source-of-truth JSONL — used
+/// directly by migrations, sub-agent runners, and (through
+/// [`publish_transcript_if_absent`]) adoption. A plain `fs::write` truncates
+/// the destination before the new bytes land, so a process or filesystem
+/// failure partway through leaves a truncated file that nonetheless
+/// satisfies `path.exists()`. Writing to a temp file first and renaming it
+/// into place means the destination only ever transitions from "absent"
+/// straight to "complete"; there is no truncated intermediate state a crash
+/// can strand callers on. `fs::rename` always **replaces** an existing
+/// destination on both Unix and Windows (`MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING`, with a `SetFileInformationByHandle` fallback
+/// — see the `std::fs::rename` docs), which is exactly the full-rewrite
+/// semantics this function's other callers want.
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let tmp_path = unique_tmp_path(path);
 
     fs::write(&tmp_path, contents)
         .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
@@ -313,6 +324,45 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         )
     })?;
     Ok(())
+}
+
+/// Publishes `contents` at `path` only if nothing is there yet, atomically.
+///
+/// Unlike [`atomic_write`] (and [`write_transcript`], which uses it),
+/// **never overwrites an existing destination**. `fs::rename` cannot express
+/// "fail if the destination exists" — as documented on [`atomic_write`], it
+/// always replaces on both platforms — so this uses `fs::hard_link` instead,
+/// which fails with `AlreadyExists` without touching whatever is already at
+/// `path`. That failure is reported by returning `Ok(false)` rather than an
+/// error: it means some other write legitimately won the race, not that
+/// anything went wrong.
+///
+/// Adoption is this function's one caller and the reason it exists: its
+/// destination is the session's very first transcript, and a session's own
+/// normal turn persistence can independently create that same file at any
+/// point during adoption's scan. Adoption must publish only if it still
+/// holds the honor of "first write" when it finishes — never clobber a
+/// conversation's genuine first turn with an adoption fold that started
+/// scanning before that turn existed.
+fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
+    let tmp_path = unique_tmp_path(path);
+
+    fs::write(&tmp_path, contents)
+        .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
+    let published = match fs::hard_link(&tmp_path, path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error)
+                .with_context(|| format!("publish transcript {}", path.display()));
+        }
+    };
+    // The temp file and its hard-linked destination share one inode; once
+    // linked (or once we know we lost the race), the temp name itself has
+    // no further purpose.
+    let _ = fs::remove_file(&tmp_path);
+    Ok(published)
 }
 
 /// Append raw bytes to a file, opening in append mode (O(1), no read-back).
