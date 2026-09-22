@@ -425,6 +425,151 @@ fn adoption_preserves_tool_rounds_and_usage_of_legacy_transcripts() {
     assert_eq!(adopted.messages[2].cache_breakpoints, vec![1]);
 }
 
+/// A different agent scoped to the same thread id writes its own root
+/// transcript. Folding it into this agent's adoption would splice one
+/// agent's private history into another's — the same mixing
+/// `find_root_transcript_for_thread_scoped` exists to prevent for ordinary
+/// resume.
+#[test]
+fn a_different_agents_root_on_the_same_thread_is_never_folded_in() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "mine", thread);
+    let mut other_agent = legacy_meta("2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z", thread);
+    other_agent.agent_id = Some("researcher".into());
+    write_transcript(
+        &resolve_keyed_transcript_path(dir.path(), "1000_researcher").unwrap(),
+        &[TranscriptMessage::new("user", "not mine")],
+        &other_agent,
+        None,
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
+
+    let contents: Vec<String> = read_transcript(&adoption.path)
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(contents, ["mine"]);
+    assert_eq!(adoption.adopted.len(), 1);
+}
+
+/// A file that already carries session identity (already adopted, or one of
+/// this session's own later generations sharing the thread id) is not
+/// pre-identity legacy content. Folding it in would duplicate history that
+/// adoption already recovered, or content this call has no business reading.
+#[test]
+fn a_session_identified_root_on_the_same_thread_is_never_folded_in() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "legacy", thread);
+    let mut already_adopted = legacy_meta("2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z", thread);
+    already_adopted.session_id = Some("thread-1~deadbeef.orchestrator~deadbeef".into());
+    write_transcript(
+        &resolve_keyed_transcript_path(dir.path(), "2000_a").unwrap(),
+        &[TranscriptMessage::new("user", "already adopted elsewhere")],
+        &already_adopted,
+        None,
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
+
+    let contents: Vec<String> = read_transcript(&adoption.path)
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert_eq!(contents, ["legacy"]);
+    assert_eq!(adoption.adopted.len(), 1);
+}
+
+/// One unreadable legacy root must not let adoption finalize a partial fold:
+/// the destination is its own idempotency marker, so a partial fold behind
+/// it would permanently strand the unreadable file's turns.
+#[test]
+fn an_unreadable_legacy_root_defers_adoption_instead_of_finalizing_a_partial_fold() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-1";
+    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "readable", thread);
+    let corrupt_path = resolve_keyed_transcript_path(dir.path(), "2000_a").unwrap();
+    std::fs::write(&corrupt_path, b"{ not a valid transcript line\n").unwrap();
+    // Give the corrupt file a matching thread id so the scan picks it up;
+    // `find_root_transcripts_for_thread` reads `_meta.thread_id` from each
+    // candidate, so a genuinely unparsable file is instead skipped by the
+    // scan itself. Use a structurally valid but semantically broken meta
+    // line instead: a compaction line with no metadata at all still matches
+    // nothing, so simulate the failure path directly against `read_transcript`
+    // by pointing a *valid* meta line reader at a truncated tail.
+    let meta = legacy_meta("2026-01-01T00:00:01Z", "2026-01-01T00:00:01Z", thread);
+    std::fs::write(
+        &corrupt_path,
+        format!(
+            "{}\nnot json at all\n",
+            serde_json::to_string(&serde_json::json!({
+                "_meta": true,
+                "session_id": meta.session_id,
+                "parent_session_id": meta.parent_session_id,
+                "agent_name": meta.agent_name,
+                "agent_id": meta.agent_id,
+                "agent_type": meta.agent_type,
+                "dispatcher": meta.dispatcher,
+                "provider": meta.provider,
+                "model": meta.model,
+                "created": meta.created,
+                "updated": meta.updated,
+                "turn_count": meta.turn_count,
+                "input_tokens": meta.input_tokens,
+                "output_tokens": meta.output_tokens,
+                "cached_input_tokens": meta.cached_input_tokens,
+                "charged_amount_usd": meta.charged_amount_usd,
+                "thread_id": meta.thread_id,
+                "task_id": meta.task_id,
+            }))
+            .unwrap()
+        ),
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let result = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    );
+
+    assert!(
+        result.is_err(),
+        "an unreadable legacy root must fail adoption, not silently finalize a partial fold"
+    );
+    let destination = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
+    assert!(
+        !destination.exists(),
+        "a failed adoption must not create the idempotency marker"
+    );
+}
+
 /// A legacy transcript whose turns were compacted replays as its reduced set.
 /// Adoption folds what the model would actually have seen, not the raw lines.
 #[test]
