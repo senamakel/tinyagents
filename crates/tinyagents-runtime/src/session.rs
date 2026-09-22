@@ -133,12 +133,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // before session identity existed is spread over one or
                     // more timestamped stems; fold them in once so the model
                     // regains the turns the newest-wins lookup had stranded.
-                    match adopt_legacy_session_transcripts(
-                        &target.locator.workspace_hint(),
-                        &session,
-                        thread,
-                        &target.meta,
-                    ) {
+                    match target.locator.adopt_legacy(&session, thread, &target.meta) {
                         Ok(Some(adoption)) => {
                             tracing::info!(
                                 "[session] adopted {} legacy transcript(s) into session={} \
