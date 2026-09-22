@@ -323,10 +323,10 @@ fn a_compaction_seals_a_generation_and_leaves_it_untouched() {
     let sealed_path = first.path().to_path_buf();
     let sealed_bytes = std::fs::read(&sealed_path).unwrap();
 
-    let retained = vec![TranscriptMessage::new("user", "three")];
-    let (successor, handle) = locator
-        .begin_generation(&session, &retained, meta())
-        .unwrap();
+    let (successor, handle) = locator.begin_generation(&session, meta()).unwrap();
+    // The successor is bound but empty; the retained set is written through the
+    // ordinary turn path so usage and request ids are recorded as usual.
+    handle.replace(&[TranscriptMessage::new("user", "three")]).unwrap();
 
     assert_eq!(successor.generation, 1);
     assert_eq!(
@@ -366,17 +366,16 @@ fn head_generation_follows_the_compaction_chain() {
         .unwrap();
     assert_eq!(locator.head_generation(&session), session);
 
-    let (first_successor, _) = locator
-        .begin_generation(&session, &[TranscriptMessage::new("user", "one")], meta())
+    let (first_successor, first_handle) = locator.begin_generation(&session, meta()).unwrap();
+    first_handle
+        .append(TranscriptMessage::new("user", "one"))
         .unwrap();
     assert_eq!(locator.head_generation(&session), first_successor);
 
-    let (second_successor, _) = locator
-        .begin_generation(
-            &first_successor,
-            &[TranscriptMessage::new("user", "one")],
-            meta(),
-        )
+    let (second_successor, second_handle) =
+        locator.begin_generation(&first_successor, meta()).unwrap();
+    second_handle
+        .append(TranscriptMessage::new("user", "one"))
         .unwrap();
     assert_eq!(locator.head_generation(&session).generation, 2);
     assert_eq!(locator.head_generation(&session), second_successor);
@@ -387,10 +386,10 @@ fn opening_a_generation_that_already_exists_is_refused() {
     let dir = tempdir().unwrap();
     let locator = FileTranscriptLocator::new(dir.path());
     let session = SessionRef::scoped("thread-1", "orchestrator");
-    let retained = [TranscriptMessage::new("user", "one")];
 
-    locator.begin_generation(&session, &retained, meta()).unwrap();
-    let second = locator.begin_generation(&session, &retained, meta());
+    let (_, handle) = locator.begin_generation(&session, meta()).unwrap();
+    handle.append(TranscriptMessage::new("user", "one")).unwrap();
+    let second = locator.begin_generation(&session, meta());
 
     assert!(
         second.is_err(),
