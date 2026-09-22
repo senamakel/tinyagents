@@ -2083,7 +2083,9 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
         && request
             .cache_segments
             .split_last()
-            .is_some_and(|(last, head)| *last == canonical_tools_segment && head == expected_layout);
+            .is_some_and(|(last, head)| {
+                *last == canonical_tools_segment && head == expected_layout
+            });
     let harness_layout = request.cache_segments.is_empty()
         || request.cache_segments == expected_layout
         || declared_with_stripped_tools;

@@ -6962,8 +6962,7 @@ fn a_custom_layout_omitting_an_existing_system_message_is_not_promoted_by_the_di
         Some(false),
     );
     let system = Message::system("volatile per-request content middleware keeps out of the key");
-    let mut request =
-        ModelRequest::new(vec![system, Message::user("hi")]).with_tools(vec![tool]);
+    let mut request = ModelRequest::new(vec![system, Message::user("hi")]).with_tools(vec![tool]);
     request.tool_choice = ToolChoice::Auto;
     request.cache_segments = vec![PromptSegment {
         id: "tools".to_string(),
