@@ -58,8 +58,14 @@ jobs:
 
       - name: Test optional features independently
         run: |
+          # Each feature set links a distinct workspace graph.  Clearing the
+          # preceding graph keeps the runner's linker working set bounded and
+          # makes these genuinely independent builds.
+          cargo clean
           cargo test --workspace --no-default-features --features sqlite
+          cargo clean
           cargo test --workspace --no-default-features --features tools
+          cargo clean
           cargo test --workspace --no-default-features --features multimodal
 
       - name: Free build artifacts before coverage
