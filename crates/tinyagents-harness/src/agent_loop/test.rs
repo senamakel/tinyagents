@@ -6862,3 +6862,107 @@ fn stripped_tools_segment_still_counts_as_the_harness_layout() {
     super::run_loop::refresh_prompt_cache_fingerprint(&mut custom);
     assert_ne!(custom.prompt_fingerprint, turn_one.prompt_fingerprint);
 }
+
+/// A text-dialect run that starts with *no* leading system message declares
+/// only the `tools` segment (`PromptBuilder` has no system prefix to name
+/// yet). The dialect then synthesizes exactly one new leading system message
+/// for its protocol block (`prompt_tools::append_system_block` inserts one
+/// when none exists) and clears `tools`. That single synthesized segment is
+/// still the harness's own dialect rewrite, not a custom annotation, and
+/// must keep the stable-prefix fingerprint rather than falling through to
+/// the whole-request digest — which would re-roll the provider routing key
+/// as the transcript grows even though the leading system content itself
+/// (the dialect's protocol block) never changes.
+#[test]
+fn a_dialect_synthesized_first_system_segment_still_counts_as_the_harness_layout() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let declared_tools_only = |request: &mut ModelRequest| {
+        request.cache_segments = vec![PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        }];
+    };
+    let dialect_system = Message::system("protocol block the dialect wrote");
+
+    let mut turn_one = ModelRequest::new(vec![dialect_system.clone(), Message::user("hi")]);
+    declared_tools_only(&mut turn_one);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut turn_one);
+    let mut turn_two = ModelRequest::new(vec![
+        dialect_system.clone(),
+        Message::user("hi"),
+        Message::assistant("hello"),
+        Message::user("later"),
+    ]);
+    declared_tools_only(&mut turn_two);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut turn_two);
+
+    let ids: Vec<&str> = turn_one
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system"], "the stripped tools segment is dropped");
+    let mut expected = crate::prompt::PromptBuilder::new();
+    expected.push_system_messages(std::slice::from_ref(&dialect_system));
+    assert_eq!(
+        turn_one.prompt_fingerprint,
+        expected.build(Vec::new()).prompt_fingerprint,
+        "the fingerprint is the stable-prefix one, not a whole-request digest"
+    );
+    assert_eq!(
+        turn_one.prompt_fingerprint, turn_two.prompt_fingerprint,
+        "the routing key must not change as the transcript grows"
+    );
+}
+
+/// A middleware that deliberately opts a custom trailing `tools` segment out
+/// of caching (`cacheable: false`) is not the harness's own canonical
+/// segment, even though its role and id match. Stripping the schemas off the
+/// wire must not silently promote that opt-out to cacheable by matching it
+/// against the harness layout on role/id alone.
+#[test]
+fn a_custom_tools_segment_opted_out_of_caching_is_not_mistaken_for_the_harness_layout() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let system = Message::system("identity and rules");
+    let mut request = ModelRequest::new(vec![system.clone(), Message::user("hi")]);
+    request.cache_segments = vec![
+        PromptSegment {
+            id: "system".to_string(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: false,
+        },
+    ];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+
+    // Declared segments are left untouched: this is treated as a genuinely
+    // custom annotation, not silently rewritten to the harness's stripped
+    // layout.
+    assert_eq!(request.cache_segments.len(), 2);
+    assert_eq!(request.cache_segments[1].cacheable, false);
+
+    // And the fingerprint takes the conservative whole-request digest path,
+    // not the stable-prefix one a harness-owned layout would get.
+    let mut harness_owned = ModelRequest::new(vec![system, Message::user("hi")]);
+    harness_owned.cache_segments = vec![
+        PromptSegment {
+            id: "system".to_string(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        },
+    ];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut harness_owned);
+    assert_ne!(request.prompt_fingerprint, harness_owned.prompt_fingerprint);
+}
