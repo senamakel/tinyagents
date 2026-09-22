@@ -532,7 +532,10 @@ fn write_transcript_if_absent_publishes_once_and_never_overwrites() {
 
     let published_again = write_transcript_if_absent(
         &path,
-        &[TranscriptMessage::new("user", "second writer, loses the race")],
+        &[TranscriptMessage::new(
+            "user",
+            "second writer, loses the race",
+        )],
         &meta(),
     )
     .unwrap();

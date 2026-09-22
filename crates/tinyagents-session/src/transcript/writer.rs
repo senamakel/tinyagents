@@ -394,8 +394,7 @@ fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
         Err(error) => {
             let _ = fs::remove_file(&tmp_path);
-            return Err(error)
-                .with_context(|| format!("publish transcript {}", path.display()));
+            return Err(error).with_context(|| format!("publish transcript {}", path.display()));
         }
     };
     // The temp file and its hard-linked destination share one inode; once

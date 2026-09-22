@@ -262,7 +262,9 @@ pub trait TranscriptLocator: Send + Sync {
     /// override this.
     fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
         let stem = session_stem(session);
-        let handle = self.open_stem(&stem, seed_meta_for_discovered(&stem)).ok()?;
+        let handle = self
+            .open_stem(&stem, seed_meta_for_discovered(&stem))
+            .ok()?;
         match handle.read_session() {
             Ok(Some(_)) => Some(handle as Arc<dyn TranscriptRead>),
             _ => None,

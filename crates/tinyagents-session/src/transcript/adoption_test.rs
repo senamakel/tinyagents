@@ -618,8 +618,7 @@ fn a_concurrent_normal_write_and_an_adoption_never_destroy_each_other() {
             let destination =
                 resolve_keyed_transcript_path(write_dir.as_path(), &session_stem(&session))
                     .unwrap();
-            let mut turn_meta =
-                legacy_meta("2026-01-01T00:00:05Z", "2026-01-01T00:00:05Z", thread);
+            let mut turn_meta = legacy_meta("2026-01-01T00:00:05Z", "2026-01-01T00:00:05Z", thread);
             turn_meta.session_id = Some(session.session_id());
             write_barrier.wait();
             write_transcript_if_absent(
