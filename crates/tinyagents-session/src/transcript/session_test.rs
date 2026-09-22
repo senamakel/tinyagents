@@ -160,3 +160,15 @@ fn two_long_keys_that_share_a_bounded_prefix_still_get_distinct_stems() {
     let b = session_stem(&SessionRef::root(format!("{base}-tail"))); // differs past the bound
     assert_ne!(a, b);
 }
+
+/// Pins the exact digest algorithm and its output, not just "some digest".
+/// A durable filename must "re-derive the same stem forever" — swapping the
+/// hash (or its parameters) is exactly the kind of change that must be
+/// caught here rather than silently shipped, because it would re-derive a
+/// different filename for every session ever written.
+#[test]
+fn the_digest_algorithm_is_pinned_to_known_fnv1a64_outputs() {
+    assert_eq!(super::fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(super::fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+    assert_eq!(super::fnv1a64(b"thread-9fa08c44"), 0xdf74_ac18_4530_bb17);
+}
