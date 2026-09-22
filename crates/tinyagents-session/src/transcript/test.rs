@@ -301,6 +301,23 @@ fn an_unwritten_session_reads_as_absent_rather_than_erroring() {
     assert_eq!(locator.head_generation(&session), session);
 }
 
+/// A directory occupying a session's canonical `.jsonl` path must never be
+/// treated as an existing generation: reads/appends against it would fail
+/// (or silently target the wrong thing), and `head_generation`'s chain walk
+/// would otherwise stop at a phantom "generation" that was never written.
+#[test]
+fn a_directory_at_the_canonical_path_is_never_treated_as_an_existing_session() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    let path = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
+    std::fs::create_dir_all(&path).unwrap();
+
+    assert!(!locator.session_exists(&session));
+    assert!(locator.read_session_transcript(&session).is_none());
+}
+
 #[test]
 fn session_identity_round_trips_through_the_jsonl_meta() {
     let dir = tempdir().unwrap();
