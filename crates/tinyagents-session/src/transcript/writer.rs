@@ -278,6 +278,46 @@ fn common_prefix_len(a: &[TranscriptMessage], b: &[TranscriptMessage]) -> usize 
         .count()
 }
 
+/// Writes `contents` to `path` via a same-directory temp file and an atomic
+/// rename, rather than truncating `path` in place.
+///
+/// [`write_transcript`] is a full rewrite of the source-of-truth JSONL — used
+/// directly by adoption to materialize a session's very first transcript, and
+/// as the idempotency marker that tells the next call "already adopted, don't
+/// redo it". A plain `fs::write` truncates the destination before the new
+/// bytes land, so a process or filesystem failure partway through leaves a
+/// truncated file that nonetheless satisfies `destination.exists()` — the
+/// truncated, incomplete transcript would then serve as that marker forever.
+/// Writing to a temp file first and renaming it into place means the
+/// destination only ever transitions from "absent" straight to "complete";
+/// there is no truncated intermediate state a crash can strand callers on.
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("transcript");
+    let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = dir.join(format!(
+        ".{file_name}.tmp-{}-{nonce}",
+        std::process::id()
+    ));
+
+    fs::write(&tmp_path, contents)
+        .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path).with_context(|| {
+        let _ = fs::remove_file(&tmp_path);
+        format!(
+            "rename temp transcript {} to {}",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// Append raw bytes to a file, opening in append mode (O(1), no read-back).
 fn append_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
