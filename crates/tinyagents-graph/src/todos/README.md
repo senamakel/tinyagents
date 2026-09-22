@@ -77,7 +77,9 @@ host needs a progress checklist rather than the board's dispatchable card
 machinery. Calls replace the complete `todos` list, and `{"todos": null}`
 (or an omitted `todos` field for non-strict schemas) reads the current list.
 Items expose only `content` and `status` (`pending`, `in_progress`, or
-`completed`). As with `TodoTool`, the thread ID comes from the tool context.
+`completed`). Checklist cards are marked non-dispatchable, even though they
+share the board store. As with `TodoTool`, the thread ID comes from the tool
+context.
 
 ## Example
 

@@ -20,22 +20,21 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::store;
-use super::types::{TaskBoardCard, TaskCardStatus, TodosSnapshot, parse_status};
+use super::types::{TaskBoardCard, TaskCardStatus, TodosSnapshot};
 use tinyagents_harness::error::Result;
 use tinyagents_harness::store::Store;
 use tinyagents_harness::tool::ToolRegistry;
 use tinytools::{Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
 
 const TOOL_NAME: &str = "todo";
+const SESSION_TODO_MARKER: &str = "session_todo";
 
 const DESCRIPTION: &str = "Your todo list for this conversation. Pass the complete list every \
     time; it replaces what was there. Use it for work with 3+ steps: write the steps up front, \
     keep exactly one `in_progress`, mark each `completed` the moment it is done. Omit `todos` \
     to read the current list.";
 
-/// One item as the model writes it. `status` accepts the Claude-style
-/// `pending` / `in_progress` / `completed` plus the board spellings
-/// [`parse_status`] already knows (`todo`, `done`, …).
+/// One item as the model writes it.
 #[derive(Debug, Deserialize)]
 pub struct TodoItem {
     pub content: String,
@@ -80,13 +79,25 @@ pub fn parse_items(raw: &Value) -> std::result::Result<Vec<TaskBoardCard>, Strin
             return Err("every todo needs non-empty `content`".to_string());
         }
         let mut card = TaskBoardCard::new(content);
-        card.status = match item.status.as_deref() {
-            None => TaskCardStatus::Todo,
-            Some(raw) => parse_status(raw)?,
+        card.status = match item.status.as_deref().map(str::trim) {
+            None | Some("pending") => TaskCardStatus::Todo,
+            Some("in_progress") => TaskCardStatus::InProgress,
+            Some("completed") => TaskCardStatus::Done,
+            Some(_) => return Err("status must be `pending`, `in_progress`, or `completed`".into()),
         };
+        card.source_metadata = Some(json!({ SESSION_TODO_MARKER: true }));
         cards.push(card);
     }
     Ok(cards)
+}
+
+/// Whether `card` is a session checklist item rather than dispatchable work.
+pub(crate) fn is_session_todo_card(card: &TaskBoardCard) -> bool {
+    card.source_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(SESSION_TODO_MARKER))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Replaces the list under `key` with `cards` (an empty list clears it).
@@ -108,22 +119,27 @@ pub async fn read(store: &Arc<dyn Store>, key: &str) -> Result<TodosSnapshot> {
 /// anything else (a write that used some other key such as the retired
 /// `cards`).
 pub async fn call(store: &Arc<dyn Store>, key: &str, args: &Value) -> Result<ToolResult> {
+    let Some(args) = args.as_object() else {
+        return Ok(ToolResult::error("arguments must be an object"));
+    };
     let outcome = match args.get("todos") {
-        None => match args.as_object() {
-            Some(map) if !map.is_empty() => Err(format!(
-                "unknown arguments {:?}: pass `todos` (the full list of {{content, status}}), \
+        None => {
+            if !args.is_empty() {
+                Err(format!(
+                    "unknown arguments {:?}: pass `todos` (the full list of {{content, status}}), \
                  or no arguments to read the list",
-                map.keys().collect::<Vec<_>>()
-            )),
-            _ => read(store, key).await.map_err(|e| e.to_string()),
-        },
-        Some(Value::Null) => match args.as_object() {
-            Some(map) if map.len() == 1 => read(store, key).await.map_err(|e| e.to_string()),
-            Some(map) => Err(format!(
+                    args.keys().collect::<Vec<_>>()
+                ))
+            } else {
+                read(store, key).await.map_err(|e| e.to_string())
+            }
+        }
+        Some(Value::Null) => match args.len() {
+            1 => read(store, key).await.map_err(|e| e.to_string()),
+            _ => Err(format!(
                 "unknown arguments {:?}: pass only `todos`, or no arguments to read the list",
-                map.keys().collect::<Vec<_>>()
+                args.keys().collect::<Vec<_>>()
             )),
-            None => unreachable!("a value with `todos` is an object"),
         },
         Some(raw) => match parse_items(raw) {
             Ok(cards) => write(store, key, cards).await.map_err(|e| e.to_string()),
