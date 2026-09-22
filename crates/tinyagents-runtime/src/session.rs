@@ -464,6 +464,20 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             return Ok(None);
         };
         if self.transcript.is_none() {
+            // A turn can reach the first bind through a resume mode other
+            // than `ResumeMode::Session` (e.g. `Never`, `LatestForAgent`,
+            // `Thread`) on a session-bound target — `resume` only rebinds to
+            // the head generation on its own `Session` path. Without this,
+            // such a turn binds generation 0 even when a later `.g{n}`
+            // exists: it appends into a generation the design requires to
+            // stay sealed, and the next compaction's `begin_generation` then
+            // fails outright because that later generation already exists.
+            if let Some(session) = target.session.clone() {
+                let head = target.locator.head_generation(&session);
+                if head != session {
+                    target.rebind_session(head);
+                }
+            }
             self.transcript = Some(match target.session.as_ref() {
                 Some(session) => target
                     .locator
