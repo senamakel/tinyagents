@@ -2440,7 +2440,10 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         )
         .await
         .unwrap();
-    let sealed = directory.path().join("session_raw/thread-1.agent-id.jsonl");
+    let sealed = directory
+        .path()
+        .join("session_raw")
+        .join(format!("{}.jsonl", session_stem(&session_ref)));
     let sealed_bytes = std::fs::read(&sealed).unwrap();
 
     session
