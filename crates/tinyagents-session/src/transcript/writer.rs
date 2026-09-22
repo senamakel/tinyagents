@@ -353,8 +353,16 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let tmp_path = unique_tmp_path(path);
 
-    fs::write(&tmp_path, contents)
-        .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
+    if let Err(error) = fs::write(&tmp_path, contents) {
+        // `fs::write` creates the file before it can fail partway through
+        // writing (a full disk, a signal interruption); leaving that behind
+        // would orphan a `.tmp-*` file in the transcript directory forever,
+        // since nothing else ever looks for or cleans up a name only this
+        // call ever mints.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error)
+            .with_context(|| format!("write temp transcript {}", tmp_path.display()));
+    }
     fs::rename(&tmp_path, path).with_context(|| {
         let _ = fs::remove_file(&tmp_path);
         format!(
