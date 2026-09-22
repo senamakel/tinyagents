@@ -2051,6 +2051,16 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
             cacheable: true,
         });
     }
+    // The canonical harness-owned trailing tools segment: only *this* exact
+    // segment (including `cacheable: true`) is recognized as the harness's
+    // own below, so middleware that deliberately annotated its own trailing
+    // `tools` segment `cacheable: false` keeps that opt-out instead of being
+    // silently promoted to cacheable once a text dialect strips the schemas.
+    let canonical_tools_segment = PromptSegment {
+        id: "tools".to_string(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    };
     // A text dialect (`RunDialect::apply_to_request`) folds the catalogue
     // into the system prompt and clears `tools` *after* `before_model` ran,
     // so a middleware that declared the harness layout while the schemas
@@ -2058,12 +2068,24 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
     // segment the rebuilt layout no longer has. That is still the harness
     // layout, not a custom annotation: demoting it to the whole-request
     // digest below would re-roll the provider routing key on every call.
+    //
+    // The declared head normally has to equal the rebuilt system-segment
+    // prefix exactly (`head == expected_layout`), but one case legitimately
+    // does not: when the request carried no leading system message at
+    // declare time, `head` is empty, and a text dialect that folds its
+    // protocol block into the (previously absent) system prompt synthesizes
+    // exactly one new leading system message (see
+    // `tinyinference_llm::prompt_tools::append_system_block`) — so
+    // `system_end` becomes 1 where the declared head had 0. That single
+    // synthesized segment is still entirely the dialect rewrite's doing, not
+    // a custom annotation, and is recognized the same way.
     let declared_with_stripped_tools = request.tools.is_empty()
         && request
             .cache_segments
             .split_last()
             .is_some_and(|(last, head)| {
-                last.role == SegmentRole::Tools && last.id == "tools" && head == expected_layout
+                *last == canonical_tools_segment
+                    && (head == expected_layout || (head.is_empty() && system_end == 1))
             });
     let harness_layout = request.cache_segments.is_empty()
         || request.cache_segments == expected_layout
