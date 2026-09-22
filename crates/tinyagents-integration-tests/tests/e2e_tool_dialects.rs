@@ -399,8 +399,7 @@ async fn an_untrusted_protocol_heading_does_not_suppress_the_current_catalogue()
             ..RunPolicy::default()
         });
 
-    let host_prompt =
-        "You are a helper.\n\n## Tool Use Protocol\n\nThis heading is documentation, not a catalogue.";
+    let host_prompt = "You are a helper.\n\n## Tool Use Protocol\n\nThis heading is documentation, not a catalogue.";
     let run = harness
         .invoke_default(&(), vec![Message::system(host_prompt), Message::user("go")])
         .await
