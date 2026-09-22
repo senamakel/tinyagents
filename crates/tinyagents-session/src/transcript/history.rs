@@ -24,10 +24,9 @@ use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
     SessionAdoption, SessionRef, SessionTranscript, TranscriptMeta, TurnUsage,
-    adopt_legacy_session_transcripts, append_transcript_turn,
-    find_latest_transcript, find_root_transcript_for_thread,
-    find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
-    session_stem,
+    adopt_legacy_session_transcripts, append_transcript_turn, find_latest_transcript,
+    find_root_transcript_for_thread, find_root_transcript_for_thread_scoped, read_transcript,
+    resolve_keyed_transcript_path, session_stem,
 };
 
 /// Upper bound on the compaction generations one session may accumulate.
@@ -444,7 +443,9 @@ impl TranscriptLocator for FileTranscriptLocator {
 /// handles a `None` meta would mean an `Option` field every write path then has
 /// to unwrap for no benefit.
 fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
-    TranscriptMeta { session_id: None, parent_session_id: None,
+    TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
         agent_name: agent_name.to_string(),
         agent_id: None,
         agent_type: None,

@@ -10,9 +10,10 @@ fn a_stem_is_deterministic_and_carries_no_timestamp() {
     assert_eq!(first, "thread-9fa08c44.orchestrator");
     // The whole point: no `{unix_ts}_` prefix, so nothing varies per launch.
     assert!(
-        !first.split(['_', '.']).next().is_some_and(|head| {
-            head.len() >= 10 && head.chars().all(|c| c.is_ascii_digit())
-        }),
+        !first
+            .split(['_', '.'])
+            .next()
+            .is_some_and(|head| { head.len() >= 10 && head.chars().all(|c| c.is_ascii_digit()) }),
         "{first} still looks timestamp-prefixed"
     );
 }

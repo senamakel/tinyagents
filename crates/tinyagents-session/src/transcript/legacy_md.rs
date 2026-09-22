@@ -56,7 +56,9 @@ fn parse_legacy_meta(raw: &str) -> Result<TranscriptMeta> {
         })
     };
 
-    Ok(TranscriptMeta { session_id: None, parent_session_id: None,
+    Ok(TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
         agent_name: get("agent").unwrap_or_else(|| "unknown".into()),
         dispatcher: get("dispatcher").unwrap_or_else(|| "native".into()),
         agent_id: None,

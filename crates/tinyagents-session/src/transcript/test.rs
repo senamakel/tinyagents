@@ -257,14 +257,19 @@ fn one_session_resolves_to_one_transcript_across_separate_bindings() {
         .open_session(&session, meta())
         .unwrap();
     first
-        .append(TranscriptMessage::new("user", "i want to plan a trip to kashmir"))
+        .append(TranscriptMessage::new(
+            "user",
+            "i want to plan a trip to kashmir",
+        ))
         .unwrap();
 
     // A brand-new locator and handle, as a restarted process would build.
     let second = FileTranscriptLocator::new(dir.path())
         .open_session(&session, meta())
         .unwrap();
-    second.append(TranscriptMessage::new("user", "hello?")).unwrap();
+    second
+        .append(TranscriptMessage::new("user", "hello?"))
+        .unwrap();
 
     assert_eq!(first.path(), second.path());
     let messages = second.messages().unwrap();
@@ -277,7 +282,11 @@ fn one_session_resolves_to_one_transcript_across_separate_bindings() {
         .flatten()
         .map(|entry| entry.file_name())
         .collect();
-    assert_eq!(roots.len(), 1, "one conversation must not sprawl: {roots:?}");
+    assert_eq!(
+        roots.len(),
+        1,
+        "one conversation must not sprawl: {roots:?}"
+    );
 }
 
 #[test]
@@ -298,10 +307,19 @@ fn session_identity_round_trips_through_the_jsonl_meta() {
     let mut written = meta();
     written.session_id = Some("thread-1.orchestrator.g1".into());
     written.parent_session_id = Some("thread-1.orchestrator".into());
-    write_transcript(&path, &[TranscriptMessage::new("user", "hi")], &written, None).unwrap();
+    write_transcript(
+        &path,
+        &[TranscriptMessage::new("user", "hi")],
+        &written,
+        None,
+    )
+    .unwrap();
 
     let read = read_transcript(&path).unwrap();
-    assert_eq!(read.meta.session_id.as_deref(), Some("thread-1.orchestrator.g1"));
+    assert_eq!(
+        read.meta.session_id.as_deref(),
+        Some("thread-1.orchestrator.g1")
+    );
     assert_eq!(
         read.meta.parent_session_id.as_deref(),
         Some("thread-1.orchestrator")
@@ -326,7 +344,9 @@ fn a_compaction_seals_a_generation_and_leaves_it_untouched() {
     let (successor, handle) = locator.begin_generation(&session, meta()).unwrap();
     // The successor is bound but empty; the retained set is written through the
     // ordinary turn path so usage and request ids are recorded as usual.
-    handle.replace(&[TranscriptMessage::new("user", "three")]).unwrap();
+    handle
+        .replace(&[TranscriptMessage::new("user", "three")])
+        .unwrap();
 
     assert_eq!(successor.generation, 1);
     assert_eq!(
@@ -388,7 +408,9 @@ fn opening_a_generation_that_already_exists_is_refused() {
     let session = SessionRef::scoped("thread-1", "orchestrator");
 
     let (_, handle) = locator.begin_generation(&session, meta()).unwrap();
-    handle.append(TranscriptMessage::new("user", "one")).unwrap();
+    handle
+        .append(TranscriptMessage::new("user", "one"))
+        .unwrap();
     let second = locator.begin_generation(&session, meta());
 
     assert!(
@@ -411,9 +433,13 @@ fn concurrent_handles_on_one_session_both_extend_it() {
         .open_session(&session, meta())
         .unwrap();
 
-    left.append(TranscriptMessage::new("user", "from left")).unwrap();
-    right.append(TranscriptMessage::new("user", "from right")).unwrap();
-    left.append(TranscriptMessage::new("user", "left again")).unwrap();
+    left.append(TranscriptMessage::new("user", "from left"))
+        .unwrap();
+    right
+        .append(TranscriptMessage::new("user", "from right"))
+        .unwrap();
+    left.append(TranscriptMessage::new("user", "left again"))
+        .unwrap();
 
     let contents: Vec<String> = left
         .messages()

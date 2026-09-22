@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use tinyagents_session::transcript::{
-    SessionRef, TranscriptLocator, TranscriptMeta, session_stem,
-};
+use tinyagents_session::transcript::{SessionRef, TranscriptLocator, TranscriptMeta, session_stem};
 
 use crate::{
     NoopSessionHooks, PrefixSnapshot, RuntimeError, Session, SessionDriver, SessionHooks,

@@ -131,7 +131,11 @@ impl SessionRef {
 /// `{parent}__` for a sub-agent.
 pub fn session_stem(session: &SessionRef) -> String {
     let mut stem = sanitize_component(&session.session_key);
-    if let Some(agent_id) = session.agent_id.as_deref().filter(|id| !id.trim().is_empty()) {
+    if let Some(agent_id) = session
+        .agent_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    {
         stem.push('.');
         stem.push_str(&sanitize_component(agent_id));
     }

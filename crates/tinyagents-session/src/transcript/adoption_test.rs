@@ -105,10 +105,14 @@ fn adoption_sums_usage_and_spans_the_whole_conversation() {
     write_legacy(dir.path(), "2000_a", "2026-02-02T00:00:00Z", "two", thread);
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let adoption =
-        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
-            .unwrap()
-            .unwrap();
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
 
     let meta = read_transcript(&adoption.path).unwrap().meta;
     assert_eq!(meta.turn_count, 2);
@@ -204,7 +208,13 @@ fn an_adopted_session_is_what_the_locator_then_resolves() {
 fn subagent_siblings_are_never_folded_into_the_root_conversation() {
     let dir = tempdir().unwrap();
     let thread = "thread-1";
-    write_legacy(dir.path(), "1000_orchestrator", "2026-01-01T00:00:00Z", "user ask", thread);
+    write_legacy(
+        dir.path(),
+        "1000_orchestrator",
+        "2026-01-01T00:00:00Z",
+        "user ask",
+        thread,
+    );
     write_legacy(
         dir.path(),
         "1000_orchestrator__1001_researcher",
@@ -214,10 +224,14 @@ fn subagent_siblings_are_never_folded_into_the_root_conversation() {
     );
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let adoption =
-        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
-            .unwrap()
-            .unwrap();
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
 
     let contents: Vec<String> = read_transcript(&adoption.path)
         .unwrap()
@@ -236,14 +250,30 @@ fn subagent_siblings_are_never_folded_into_the_root_conversation() {
 fn legacy_indexed_openhuman_stems_are_adopted() {
     let dir = tempdir().unwrap();
     let thread = "thread-1";
-    write_legacy(dir.path(), "orchestrator_1", "2026-01-01T00:00:00Z", "first", thread);
-    write_legacy(dir.path(), "orchestrator_2", "2026-01-02T00:00:00Z", "second", thread);
+    write_legacy(
+        dir.path(),
+        "orchestrator_1",
+        "2026-01-01T00:00:00Z",
+        "first",
+        thread,
+    );
+    write_legacy(
+        dir.path(),
+        "orchestrator_2",
+        "2026-01-02T00:00:00Z",
+        "second",
+        thread,
+    );
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let adoption =
-        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
-            .unwrap()
-            .unwrap();
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
 
     let contents: Vec<String> = read_transcript(&adoption.path)
         .unwrap()
@@ -298,17 +328,27 @@ fn date_grouped_openhuman_transcripts_adopt_after_the_layout_migration() {
 fn transcripts_without_session_identity_still_adopt() {
     let dir = tempdir().unwrap();
     let thread = "thread-1";
-    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "pre-identity", thread);
-    let legacy = read_transcript(&resolve_keyed_transcript_path(dir.path(), "1000_a").unwrap())
-        .unwrap();
+    write_legacy(
+        dir.path(),
+        "1000_a",
+        "2026-01-01T00:00:00Z",
+        "pre-identity",
+        thread,
+    );
+    let legacy =
+        read_transcript(&resolve_keyed_transcript_path(dir.path(), "1000_a").unwrap()).unwrap();
     assert_eq!(legacy.meta.session_id, None);
     assert_eq!(legacy.meta.parent_session_id, None);
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let adoption =
-        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
-            .unwrap()
-            .unwrap();
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
 
     let adopted = read_transcript(&adoption.path).unwrap();
     assert_eq!(adopted.messages[0].content, "pre-identity");
@@ -361,10 +401,14 @@ fn adoption_preserves_tool_rounds_and_usage_of_legacy_transcripts() {
     .unwrap();
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let adoption =
-        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
-            .unwrap()
-            .unwrap();
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
 
     let adopted = read_transcript(&adoption.path).unwrap();
     assert_eq!(adopted.messages.len(), 3);
@@ -415,10 +459,14 @@ fn adoption_folds_the_replayed_context_of_a_compacted_legacy_transcript() {
     .unwrap();
 
     let session = SessionRef::scoped(thread, "orchestrator");
-    let adoption =
-        adopt_legacy_session_transcripts(dir.path(), &session, thread, &legacy_meta("", "", thread))
-            .unwrap()
-            .unwrap();
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
 
     let contents: Vec<String> = read_transcript(&adoption.path)
         .unwrap()

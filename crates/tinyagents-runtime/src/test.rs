@@ -12,10 +12,9 @@ use tinyagents_harness::{
     runtime::AgentHarness,
 };
 use tinyagents_session::transcript::{
-    SessionRef,
-    DisplayRecord, FileTranscriptLocator, SessionTranscript, TranscriptHistory, TranscriptLocator,
-    TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, read_transcript,
-    read_transcript_display,
+    DisplayRecord, FileTranscriptLocator, SessionRef, SessionTranscript, TranscriptHistory,
+    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
+    TurnUsage, read_transcript, read_transcript_display,
 };
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
@@ -1016,7 +1015,7 @@ async fn resumed_history_restores_the_prefix_once_before_the_next_driver_call() 
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::LatestForAgent,
+                resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1382,7 +1381,7 @@ async fn latest_resume_agent_is_distinct_from_the_write_stem() {
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::LatestForAgent,
+                resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1426,7 +1425,7 @@ async fn thread_resume_scopes_lookup_to_the_target_agent() {
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::Thread,
+                resume: ResumeMode::Thread,
                 thread_id: Some("thread-1".into()),
                 ..TurnOptions::default()
             },
@@ -1499,7 +1498,7 @@ async fn before_turn_receives_resumed_decoded_history_and_raw_rows() {
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::LatestForAgent,
+                resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1605,7 +1604,7 @@ async fn first_turn_prefix_accepts_an_exact_resumed_prefix_and_restores_it_after
             SessionTurnRequest::new(Message::user("first")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::LatestForAgent,
+                resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1666,7 +1665,7 @@ async fn changed_first_turn_prefix_replaces_a_builder_prefix_after_resume() {
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::LatestForAgent,
+                resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1796,7 +1795,7 @@ async fn resumed_raw_rows_and_metadata_survive_the_append() {
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
                 session: None,
-            resume: ResumeMode::LatestForAgent,
+                resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -2035,7 +2034,7 @@ async fn hook_option_context_mutation_reaches_driver_and_codec() {
                 thread_id: None,
                 stream: false,
                 session: None,
-            resume: ResumeMode::Never,
+                resume: ResumeMode::Never,
                 cancellation: cancellation.clone(),
                 run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
                     .with_cancellation(cancellation),
@@ -2122,7 +2121,7 @@ async fn before_resume_mutates_context_and_options_while_target_remains_lazy() {
                 thread_id: None,
                 stream: false,
                 session: None,
-            resume: ResumeMode::Never,
+                resume: ResumeMode::Never,
                 cancellation: cancellation.clone(),
                 run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
                     .with_cancellation(cancellation),
@@ -2313,7 +2312,10 @@ async fn a_restarted_session_continues_the_same_transcript() {
     let session_ref = SessionRef::scoped("thread-9fa08", "agent-id");
 
     let mut first = SessionBuilder::new(Arc::new(Driver::new(vec![session_outcome(
-        vec![Message::user("plan a trip to kashmir"), Message::assistant("when?")],
+        vec![
+            Message::user("plan a trip to kashmir"),
+            Message::assistant("when?"),
+        ],
         "when?",
     )])))
     .codec(Arc::new(Codec::default()))
@@ -2375,7 +2377,11 @@ async fn a_restarted_session_continues_the_same_transcript() {
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().to_string())
         .collect();
-    assert_eq!(roots.len(), 1, "one conversation, one transcript: {roots:?}");
+    assert_eq!(
+        roots.len(),
+        1,
+        "one conversation, one transcript: {roots:?}"
+    );
 
     let persisted = read_transcript(&directory.path().join("session_raw").join(&roots[0])).unwrap();
     let contents: Vec<&str> = persisted
@@ -2392,7 +2398,10 @@ async fn a_restarted_session_continues_the_same_transcript() {
             "about kashmir"
         ]
     );
-    assert_eq!(persisted.meta.session_id.as_deref(), Some("thread-9fa08.agent-id"));
+    assert_eq!(
+        persisted.meta.session_id.as_deref(),
+        Some("thread-9fa08.agent-id")
+    );
 }
 
 /// A compaction must not rewrite the sealed file: the turns it drops are the
@@ -2431,9 +2440,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         )
         .await
         .unwrap();
-    let sealed = directory
-        .path()
-        .join("session_raw/thread-1.agent-id.jsonl");
+    let sealed = directory.path().join("session_raw/thread-1.agent-id.jsonl");
     let sealed_bytes = std::fs::read(&sealed).unwrap();
 
     session
@@ -2497,7 +2504,11 @@ async fn a_restart_after_a_compaction_resumes_the_head_generation() {
 
     assert!(resumed.loaded);
     assert_eq!(
-        resumed.history.iter().map(Message::text).collect::<Vec<_>>(),
+        resumed
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
         ["current"]
     );
 }
@@ -2539,7 +2550,11 @@ async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
 
     assert!(resumed.loaded, "the legacy conversation must be adopted");
     assert_eq!(
-        resumed.history.iter().map(Message::text).collect::<Vec<_>>(),
+        resumed
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
         ["plan a trip to kashmir"]
     );
 }
