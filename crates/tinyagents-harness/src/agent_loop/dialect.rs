@@ -129,7 +129,7 @@ impl RunDialect {
         let tools = std::mem::take(&mut request.tools);
         let messages = prompt_tools::coalesce_tool_results(&request.messages);
         let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
-        sync_stripped_tools_cache_segment(request, &messages);
+        let had_leading_system = matches!(messages.first(), Some(Message::System(_)));
         if host_renders_catalogue {
             let mut block = String::new();
             if !synthesized.is_empty() {
@@ -145,11 +145,16 @@ impl RunDialect {
                 ToolChoice::Auto | ToolChoice::None => {}
             }
             request.messages = if block.is_empty() {
+                // Nothing to say: no synthesized tool to advertise and no
+                // forced choice, so this rewrite leaves `messages` — and in
+                // particular whether a leading system message exists —
+                // exactly as it already was.
                 messages
             } else {
                 prompt_tools::append_system_block(&messages, &block)
             };
             request.tool_choice = ToolChoice::Auto;
+            sync_stripped_tools_cache_segment(request, had_leading_system);
             return;
         }
         request.messages = match self {
