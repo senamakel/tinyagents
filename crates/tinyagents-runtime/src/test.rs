@@ -2657,6 +2657,75 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
     );
 }
 
+/// `session_binding` is only ever set on the `ResumeMode::Session` path, so
+/// without rebinding for every mode, a session-bound target resumed through
+/// `Thread`/`LatestForAgent` after an earlier compaction would still bind
+/// generation 0 — a generation the design requires to stay sealed and
+/// byte-for-byte unchanged — instead of the actual head.
+#[tokio::test]
+async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+
+    // Seal generation 0 and open generation 1, exactly what a prior
+    // compaction does.
+    locator
+        .open_session(&session_ref, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "sealed generation 0"))
+        .unwrap();
+    let (_, head_handle) = locator.begin_generation(&session_ref, meta()).unwrap();
+    head_handle
+        .append(TranscriptMessage::new("user", "head generation 1"))
+        .unwrap();
+    let sealed_path = directory
+        .path()
+        .join("session_raw")
+        .join(format!("{}.jsonl", session_stem(&session_ref)));
+    let sealed_bytes_before = std::fs::read(&sealed_path).unwrap();
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
+        vec![
+            Message::user("head generation 1"),
+            Message::assistant("new turn"),
+        ],
+        "new turn",
+    ))])))
+    .codec(Arc::new(Codec::default()))
+    .session(locator.clone(), session_ref.clone(), meta())
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("continue")),
+            session_turn_options(ResumeMode::Thread, "thread-1"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read(&sealed_path).unwrap(),
+        sealed_bytes_before,
+        "generation 0 must stay sealed and byte-identical"
+    );
+    let head_path = directory.path().join("session_raw").join(format!(
+        "{}.jsonl",
+        session_stem(&session_ref.next_generation())
+    ));
+    let head_contents: Vec<String> = read_transcript(&head_path)
+        .unwrap()
+        .messages
+        .into_iter()
+        .map(|message| message.content)
+        .collect();
+    assert!(
+        head_contents.contains(&"new turn".to_string()),
+        "the new turn must land in the head generation, not the sealed one: {head_contents:?}"
+    );
+}
+
 /// A conversation written before session identity existed is spread over
 /// timestamped stems. The first session resume folds them in, so the model
 /// regains the turns newest-wins lookup had stranded.
