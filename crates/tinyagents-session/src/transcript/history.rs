@@ -238,10 +238,7 @@ pub trait TranscriptLocator: Send + Sync {
     /// conversation wants the whole chain. Empty when nothing is written yet.
     fn session_chain(&self, session: &SessionRef) -> Vec<SessionRef> {
         let mut chain = Vec::new();
-        let mut generation = SessionRef {
-            generation: 0,
-            ..session.clone()
-        };
+        let mut generation = session.first_generation();
         while generation.generation <= MAX_GENERATIONS && self.session_exists(&generation) {
             chain.push(generation.clone());
             generation = generation.next_generation();

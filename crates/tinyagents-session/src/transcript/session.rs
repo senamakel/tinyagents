@@ -92,6 +92,14 @@ impl SessionRef {
         }
     }
 
+    /// Generation 0 of this session — the chain's first segment.
+    pub fn first_generation(&self) -> Self {
+        Self {
+            generation: 0,
+            ..self.clone()
+        }
+    }
+
     /// The successor this session's next compaction writes into.
     pub fn next_generation(&self) -> Self {
         Self {
