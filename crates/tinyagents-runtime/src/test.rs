@@ -2667,15 +2667,23 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    // `ResumeMode::Thread` matches on `_meta.thread_id`, so the seed for both
+    // generations needs it set — otherwise `root_for_thread_scoped` finds
+    // neither file and `resume` returns early before ever reaching the bind
+    // this test is about, making the whole scenario a no-op.
+    let mut thread_meta = meta();
+    thread_meta.thread_id = Some("thread-1".into());
 
     // Seal generation 0 and open generation 1, exactly what a prior
     // compaction does.
     locator
-        .open_session(&session_ref, meta())
+        .open_session(&session_ref, thread_meta.clone())
         .unwrap()
         .append(TranscriptMessage::new("user", "sealed generation 0"))
         .unwrap();
-    let (_, head_handle) = locator.begin_generation(&session_ref, meta()).unwrap();
+    let (_, head_handle) = locator
+        .begin_generation(&session_ref, thread_meta.clone())
+        .unwrap();
     head_handle
         .append(TranscriptMessage::new("user", "head generation 1"))
         .unwrap();
