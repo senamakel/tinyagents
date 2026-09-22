@@ -2069,24 +2069,21 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
     // layout, not a custom annotation: demoting it to the whole-request
     // digest below would re-roll the provider routing key on every call.
     //
-    // The declared head normally has to equal the rebuilt system-segment
-    // prefix exactly (`head == expected_layout`), but one case legitimately
-    // does not: when the request carried no leading system message at
-    // declare time, `head` is empty, and a text dialect that folds its
-    // protocol block into the (previously absent) system prompt synthesizes
-    // exactly one new leading system message (see
-    // `tinyinference_llm::prompt_tools::append_system_block`) — so
-    // `system_end` becomes 1 where the declared head had 0. That single
-    // synthesized segment is still entirely the dialect rewrite's doing, not
-    // a custom annotation, and is recognized the same way.
+    // The declared head has to equal the rebuilt system-segment prefix
+    // exactly. The one case that legitimately would not — no leading system
+    // message at declare time, so the dialect synthesizes one — is already
+    // resolved before this function ever runs, by
+    // `RunDialect::sync_stripped_tools_cache_segment`, which has the
+    // pre-rewrite message shape this function does not: reconstructing that
+    // distinction from the rewritten request alone cannot tell an
+    // actually-synthesized leading segment apart from a custom declaration
+    // that deliberately left an already-present system message out of the
+    // cache key.
     let declared_with_stripped_tools = request.tools.is_empty()
         && request
             .cache_segments
             .split_last()
-            .is_some_and(|(last, head)| {
-                *last == canonical_tools_segment
-                    && (head == expected_layout || (head.is_empty() && system_end == 1))
-            });
+            .is_some_and(|(last, head)| *last == canonical_tools_segment && head == expected_layout);
     let harness_layout = request.cache_segments.is_empty()
         || request.cache_segments == expected_layout
         || declared_with_stripped_tools;
