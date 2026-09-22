@@ -55,6 +55,10 @@ pub(super) struct MetaPayload {
     pub(super) thread_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) parent_session_id: Option<String>,
 }
 
 /// One message line in the JSONL — only `role` and `content` are required.
@@ -140,6 +144,8 @@ fn meta_payload_from(meta: &TranscriptMeta) -> MetaPayload {
         version: TRANSCRIPT_SCHEMA_VERSION,
         agent: meta.agent_name.clone(),
         agent_id: meta.agent_id.clone(),
+        session_id: meta.session_id.clone(),
+        parent_session_id: meta.parent_session_id.clone(),
         agent_type: meta.agent_type.clone(),
         dispatcher: meta.dispatcher.clone(),
         provider: meta.provider.clone(),
