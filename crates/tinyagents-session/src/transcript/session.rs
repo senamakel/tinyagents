@@ -188,8 +188,9 @@ const MAX_COMPONENT_PREFIX: usize = 80;
 fn sanitize_component(value: &str) -> String {
     let sanitized = sanitize_stem(value);
     let mut out = String::with_capacity(sanitized.len().min(MAX_COMPONENT_PREFIX));
+    let mut kept = 0usize;
     for ch in sanitized.chars() {
-        if out.chars().count() >= MAX_COMPONENT_PREFIX {
+        if kept >= MAX_COMPONENT_PREFIX {
             break;
         }
         // `.` is reserved for the agent-id and generation separators.
@@ -198,6 +199,7 @@ fn sanitize_component(value: &str) -> String {
             continue;
         }
         out.push(ch);
+        kept += 1;
     }
 
     let mut hasher = DefaultHasher::new();
