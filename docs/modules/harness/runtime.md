@@ -144,8 +144,9 @@ Step 12's text-dialect recovery (parsing `<tool_call>`-style markup out of
 an assistant's visible text through the `tinytools-agent` grammars, both on
 the streamed deltas and on the terminal response) always runs under a forced
 text dialect (`RunPolicy::tool_dialect` of `Xml` / `Pformat`, or `Auto`
-falling back to Xml for a model without native tool calling) — there, parsing
-text is the protocol. Under a native dialect it is gated by
+falling back to Xml for a model without native tool calling; `Python` and
+`Typescript` are forced text dialects too) — there, parsing text is the
+protocol. Under a native dialect it is gated by
 `RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On | Auto`,
 default `Auto`): it only runs when the resolved model's profile does not
 report native tool calling, and it always skips markup that appears only
