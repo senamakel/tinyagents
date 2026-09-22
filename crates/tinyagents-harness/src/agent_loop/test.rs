@@ -6798,3 +6798,67 @@ async fn tiered_system_messages_become_one_cacheable_segment_each() {
     );
     assert!(request.provider_options[PROMPT_CACHE_KEY_OPTION].is_string());
 }
+
+/// A middleware that declares the harness layout while the schemas are still
+/// on the request (`system`, `tools`) must keep its stable-prefix fingerprint
+/// under a text dialect, which folds the catalogue into the prompt and clears
+/// `tools` afterwards. Before, the rebuilt layout (`system` only) no longer
+/// matched the declaration, the request fell through to the whole-request
+/// digest, and the provider routing key changed on every call of a thread.
+#[test]
+fn stripped_tools_segment_still_counts_as_the_harness_layout() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+    let system = Message::system("identity and rules");
+    let declared = |request: &mut ModelRequest| {
+        request.cache_segments = vec![
+            PromptSegment {
+                id: "system".to_string(),
+                role: SegmentRole::System,
+                cacheable: true,
+            },
+            PromptSegment {
+                id: "tools".to_string(),
+                role: SegmentRole::Tools,
+                cacheable: true,
+            },
+        ];
+    };
+
+    // Same declaration, two turns of one thread, schemas already stripped.
+    let mut turn_one = ModelRequest::new(vec![system.clone(), Message::user("hi")]);
+    declared(&mut turn_one);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut turn_one);
+    let mut turn_two = ModelRequest::new(vec![
+        system.clone(),
+        Message::user("hi"),
+        Message::assistant("hello"),
+        Message::user("later"),
+    ]);
+    declared(&mut turn_two);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut turn_two);
+
+    let ids: Vec<&str> = turn_one
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system"], "the stripped tools segment is dropped");
+    let mut expected = crate::prompt::PromptBuilder::new();
+    expected.push_system_messages(std::slice::from_ref(&system));
+    assert_eq!(
+        turn_one.prompt_fingerprint,
+        expected.build(Vec::new()).prompt_fingerprint,
+        "the fingerprint is the stable-prefix one, not a whole-request digest"
+    );
+    assert_eq!(turn_one.prompt_fingerprint, turn_two.prompt_fingerprint);
+
+    // A genuinely custom annotation still takes the conservative path.
+    let mut custom = ModelRequest::new(vec![system, Message::user("hi")]);
+    custom.cache_segments = vec![PromptSegment {
+        id: "system:abc".to_string(),
+        role: SegmentRole::System,
+        cacheable: true,
+    }];
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut custom);
+    assert_ne!(custom.prompt_fingerprint, turn_one.prompt_fingerprint);
+}
