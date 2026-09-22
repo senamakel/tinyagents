@@ -107,11 +107,21 @@ impl TranscriptTarget {
     ///
     /// The stem is derived from the session, so it is stable across processes
     /// and launches — the property a `{unix_ts}_{agent}` stem never had.
+    ///
+    /// `meta.session_id`/`parent_session_id` are populated from `session`
+    /// here, the same way [`Self::rebind_session`] keeps them in sync after a
+    /// compaction. Leaving them as whatever the caller passed in (typically
+    /// `None`, since a newly bound target usually has no opinion on session
+    /// identity yet) would otherwise let a session-addressed transcript carry
+    /// metadata that does not name its own session — metadata-based session
+    /// discovery would then fail to recognise it.
     pub fn for_session(
         locator: Arc<dyn TranscriptLocator>,
         session: SessionRef,
-        meta: TranscriptMeta,
+        mut meta: TranscriptMeta,
     ) -> Self {
+        meta.session_id = Some(session.session_id());
+        meta.parent_session_id = session.parent_session_id();
         Self {
             locator,
             stem: session_stem(&session),
