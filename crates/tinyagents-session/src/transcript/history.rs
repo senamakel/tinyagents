@@ -443,14 +443,20 @@ impl TranscriptLocator for FileTranscriptLocator {
     fn session_exists(&self, session: &SessionRef) -> bool {
         // A direct path probe, not a read: `head_generation` calls this once
         // per generation and only needs to know whether the file is there.
+        // `is_file()` rather than `exists()`: a directory, FIFO or other
+        // non-regular entry occupying the canonical path must not be
+        // reported as an existing generation — reads/appends against it
+        // would fail (or, for a directory, silently target the wrong thing)
+        // downstream, and `head_generation`'s chain walk would stop at a
+        // phantom "generation" that was never actually written.
         resolve_keyed_transcript_path(&self.workspace_dir, &session_stem(session))
-            .is_ok_and(|path| path.exists())
+            .is_ok_and(|path| path.is_file())
     }
 
     fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
         let stem = session_stem(session);
         let path = resolve_keyed_transcript_path(&self.workspace_dir, &stem).ok()?;
-        if !path.exists() {
+        if !path.is_file() {
             return None;
         }
         tracing::debug!(
