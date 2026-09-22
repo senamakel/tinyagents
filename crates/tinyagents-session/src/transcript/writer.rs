@@ -41,7 +41,7 @@ pub fn write_transcript(
     jsonl_buf.push('\n');
     serialise_message_lines(messages, last_assistant_turn_usage, None, &mut jsonl_buf)?;
 
-    fs::write(jsonl_path, jsonl_buf.as_bytes())
+    atomic_write(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("write transcript {}", jsonl_path.display()))?;
 
     tracing::debug!(
