@@ -233,7 +233,7 @@ fn sanitize_component(value: &str) -> String {
     }
 
     out.push(DIGEST_SEPARATOR);
-    out.push_str(&format!("{:016x}", fnv1a64(value.as_bytes())));
+    out.push_str(&format!("{:032x}", fnv1a128(value.as_bytes())));
     out
 }
 
@@ -242,16 +242,46 @@ fn sanitize_component(value: &str) -> String {
 /// [`sanitize_component`] for why that fixedness is the point. Operates on
 /// bytes rather than `str::hash`, so it does not depend on
 /// [`std::hash::Hash`]'s own algorithm-agnostic contract either.
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+///
+/// `offset_basis` is exposed (rather than hardcoded to FNV's own published
+/// constant) so [`fnv1a128`] can run this twice with two different, still
+/// fully-specified seeds and combine the results — a single 64-bit digest
+/// alone only resists *accidental* collision (host-generated identifiers
+/// such as thread ids colliding by chance, astronomically unlikely at 64
+/// bits); it does not resist a party that can choose the raw session key and
+/// deliberately search for two values with the same digest, which is
+/// tractable against a fast, non-cryptographic 64-bit hash. This module
+/// makes no claim of cryptographic collision resistance either way — that
+/// would need a real cryptographic hash and a dependency this small crate
+/// does not otherwise need — but 128 bits raises the deliberate-search cost
+/// enough that it is no longer a practical concern for a value that, per
+/// `SessionRef`'s own doc, is "the host's stable name for the conversation"
+/// rather than fully attacker-chosen bytes.
+fn fnv1a64(bytes: &[u8], offset_basis: u64) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01b3;
 
-    let mut hash = OFFSET_BASIS;
+    let mut hash = offset_basis;
     for &byte in bytes {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(PRIME);
     }
     hash
+}
+
+/// 128-bit digest: two independent [`fnv1a64`] passes over the same bytes
+/// with two different fixed seeds, concatenated. See [`fnv1a64`]'s doc for
+/// why one 64-bit pass alone is not enough.
+fn fnv1a128(bytes: &[u8]) -> u128 {
+    // FNV's own published 64-bit offset basis, and a second, arbitrary but
+    // fixed 64-bit constant (this crate's version-independent "no discretion
+    // left to change" requirement only demands that whatever is used is
+    // fixed forever, not that it hold any particular value).
+    const OFFSET_BASIS_A: u64 = 0xcbf2_9ce4_8422_2325;
+    const OFFSET_BASIS_B: u64 = 0x9E37_79B9_7F4A_7C15;
+
+    let high = fnv1a64(bytes, OFFSET_BASIS_A);
+    let low = fnv1a64(bytes, OFFSET_BASIS_B);
+    (u128::from(high) << 64) | u128::from(low)
 }
 
 /// `parent`'s stem, bounded to [`MAX_PARENT_CHAIN_PREFIX`]: verbatim when
