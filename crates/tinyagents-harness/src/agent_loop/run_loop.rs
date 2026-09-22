@@ -944,7 +944,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `max_input_tokens` pass admission on the small structured
             // request and then send a materially larger rendered-text one,
             // defeating the pre-call budget limit.
-            dialect.apply_to_request(&mut request);
+            dialect.apply_to_request(&mut request, self.policy.host_renders_tool_catalogue);
 
             // A host budget is acquired only for an explicit host-driven run.
             // Do it after structured-output planning: a synthetic schema tool

@@ -101,13 +101,24 @@ impl RunDialect {
     /// is folded into forms a prompt-guided model can read, the protocol block
     /// and catalogue go into the system prompt, and no schema goes on the
     /// wire. A no-op for [`Self::Native`] or when no tools are offered.
-    pub(super) fn apply_to_request(&self, request: &mut ModelRequest) {
+    ///
+    /// With `host_renders_catalogue` the schemas still leave the wire (the
+    /// registry built from them before this call is what parses the answer),
+    /// but nothing is appended: the host's own prompt already carries the
+    /// protocol block and the catalogue for this dialect.
+    pub(super) fn apply_to_request(&self, request: &mut ModelRequest, host_renders_catalogue: bool) {
         if !self.is_text() || request.tools.is_empty() || request.tool_choice == ToolChoice::None {
             return;
         }
         use tinyinference_llm::prompt_tools;
 
         let tools = std::mem::take(&mut request.tools);
+        if host_renders_catalogue {
+            request.messages = prompt_tools::coalesce_tool_results(&request.messages);
+            request.messages = prompt_tools::ensure_resolvable_user_turn(&request.messages);
+            request.tool_choice = ToolChoice::Auto;
+            return;
+        }
         let messages = prompt_tools::coalesce_tool_results(&request.messages);
         let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
         request.messages = match self {
