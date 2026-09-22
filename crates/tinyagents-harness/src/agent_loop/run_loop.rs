@@ -249,6 +249,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
+        // Captured before the bridge schemas are appended below, so
+        // `ToolsAdvertised.direct` reports the actual `Direct`-exposure
+        // count. Otherwise it would silently include the two intrinsic
+        // bridge schemas whenever discovery is enabled, double-counting
+        // relative to `deferred` and making `direct` mean different things
+        // depending on whether any tool happens to be deferred.
+        let direct_schema_count = tool_schemas.len();
         // B6 (`docs/runtime-comparison/plan.md`): `declared_tool_schemas`
         // tracks what the transcript has actually been told about the
         // toolset chain's tools so far (folded or patched in, turn by turn,
@@ -350,7 +357,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // output tool-call fallback can still narrow or grow what an
         // individual request actually sends.
         let record = ctx.emit(AgentEvent::ToolsAdvertised {
-            direct: tool_schemas.len(),
+            direct: direct_schema_count,
             deferred: deferred_catalog.len(),
             schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
         });

@@ -1108,7 +1108,10 @@ async fn tool_policy_strict_preserves_the_discovery_bridge() {
     let mut policies = std::collections::HashMap::new();
     policies.insert("safe".to_string(), ToolPolicy::read_only());
 
-    let mw = ToolPolicyMiddleware::strict(policies);
+    // `exempt_discovery_bridge` is opt-in (see the field doc and the
+    // `..._does_not_exempt_a_real_tool_...` regression below for why it isn't
+    // automatic even under `strict()`).
+    let mw = ToolPolicyMiddleware::strict(policies).exempt_discovery_bridge(true);
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(Arc::new(mw));
 
@@ -1132,6 +1135,59 @@ async fn tool_policy_strict_preserves_the_discovery_bridge() {
     assert!(names.contains("safe"));
     assert!(names.contains(crate::tool::discover::TOOL_SEARCH_NAME));
     assert!(names.contains(crate::tool::discover::TOOL_CALL_NAME));
+}
+
+/// Regression: without `exempt_discovery_bridge(true)`, `strict()` must keep
+/// rejecting an unclassified name sharing `tool_search`/`tool_call` exactly
+/// like any other unclassified tool. This is the safety property the opt-in
+/// flag protects: a real, side-effecting host tool registered under one of
+/// these reserved names (with an incomplete/stale `policies` snapshot that
+/// omits its entry) must not silently bypass `strict()`'s fail-closed checks
+/// just because its name happens to match the bridge's reserved names.
+#[tokio::test]
+async fn tool_policy_strict_without_the_opt_in_still_rejects_the_reserved_names() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mut policies = std::collections::HashMap::new();
+    policies.insert("safe".to_string(), ToolPolicy::read_only());
+
+    let mw = ToolPolicyMiddleware::strict(policies); // no `.exempt_discovery_bridge(true)`
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let schema = |name: &str| ToolSchema {
+        name: name.to_string(),
+        description: String::new(),
+        parameters: json!({}),
+        format: ToolFormat::Json,
+    };
+    let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
+        schema("safe"),
+        schema(crate::tool::discover::TOOL_SEARCH_NAME),
+        schema(crate::tool::discover::TOOL_CALL_NAME),
+    ]);
+    stack
+        .run_before_model(&mut ctx, &(), &mut request)
+        .await
+        .expect("exposure filter runs");
+    let names: std::collections::HashSet<_> =
+        request.tools.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains("safe"));
+    assert!(
+        !names.contains(crate::tool::discover::TOOL_SEARCH_NAME),
+        "an unclassified `tool_search` must be rejected like any other unclassified tool \
+         when the opt-in exemption is not enabled"
+    );
+    assert!(!names.contains(crate::tool::discover::TOOL_CALL_NAME));
+
+    let mut call = tool_call(crate::tool::discover::TOOL_SEARCH_NAME);
+    let err = stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect_err(
+            "a real tool registered under a reserved name, with no policy entry, \
+                     must still be rejected by strict() without the opt-in",
+        );
+    assert!(matches!(err, TinyAgentsError::Validation(_)));
 }
 
 #[tokio::test]
