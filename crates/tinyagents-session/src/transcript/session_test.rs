@@ -241,9 +241,9 @@ fn a_deeply_nested_delegation_chain_stays_bounded() {
 /// actually exceeds the bound.
 #[test]
 fn a_shallow_delegation_chain_is_unaffected_by_the_bound() {
-    let root = SessionRef::scoped("thread-1", "orchestrator");
-    let child = SessionRef::child_of(&root, "researcher");
-    let grandchild = SessionRef::child_of(&child, "reader");
+    let root = SessionRef::scoped("t1", "o");
+    let child = SessionRef::child_of(&root, "r1");
+    let grandchild = SessionRef::child_of(&child, "r2");
 
     let stem = session_stem(&grandchild);
     assert!(!stem.contains("chain-"), "{stem} collapsed too early");
