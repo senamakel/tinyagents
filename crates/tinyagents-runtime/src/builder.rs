@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use tinyagents_session::transcript::{TranscriptLocator, TranscriptMeta};
+use tinyagents_session::transcript::{
+    SessionRef, TranscriptLocator, TranscriptMeta, session_stem,
+};
 
 use crate::{
     NoopSessionHooks, PrefixSnapshot, RuntimeError, Session, SessionDriver, SessionHooks,
@@ -20,6 +22,8 @@ pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {
 struct TranscriptConfig {
     locator: Arc<dyn TranscriptLocator>,
     stem: String,
+    session: Option<SessionRef>,
+    resume_agent: Option<String>,
     meta: TranscriptMeta,
 }
 
@@ -71,8 +75,46 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
         self.transcript = Some(TranscriptConfig {
             locator,
             stem: stem.into(),
+            session: None,
+            resume_agent: None,
             meta,
         });
+        self
+    }
+
+    /// Enables persistence addressed by durable session identity.
+    ///
+    /// Prefer this over [`Self::transcript`]: the stem it derives is stable
+    /// across processes and launches, so one conversation stays in one
+    /// transcript instead of accumulating a file per cold boot. It is also what
+    /// [`ResumeMode::Session`](crate::ResumeMode::Session) resolves against.
+    pub fn session(
+        mut self,
+        locator: Arc<dyn TranscriptLocator>,
+        session: SessionRef,
+        mut meta: TranscriptMeta,
+    ) -> Self {
+        meta.session_id = Some(session.session_id());
+        meta.parent_session_id = session.parent_session_id();
+        self.transcript = Some(TranscriptConfig {
+            locator,
+            stem: session_stem(&session),
+            session: Some(session),
+            resume_agent: None,
+            meta,
+        });
+        self
+    }
+
+    /// Uses a distinct agent key for `ResumeMode::LatestForAgent` lookup.
+    ///
+    /// Previously reachable only through a hook-supplied `ResumePreparation`,
+    /// which meant a host that simply wanted a different resume key had to
+    /// implement a hook to say so.
+    pub fn resume_agent(mut self, resume_agent: impl Into<String>) -> Self {
+        if let Some(config) = self.transcript.as_mut() {
+            config.resume_agent = Some(resume_agent.into());
+        }
         self
     }
 
@@ -82,7 +124,8 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
         let target = self.transcript.map(|config| crate::TranscriptTarget {
             locator: config.locator,
             stem: config.stem,
-            resume_agent: None,
+            resume_agent: config.resume_agent,
+            session: config.session,
             meta: config.meta,
         });
         if target.is_some() && self.codec.is_none() {
