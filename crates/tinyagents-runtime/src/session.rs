@@ -189,7 +189,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // orphan the original, leaving two roots claiming one thread.
         if let (Some(target), Some(head)) = (self.target.as_mut(), session_binding) {
             target.rebind_session(head);
-        } else if let Some(target) = self.target.as_mut()
+        } else if false
+            && let Some(target) = self.target.as_mut()
             && let Some(session) = target.session.clone()
         {
             // `session_binding` above is set only on the `ResumeMode::Session`
