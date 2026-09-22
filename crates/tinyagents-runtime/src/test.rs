@@ -168,6 +168,11 @@ struct Locator {
     latest_agents: Mutex<Vec<String>>,
     scoped_threads: Mutex<Vec<(String, Option<String>)>>,
     opened_stems: Mutex<Vec<String>>,
+    /// Sessions this double will answer a read for. Empty means "nothing has
+    /// been written yet", which is how a first-turn session behaves.
+    known_sessions: Mutex<Vec<SessionRef>>,
+    generations: Mutex<Vec<SessionRef>>,
+    adopted: Mutex<Vec<(SessionRef, String)>>,
 }
 
 impl TranscriptLocator for Locator {
@@ -198,6 +203,34 @@ impl TranscriptLocator for Locator {
         *self.history.opens.lock().unwrap() += 1;
         Ok(self.history.clone())
     }
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        self.known_sessions
+            .lock()
+            .unwrap()
+            .contains(session)
+            .then(|| self.history.clone() as Arc<dyn TranscriptRead>)
+    }
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread_id: &str,
+        _: &TranscriptMeta,
+    ) -> anyhow::Result<Option<tinyagents_session::transcript::SessionAdoption>> {
+        self.adopted
+            .lock()
+            .unwrap()
+            .push((session.clone(), thread_id.to_string()));
+        Ok(None)
+    }
+    fn begin_generation(
+        &self,
+        session: &SessionRef,
+        _: TranscriptMeta,
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        let successor = session.next_generation();
+        self.generations.lock().unwrap().push(successor.clone());
+        Ok((successor, self.history.clone()))
+    }
 }
 
 fn locator(session: Option<SessionTranscript>) -> (Arc<Locator>, Arc<MemoryHistory>) {
@@ -216,6 +249,9 @@ fn locator(session: Option<SessionTranscript>) -> (Arc<Locator>, Arc<MemoryHisto
             latest_agents: Mutex::new(Vec::new()),
             scoped_threads: Mutex::new(Vec::new()),
             opened_stems: Mutex::new(Vec::new()),
+            known_sessions: Mutex::new(Vec::new()),
+            generations: Mutex::new(Vec::new()),
+            adopted: Mutex::new(Vec::new()),
         }),
         history,
     )
@@ -976,7 +1012,8 @@ async fn resumed_history_restores_the_prefix_once_before_the_next_driver_call() 
         .turn(
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
-                resume: ResumeMode::LatestForAgent,
+                session: None,
+            resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1341,7 +1378,8 @@ async fn latest_resume_agent_is_distinct_from_the_write_stem() {
         .turn(
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
-                resume: ResumeMode::LatestForAgent,
+                session: None,
+            resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1384,7 +1422,8 @@ async fn thread_resume_scopes_lookup_to_the_target_agent() {
         .turn(
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
-                resume: ResumeMode::Thread,
+                session: None,
+            resume: ResumeMode::Thread,
                 thread_id: Some("thread-1".into()),
                 ..TurnOptions::default()
             },
@@ -1456,7 +1495,8 @@ async fn before_turn_receives_resumed_decoded_history_and_raw_rows() {
         .turn(
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
-                resume: ResumeMode::LatestForAgent,
+                session: None,
+            resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1561,7 +1601,8 @@ async fn first_turn_prefix_accepts_an_exact_resumed_prefix_and_restores_it_after
         .turn(
             SessionTurnRequest::new(Message::user("first")),
             TurnOptions {
-                resume: ResumeMode::LatestForAgent,
+                session: None,
+            resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1621,7 +1662,8 @@ async fn changed_first_turn_prefix_replaces_a_builder_prefix_after_resume() {
         .turn(
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
-                resume: ResumeMode::LatestForAgent,
+                session: None,
+            resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1750,7 +1792,8 @@ async fn resumed_raw_rows_and_metadata_survive_the_append() {
         .turn(
             SessionTurnRequest::new(Message::user("next")),
             TurnOptions {
-                resume: ResumeMode::LatestForAgent,
+                session: None,
+            resume: ResumeMode::LatestForAgent,
                 ..TurnOptions::default()
             },
         )
@@ -1988,7 +2031,8 @@ async fn hook_option_context_mutation_reaches_driver_and_codec() {
                 request_id: None,
                 thread_id: None,
                 stream: false,
-                resume: ResumeMode::Never,
+                session: None,
+            resume: ResumeMode::Never,
                 cancellation: cancellation.clone(),
                 run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
                     .with_cancellation(cancellation),
@@ -2074,7 +2118,8 @@ async fn before_resume_mutates_context_and_options_while_target_remains_lazy() {
                 request_id: None,
                 thread_id: None,
                 stream: false,
-                resume: ResumeMode::Never,
+                session: None,
+            resume: ResumeMode::Never,
                 cancellation: cancellation.clone(),
                 run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
                     .with_cancellation(cancellation),
