@@ -4,8 +4,8 @@
 //! a call with no arguments reads it back. There is no per-card CRUD, no
 //! approval gate, no evidence or plan: the list is the progress checklist a
 //! model rewrites as it works. It shares the board [`store`] (so the
-//! single-`in_progress` invariant, ordering and markdown rendering are the
-//! same code) but exposes only `content` and a three-state `status`.
+//! single-`in_progress` invariant and ordering are the same code) but exposes
+//! only `content`, a three-state `status`, and an id-free checklist rendering.
 //!
 //! The list is keyed by the caller's [`ToolRunContext::thread_id`]; a host
 //! that scopes lists differently (per agent session, say) hands the key it
