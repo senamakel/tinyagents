@@ -6946,7 +6946,7 @@ fn a_custom_tools_segment_opted_out_of_caching_is_not_mistaken_for_the_harness_l
     // custom annotation, not silently rewritten to the harness's stripped
     // layout.
     assert_eq!(request.cache_segments.len(), 2);
-    assert_eq!(request.cache_segments[1].cacheable, false);
+    assert!(!request.cache_segments[1].cacheable);
 
     // And the fingerprint takes the conservative whole-request digest path,
     // not the stable-prefix one a harness-owned layout would get.
