@@ -188,10 +188,18 @@ const DIGEST_SEPARATOR: char = '-';
 /// otherwise sanitize to the *same* text and silently share one transcript.
 /// A short deterministic digest of the untouched raw value is appended to
 /// rule that out: two components produce the same encoded stem only when
-/// their raw values are identical. `DefaultHasher::new()` uses fixed keys
-/// (not the per-process-random keys `RandomState` uses for hash maps), so
-/// the digest — like the rest of this module — carries no randomness and no
-/// timestamp: the same raw value always re-derives the same stem.
+/// their raw values are identical.
+///
+/// The digest is [`fnv1a64`], not `std::collections::hash_map::DefaultHasher`:
+/// the standard library explicitly documents `DefaultHasher`'s algorithm as
+/// unspecified and subject to change between Rust releases. A durable
+/// identity that is supposed to "re-derive the same stem forever" cannot be
+/// built on a hash the language is free to change out from under it — a
+/// toolchain upgrade would silently re-derive different filenames for every
+/// existing conversation. FNV-1a's definition is fixed arithmetic with no
+/// language- or library-level discretion, so it carries the same forever
+/// guarantee the rest of this module's "no timestamp, no randomness" design
+/// already relies on.
 fn sanitize_component(value: &str) -> String {
     let sanitized = sanitize_stem(value);
     let mut out = String::with_capacity(sanitized.len().min(MAX_COMPONENT_PREFIX));
@@ -209,11 +217,26 @@ fn sanitize_component(value: &str) -> String {
         kept += 1;
     }
 
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
     out.push(DIGEST_SEPARATOR);
-    out.push_str(&format!("{:016x}", hasher.finish()));
+    out.push_str(&format!("{:016x}", fnv1a64(value.as_bytes())));
     out
+}
+
+/// FNV-1a, 64-bit variant: a small, fully-specified, non-cryptographic hash
+/// with no algorithmic discretion left to a library or language version — see
+/// [`sanitize_component`] for why that fixedness is the point. Operates on
+/// bytes rather than `str::hash`, so it does not depend on
+/// [`std::hash::Hash`]'s own algorithm-agnostic contract either.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    let mut hash = OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 #[cfg(test)]
