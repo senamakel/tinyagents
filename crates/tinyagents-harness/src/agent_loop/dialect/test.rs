@@ -131,7 +131,11 @@ fn a_host_that_renders_the_catalogue_still_learns_a_turn_synthesized_tool() {
             "required": ["total"]
         }),
     );
-    let dialect = RunDialect::resolve(ToolDispatcher::Python, std::slice::from_ref(&base), Some(true));
+    let dialect = RunDialect::resolve(
+        ToolDispatcher::Python,
+        std::slice::from_ref(&base),
+        Some(true),
+    );
     let messages = vec![
         Message::system("host prompt with its own ## Tools block"),
         Message::user("hi"),
