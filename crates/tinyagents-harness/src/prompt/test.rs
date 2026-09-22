@@ -6,6 +6,76 @@
 
 use super::*;
 use serde_json::{Map, json};
+use tinyinference_llm::model::ModelProfile;
+
+#[test]
+fn gated_families_get_execution_discipline_and_others_do_not() {
+    for model in [
+        "openrouter/deepseek/deepseek-v4-flash",
+        "deepseek-chat",
+        "openrouter/z-ai/glm-5.3-flash",
+        "qwen3-235b",
+        "gpt-5.1",
+        "o3-mini",
+        "grok-4",
+        "moonshotai/kimi-k2",
+        "mistral-large",
+        "meta-llama/llama-4",
+    ] {
+        assert!(needs_execution_discipline(model), "{model}");
+        assert_eq!(execution_discipline_for(model), Some(EXECUTION_DISCIPLINE));
+    }
+    for model in [
+        "claude-opus-5",
+        "anthropic/claude-sonnet-5",
+        "gemini-3-pro",
+        "chat-v1",
+        "test-model",
+        "",
+        "   ",
+    ] {
+        assert!(!needs_execution_discipline(model), "{model}");
+        assert_eq!(execution_discipline_for(model), None);
+    }
+}
+
+#[test]
+fn execution_discipline_never_list_wins_over_family_marker() {
+    assert!(!needs_execution_discipline("gpt-oss-proxy/claude-haiku"));
+    assert!(!needs_execution_discipline("Gemini-Qwen-Router"));
+}
+
+#[test]
+fn profile_execution_discipline_uses_provider_for_blank_or_opaque_models() {
+    for model in [None, Some(""), Some("   "), Some("chat-v1")] {
+        let profile = ModelProfile {
+            model: model.map(str::to_string),
+            provider: Some("deepseek".to_string()),
+            ..ModelProfile::default()
+        };
+        assert_eq!(
+            execution_discipline_for_profile(&profile),
+            Some(EXECUTION_DISCIPLINE)
+        );
+    }
+
+    let profile = ModelProfile {
+        model: Some("claude-opus-5".to_string()),
+        provider: Some("deepseek".to_string()),
+        ..ModelProfile::default()
+    };
+    assert_eq!(execution_discipline_for_profile(&profile), None);
+}
+
+#[test]
+fn execution_discipline_block_stays_small() {
+    assert!(
+        EXECUTION_DISCIPLINE.len() <= 900,
+        "{}",
+        EXECUTION_DISCIPLINE.len()
+    );
+    assert!(EXECUTION_DISCIPLINE.starts_with("## Execution discipline"));
+}
 
 #[test]
 fn section_assembly_preserves_order_budget_and_truncation_provenance() {
@@ -321,9 +391,35 @@ fn system_segment_ids_number_every_leading_system_message() {
     for id in ["system", "system.1", "system.42"] {
         assert!(is_system_segment_id(id), "{id}");
     }
-    for id in ["tools", "system.", "system.x", "systemic", "system.1.2", ""] {
+    for id in [
+        "tools",
+        "system.",
+        "system.0",
+        "system.00",
+        "system.01",
+        "system.0002",
+        "system.x",
+        "systemic",
+        "system.1.2",
+        "",
+    ] {
         assert!(!is_system_segment_id(id), "{id}");
     }
+}
+
+#[test]
+fn repeated_system_message_appends_keep_segment_ids_unique() {
+    let mut builder = PromptBuilder::new();
+    builder.push_system_messages(&[Message::system("first")]);
+    builder.push_system_messages(&[Message::system("second"), Message::system("third")]);
+
+    let ids = builder
+        .build(Vec::new())
+        .cache_segments
+        .into_iter()
+        .map(|segment| segment.id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["system", "system.1", "system.2"]);
 }
 
 #[test]

@@ -63,74 +63,13 @@ pub fn execution_discipline_for(model: &str) -> Option<&'static str> {
 /// profile's `model` id first and its `provider` as a fallback.
 #[must_use]
 pub fn execution_discipline_for_profile(profile: &ModelProfile) -> Option<&'static str> {
-    let model = profile.model.as_deref().unwrap_or_default();
-    if !model.is_empty() {
-        return execution_discipline_for(model);
+    let model = profile.model.as_deref().unwrap_or_default().trim();
+    let lower = model.to_ascii_lowercase();
+    if NEVER.iter().any(|family| lower.contains(family)) {
+        return None;
+    }
+    if let Some(guidance) = execution_discipline_for(model) {
+        return Some(guidance);
     }
     execution_discipline_for(profile.provider.as_deref().unwrap_or_default())
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn gated_families_get_the_block_and_others_do_not() {
-        for model in [
-            "openrouter/deepseek/deepseek-v4-flash",
-            "deepseek-chat",
-            "openrouter/z-ai/glm-5.3-flash",
-            "qwen3-235b",
-            "gpt-5.1",
-            "o3-mini",
-            "grok-4",
-            "moonshotai/kimi-k2",
-            "mistral-large",
-            "meta-llama/llama-4",
-        ] {
-            assert!(needs_execution_discipline(model), "{model}");
-            assert_eq!(execution_discipline_for(model), Some(EXECUTION_DISCIPLINE));
-        }
-        for model in [
-            "claude-opus-5",
-            "anthropic/claude-sonnet-5",
-            "gemini-3-pro",
-            "chat-v1",
-            "test-model",
-            "",
-            "   ",
-        ] {
-            assert!(!needs_execution_discipline(model), "{model}");
-            assert_eq!(execution_discipline_for(model), None);
-        }
-    }
-
-    #[test]
-    fn never_list_wins_over_a_family_marker_in_the_same_id() {
-        assert!(!needs_execution_discipline("gpt-oss-proxy/claude-haiku"));
-        assert!(!needs_execution_discipline("Gemini-Qwen-Router"));
-    }
-
-    #[test]
-    fn profile_lookup_prefers_the_model_id_then_the_provider() {
-        let mut profile = ModelProfile::default();
-        assert_eq!(execution_discipline_for_profile(&profile), None);
-        profile.provider = Some("deepseek".to_string());
-        assert_eq!(
-            execution_discipline_for_profile(&profile),
-            Some(EXECUTION_DISCIPLINE)
-        );
-        profile.model = Some("claude-opus-5".to_string());
-        assert_eq!(execution_discipline_for_profile(&profile), None);
-    }
-
-    #[test]
-    fn the_block_stays_small() {
-        assert!(
-            EXECUTION_DISCIPLINE.len() <= 900,
-            "{}",
-            EXECUTION_DISCIPLINE.len()
-        );
-        assert!(EXECUTION_DISCIPLINE.starts_with("## Execution discipline"));
-    }
 }

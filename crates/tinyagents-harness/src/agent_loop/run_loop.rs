@@ -2012,30 +2012,25 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
-    let harness_layout = request.cache_segments.is_empty()
-        || request.cache_segments.iter().all(|segment| {
-            segment.cacheable
-                && ((crate::prompt::is_system_segment_id(&segment.id)
-                    && segment.role == SegmentRole::System)
-                    || (segment.id == "tools" && segment.role == SegmentRole::Tools))
+    let mut expected_layout = (0..system_end)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    if !request.tools.is_empty() {
+        expected_layout.push(PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
         });
+    }
+    let harness_layout = request.cache_segments.is_empty()
+        || request.cache_segments == expected_layout;
 
     if harness_layout {
-        request.cache_segments.clear();
-        for index in 0..system_end {
-            request.cache_segments.push(PromptSegment {
-                id: crate::prompt::system_segment_id(index),
-                role: SegmentRole::System,
-                cacheable: true,
-            });
-        }
-        if !request.tools.is_empty() {
-            request.cache_segments.push(PromptSegment {
-                id: "tools".to_string(),
-                role: SegmentRole::Tools,
-                cacheable: true,
-            });
-        }
+        request.cache_segments = expected_layout;
         if request.cache_segments.is_empty() {
             request.prompt_fingerprint = None;
             return;

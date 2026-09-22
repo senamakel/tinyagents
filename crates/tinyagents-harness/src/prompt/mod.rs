@@ -136,7 +136,11 @@ pub fn is_system_segment_id(id: &str) -> bool {
         || id
             .strip_prefix(SYSTEM_SEGMENT_ID)
             .and_then(|rest| rest.strip_prefix('.'))
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            .is_some_and(|suffix| {
+                suffix
+                    .parse::<usize>()
+                    .is_ok_and(|index| index > 0 && suffix == index.to_string())
+            })
 }
 
 pub fn render_heading(title: &str) -> String {
@@ -312,8 +316,24 @@ impl PromptBuilder {
     /// `"{SYSTEM_SEGMENT_ID}.{n}"` for the rest, which
     /// [`is_system_segment_id`] recognises.
     pub fn push_system_messages(&mut self, system_messages: &[Message]) -> &mut Self {
-        for (index, message) in system_messages.iter().enumerate() {
+        let mut index = self
+            .segments
+            .iter()
+            .filter(|segment| {
+                segment.meta.role == SegmentRole::System
+                    && is_system_segment_id(&segment.meta.id)
+            })
+            .count();
+        for message in system_messages {
+            while self
+                .segments
+                .iter()
+                .any(|segment| segment.meta.id == system_segment_id(index))
+            {
+                index += 1;
+            }
             self.push_system(system_segment_id(index), vec![message.clone()]);
+            index += 1;
         }
         self
     }
