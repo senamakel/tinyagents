@@ -2294,7 +2294,7 @@ fn session_turn_options(resume: ResumeMode, thread: &str) -> TurnOptions {
     }
 }
 
-fn outcome(history: Vec<Message>, output: &str) -> Result<DriverOutcome, DriverFailure> {
+fn session_outcome(history: Vec<Message>, output: &str) -> Result<DriverOutcome, DriverFailure> {
     Ok(DriverOutcome {
         history,
         output: Some(output.into()),
@@ -2312,7 +2312,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-9fa08", "agent-id");
 
-    let mut first = SessionBuilder::new(Arc::new(Driver::new(vec![outcome(
+    let mut first = SessionBuilder::new(Arc::new(Driver::new(vec![session_outcome(
         vec![Message::user("plan a trip to kashmir"), Message::assistant("when?")],
         "when?",
     )])))
@@ -2333,7 +2333,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
         .unwrap();
 
     // A brand-new Session over the same identity, as a restarted core builds.
-    let mut second = SessionBuilder::new(Arc::new(Driver::new(vec![outcome(
+    let mut second = SessionBuilder::new(Arc::new(Driver::new(vec![session_outcome(
         vec![
             Message::user("plan a trip to kashmir"),
             Message::assistant("when?"),
@@ -2404,7 +2404,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![
-        outcome(
+        session_outcome(
             vec![
                 Message::user("one"),
                 Message::assistant("first"),
@@ -2414,7 +2414,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
             "second",
         ),
         // The driver trimmed: the next set is no longer an extension.
-        outcome(
+        session_outcome(
             vec![Message::user("three"), Message::assistant("third")],
             "third",
         ),
