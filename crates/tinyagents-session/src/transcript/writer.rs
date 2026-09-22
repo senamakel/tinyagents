@@ -54,6 +54,46 @@ pub fn write_transcript(
     Ok(())
 }
 
+/// Like [`write_transcript`], but never overwrites an existing destination —
+/// see [`publish_transcript_if_absent`] for why adoption needs that instead
+/// of the full-rewrite semantics every other `write_transcript` caller
+/// wants. Returns `Ok(true)` when this call created `jsonl_path`, `Ok(false)`
+/// when it already existed (some other write already won the race and this
+/// call's `messages`/`meta` were discarded).
+pub fn write_transcript_if_absent(
+    jsonl_path: &Path,
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+) -> Result<bool> {
+    if let Some(parent) = jsonl_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create transcript dir {}", parent.display()))?;
+    }
+
+    let mut jsonl_buf = String::new();
+    jsonl_buf.push_str(&meta_line_json(meta)?);
+    jsonl_buf.push('\n');
+    serialise_message_lines(messages, None, None, &mut jsonl_buf)?;
+
+    let published = publish_transcript_if_absent(jsonl_path, jsonl_buf.as_bytes())
+        .with_context(|| format!("publish transcript {}", jsonl_path.display()))?;
+
+    if published {
+        tracing::debug!(
+            "[transcript] published {} messages (jsonl, create-if-absent) to {}",
+            messages.len(),
+            jsonl_path.display()
+        );
+        render_md_companion(jsonl_path, messages, meta, None);
+    } else {
+        tracing::debug!(
+            "[transcript] create-if-absent lost the race, {} already exists",
+            jsonl_path.display()
+        );
+    }
+    Ok(published)
+}
+
 /// Append this turn's delta to an **append-only** transcript, never rewriting
 /// existing lines.
 ///
