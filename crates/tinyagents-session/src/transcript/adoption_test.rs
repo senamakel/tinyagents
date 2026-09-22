@@ -1,7 +1,7 @@
 use super::*;
 use crate::transcript::{
     FileTranscriptLocator, MessageUsage, TranscriptLocator, TranscriptToolCall, TurnUsage,
-    append_transcript_turn, read_transcript,
+    append_transcript_turn, read_transcript, write_transcript,
 };
 use tempfile::tempdir;
 
