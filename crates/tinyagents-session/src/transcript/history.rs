@@ -300,11 +300,46 @@ pub trait TranscriptLocator: Send + Sync {
     /// The returned handle is bound but empty: the caller writes the retained
     /// set through the ordinary turn path (`prev: &[]`), so usage, request ids
     /// and display partials are recorded exactly as on any other turn.
+    ///
+    /// Bounded by [`MAX_GENERATIONS`] — the same limit [`Self::head_generation`]
+    /// and [`Self::session_chain`] stop probing at. Enforcing it here, at the
+    /// only place a new generation is minted, is what keeps those two bounded
+    /// scans complete: without it a chain could grow past what they are
+    /// willing to walk, leaving its newest generation undiscoverable by resume
+    /// and its head silently stuck on a stale, capped-off generation that the
+    /// ordinary append path would then go on writing into.
+    ///
+    /// Defaults to sealing through [`Self::open_session`] and the trait's own
+    /// existence check, which is enough for most implementors; a
+    /// file-backed locator overrides it only to reuse an already-resolved
+    /// path. Kept non-defaulted before this comment existed as a required
+    /// method would have broken every external implementor the moment this
+    /// method was added — this default is what restores that compatibility.
     fn begin_generation(
         &self,
         session: &SessionRef,
         seed: TranscriptMeta,
-    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)>;
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        let successor = session.next_generation();
+        anyhow::ensure!(
+            successor.generation <= MAX_GENERATIONS,
+            "session {} has reached the {MAX_GENERATIONS}-generation compaction limit; \
+             refusing to create generation {}",
+            session.session_id(),
+            successor.generation
+        );
+        anyhow::ensure!(
+            !self.session_exists(&successor),
+            "session generation {} already exists; refusing to overwrite a sealed transcript",
+            successor.session_id()
+        );
+
+        let mut meta = seed;
+        meta.session_id = Some(successor.session_id());
+        meta.parent_session_id = successor.parent_session_id();
+        let handle = self.open_session(&successor, meta)?;
+        Ok((successor, handle))
+    }
 }
 
 /// The default [`TranscriptLocator`]: real files under
