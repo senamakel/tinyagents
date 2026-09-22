@@ -144,6 +144,22 @@ pub fn session_stem(session: &SessionRef) -> String {
     }
 }
 
+/// One component of a stem: path-safe, and with runs of `_` collapsed so a
+/// component can never reproduce [`SUBAGENT_SEPARATOR`]. Without the collapse a
+/// thread id like `chat__2` would build a root stem that every root scan skips
+/// as a delegated worker, and the conversation would be invisible to resume.
+fn sanitize_component(value: &str) -> String {
+    let sanitized = sanitize_stem(value);
+    let mut out = String::with_capacity(sanitized.len());
+    for ch in sanitized.chars() {
+        if ch == '_' && out.ends_with('_') {
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 #[path = "session_test.rs"]
 mod test;
