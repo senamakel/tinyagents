@@ -459,13 +459,44 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             return Ok(None);
         };
         if self.transcript.is_none() {
-            self.transcript = Some(
-                target
+            self.transcript = Some(match target.session.as_ref() {
+                Some(session) => target
+                    .locator
+                    .open_session(session, target.meta.clone())
+                    .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+                None => target
                     .locator
                     .open_stem(&target.stem, target.meta.clone())
                     .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-            );
+            });
         }
+
+        let previous_len = self.persisted.len();
+        let next_len = raw.len();
+        let common_len = previous_len.min(next_len);
+        let extends = next_len >= previous_len && raw[..common_len] == self.persisted[..common_len];
+
+        // A turn that no longer extends what is persisted is a compaction. For
+        // a session-bound target that seals the current generation and opens
+        // the next one rather than appending a replacement record: rewriting
+        // the logical set in place would make the replaced turns unreadable
+        // forever, and they are the conversation's own history.
+        let mut prev: &[TranscriptMessage] = &self.persisted;
+        let empty: [TranscriptMessage; 0] = [];
+        if !extends && let Some(session) = target.session.clone() {
+            let (successor, handle) = target
+                .locator
+                .begin_generation(&session, target.meta.clone())
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+            target.rebind_session(successor);
+            // The successor starts empty, so the retained set is written
+            // through the ordinary turn path and keeps its usage, request ids
+            // and display partial.
+            target.meta.turn_count = 0;
+            self.transcript = Some(handle);
+            prev = &empty;
+        }
+
         let transcript = self.transcript.as_ref().expect("bound above");
         let mut meta = target.meta.clone();
         meta.turn_count += 1;
@@ -474,7 +505,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         transcript
             .append_turn_with_partial(
                 TranscriptTurn {
-                    prev: &self.persisted,
+                    prev,
                     next: raw,
                     meta: &meta,
                     turn_usage,
@@ -484,11 +515,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             )
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
         target.meta = meta;
-        let previous_len = self.persisted.len();
-        let next_len = raw.len();
-        let common_len = previous_len.min(next_len);
-        let delta = if next_len >= previous_len && raw[..common_len] == self.persisted[..common_len]
-        {
+        let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,
                 appended: previous_len..next_len,
