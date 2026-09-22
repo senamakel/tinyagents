@@ -8,8 +8,8 @@
 use super::*;
 use tempfile::tempdir;
 
-fn meta() -> TranscriptMeta {
-    TranscriptMeta {
+fn meta() -> TranscriptMeta { session_id: None, parent_session_id: None,
+    TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: "agent".into(),
         agent_id: Some("agent-id".into()),
         agent_type: Some("root".into()),

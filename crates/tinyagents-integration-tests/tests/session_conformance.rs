@@ -31,8 +31,8 @@ fn run_ledger_satisfies_the_conformance_suite_on_a_second_independent_workspace(
     run_ledger_conformance(dir.path());
 }
 
-fn contract_meta() -> TranscriptMeta {
-    TranscriptMeta {
+fn contract_meta() -> TranscriptMeta { session_id: None, parent_session_id: None,
+    TranscriptMeta { session_id: None, parent_session_id: None,
         agent_name: "contract-agent".to_string(),
         agent_id: Some("contract-agent-id".to_string()),
         agent_type: Some("root".to_string()),
