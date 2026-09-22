@@ -2026,8 +2026,8 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
             cacheable: true,
         });
     }
-    let harness_layout = request.cache_segments.is_empty()
-        || request.cache_segments == expected_layout;
+    let harness_layout =
+        request.cache_segments.is_empty() || request.cache_segments == expected_layout;
 
     if harness_layout {
         request.cache_segments = expected_layout;

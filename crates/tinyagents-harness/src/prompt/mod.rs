@@ -320,8 +320,7 @@ impl PromptBuilder {
             .segments
             .iter()
             .filter(|segment| {
-                segment.meta.role == SegmentRole::System
-                    && is_system_segment_id(&segment.meta.id)
+                segment.meta.role == SegmentRole::System && is_system_segment_id(&segment.meta.id)
             })
             .count();
         for message in system_messages {
