@@ -449,3 +449,29 @@ fn concurrent_handles_on_one_session_both_extend_it() {
         .collect();
     assert_eq!(contents, ["from left", "from right", "left again"]);
 }
+
+/// The model reads only the head generation, but a host rendering or
+/// exporting the conversation needs every segment, in order.
+#[test]
+fn a_session_chain_lists_every_generation_oldest_first() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    assert!(locator.session_chain(&session).is_empty());
+
+    locator
+        .open_session(&session, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "one"))
+        .unwrap();
+    let (successor, handle) = locator.begin_generation(&session, meta()).unwrap();
+    handle
+        .append(TranscriptMessage::new("user", "two"))
+        .unwrap();
+
+    let chain = locator.session_chain(&session);
+    assert_eq!(chain, vec![session.clone(), successor]);
+    // Asking from any generation returns the same whole chain.
+    assert_eq!(locator.session_chain(&chain[1]), chain);
+}
