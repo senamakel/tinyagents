@@ -189,6 +189,24 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // orphan the original, leaving two roots claiming one thread.
         if let (Some(target), Some(head)) = (self.target.as_mut(), session_binding) {
             target.rebind_session(head);
+        } else if let Some(target) = self.target.as_mut()
+            && let Some(session) = target.session.clone()
+        {
+            // `session_binding` above is set only on the `ResumeMode::Session`
+            // path, so a session-bound target resumed through `Thread` or
+            // `LatestForAgent` would otherwise reach the bind below still
+            // naming generation 0 — even when an earlier compaction already
+            // sealed it and opened a later head. That write would land in a
+            // generation the design requires to stay sealed and byte-for-byte
+            // unchanged. Resolving the head here, for every mode, is what
+            // `persist`'s own equivalent guard (`self.transcript.is_none()`)
+            // cannot substitute for: `self.transcript` is bound unconditionally
+            // a few lines down, so by the time `persist` runs on this turn
+            // that guard has already been satisfied.
+            let head = target.locator.head_generation(&session);
+            if head != session {
+                target.rebind_session(head);
+            }
         }
         let target = self.target.as_ref().expect("target checked above");
         self.transcript = Some(match target.session.as_ref() {
