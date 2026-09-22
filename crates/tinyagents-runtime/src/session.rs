@@ -201,6 +201,30 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .open_stem(&target.stem, target.meta.clone())
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
         });
+        // For a session-bound target, `target.session`/`target.stem` always
+        // name the same file (construction and `rebind_session` keep them in
+        // lockstep) — the bind above is always that file, regardless of
+        // resume mode. Under `ResumeMode::Session`, `read` was already that
+        // same file, so `self.persisted` (set above from `transcript`,
+        // i.e. from `read`) already matches what this turn will append to.
+        // Under `Thread`/`LatestForAgent`, `read` can legitimately be a
+        // *different* file — a newest-wins scan recovering history from
+        // wherever it exists is exactly their contract — while the destination
+        // this turn writes to is still the session's own, separately-tracked
+        // file. Using the scan's raw rows as the append-diff baseline for a
+        // write that lands elsewhere would corrupt whatever is already on
+        // that other file. Re-derive the baseline from the file this turn
+        // actually writes to; `self.history` (what the model sees) keeps
+        // coming from the scanned `read`, which is the intended recovery
+        // behavior for those modes.
+        if target.session.is_some() && options.resume != ResumeMode::Session {
+            self.persisted = self
+                .transcript
+                .as_ref()
+                .expect("bound above")
+                .messages()
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        }
         Ok(SessionResume {
             loaded: true,
             history,
