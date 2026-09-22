@@ -350,7 +350,7 @@ mod tool_tests {
             .iter()
             .find_map(|block| match block {
                 ToolContent::Json { data } => Some(data),
-                ToolContent::Text { .. } => None,
+                _ => None,
             })
             .expect("successful todo result has a JSON payload")
     }
