@@ -350,17 +350,44 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 /// `MOVEFILE_REPLACE_EXISTING`, with a `SetFileInformationByHandle` fallback
 /// — see the `std::fs::rename` docs), which is exactly the full-rewrite
 /// semantics this function's other callers want.
+/// Writes `contents` to a fresh temp file at `tmp_path`, refusing to follow
+/// (and so overwrite the target of) any pre-existing filesystem entry —
+/// including a symlink — already at that path.
+///
+/// `unique_tmp_path` mints a name unique to this process and call, so this
+/// should never race with a legitimate temp file of ours; a party able to
+/// pre-create an entry at the exact predicted name is exactly the case this
+/// guards against. `fs::write` alone would instead follow a pre-planted
+/// symlink and write our transcript content through it into whatever the
+/// symlink points at — a party with write access to this directory could aim
+/// that at a file elsewhere the process can write but should not overwrite.
+/// `create_new` fails instead, atomically, without ever opening whatever was
+/// really there.
+fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp_path)
+        .with_context(|| format!("create temp transcript {}", tmp_path.display()))?;
+    file.write_all(contents)
+        .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
+    Ok(())
+}
+
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let tmp_path = unique_tmp_path(path);
 
-    if let Err(error) = fs::write(&tmp_path, contents) {
-        // `fs::write` creates the file before it can fail partway through
-        // writing (a full disk, a signal interruption); leaving that behind
-        // would orphan a `.tmp-*` file in the transcript directory forever,
-        // since nothing else ever looks for or cleans up a name only this
-        // call ever mints.
+    if let Err(error) = write_temp_file(&tmp_path, contents) {
+        // A failure after `create_new` succeeded (a full disk, a signal
+        // interruption partway through `write_all`) leaves the temp file
+        // behind; nothing else ever looks for or cleans up a name only this
+        // call ever mints, so it would otherwise orphan forever. A failure
+        // from `create_new` itself (the guarded case above) means there is
+        // nothing of ours to clean up.
         let _ = fs::remove_file(&tmp_path);
-        return Err(error).with_context(|| format!("write temp transcript {}", tmp_path.display()));
+        return Err(error);
     }
     fs::rename(&tmp_path, path).with_context(|| {
         let _ = fs::remove_file(&tmp_path);
