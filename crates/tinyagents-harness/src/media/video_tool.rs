@@ -67,7 +67,11 @@ impl GenerateVideoTool {
         self
     }
 
-    fn request(&self, args: &Value, workspace: Option<&std::path::Path>) -> Result<VideoRequest, String> {
+    fn request(
+        &self,
+        args: &Value,
+        workspace: Option<&std::path::Path>,
+    ) -> Result<VideoRequest, String> {
         let mut request = VideoRequest::default();
         request.prompt = arg_str(args, &["prompt"]).map(str::to_owned);
         request.model = arg_str(args, &["model"]).map(str::to_owned);
@@ -85,7 +89,9 @@ impl GenerateVideoTool {
             request.last_frame = Some(self.output.reference(raw, workspace)?);
         }
         for raw in arg_list(args, &["references", "reference_images"]) {
-            request.references.push(self.output.reference(&raw, workspace)?);
+            request
+                .references
+                .push(self.output.reference(&raw, workspace)?);
         }
         Ok(request)
     }

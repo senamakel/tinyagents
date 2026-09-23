@@ -411,7 +411,9 @@ impl From<tinyinference_image::Error> for TinyAgentsError {
         match error {
             tinyinference_image::Error::Serialization(error) => Self::Serialization(error),
             error @ (tinyinference_image::Error::Validation(_)
-            | tinyinference_image::Error::Unsupported { .. }) => Self::Validation(error.to_string()),
+            | tinyinference_image::Error::Unsupported { .. }) => {
+                Self::Validation(error.to_string())
+            }
             other => Self::Model(other.to_string()),
         }
     }

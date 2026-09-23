@@ -73,6 +73,8 @@ pub mod handoff;
 pub mod host;
 pub mod ids;
 pub mod limits;
+#[cfg(feature = "media")]
+pub mod media;
 pub mod middleware;
 pub mod model_registry;
 #[cfg(feature = "multimodal")]
@@ -94,12 +96,12 @@ pub mod summarization;
 pub mod testkit;
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "media")]
-pub mod media;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
 pub mod workspace;
 
+#[cfg(feature = "media")]
+pub use tinyinference_image;
 /// Re-exported vendor crates. Downstream consumers should reach these
 /// dependencies' types through these re-exports (e.g.
 /// `tinyagents_harness::tinyinference_llm::ChatMessage`) rather than adding
@@ -108,8 +110,6 @@ pub mod workspace;
 /// independent dependency would produce a duplicate, incompatible copy of
 /// the same types.
 pub use tinyinference_llm;
-#[cfg(feature = "media")]
-pub use tinyinference_image;
 #[cfg(feature = "media")]
 pub use tinyinference_video;
 pub use tinytools;

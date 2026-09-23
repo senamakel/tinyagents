@@ -63,11 +63,19 @@ impl MediaOutput {
 
     /// Converts a model-supplied reference string into a [`MediaReference`],
     /// resolving and admitting local paths.
-    pub(crate) fn reference(&self, raw: &str, workspace: Option<&Path>) -> Result<MediaReference, String> {
+    pub(crate) fn reference(
+        &self,
+        raw: &str,
+        workspace: Option<&Path>,
+    ) -> Result<MediaReference, String> {
         match MediaReference::parse(raw) {
             MediaReference::Path(path) => {
                 let root = self.root(workspace);
-                let joined = if path.is_absolute() { path } else { root.join(path) };
+                let joined = if path.is_absolute() {
+                    path
+                } else {
+                    root.join(path)
+                };
                 let admitted = match &self.reference_policy {
                     Some(policy) => policy(&joined)?,
                     None => confine(&joined, root)?,
@@ -94,7 +102,10 @@ impl std::fmt::Debug for MediaOutput {
 /// no `..` components, so a model cannot read and upload arbitrary files.
 fn confine(path: &Path, root: &Path) -> Result<PathBuf, String> {
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(format!("reference path {} may not contain '..'", path.display()));
+        return Err(format!(
+            "reference path {} may not contain '..'",
+            path.display()
+        ));
     }
     if !path.starts_with(root) {
         return Err(format!(
@@ -154,7 +165,9 @@ pub(crate) fn arg_list(args: &Value, keys: &[&str]) -> Vec<String> {
                     .filter(|s| !s.is_empty())
                     .map(str::to_owned),
             ),
-            Some(Value::String(item)) if !item.trim().is_empty() => out.push(item.trim().to_owned()),
+            Some(Value::String(item)) if !item.trim().is_empty() => {
+                out.push(item.trim().to_owned())
+            }
             _ => {}
         }
     }

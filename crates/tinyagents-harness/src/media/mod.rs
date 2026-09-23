@@ -21,7 +21,9 @@ pub use image_tool::{GENERATE_IMAGE_TOOL_NAME, GenerateImageTool};
 pub use types::{DEFAULT_MEDIA_SUBDIR, MediaOutput, ReferencePathPolicy};
 pub use video_tool::{GENERATE_VIDEO_TOOL_NAME, GenerateVideoTool};
 
-use tinytools::{ToolAccess, ToolPolicy, ToolRuntime, ToolSideEffects, ToolTimeout, WorkspaceAccess};
+use tinytools::{
+    ToolAccess, ToolPolicy, ToolRuntime, ToolSideEffects, ToolTimeout, WorkspaceAccess,
+};
 
 /// Policy shared by both tools: network, a third-party service, a charge, and
 /// file writes into the workspace. Never replayed after a crash, because a
@@ -57,7 +59,10 @@ fn artifact_stem(kind: &str) -> String {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
-    format!("{kind}-{millis}-{}", COUNTER.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{kind}-{millis}-{}",
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 #[cfg(test)]

@@ -76,7 +76,15 @@ impl GenerateImageTool {
         request.output_format = arg_str(args, &["output_format", "format"]).map(str::to_owned);
         request.background = arg_str(args, &["background"]).map(str::to_owned);
         request.seed = arg_i64(args, &["seed"]);
-        for raw in arg_list(args, &["references", "reference_images", "input_images", "inputImages"]) {
+        for raw in arg_list(
+            args,
+            &[
+                "references",
+                "reference_images",
+                "input_images",
+                "inputImages",
+            ],
+        ) {
             match self.output.reference(&raw, workspace) {
                 Ok(reference) => request.references.push(reference),
                 Err(message) => return ToolResult::error(message),

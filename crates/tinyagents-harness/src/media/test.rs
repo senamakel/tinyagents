@@ -48,7 +48,11 @@ async fn image_tool_saves_into_the_workspace_and_reports_paths() {
 
     let request = generator.requests().pop().unwrap();
     assert_eq!(request.n, Some(2), "numeric strings are accepted");
-    assert_eq!(request.aspect_ratio.as_deref(), Some("landscape"), "camelCase alias accepted");
+    assert_eq!(
+        request.aspect_ratio.as_deref(),
+        Some("landscape"),
+        "camelCase alias accepted"
+    );
     assert_eq!(request.seed, Some(5));
     assert_eq!(tool.name(), "media_generate_image");
 }
@@ -66,13 +70,22 @@ async fn billed_non_delivery_tells_the_model_not_to_retry() {
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error);
     let message = text(&result);
-    assert!(message.contains("billed") && message.contains("do not retry"), "{message}");
-    assert!(message.contains("mock-request"), "request id is reported: {message}");
+    assert!(
+        message.contains("billed") && message.contains("do not retry"),
+        "{message}"
+    );
+    assert!(
+        message.contains("mock-request"),
+        "request id is reported: {message}"
+    );
 }
 
 #[tokio::test]
 async fn image_tool_requires_a_prompt() {
-    let tool = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), MediaOutput::new("/tmp"));
+    let tool = GenerateImageTool::new(
+        Arc::new(MockImageGenerator::new()),
+        MediaOutput::new("/tmp"),
+    );
     let result = tool.execute(json!({})).await.unwrap();
     assert!(result.is_error);
 }
@@ -115,15 +128,20 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
         if escape.starts_with('~') {
             continue;
         }
-        assert!(result.is_error, "{escape} must be refused: {}", text(&result));
+        assert!(
+            result.is_error,
+            "{escape} must be refused: {}",
+            text(&result)
+        );
     }
 }
 
 #[tokio::test]
 async fn a_host_reference_policy_replaces_the_default_confinement() {
     let generator = Arc::new(MockImageGenerator::new());
-    let output = MediaOutput::new("/nonexistent")
-        .with_reference_policy(Arc::new(|path| Err(format!("host refused {}", path.display()))));
+    let output = MediaOutput::new("/nonexistent").with_reference_policy(Arc::new(|path| {
+        Err(format!("host refused {}", path.display()))
+    }));
     let tool = GenerateImageTool::new(generator, output);
     let result = tool
         .execute(json!({ "prompt": "x", "references": ["a.png"] }))
@@ -140,7 +158,11 @@ fn fast() -> WaitPolicy {
 async fn video_tool_waits_for_delivery_and_saves_the_clip() {
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(MockVideoGenerator::new(MockVideoScript {
-        polls: vec![(JobState::InProgress, 0), (JobState::Completed, 0), (JobState::Completed, 1)],
+        polls: vec![
+            (JobState::InProgress, 0),
+            (JobState::Completed, 0),
+            (JobState::Completed, 1),
+        ],
         error: None,
     }));
     let tool = GenerateVideoTool::new(generator.clone(), MediaOutput::new(dir.path()))
@@ -154,7 +176,9 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
     assert!(text(&result).contains("mock-job"));
-    let saved: Vec<_> = std::fs::read_dir(dir.path().join("generated-media")).unwrap().collect();
+    let saved: Vec<_> = std::fs::read_dir(dir.path().join("generated-media"))
+        .unwrap()
+        .collect();
     assert_eq!(saved.len(), 1);
 
     let request = generator.requests().pop().unwrap();
@@ -173,12 +197,17 @@ async fn video_timeout_names_the_job_and_resume_collects_it() {
         polls: vec![(JobState::InProgress, 0)],
         error: None,
     }));
-    let tool = GenerateVideoTool::new(generator.clone(), MediaOutput::new(dir.path()))
-        .with_wait_policy(WaitPolicy::new(Duration::from_millis(1), Duration::from_millis(10)));
+    let tool =
+        GenerateVideoTool::new(generator.clone(), MediaOutput::new(dir.path())).with_wait_policy(
+            WaitPolicy::new(Duration::from_millis(1), Duration::from_millis(10)),
+        );
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error);
     let message = text(&result);
-    assert!(message.contains("mock-job") && message.contains("do not resubmit"), "{message}");
+    assert!(
+        message.contains("mock-job") && message.contains("do not resubmit"),
+        "{message}"
+    );
 
     let delivered = Arc::new(MockVideoGenerator::new(MockVideoScript::delivers()));
     let resume = GenerateVideoTool::new(delivered.clone(), MediaOutput::new(dir.path()))
@@ -188,7 +217,10 @@ async fn video_timeout_names_the_job_and_resume_collects_it() {
         .await
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
-    assert!(delivered.requests().is_empty(), "resume must not submit a new job");
+    assert!(
+        delivered.requests().is_empty(),
+        "resume must not submit a new job"
+    );
 }
 
 #[tokio::test]
@@ -198,7 +230,8 @@ async fn video_failure_surfaces_the_provider_reason() {
         polls: vec![(JobState::Failed, 0)],
         error: Some("safety filter".into()),
     }));
-    let tool = GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(fast());
+    let tool =
+        GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(fast());
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error);
     assert!(text(&result).contains("safety filter"));
@@ -206,9 +239,38 @@ async fn video_failure_surfaces_the_provider_reason() {
 
 #[test]
 fn media_tools_declare_billing_side_effects() {
-    let tool = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), MediaOutput::new("/tmp"));
+    let tool = GenerateImageTool::new(
+        Arc::new(MockImageGenerator::new()),
+        MediaOutput::new("/tmp"),
+    );
     let policy = tool.policy();
-    assert!(policy.side_effects.payment && policy.side_effects.network && policy.side_effects.writes_files);
+    assert!(
+        policy.side_effects.payment
+            && policy.side_effects.network
+            && policy.side_effects.writes_files
+    );
     assert!(!policy.runtime.idempotent, "a replay would bill again");
     assert!(tool.external_effect());
+}
+
+#[test]
+fn media_errors_map_onto_harness_errors() {
+    use crate::TinyAgentsError;
+    let unsupported: TinyAgentsError = tinyinference_image::Error::Unsupported {
+        model: "m".into(),
+        field: "aspect_ratio".into(),
+        value: "16:9".into(),
+        allowed: vec!["1:1".into()],
+    }
+    .into();
+    assert!(matches!(unsupported, TinyAgentsError::Validation(_)));
+    let no_media: TinyAgentsError = tinyinference_image::Error::NoMedia { request_id: None }.into();
+    assert!(matches!(no_media, TinyAgentsError::Model(ref m) if m.contains("do not retry")));
+    let timeout: TinyAgentsError = tinyinference_video::Error::Timeout {
+        job_id: "j".into(),
+        waited_secs: 1,
+        last_state: "pending".into(),
+    }
+    .into();
+    assert!(matches!(timeout, TinyAgentsError::Timeout(ref m) if m.contains("j")));
 }
