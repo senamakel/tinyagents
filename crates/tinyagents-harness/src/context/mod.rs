@@ -365,7 +365,7 @@ impl<Ctx> RunContext<Ctx> {
     /// The counter is per-context, not process-global: a freshly constructed
     /// context (including a child context, which never inherits its parent's
     /// counter) always starts at `0`. Callers that spawn deterministically
-    /// named children — [`crate::subagent::SubAgent`], for one — use this
+    /// named children — `tinyagents_orchestration::SubAgent`, for one — use this
     /// instead of a process-wide sequence so two processes calling the same
     /// parent context's child spawner in the same order derive identical
     /// ordinals, and therefore identical child run ids (M-2).

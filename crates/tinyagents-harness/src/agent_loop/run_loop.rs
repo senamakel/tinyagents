@@ -249,6 +249,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if let Some(preparation) = &self.policy.tool_schemas {
             tool_schemas = crate::tool::prepare_tool_schemas(&tool_schemas, preparation);
         }
+        // Captured before the bridge schemas are appended below, so
+        // `ToolsAdvertised.direct` reports the actual `Direct`-exposure
+        // count. Otherwise it would silently include the two intrinsic
+        // bridge schemas whenever discovery is enabled, double-counting
+        // relative to `deferred` and making `direct` mean different things
+        // depending on whether any tool happens to be deferred.
+        let direct_schema_count = tool_schemas.len();
         // B6 (`docs/runtime-comparison/plan.md`): `declared_tool_schemas`
         // tracks what the transcript has actually been told about the
         // toolset chain's tools so far (folded or patched in, turn by turn,
@@ -350,7 +357,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // output tool-call fallback can still narrow or grow what an
         // individual request actually sends.
         let record = ctx.emit(AgentEvent::ToolsAdvertised {
-            direct: tool_schemas.len(),
+            direct: direct_schema_count,
             deferred: deferred_catalog.len(),
             schema_bytes: crate::token_estimation::tool_schema_bytes(&tool_schemas),
         });
@@ -556,9 +563,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .take_while(|message| matches!(message, Message::System(_)))
                 .count();
             let mut prompt = crate::prompt::PromptBuilder::new();
-            if system_end > 0 {
-                prompt.push_system("system", messages[..system_end].to_vec());
-            }
+            prompt.push_system_messages(&messages[..system_end]);
             if !tool_schemas.is_empty() {
                 prompt.push_tools_segment("tools", tool_schemas.clone());
             }
@@ -729,6 +734,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // mode versus a tool-call fallback; an explicit `JsonSchema` always
             // uses provider-native mode. The chosen strategy drives extraction of
             // the final response below.
+            // Marks where any structured-output fallback tool gets pushed
+            // below, so it can be told apart afterward from what was already
+            // on `request.tools` — see `synthesized_tools`.
+            let tools_before_structured_plan = request.tools.len();
             let structured_plan: Option<(StructuredStrategy, String, Value)> =
                 match request.response_format.clone() {
                     Some(ResponseFormat::Auto { name, schema })
@@ -894,6 +903,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     _ => None,
                 };
 
+            // Tool schemas minted by the structured-output plan above (the
+            // `ToolCall` / `ToolCallUnion` fallback tools), pushed onto
+            // `request.tools` after `tools_before_structured_plan` was
+            // recorded. A host that renders its own static tool catalogue
+            // composed it before this turn's structured-output planning ran,
+            // so it cannot have advertised these; `RunDialect::apply_to_request`
+            // appends their catalogue entries even in the host-rendered case.
+            let synthesized_tools: Vec<ToolSchema> =
+                request.tools[tools_before_structured_plan..].to_vec();
+
             // What was offered is fixed here, before a text dialect strips
             // the schemas off the wire: recovery and the stream scrubber need
             // the names, and the structured-output schema tool counts. The
@@ -939,7 +958,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // `max_input_tokens` pass admission on the small structured
             // request and then send a materially larger rendered-text one,
             // defeating the pre-call budget limit.
-            dialect.apply_to_request(&mut request);
+            dialect.apply_to_request(
+                &mut request,
+                self.policy.host_renders_tool_catalogue,
+                &synthesized_tools,
+            );
 
             // A host budget is acquired only for an explicit host-driven run.
             // Do it after structured-output planning: a synthetic schema tool
@@ -2014,38 +2037,68 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
-    let harness_layout = request.cache_segments.is_empty()
-        || request.cache_segments.iter().all(|segment| {
-            segment.cacheable
-                && ((segment.id == "system" && segment.role == SegmentRole::System)
-                    || (segment.id == "tools" && segment.role == SegmentRole::Tools))
+    let mut expected_layout = (0..system_end)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    if !request.tools.is_empty() {
+        expected_layout.push(PromptSegment {
+            id: "tools".to_string(),
+            role: SegmentRole::Tools,
+            cacheable: true,
         });
+    }
+    // The canonical harness-owned trailing tools segment: only *this* exact
+    // segment (including `cacheable: true`) is recognized as the harness's
+    // own below, so middleware that deliberately annotated its own trailing
+    // `tools` segment `cacheable: false` keeps that opt-out instead of being
+    // silently promoted to cacheable once a text dialect strips the schemas.
+    let canonical_tools_segment = PromptSegment {
+        id: "tools".to_string(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    };
+    // A text dialect (`RunDialect::apply_to_request`) folds the catalogue
+    // into the system prompt and clears `tools` *after* `before_model` ran,
+    // so a middleware that declared the harness layout while the schemas
+    // were still on the request legitimately carries a trailing `tools`
+    // segment the rebuilt layout no longer has. That is still the harness
+    // layout, not a custom annotation: demoting it to the whole-request
+    // digest below would re-roll the provider routing key on every call.
+    //
+    // The declared head has to equal the rebuilt system-segment prefix
+    // exactly. The one case that legitimately would not — no leading system
+    // message at declare time, so the dialect synthesizes one — is already
+    // resolved before this function ever runs, by
+    // `RunDialect::sync_stripped_tools_cache_segment`, which has the
+    // pre-rewrite message shape this function does not: reconstructing that
+    // distinction from the rewritten request alone cannot tell an
+    // actually-synthesized leading segment apart from a custom declaration
+    // that deliberately left an already-present system message out of the
+    // cache key.
+    let declared_with_stripped_tools = request.tools.is_empty()
+        && request
+            .cache_segments
+            .split_last()
+            .is_some_and(|(last, head)| {
+                *last == canonical_tools_segment && head == expected_layout
+            });
+    let harness_layout = request.cache_segments.is_empty()
+        || request.cache_segments == expected_layout
+        || declared_with_stripped_tools;
 
     if harness_layout {
-        request.cache_segments.clear();
-        if system_end > 0 {
-            request.cache_segments.push(PromptSegment {
-                id: "system".to_string(),
-                role: SegmentRole::System,
-                cacheable: true,
-            });
-        }
-        if !request.tools.is_empty() {
-            request.cache_segments.push(PromptSegment {
-                id: "tools".to_string(),
-                role: SegmentRole::Tools,
-                cacheable: true,
-            });
-        }
+        request.cache_segments = expected_layout;
         if request.cache_segments.is_empty() {
             request.prompt_fingerprint = None;
             return;
         }
 
         let mut prompt = crate::prompt::PromptBuilder::new();
-        if system_end > 0 {
-            prompt.push_system("system", request.messages[..system_end].to_vec());
-        }
+        prompt.push_system_messages(&request.messages[..system_end]);
         if !request.tools.is_empty() {
             prompt.push_tools_segment("tools", request.tools.clone());
         }

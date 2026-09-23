@@ -5,13 +5,13 @@
 //! (`ToolPolicy.access.approval_required`), the tool (or a `before_tool`
 //! middleware) raised [`TinyAgentsError::ApprovalRequired`] /
 //! [`TinyAgentsError::CallDeferred`], or the tool was registered schema-only
-//! through [`ToolRegistry::register_external`]. The loop then finishes the
+//! through [`crate::ToolRegistry::register_external`]. The loop then finishes the
 //! rest of the batch and exits with [`DeferredToolRequests`], which the host
 //! resolves into [`DeferredToolResults`] and hands back to resume.
 //!
 //! [`TinyAgentsError::ApprovalRequired`]: crate::error::TinyAgentsError::ApprovalRequired
 //! [`TinyAgentsError::CallDeferred`]: crate::error::TinyAgentsError::CallDeferred
-//! [`ToolRegistry::register_external`]: crate::tool::ToolRegistry::register_external
+//! [`crate::ToolRegistry::register_external`]: crate::tool::ToolRegistry::register_external
 
 use std::collections::BTreeMap;
 
@@ -109,7 +109,7 @@ pub trait DeferredToolHandler: Send + Sync {
 }
 
 /// A schema-only tool the host executes out of band; see
-/// [`ToolRegistry::register_external`].
+/// [`crate::ToolRegistry::register_external`].
 ///
 /// Admission recognises it through [`is_external_tool`] and defers the call
 /// before anything runs. `execute` still exists (a host calling the

@@ -225,6 +225,17 @@ fn removes_null_from_type_array() {
 }
 
 #[test]
+fn preserves_null_in_type_array_for_openai() {
+    let schema = json!({
+        "type": ["string", "null"]
+    });
+
+    let cleaned = SchemaCleanr::clean_for_openai(schema);
+
+    assert_eq!(cleaned["type"], json!(["string", "null"]));
+}
+
+#[test]
 fn preserves_only_null_type_array() {
     let schema = json!({
         "type": ["null"]

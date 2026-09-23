@@ -6,6 +6,76 @@
 
 use super::*;
 use serde_json::{Map, json};
+use tinyinference_llm::model::ModelProfile;
+
+#[test]
+fn gated_families_get_execution_discipline_and_others_do_not() {
+    for model in [
+        "openrouter/deepseek/deepseek-v4-flash",
+        "deepseek-chat",
+        "openrouter/z-ai/glm-5.3-flash",
+        "qwen3-235b",
+        "gpt-5.1",
+        "o3-mini",
+        "grok-4",
+        "moonshotai/kimi-k2",
+        "mistral-large",
+        "meta-llama/llama-4",
+    ] {
+        assert!(needs_execution_discipline(model), "{model}");
+        assert_eq!(execution_discipline_for(model), Some(EXECUTION_DISCIPLINE));
+    }
+    for model in [
+        "claude-opus-5",
+        "anthropic/claude-sonnet-5",
+        "gemini-3-pro",
+        "chat-v1",
+        "test-model",
+        "",
+        "   ",
+    ] {
+        assert!(!needs_execution_discipline(model), "{model}");
+        assert_eq!(execution_discipline_for(model), None);
+    }
+}
+
+#[test]
+fn execution_discipline_never_list_wins_over_family_marker() {
+    assert!(!needs_execution_discipline("gpt-oss-proxy/claude-haiku"));
+    assert!(!needs_execution_discipline("Gemini-Qwen-Router"));
+}
+
+#[test]
+fn profile_execution_discipline_uses_provider_for_blank_or_opaque_models() {
+    for model in [None, Some(""), Some("   "), Some("chat-v1")] {
+        let profile = ModelProfile {
+            model: model.map(str::to_string),
+            provider: Some("deepseek".to_string()),
+            ..ModelProfile::default()
+        };
+        assert_eq!(
+            execution_discipline_for_profile(&profile),
+            Some(EXECUTION_DISCIPLINE)
+        );
+    }
+
+    let profile = ModelProfile {
+        model: Some("claude-opus-5".to_string()),
+        provider: Some("deepseek".to_string()),
+        ..ModelProfile::default()
+    };
+    assert_eq!(execution_discipline_for_profile(&profile), None);
+}
+
+#[test]
+fn execution_discipline_block_stays_small() {
+    assert!(
+        EXECUTION_DISCIPLINE.len() <= 900,
+        "{}",
+        EXECUTION_DISCIPLINE.len()
+    );
+    assert!(EXECUTION_DISCIPLINE.starts_with("## Execution discipline"));
+}
 
 #[test]
 fn section_assembly_preserves_order_budget_and_truncation_provenance() {
@@ -311,4 +381,85 @@ fn fingerprint_value_is_pinned_for_cross_process_stability() {
         builder.fingerprint(),
         "0c8eb74fc9194b5d7845d787735eb2e36a68dc9d2ed91e5e7e07a13035d7d2a6"
     );
+}
+
+#[test]
+fn system_segment_ids_number_every_leading_system_message() {
+    assert_eq!(system_segment_id(0), "system");
+    assert_eq!(system_segment_id(1), "system.1");
+    assert_eq!(system_segment_id(12), "system.12");
+    for id in ["system", "system.1", "system.42"] {
+        assert!(is_system_segment_id(id), "{id}");
+    }
+    for id in [
+        "tools",
+        "system.",
+        "system.0",
+        "system.00",
+        "system.01",
+        "system.0002",
+        "system.x",
+        "systemic",
+        "system.1.2",
+        "",
+    ] {
+        assert!(!is_system_segment_id(id), "{id}");
+    }
+}
+
+#[test]
+fn repeated_system_message_appends_keep_segment_ids_unique() {
+    let mut builder = PromptBuilder::new();
+    builder.push_system_messages(&[Message::system("first")]);
+    builder.push_system_messages(&[Message::system("second"), Message::system("third")]);
+
+    let ids = builder
+        .build(Vec::new())
+        .cache_segments
+        .into_iter()
+        .map(|segment| segment.id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["system", "system.1", "system.2"]);
+}
+
+#[test]
+fn push_system_messages_keeps_one_cacheable_segment_per_tier() {
+    let stable = Message::system("identity and rules");
+    let volatile = Message::system("connected services for this session");
+    let mut builder = PromptBuilder::new();
+    builder.push_system_messages(&[stable.clone(), volatile.clone()]);
+    let request = builder.build(vec![Message::user("hi")]);
+
+    assert_eq!(request.messages.len(), 3);
+    assert_eq!(request.messages[0], stable);
+    assert_eq!(request.messages[1], volatile);
+    let ids: Vec<&str> = request
+        .cache_segments
+        .iter()
+        .map(|segment| segment.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["system", "system.1"]);
+    assert!(
+        request
+            .cache_segments
+            .iter()
+            .all(|segment| segment.cacheable)
+    );
+    assert!(
+        request
+            .cache_segments
+            .iter()
+            .all(|segment| segment.role == SegmentRole::System)
+    );
+
+    // Rewriting only the volatile tier changes the fingerprint (the whole
+    // prefix is what a provider caches) but the stable segment keeps its id,
+    // so the layout guard can attribute the change to the second tier.
+    let mut other = PromptBuilder::new();
+    other.push_system_messages(&[stable, Message::system("different session")]);
+    assert_ne!(builder.fingerprint(), other.fingerprint());
+
+    let mut empty = PromptBuilder::new();
+    empty.push_system_messages(&[]);
+    assert!(empty.build(vec![]).cache_segments.is_empty());
 }

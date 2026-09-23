@@ -395,8 +395,9 @@ fn response_format_instruction(format: Option<&ResponseFormat>) -> Option<String
 }
 
 /// Flattens a message's content blocks to plain text: text and reasoning
-/// blocks pass through, JSON/extension blocks are stringified, an image
-/// becomes an `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
+/// blocks pass through (with internal image-looking text escaped),
+/// JSON/extension blocks are stringified, an image becomes an
+/// `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
 /// and redacted-thinking blocks are dropped (nothing to show).
 fn render_content(content: &[ContentBlock]) -> String {
     content
@@ -406,7 +407,7 @@ fn render_content(content: &[ContentBlock]) -> String {
             // and rehydrated by `input_builder::content_blocks`. Escape the
             // same marker when it occurs in ordinary text so user-authored
             // prose can never be mistaken for an attachment.
-            ContentBlock::Text(text) => Some(text.replace("[OH_IMAGE:", "[OH_IMAGE_LITERAL:")),
+            ContentBlock::Text(text) => Some(escape_native_image_markers(text)),
             ContentBlock::Image(image) => Some(format!("[OH_IMAGE:{}]", image.url)),
             ContentBlock::Json(value) | ContentBlock::ProviderExtension(value) => {
                 Some(value.to_string())
@@ -422,6 +423,36 @@ fn render_content(content: &[ContentBlock]) -> String {
         // newline here changes adjacent captions and diverges from
         // `tinyinference_llm::Message::text`, which concatenates text blocks.
         .join("")
+}
+
+/// Escapes complete private image markers in user-authored text.
+///
+/// An unmatched `[OH_IMAGE:` prefix is ordinary prose and must remain byte-for-byte
+/// unchanged; `input_builder::content_blocks` only interprets bracket-terminated
+/// markers, so escaping an unmatched prefix would make that malformed prose visible
+/// to the user as `[OH_IMAGE_LITERAL:`.
+fn escape_native_image_markers(text: &str) -> String {
+    const IMAGE_PREFIX: &str = "[OH_IMAGE:";
+    const LITERAL_IMAGE_PREFIX: &str = "[OH_IMAGE_LITERAL:";
+
+    let mut escaped = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = text[cursor..].find(IMAGE_PREFIX) {
+        let start = cursor + relative_start;
+        let marker_body = start + IMAGE_PREFIX.len();
+        let Some(relative_end) = text[marker_body..].find(']') else {
+            escaped.push_str(&text[cursor..]);
+            return escaped;
+        };
+        let end = marker_body + relative_end + 1;
+
+        escaped.push_str(&text[cursor..start]);
+        escaped.push_str(LITERAL_IMAGE_PREFIX);
+        escaped.push_str(&text[marker_body..end]);
+        cursor = end;
+    }
+    escaped.push_str(&text[cursor..]);
+    escaped
 }
 
 /// Converts an internal [`ChatResponse`] into the harness's `ModelResponse`.

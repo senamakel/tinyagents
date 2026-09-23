@@ -21,7 +21,8 @@ KV-cache/prompt-cache keeps hitting.
   variant `PromptTemplate::render_message` produces.
 - `MessagesTemplate` — an ordered sequence of `(TemplateRole, PromptTemplate)`
   pairs rendered together into a `Vec<Message>`.
-- `PromptBuilder` — the main entry point. `push_system` / `push_tools_segment`
+- `PromptBuilder` — the main entry point. `push_system` /
+  `push_system_messages` / `push_tools_segment`
   / `push_instructions` append **cacheable** segments; `push_history` /
   `push_volatile` append **non-cacheable** ones. `build(tail)` finalizes a
   `ModelRequest`, appending `tail` last (the current user turn) and stamping
@@ -36,12 +37,21 @@ KV-cache/prompt-cache keeps hitting.
   model request.
 - Free rendering helpers: `render_heading`, `render_optional_section`,
   `render_tool_catalogue`, `render_retrieved_documents`.
+- Model-guidance helpers: `needs_execution_discipline`,
+  `execution_discipline_for`, and `execution_discipline_for_profile` select the
+  exported `EXECUTION_DISCIPLINE` block by model family, falling back from an
+  unknown or blank model alias to its provider while explicitly excluding
+  Claude and Gemini families.
+- System-segment helpers: `SYSTEM_SEGMENT_ID`, `system_segment_id`, and
+  `is_system_segment_id` define the canonical `system`, `system.1`, ... IDs
+  used for one cacheable segment per leading system-message tier.
 
 ## Files
 
 | File | Role |
 | --- | --- |
 | `types.rs` | Every public type: `TemplateRole`, `PromptTemplate`, `MessagesTemplate`, `PromptBuilder` (and its private `BuiltSegment`), `PromptSection`, `PromptTruncation`, `PromptAssembly`, `PromptBudget`. |
+| `model_guidance.rs` | Model-family matching and the optional execution-discipline prompt block. |
 | `mod.rs` | Behavioral code: the `{name}` template renderer, `PromptBuilder` methods (segment pushes, `build`, `fingerprint`), and the section-assembly free functions. |
 | `test.rs` | Unit tests for placeholder substitution/escaping, error cases, per-role rendering, `MessagesTemplate` ordering, and `PromptBuilder` segment cacheability/fingerprinting. |
 
@@ -53,6 +63,11 @@ KV-cache/prompt-cache keeps hitting.
   and providers can apply KV-cache reuse. `PromptBuilder` does not enforce
   this ordering itself — it is a convention the push methods are named to
   encourage.
+- **Tiered system IDs are canonical and append-safe.**
+  `push_system_messages` assigns one cacheable segment per message and
+  continues numbering across repeated calls. Recognition rejects zero and
+  leading-zero suffixes so middleware-owned layouts are not mistaken for the
+  harness layout.
 - **The fingerprint only covers cacheable segments and tool schemas.** It is a
   SHA-256 over serde's deterministic (sorted-key) JSON serialization, so it is
   stable across processes, Rust versions, and platforms — safe to persist and

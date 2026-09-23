@@ -574,7 +574,21 @@ async fn context_compression_falls_back_to_trim_when_summarizer_errors() {
 /// than a schema-free one under the same trigger budget.
 #[tokio::test]
 async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
-    let (policy, before) = over_threshold_request();
+    // A finer-grained transcript than `over_threshold_request` (which trims
+    // straight to the system-only floor in both cases here): ten ~20-token
+    // messages under a 100-token trigger budget leaves room to see the
+    // schema reservation actually change how many messages survive, rather
+    // than both cases bottoming out at the same floor.
+    let policy = SummarizationPolicy {
+        keep_last: 0,
+        trigger_tokens: 100,
+        ..SummarizationPolicy::default()
+    };
+    let trigger_budget = policy.trigger_budget();
+    let mut before = vec![Message::system("You are a helpful assistant.")];
+    for i in 0..10 {
+        before.push(user(&format!("message {i}: {}", "x".repeat(60))));
+    }
     let mw = Arc::new(ContextCompressionMiddleware::with_summarizer(
         policy,
         Box::new(FailingSummarizer),
@@ -594,8 +608,8 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         .expect("fallback trim runs");
 
     // Same transcript, but the request also carries a moderate tool schema
-    // that eats into the same 50-token trigger budget without consuming all
-    // of it, so the system prompt still survives trimming.
+    // that eats into the same trigger budget without consuming all of it, so
+    // the system prompt still survives trimming.
     let moderate_schema_text = "p".repeat(60);
     let mut request_with_tools = ModelRequest {
         messages: before.clone(),
@@ -611,14 +625,36 @@ async fn context_compression_fallback_trim_reserves_the_tool_schema_budget() {
         .await
         .expect("fallback trim runs");
 
+    // Strict `<`, not `<=`: the pre-fix implementation trimmed both requests
+    // to the full (schema-blind) `trigger_budget`, which — for this
+    // transcript, where every non-system message is the same size — would
+    // often keep the exact same number of messages in both cases and satisfy
+    // a merely-`<=` assertion despite not actually reserving anything for the
+    // schema. A `<` here is only possible because the schema budget was
+    // subtracted from the message budget before trimming.
     assert!(
-        request_with_tools.messages.len() <= request_no_tools.messages.len(),
-        "a request whose schemas already consume budget must trim at least as \
-         far as one with no schemas: with_tools={}, no_tools={}",
+        request_with_tools.messages.len() < request_no_tools.messages.len(),
+        "a request whose schemas already consume budget must trim strictly \
+         further than one with no schemas: with_tools={}, no_tools={}",
         request_with_tools.messages.len(),
         request_no_tools.messages.len()
     );
     assert!(matches!(request_with_tools.messages[0], Message::System(_)));
+
+    // Quantitative check: the trimmed messages plus the schema cost must fit
+    // within the policy's trigger budget — the property the reservation
+    // exists to guarantee, not just "fewer messages than before."
+    let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
+        &request_with_tools.tools,
+        &crate::token_estimation::TokenCountOptions::default(),
+    );
+    let message_tokens =
+        crate::token_estimation::estimate_slice_tokens(&request_with_tools.messages);
+    assert!(
+        message_tokens + schema_tokens <= trigger_budget,
+        "message_tokens ({message_tokens}) + schema_tokens ({schema_tokens}) must fit within \
+         trigger_budget ({trigger_budget})"
+    );
 
     // Extreme case: the schema cost alone exceeds the whole trigger budget.
     // The message budget must saturate to 0 (not underflow/panic), so the

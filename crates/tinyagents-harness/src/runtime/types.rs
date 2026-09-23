@@ -268,6 +268,19 @@ pub struct RunPolicy {
     /// the same read is the fallback for a model that narrated a call as
     /// text, gated by [`RunPolicy::text_dialect_recovery`].
     pub tool_dialect: ToolDispatcher,
+    /// Under a text dialect, whether the host already rendered the protocol
+    /// block and the tool catalogue into its own system prompt.
+    ///
+    /// `false` (the default): the loop folds `tinytools-agent`'s protocol
+    /// instructions and a catalogue of the advertised tools into the system
+    /// prompt right before dispatch, so a host that only sets
+    /// [`RunPolicy::tool_dialect`] gets a complete text-protocol prompt.
+    /// `true`: the loop still strips the schemas off the wire and still binds
+    /// the positional registry that parses calls back, but appends nothing —
+    /// a host that composes its prompt from the same dialect (so the model
+    /// sees one catalogue, in the place the host chose, inside the cacheable
+    /// prefix) sets this to avoid shipping every signature twice.
+    pub host_renders_tool_catalogue: bool,
     /// Maximum consecutive re-prompts when a model signals a tool call it did
     /// not make: `finish_reason == "tool_calls"` with no structured call and
     /// no text-recoverable one.
@@ -339,7 +352,7 @@ pub struct RunPolicy {
     /// [`OutputRetryPolicy`].
     pub output_retry: OutputRetryPolicy,
     /// What the loop does when one turn's tool calls include both a
-    /// structured-output "schema" call ([`StructuredStrategy::ToolCall`]'s
+    /// structured-output "schema" call ([`crate::structured::StructuredStrategy::ToolCall`]'s
     /// synthetic tool) and one or more genuine function-tool calls (A6).
     /// Defaults to [`EndStrategy::Graceful`].
     pub end_strategy: EndStrategy,
@@ -529,6 +542,7 @@ impl Default for RunPolicy {
             // Opt-in: preserve the historical blank-final behavior by default.
             error_on_empty_response: false,
             tool_dialect: ToolDispatcher::Auto,
+            host_renders_tool_catalogue: false,
             dropped_tool_call_nudges: 3,
             // On by default: a truncated-empty completion is useless to every
             // caller, so one stochastic-failure retry is strictly better than a

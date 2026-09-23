@@ -63,7 +63,7 @@ store); the map itself never keeps a mutex alive past the last caller.
 
 ## Relation to neighbouring modules
 
-`goals::store`, `todos::store`, `todos::runs::store`, and `delegation::run`
+`goals::store`, `todos::store`, and `delegation::run`
 each hold their own `ThreadLockMap` (constructed with a store-specific `what`
 label) and call `lock_for(thread_id)` around their `load → mutate → put`
 sequences. This module has no dependency on any of them — it is a generic

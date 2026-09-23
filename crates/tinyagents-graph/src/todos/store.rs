@@ -1,29 +1,30 @@
-//! CRUD for the per-thread task board, on the harness
-//! [`Store`].
+//! CRUD for the per-thread todo list, on the harness
+//! [`Store`](tinyagents_harness::store::Store).
 //!
-//! Each thread's board is a single serialized [`TaskBoard`] value under the
+//! Each thread's list is a single serialized [`TodoList`] value under the
 //! [`TODOS_NAMESPACE`] namespace, keyed by the hex-encoded thread id. Every
 //! mutation runs `load → mutate → normalise → put` under a **per-thread async
-//! mutex** (`thread_lock`) so the read-modify-write is atomic within the
+//! mutex** ([`thread_lock`]) so the read-modify-write is atomic within the
 //! process (the same single-process caveat as
 //! [`graph::goals::store`](crate::goals::store)).
 //!
-//! Each mutator returns a [`TodosSnapshot`] — the normalised cards plus a
-//! markdown rendering — so an agent transcript and a UI stay in lock-step.
+//! The list is rewritten wholesale ([`replace`]) — there is no per-item CRUD,
+//! because the model that owns it always writes the complete list. Each
+//! mutator returns a [`TodosSnapshot`] — the normalised items plus a markdown
+//! rendering — so an agent transcript and a UI stay in lock-step.
 
 use std::sync::{Arc, OnceLock};
 
 use tokio::sync::Mutex;
 
 use super::types::{
-    CardPatch, TaskBoard, TaskBoardCard, TaskCardStatus, TodosSnapshot, non_empty, normalise_board,
-    now_stamp, render_markdown,
+    TodoItem, TodoList, TodoStatus, TodosSnapshot, normalise_list, now_stamp, render_markdown,
 };
 use crate::thread_locks::ThreadLockMap;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::store::Store;
 
-/// The [`Store`] namespace holding one [`TaskBoard`] per thread.
+/// The [`Store`] namespace holding one [`TodoList`] per thread.
 pub const TODOS_NAMESPACE: &str = "graph.todos";
 
 /// Serialises `load → mutate → put` per thread so a read-modify-write is atomic
@@ -50,23 +51,23 @@ fn validate_thread_id(thread_id: &str) -> Result<String> {
     let trimmed = thread_id.trim();
     if trimmed.is_empty() {
         return Err(TinyAgentsError::Validation(
-            "task board thread_id must not be empty or whitespace".to_string(),
+            "todo list thread_id must not be empty or whitespace".to_string(),
         ));
     }
     Ok(trimmed.to_string())
 }
 
-/// Loads the raw cards for `thread_id` (empty when the thread has no board).
-async fn load_cards(store: &Arc<dyn Store>, thread_id: &str) -> Result<Vec<TaskBoardCard>> {
+/// Loads the raw items for `thread_id` (empty when the thread has no list).
+async fn load_items(store: &Arc<dyn Store>, thread_id: &str) -> Result<Vec<TodoItem>> {
     Ok(get(store, thread_id)
         .await?
-        .map(|board| board.cards)
+        .map(|list| list.items)
         .unwrap_or_default())
 }
 
-/// Load a board without normalising it, preserving the distinction between an
-/// absent board and a present empty board.
-pub async fn get(store: &Arc<dyn Store>, thread_id: &str) -> Result<Option<TaskBoard>> {
+/// Load a list without normalising it, preserving the distinction between an
+/// absent list and a present empty list.
+pub async fn get(store: &Arc<dyn Store>, thread_id: &str) -> Result<Option<TodoList>> {
     let thread_id = validate_thread_id(thread_id)?;
     match store.get(TODOS_NAMESPACE, &key(&thread_id)).await? {
         Some(value) => Ok(Some(serde_json::from_value(value)?)),
@@ -74,73 +75,55 @@ pub async fn get(store: &Arc<dyn Store>, thread_id: &str) -> Result<Option<TaskB
     }
 }
 
-/// Delete a board value outright, returning whether one was present.
+/// Delete a list value outright, returning whether one was present.
 ///
-/// This differs from [`clear`], which persists a present, empty board.
+/// This differs from [`clear`], which persists a present, empty list.
 pub async fn delete(store: &Arc<dyn Store>, thread_id: &str) -> Result<bool> {
     let thread_id = validate_thread_id(thread_id)?;
     let lock = thread_lock(&thread_id);
     let _guard = lock.lock().await;
-    let board_key = key(&thread_id);
-    let existed = store.get(TODOS_NAMESPACE, &board_key).await?.is_some();
+    let list_key = key(&thread_id);
+    let existed = store.get(TODOS_NAMESPACE, &list_key).await?.is_some();
     if existed {
-        store.delete(TODOS_NAMESPACE, &board_key).await?;
+        store.delete(TODOS_NAMESPACE, &list_key).await?;
     }
     Ok(existed)
 }
 
-/// Import a board only when its thread has no stored value.
-///
-/// The existence check and write share the normal per-thread lock. Existing
-/// values are left untouched even when they use a newer or undecodable schema,
-/// which makes this suitable for one-time legacy migrations.
-pub async fn import_if_absent(store: &Arc<dyn Store>, board: TaskBoard) -> Result<bool> {
-    let thread_id = validate_thread_id(&board.thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let board_key = key(&thread_id);
-    if store.get(TODOS_NAMESPACE, &board_key).await?.is_some() {
-        return Ok(false);
-    }
-    store
-        .put(TODOS_NAMESPACE, &board_key, serde_json::to_value(board)?)
-        .await?;
-    Ok(true)
-}
-
-/// Normalises and persists `cards` for `thread_id`, returning the normalised set.
-async fn save_cards(
+/// Normalises and persists `items` for `thread_id`, returning the normalised set.
+async fn save_items(
     store: &Arc<dyn Store>,
     thread_id: &str,
-    cards: Vec<TaskBoardCard>,
-) -> Result<Vec<TaskBoardCard>> {
-    let mut board = TaskBoard {
+    items: Vec<TodoItem>,
+) -> Result<Vec<TodoItem>> {
+    let mut list = TodoList {
         thread_id: thread_id.to_string(),
-        cards,
+        items,
         updated_at: now_stamp(),
     };
-    normalise_board(&mut board);
-    let value = serde_json::to_value(&board)?;
+    normalise_list(&mut list);
+    let value = serde_json::to_value(&list)?;
     store.put(TODOS_NAMESPACE, &key(thread_id), value).await?;
-    Ok(board.cards)
+    Ok(list.items)
 }
 
-fn snapshot(thread_id: &str, cards: Vec<TaskBoardCard>) -> TodosSnapshot {
-    let markdown = render_markdown(&cards);
+fn snapshot(thread_id: &str, items: Vec<TodoItem>) -> TodosSnapshot {
+    let markdown = render_markdown(&items);
     TodosSnapshot {
         thread_id: thread_id.to_string(),
-        cards,
+        items,
         markdown,
     }
 }
 
-/// At most one card may be `InProgress` at a time. Returns a
+/// At most one item may be `InProgress` at a time. Returns a
 /// [`Validation`](TinyAgentsError::Validation) error otherwise (never silently
-/// fixes it).
-fn enforce_single_in_progress(cards: &[TaskBoardCard]) -> Result<()> {
-    let in_progress = cards
+/// fixes it), so the model is told to narrow its focus rather than having the
+/// list quietly rewritten under it.
+fn enforce_single_in_progress(items: &[TodoItem]) -> Result<()> {
+    let in_progress = items
         .iter()
-        .filter(|c| matches!(c.status, TaskCardStatus::InProgress))
+        .filter(|item| matches!(item.status, TodoStatus::InProgress))
         .count();
     if in_progress > 1 {
         return Err(TinyAgentsError::Validation(format!(
@@ -150,286 +133,34 @@ fn enforce_single_in_progress(cards: &[TaskBoardCard]) -> Result<()> {
     Ok(())
 }
 
-/// Snapshot the current board without mutating.
+/// Snapshot the current list without mutating.
 pub async fn list(store: &Arc<dyn Store>, thread_id: &str) -> Result<TodosSnapshot> {
     let thread_id = validate_thread_id(thread_id)?;
     let lock = thread_lock(&thread_id);
     let _guard = lock.lock().await;
-    let cards = load_cards(store, &thread_id).await?;
-    Ok(snapshot(&thread_id, cards))
+    let items = load_items(store, &thread_id).await?;
+    Ok(snapshot(&thread_id, items))
 }
 
-/// Append a new card. `content` is the required title; `patch` supplies the rest.
-pub async fn add(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    content: &str,
-    patch: CardPatch,
-) -> Result<TodosSnapshot> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let content = content.trim();
-    if content.is_empty() {
-        return Err(TinyAgentsError::Validation(
-            "todo content must not be empty".to_string(),
-        ));
-    }
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    let order = cards.len() as u32;
-    cards.push(TaskBoardCard {
-        title: content.to_string(),
-        status: patch.status.unwrap_or(TaskCardStatus::Todo),
-        objective: patch.objective.and_then(non_empty),
-        plan: patch.plan.unwrap_or_default(),
-        allowed_tools: patch.allowed_tools.unwrap_or_default(),
-        approval_mode: patch.approval_mode.flatten(),
-        acceptance_criteria: patch.acceptance_criteria.unwrap_or_default(),
-        evidence: patch.evidence.unwrap_or_default(),
-        notes: patch.notes.and_then(non_empty),
-        blocker: patch.blocker.and_then(non_empty),
-        source_metadata: patch.source_metadata,
-        order,
-        ..TaskBoardCard::new(content)
-    });
-    enforce_single_in_progress(&cards)?;
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Edit an existing card. Fields left `None` in `patch` are untouched. Errors if
-/// `id` is unknown.
-pub async fn edit(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    id: &str,
-    patch: CardPatch,
-) -> Result<TodosSnapshot> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    let card = cards
-        .iter_mut()
-        .find(|c| c.id == id)
-        .ok_or_else(|| TinyAgentsError::Validation(format!("todo id '{id}' not found")))?;
-    if let Some(content) = patch.content {
-        let trimmed = content.trim().to_string();
-        if trimmed.is_empty() {
-            return Err(TinyAgentsError::Validation(
-                "todo content must not be empty".to_string(),
-            ));
-        }
-        card.title = trimmed;
-    }
-    if let Some(status) = patch.status {
-        card.status = status;
-    }
-    if let Some(objective) = patch.objective {
-        card.objective = non_empty(objective);
-    }
-    if let Some(plan) = patch.plan {
-        card.plan = plan;
-    }
-    if let Some(allowed_tools) = patch.allowed_tools {
-        card.allowed_tools = allowed_tools;
-    }
-    if let Some(approval_mode) = patch.approval_mode {
-        card.approval_mode = approval_mode;
-    }
-    if let Some(acceptance_criteria) = patch.acceptance_criteria {
-        card.acceptance_criteria = acceptance_criteria;
-    }
-    if let Some(evidence) = patch.evidence {
-        card.evidence = evidence;
-    }
-    if let Some(notes) = patch.notes {
-        card.notes = non_empty(notes);
-    }
-    if let Some(blocker) = patch.blocker {
-        card.blocker = non_empty(blocker);
-    }
-    if let Some(source_metadata) = patch.source_metadata {
-        card.source_metadata = Some(source_metadata);
-    }
-    card.updated_at = now_stamp();
-    enforce_single_in_progress(&cards)?;
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Update only the status of a card.
-pub async fn update_status(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    id: &str,
-    status: TaskCardStatus,
-) -> Result<TodosSnapshot> {
-    edit(
-        store,
-        thread_id,
-        id,
-        CardPatch {
-            status: Some(status),
-            ..Default::default()
-        },
-    )
-    .await
-}
-
-/// Stamp (or clear, with a blank id) a card's `session_thread_id` — the
-/// conversation thread of its live/last run. Pure session-link bookkeeping,
-/// orthogonal to the lifecycle (does not touch status or the invariant).
-pub async fn set_session_thread(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    id: &str,
-    session_thread_id: Option<String>,
-) -> Result<TodosSnapshot> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    let card = cards
-        .iter_mut()
-        .find(|c| c.id == id)
-        .ok_or_else(|| TinyAgentsError::Validation(format!("todo id '{id}' not found")))?;
-    card.session_thread_id = session_thread_id.and_then(non_empty);
-    card.updated_at = now_stamp();
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Resolve a plan-approval decision: approve (→ `Ready`) or reject
-/// (→ `Rejected`). Errors unless the card is currently `AwaitingApproval`, so a
-/// stale/duplicate decision can't resurrect a card that already moved on.
-pub async fn decide_plan(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    id: &str,
-    approve: bool,
-) -> Result<TodosSnapshot> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    let card = cards
-        .iter_mut()
-        .find(|c| c.id == id)
-        .ok_or_else(|| TinyAgentsError::Validation(format!("todo id '{id}' not found")))?;
-    if card.status != TaskCardStatus::AwaitingApproval {
-        return Err(TinyAgentsError::Validation(format!(
-            "card '{id}' is not awaiting approval (status: {})",
-            card.status.as_str()
-        )));
-    }
-    card.status = if approve {
-        TaskCardStatus::Ready
-    } else {
-        TaskCardStatus::Rejected
-    };
-    card.updated_at = now_stamp();
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Reject **every** `AwaitingApproval` card so none stays runnable, clearing a
-/// parked plan for re-planning. Lenient when nothing is awaiting (a benign
-/// no-op rather than an error).
-pub async fn revise_plan(store: &Arc<dyn Store>, thread_id: &str) -> Result<TodosSnapshot> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    for card in cards.iter_mut() {
-        if card.status == TaskCardStatus::AwaitingApproval {
-            card.status = TaskCardStatus::Rejected;
-            card.updated_at = now_stamp();
-        }
-    }
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Remove a card by id. Errors if `id` is unknown.
-pub async fn remove(store: &Arc<dyn Store>, thread_id: &str, id: &str) -> Result<TodosSnapshot> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    let before = cards.len();
-    cards.retain(|c| c.id != id);
-    if cards.len() == before {
-        return Err(TinyAgentsError::Validation(format!(
-            "todo id '{id}' not found"
-        )));
-    }
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Wholesale-replace the board's cards. Cards missing ids get server-generated
-/// ones on normalise.
+/// Wholesale-replace the thread's list. Blank items are dropped on normalise.
 pub async fn replace(
     store: &Arc<dyn Store>,
     thread_id: &str,
-    cards: Vec<TaskBoardCard>,
+    items: Vec<TodoItem>,
 ) -> Result<TodosSnapshot> {
     let thread_id = validate_thread_id(thread_id)?;
     let lock = thread_lock(&thread_id);
     let _guard = lock.lock().await;
-    enforce_single_in_progress(&cards)?;
-    let cards = save_cards(store, &thread_id, cards).await?;
-    Ok(snapshot(&thread_id, cards))
+    enforce_single_in_progress(&items)?;
+    let items = save_items(store, &thread_id, items).await?;
+    Ok(snapshot(&thread_id, items))
 }
 
-/// Empty the board.
+/// Empty the list.
 pub async fn clear(store: &Arc<dyn Store>, thread_id: &str) -> Result<TodosSnapshot> {
     let thread_id = validate_thread_id(thread_id)?;
     let lock = thread_lock(&thread_id);
     let _guard = lock.lock().await;
-    let cards = save_cards(store, &thread_id, Vec::new()).await?;
-    Ok(snapshot(&thread_id, cards))
-}
-
-/// Atomic compare-and-set claim: transition a card from one of `expected` to
-/// `target` under the per-thread lock, returning the fresh card on success. If
-/// the card's current status is not in `expected`, the claim is rejected — the
-/// caller lost the race or the card already moved on.
-pub async fn claim_card(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    card_id: &str,
-    expected: &[TaskCardStatus],
-    target: TaskCardStatus,
-) -> Result<TaskBoardCard> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let mut cards = load_cards(store, &thread_id).await?;
-    let card = cards.iter_mut().find(|c| c.id == card_id).ok_or_else(|| {
-        TinyAgentsError::Validation(format!("claim_card: card '{card_id}' not found on board"))
-    })?;
-    if !expected.contains(&card.status) {
-        return Err(TinyAgentsError::Validation(format!(
-            "claim_card: card '{card_id}' status is '{}', expected one of [{}]; claim rejected",
-            card.status.as_str(),
-            expected
-                .iter()
-                .map(TaskCardStatus::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-    card.status = target;
-    card.updated_at = now_stamp();
-    let claimed_id = card.id.clone();
-    enforce_single_in_progress(&cards)?;
-    let cards = save_cards(store, &thread_id, cards).await?;
-    cards
-        .into_iter()
-        .find(|c| c.id == claimed_id)
-        .ok_or_else(|| {
-            TinyAgentsError::Graph(format!("claim_card: card '{claimed_id}' lost after save"))
-        })
+    let items = save_items(store, &thread_id, Vec::new()).await?;
+    Ok(snapshot(&thread_id, items))
 }

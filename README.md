@@ -200,7 +200,7 @@ All live in
 - **`agent_loop_tools`** — the agent/tool loop the harness runs.
 - **`orchestrator_subagents`** — an orchestrator agent that resolves and calls
   sub-agents by name from the registry.
-- **`goals_and_todos`** — a durable goal driving a task-board kanban on one
+- **`goals_and_todos`** — a durable goal driving a todo checklist on one
   thread.
 - **`openai_chat`**, **`openai_tools`**, **`openai_structured`**,
   **`openai_graph_agent`** — provider-backed chat, tool calling, structured

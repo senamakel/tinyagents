@@ -238,6 +238,20 @@ fn request_rendering_keeps_private_image_marker_text_literal() {
 }
 
 #[test]
+fn request_rendering_preserves_unclosed_private_image_marker_text() {
+    let text = "literal [OH_IMAGE:data:image/png;base64,QUJD";
+    let request = ModelRequest::new(vec![Message::user(text)]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["text"], text);
+}
+
+#[test]
 fn request_messages_filter_host_custom_records() {
     let request = ModelRequest::new(vec![
         Message::user("hello"),

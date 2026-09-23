@@ -37,7 +37,7 @@ pub fn resolve_keyed_transcript_path_in_dir(raw_dir: &Path, stem: &str) -> Resul
 /// `session_raw/` directory. Allows ASCII alphanumerics plus a small
 /// punctuation set (`_`, `-`, `.`); every other byte is replaced with
 /// `_`. Empty inputs fall back to `"session"`.
-fn sanitize_stem(stem: &str) -> String {
+pub(super) fn sanitize_stem(stem: &str) -> String {
     let cleaned: String = stem
         .chars()
         .map(|c| {

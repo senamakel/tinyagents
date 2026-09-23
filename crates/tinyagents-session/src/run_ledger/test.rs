@@ -214,30 +214,27 @@ fn lifecycle_fences_an_old_driver_and_lease_renewal_keeps_takeover_out() {
         workspace,
         "workflow-lifecycle-fence",
         "first",
-        chrono::Duration::milliseconds(300),
+        chrono::Duration::seconds(3),
     )
     .unwrap()
     {
         WorkflowLeaseClaim::Acquired(run) => run,
         other => panic!("expected first lease, got {other:?}"),
     };
-    std::thread::sleep(std::time::Duration::from_millis(30));
     assert!(
-        renew_workflow_run_lease(
-            workspace,
-            &first.id,
-            "first",
-            chrono::Duration::milliseconds(500),
-        )
-        .unwrap()
+        renew_workflow_run_lease(workspace, &first.id, "first", chrono::Duration::seconds(10),)
+            .unwrap()
     );
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Cross the original expiry. The renewed lease remains live for nearly
+    // seven seconds, leaving scheduling headroom while proving renewal fenced
+    // out another driver after the first lease would have lapsed.
+    std::thread::sleep(std::time::Duration::from_millis(3100));
     assert!(matches!(
         try_claim_workflow_run(
             workspace,
             &first.id,
             "second",
-            chrono::Duration::milliseconds(500),
+            chrono::Duration::seconds(10),
         )
         .unwrap(),
         WorkflowLeaseClaim::Busy(_)
@@ -495,8 +492,6 @@ fn agent_run_append_list_get_and_events_are_ordered() {
             status: AgentRunStatus::Running,
             prompt_ref: Some("worker-1:user:seed".into()),
             worker_thread_id: Some("worker-1".into()),
-            task_board_id: None,
-            task_card_id: None,
             checkpoint_path: None,
             checkpoint: None,
             summary: None,
@@ -571,8 +566,6 @@ fn transition_sets_status_and_clears_error_and_completed_at() {
             status: AgentRunStatus::Failed,
             prompt_ref: None,
             worker_thread_id: None,
-            task_board_id: None,
-            task_card_id: None,
             checkpoint_path: None,
             checkpoint: None,
             summary: None,
@@ -885,8 +878,6 @@ fn seed_run(workspace_dir: &Path, id: &str, status: AgentRunStatus) {
             status,
             prompt_ref: None,
             worker_thread_id: None,
-            task_board_id: None,
-            task_card_id: None,
             checkpoint_path: None,
             checkpoint: None,
             summary: None,
