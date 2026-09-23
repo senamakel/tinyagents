@@ -43,8 +43,9 @@ pub struct LoopState {
     pub tool_calls: usize,
     /// Names of calls that reached a tool executor, in execution order.
     pub executed_tools: Vec<String>,
-    /// Set once the loop has produced a terminal outcome (finished, not
-    /// necessarily successfully — see [`Self::final_error`]).
+    /// Set once the loop has produced a terminal outcome — finished, not
+    /// necessarily successfully. A run that ended in an error reports it
+    /// through the driver's `Result`, not through this struct.
     pub finished: bool,
     /// The final assistant text, once [`Self::finished`] is set by a normal
     /// completion, [`MiddlewareControl::StopWithFinal`][mc], or
