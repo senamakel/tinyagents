@@ -337,10 +337,10 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// # Why `Ctx` is a method type parameter, not stored on `Self`
     ///
     /// Every other executable kind this registry stores — models
-    /// ([`Self::register_model`]), tools ([`Self::register_tool`]), graph
-    /// blueprints, agent definitions — is `Ctx`-free: `Arc<dyn
-    /// ChatModel<State>>`, `Arc<dyn tinytools::Tool>`, `Blueprint`, and
-    /// `AgentDefinition` none of them name a `Ctx` type. A `Capability`,
+    /// ([`Self::register_model`]), tools ([`Self::register_tool`]), and agent
+    /// definitions — is `Ctx`-free: `Arc<dyn ChatModel<State>>`, `Arc<dyn
+    /// tinytools::Tool>`, and `AgentDefinition` none of them name a `Ctx`
+    /// type. A `Capability`,
     /// however, composes `tinyagents_harness::tool::toolset::ToolSet<State,
     /// Ctx>` and `tinyagents_harness::middleware::Middleware<State, Ctx>`
     /// trait objects (see `tinyagents-harness`'s `capability` module doc

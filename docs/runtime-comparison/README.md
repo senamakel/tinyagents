@@ -27,7 +27,6 @@ as calibration for the runtime/harness split.
 | [`pi.md`](pi.md) | pi (`earendil-works/pi`): `pi-ai`, `pi-agent-core` and its `AgentHarness`: same structure. |
 | [`code-review-harness.md`](code-review-harness.md) | `tinyagents-harness` findings (3 critical, 13 important, 14 minor), refactors, test gaps. |
 | [`code-review-graph.md`](code-review-graph.md) | `tinyagents-graph` / `-orchestration` / `-session` findings (4 critical, 12 important, 12 minor). |
-| [`code-review-workspace.md`](code-review-workspace.md) | Registry, language, definition, tracing, integration tests, CI and workspace hygiene. |
 
 ## Executive summary
 
@@ -35,7 +34,7 @@ as calibration for the runtime/harness split.
 of a durable typed graph (channels, `Send`, subgraphs, checkpoints with time
 travel), a policy-checked steering channel, detached sub-agent registry with
 parallel failure policies, fail-closed `ToolPolicy`, prompt-cache segment
-layout, capability-set model resolution, and a declarative `.rag` language.
+layout and capability-set model resolution.
 LangGraph OSS puts double-texting, cron and background runs in its paid
 server; Pydantic AI refuses to own a checkpointer; pi has no graph, no
 sub-agents, no structured output, no budgets.
@@ -83,8 +82,6 @@ event on first failure; a per-call timeout aborts the run instead of falling
 back; text-dialect tool-call recovery runs unconditionally on final answers;
 blocking SQLite/fs I/O runs inside `async fn`; CI never runs the 637
 integration tests with `-D warnings` or without `--all-features`;
-`build_graph` ignores ~70 % of a `.rag` blueprint; the language crate pulls
-the HTTP stack for one error type.
 
 ## The layering rule used throughout
 

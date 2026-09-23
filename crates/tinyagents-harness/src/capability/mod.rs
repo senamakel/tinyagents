@@ -122,8 +122,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Capability<State, Ctx> {
     /// Only the declarative fields round-trip through JSON (see
     /// [`Self::to_spec`]): the built capability's `toolset` and `middleware`
     /// are always empty, since neither can be represented in JSON. A host
-    /// parsing a `.rag` `capability "name"` reference (or any other
-    /// JSON-declared capability) wires those in afterward with
+    /// parsing a JSON-declared capability wires those in afterward with
     /// [`Self::with_toolset`]/[`Self::with_middleware`] before installing it
     /// via [`crate::runtime::AgentHarness::with_capability`].
     ///
