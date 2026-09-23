@@ -17,13 +17,13 @@ use crate::types::SessionMessage;
 
 use super::types::{Entry, EntryId, EntryKind};
 
-/// Derives an append-only linear chain of [`Entry::Message`] nodes from a
+/// Derives an append-only linear chain of [`crate::entry_tree::EntryKind::Message`] nodes from a
 /// parsed JSONL transcript's message array, in file order.
 pub fn from_transcript(session_id: &str, transcript: &SessionTranscript) -> Vec<Entry> {
     from_messages(session_id, &transcript.messages)
 }
 
-/// Derives an append-only linear chain of [`Entry::Message`] nodes from a
+/// Derives an append-only linear chain of [`crate::entry_tree::EntryKind::Message`] nodes from a
 /// bare message slice, in the given order.
 pub fn from_messages(session_id: &str, messages: &[TranscriptMessage]) -> Vec<Entry> {
     let mut entries = Vec::with_capacity(messages.len());
@@ -49,7 +49,7 @@ pub fn from_messages(session_id: &str, messages: &[TranscriptMessage]) -> Vec<En
     entries
 }
 
-/// Derives an append-only linear chain of [`Entry::Message`] nodes from
+/// Derives an append-only linear chain of [`crate::entry_tree::EntryKind::Message`] nodes from
 /// SQLite `session_messages` rows, in `id` (insertion) order.
 ///
 /// Rows are converted to [`TranscriptMessage`] with `extra_metadata`
