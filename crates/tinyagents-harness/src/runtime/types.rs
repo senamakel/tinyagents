@@ -352,7 +352,7 @@ pub struct RunPolicy {
     /// [`OutputRetryPolicy`].
     pub output_retry: OutputRetryPolicy,
     /// What the loop does when one turn's tool calls include both a
-    /// structured-output "schema" call ([`StructuredStrategy::ToolCall`]'s
+    /// structured-output "schema" call ([`crate::structured::StructuredStrategy::ToolCall`]'s
     /// synthetic tool) and one or more genuine function-tool calls (A6).
     /// Defaults to [`EndStrategy::Graceful`].
     pub end_strategy: EndStrategy,
