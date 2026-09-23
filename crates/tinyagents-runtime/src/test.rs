@@ -2673,10 +2673,12 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
 
-    // The destination's own metadata: a distinct `agent_id` and `created`
-    // from whatever the scan below will find.
+    // The destination's own metadata: a distinct `created` from whatever the
+    // scan below will find. `agent_id` has to match the builder's seed
+    // ("agent-id") on *both* files — `root_for_thread_scoped` filters
+    // candidates on it, so a mismatch would just make the scan find nothing
+    // and turn this into a no-op test rather than exercising the reload.
     let mut destination_meta = meta();
-    destination_meta.agent_id = Some("destination-agent".into());
     destination_meta.created = "destination-created".into();
     locator
         .open_session(&session_ref, destination_meta)
@@ -2692,7 +2694,6 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
     legacy.created = "zzz-scanned-created".into();
-    legacy.agent_id = Some("scanned-agent".into());
     tinyagents_session::transcript::write_transcript(
         &directory.path().join("session_raw/legacy_other.jsonl"),
         &[TranscriptMessage::new(
