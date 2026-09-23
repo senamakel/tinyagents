@@ -116,8 +116,23 @@ fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> (Vec<P
     // concatenates these in order, so that reordered the rendered view and
     // could attach a sub-agent trail to the wrong turn.
     let mut matches: Vec<(String, PathBuf)> = entries
-        .flatten()
-        .map(|entry| entry.path())
+        .filter_map(|entry| match entry {
+            Ok(entry) => Some(entry.path()),
+            Err(error) => {
+                // An entry the directory iterator itself could not read
+                // (e.g. a race with concurrent deletion, a transient I/O
+                // error) is exactly as invisible to this scan as a file that
+                // failed `read_transcript` below — the same `.flatten()`
+                // that used to drop it would have hidden it from every
+                // caller, including adoption's fail-closed contract.
+                tracing::warn!(
+                    "[transcript] could not read a directory entry in {}: {error}",
+                    raw_dir.display()
+                );
+                any_unreadable = true;
+                None
+            }
+        })
         .filter(|path| {
             path.extension().and_then(|s| s.to_str()) == Some("jsonl")
                 && path
