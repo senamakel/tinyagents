@@ -83,6 +83,17 @@ impl SessionRef {
     /// The resulting stem is `{parent stem}__{child stem}`, which is what keeps
     /// a delegated worker out of every root-transcript scan while still
     /// recording the delegation path in one flat filename.
+    ///
+    /// Unlike [`Self::scoped`], a child has no separate `agent_id` slot: its
+    /// whole identity beneath `parent` is `child_key`. Two different agent
+    /// implementations delegated under the same parent with the same
+    /// `child_key` therefore share one transcript — by design this
+    /// constructor puts that disambiguation on the caller, the same way
+    /// [`Self::root`]/[`Self::scoped`] already require `session_key` to be
+    /// unique per conversation. Choose a `child_key` that is unique per
+    /// (parent, logical sub-agent) pair — e.g. include the agent's own name
+    /// or role in it — rather than relying on this type to invent identity
+    /// it was never given.
     pub fn child_of(parent: &SessionRef, child_key: impl Into<String>) -> Self {
         Self {
             session_key: child_key.into(),
