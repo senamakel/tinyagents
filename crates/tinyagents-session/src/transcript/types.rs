@@ -169,6 +169,19 @@ pub struct TranscriptMeta {
     /// Sub-agent task id, when this transcript belongs to a spawned worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// Durable identity of the session this transcript holds, as produced by
+    /// [`session_stem`](crate::transcript::session_stem). Before this existed
+    /// a transcript's only identity was its filename, so nothing could tell
+    /// two files of one conversation apart from two unrelated ones. `None` on
+    /// transcripts written before session identity landed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The session this one succeeded when a compaction sealed it. Compaction
+    /// never rewrites history in place: it opens the next generation and
+    /// points back here, so the whole conversation stays recoverable by
+    /// walking the chain even though the model only sees the head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
 }
 
 /// A parsed session transcript: metadata + exact message array.

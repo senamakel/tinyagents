@@ -12,7 +12,7 @@ use crate::tool::toolset::ToolSet;
 /// dispatches to the **first** member (in registration order) that
 /// currently exposes the requested name. Name collisions across members are
 /// the caller's responsibility to avoid — wrap a member in
-/// [`super::PrefixedToolSet`] first when its names might clash with
+/// [`crate::tool::toolset::PrefixedToolSet`] first when its names might clash with
 /// another's.
 pub struct CombinedToolSet<State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) members: Vec<Arc<dyn ToolSet<State, Ctx>>>,

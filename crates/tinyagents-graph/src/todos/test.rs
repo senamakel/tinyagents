@@ -1,86 +1,75 @@
-//! Unit tests for the task board: domain-type serialization/markdown/
-//! normalisation, `store` CRUD and the single-`InProgress` / approval-flow
-//! invariants (`store_tests`), and the `todo` multiplexer tool's dispatch and
-//! argument validation (`tool_tests`).
+//! Unit tests for the todo-list domain types.
 
 use super::types::*;
 
-fn card(id: &str, title: &str, status: TaskCardStatus) -> TaskBoardCard {
-    TaskBoardCard {
-        id: id.to_string(),
-        title: title.to_string(),
-        status,
-        ..TaskBoardCard::new(title)
-    }
+fn item(content: &str, status: TodoStatus) -> TodoItem {
+    TodoItem::with_status(content, status)
 }
 
 #[test]
 fn status_strings_match_serialized() {
-    assert_eq!(TaskCardStatus::Todo.as_str(), "todo");
-    assert_eq!(
-        TaskCardStatus::AwaitingApproval.as_str(),
-        "awaiting_approval"
-    );
-    assert_eq!(TaskCardStatus::Ready.as_str(), "ready");
-    assert_eq!(TaskCardStatus::InProgress.as_str(), "in_progress");
-    assert_eq!(TaskCardStatus::Blocked.as_str(), "blocked");
-    assert_eq!(TaskCardStatus::Done.as_str(), "done");
-    assert_eq!(TaskCardStatus::Rejected.as_str(), "rejected");
-    assert_eq!(TaskApprovalMode::Required.as_str(), "required");
-    assert_eq!(TaskApprovalMode::NotRequired.as_str(), "not_required");
+    assert_eq!(TodoStatus::Pending.as_str(), "pending");
+    assert_eq!(TodoStatus::InProgress.as_str(), "in_progress");
+    assert_eq!(TodoStatus::Completed.as_str(), "completed");
+    for status in [
+        TodoStatus::Pending,
+        TodoStatus::InProgress,
+        TodoStatus::Completed,
+    ] {
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::Value::String(status.as_str().to_string())
+        );
+    }
 }
 
 #[test]
 fn parse_status_accepts_aliases() {
-    assert_eq!(parse_status("todo").unwrap(), TaskCardStatus::Todo);
-    assert_eq!(parse_status("PENDING").unwrap(), TaskCardStatus::Todo);
+    assert_eq!(parse_status("pending").unwrap(), TodoStatus::Pending);
+    assert_eq!(parse_status("TODO").unwrap(), TodoStatus::Pending);
+    assert_eq!(parse_status("in-progress").unwrap(), TodoStatus::InProgress);
     assert_eq!(
-        parse_status("in-progress").unwrap(),
-        TaskCardStatus::InProgress
+        parse_status(" in_progress ").unwrap(),
+        TodoStatus::InProgress
     );
-    assert_eq!(parse_status("approved").unwrap(), TaskCardStatus::Ready);
-    assert_eq!(parse_status("done").unwrap(), TaskCardStatus::Done);
-    assert_eq!(parse_status("denied").unwrap(), TaskCardStatus::Rejected);
+    assert_eq!(parse_status("done").unwrap(), TodoStatus::Completed);
+    assert_eq!(parse_status("completed").unwrap(), TodoStatus::Completed);
+    assert!(parse_status("blocked").is_err(), "kanban states are gone");
     assert!(parse_status("nope").is_err());
 }
 
 #[test]
-fn card_and_board_round_trip_through_json() {
-    let mut c = card("task-1", "Draft plan", TaskCardStatus::AwaitingApproval);
-    c.approval_mode = Some(TaskApprovalMode::Required);
-    c.plan = vec!["step one".into()];
-    let board = TaskBoard {
+fn item_and_list_round_trip_through_json() {
+    let list = TodoList {
         thread_id: "t".into(),
-        cards: vec![c.clone()],
+        items: vec![
+            item("Draft plan", TodoStatus::Completed),
+            item("Write code", TodoStatus::InProgress),
+        ],
         updated_at: "0".into(),
     };
-    let json = serde_json::to_value(&board).unwrap();
+    let json = serde_json::to_value(&list).unwrap();
     assert_eq!(json["threadId"], "t");
-    assert_eq!(json["cards"][0]["approvalMode"], "required");
-    let back: TaskBoard = serde_json::from_value(json).unwrap();
-    assert_eq!(back, board);
+    assert_eq!(json["items"][0]["status"], "completed");
+    assert_eq!(json["items"][1]["content"], "Write code");
+    let back: TodoList = serde_json::from_value(json).unwrap();
+    assert_eq!(back, list);
 }
 
 #[test]
-fn render_markdown_uses_status_markers_and_sub_lines() {
-    let mut done = card("task-1", "Ship it", TaskCardStatus::Done);
-    done.objective = Some("release the crate".into());
-    let mut blocked = card("task-2", "Wait on CI", TaskCardStatus::Blocked);
-    blocked.blocker = Some("CI is red".into());
-    let in_progress = card("task-3", "Write docs", TaskCardStatus::InProgress);
-    let awaiting = card("task-4", "Approve plan", TaskCardStatus::AwaitingApproval);
-    let rejected = card("task-5", "Nope", TaskCardStatus::Rejected);
-    let todo = card("task-6", "Later", TaskCardStatus::Todo);
+fn item_status_defaults_to_pending_when_absent() {
+    let back: TodoItem = serde_json::from_value(serde_json::json!({ "content": "x" })).unwrap();
+    assert_eq!(back.status, TodoStatus::Pending);
+}
 
-    let md = render_markdown(&[done, blocked, in_progress, awaiting, rejected, todo]);
-    assert!(md.contains("- [x] Ship it  `(task-1)`"));
-    assert!(md.contains("  - objective: release the crate"));
-    assert!(md.contains("- [!] Wait on CI"));
-    assert!(md.contains("  - _blocked:_ CI is red"));
-    assert!(md.contains("- [~] Write docs"));
-    assert!(md.contains("- [?] Approve plan"));
-    assert!(md.contains("- [-] Nope"));
-    assert!(md.contains("- [ ] Later"));
+#[test]
+fn render_markdown_uses_status_markers() {
+    let md = render_markdown(&[
+        item("Ship it", TodoStatus::Completed),
+        item("Write docs", TodoStatus::InProgress),
+        item("Later", TodoStatus::Pending),
+    ]);
+    assert_eq!(md, "- [x] Ship it\n- [~] Write docs\n- [ ] Later");
 }
 
 #[test]
@@ -89,39 +78,22 @@ fn render_markdown_empty_is_placeholder() {
 }
 
 #[test]
-fn normalise_trims_generates_ids_and_recomputes_order() {
-    let mut board = TaskBoard {
-        thread_id: "  t  ".into(),
-        cards: vec![
-            TaskBoardCard {
-                order: 99,
-                objective: Some("  ship briefs  ".into()),
-                plan: vec!["  extend schema  ".into(), "   ".into()],
-                allowed_tools: vec![" todo ".into(), "".into()],
-                ..card("", "  Draft plan  ", TaskCardStatus::Todo)
-            },
-            // Empty title → dropped.
-            card("empty", "   ", TaskCardStatus::Todo),
-            // Blocked without a blocker → backfilled from notes.
-            TaskBoardCard {
-                notes: Some("waiting on user".into()),
-                ..card("blocked", "Need approval", TaskCardStatus::Blocked)
-            },
+fn normalise_trims_and_drops_blank_items() {
+    let mut list = TodoList {
+        thread_id: " t ".into(),
+        items: vec![
+            item("  keep  ", TodoStatus::Pending),
+            item("   ", TodoStatus::Completed),
+            item("also keep", TodoStatus::InProgress),
         ],
         updated_at: String::new(),
     };
-    normalise_board(&mut board);
-
-    assert_eq!(board.thread_id, "t");
-    assert_eq!(board.cards.len(), 2, "empty-title card dropped");
-    assert_eq!(board.cards[0].title, "Draft plan");
-    assert_eq!(board.cards[0].objective.as_deref(), Some("ship briefs"));
-    assert_eq!(board.cards[0].plan, vec!["extend schema"]);
-    assert_eq!(board.cards[0].allowed_tools, vec!["todo"]);
-    assert!(board.cards[0].id.starts_with("task-"), "blank id generated");
-    assert_eq!(board.cards[0].order, 0);
-    assert_eq!(board.cards[1].order, 1);
-    assert_eq!(board.cards[1].blocker.as_deref(), Some("waiting on user"));
+    normalise_list(&mut list);
+    assert_eq!(list.thread_id, "t");
+    assert_eq!(list.items.len(), 2);
+    assert_eq!(list.items[0].content, "keep");
+    assert_eq!(list.items[1].content, "also keep");
+    assert!(!list.updated_at.is_empty());
 }
 
 mod store_tests {
@@ -133,36 +105,64 @@ mod store_tests {
     use tokio::sync::Notify;
 
     use super::super::store;
-    use super::super::types::{CardPatch, TaskBoardCard, TaskCardStatus};
+    use super::super::types::{TodoItem, TodoStatus};
     use tinyagents_harness::store::{InMemoryStore, Store};
 
     fn store() -> Arc<dyn Store> {
         Arc::new(InMemoryStore::default())
     }
 
-    #[tokio::test]
-    async fn add_list_remove_round_trip() {
-        let s = store();
-        assert!(store::list(&s, "t").await.unwrap().cards.is_empty());
+    fn items(specs: &[(&str, TodoStatus)]) -> Vec<TodoItem> {
+        specs
+            .iter()
+            .map(|(content, status)| TodoItem::with_status(*content, *status))
+            .collect()
+    }
 
-        let snap = store::add(&s, "t", "Write the RFC", CardPatch::default())
-            .await
-            .unwrap();
+    #[tokio::test]
+    async fn replace_list_clear_round_trip() {
+        let s = store();
+        assert!(store::list(&s, "t").await.unwrap().items.is_empty());
+
+        let snap = store::replace(
+            &s,
+            "t",
+            items(&[
+                ("Write the RFC", TodoStatus::InProgress),
+                ("Review it", TodoStatus::Pending),
+            ]),
+        )
+        .await
+        .unwrap();
         assert_eq!(snap.thread_id, "t");
-        assert_eq!(snap.cards.len(), 1);
-        assert_eq!(snap.cards[0].title, "Write the RFC");
-        assert!(snap.markdown.contains("Write the RFC"));
-        let id = snap.cards[0].id.clone();
+        assert_eq!(snap.items.len(), 2);
+        assert_eq!(snap.items[0].content, "Write the RFC");
+        assert_eq!(snap.markdown, "- [~] Write the RFC\n- [ ] Review it");
 
         let listed = store::list(&s, "t").await.unwrap();
-        assert_eq!(listed.cards.len(), 1);
+        assert_eq!(listed, snap);
 
-        let after = store::remove(&s, "t", &id).await.unwrap();
-        assert!(after.cards.is_empty());
-        assert!(
-            store::remove(&s, "t", &id).await.is_err(),
-            "unknown id errors"
-        );
+        // A replace is wholesale: the old items are gone, not merged.
+        let snap = store::replace(&s, "t", items(&[("Only this", TodoStatus::Completed)]))
+            .await
+            .unwrap();
+        assert_eq!(snap.items.len(), 1);
+        assert_eq!(snap.items[0].status, TodoStatus::Completed);
+
+        let cleared = store::clear(&s, "t").await.unwrap();
+        assert!(cleared.items.is_empty());
+        assert_eq!(cleared.markdown, "_No todos yet._");
+    }
+
+    #[tokio::test]
+    async fn threads_are_isolated() {
+        let s = store();
+        store::replace(&s, "a", items(&[("A's work", TodoStatus::Pending)]))
+            .await
+            .unwrap();
+        assert!(store::list(&s, "b").await.unwrap().items.is_empty());
+        store::clear(&s, "b").await.unwrap();
+        assert_eq!(store::list(&s, "a").await.unwrap().items.len(), 1);
     }
 
     #[tokio::test]
@@ -171,52 +171,90 @@ mod store_tests {
         assert!(store::get(&s, " t ").await.unwrap().is_none());
 
         store::clear(&s, "t").await.unwrap();
-        let board = store::get(&s, "t").await.unwrap().expect("present board");
-        assert!(board.cards.is_empty());
+        let list = store::get(&s, "t").await.unwrap().expect("present list");
+        assert!(list.items.is_empty());
 
         assert!(store::delete(&s, "t").await.unwrap());
         assert!(store::get(&s, "t").await.unwrap().is_none());
         assert!(!store::delete(&s, "t").await.unwrap());
     }
 
-    struct BlockingGetStore {
-        inner: InMemoryStore,
-        armed: AtomicBool,
-        first_get_started: Notify,
-        release_first_get: Notify,
-        first_get_released: AtomicBool,
-        concurrent_get: AtomicBool,
+    #[tokio::test]
+    async fn replace_rejects_two_in_progress_and_blank_thread() {
+        let s = store();
+        let err = store::replace(
+            &s,
+            "t",
+            items(&[("A", TodoStatus::InProgress), ("B", TodoStatus::InProgress)]),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("in_progress"), "{err}");
+        assert!(
+            store::list(&s, "t").await.unwrap().items.is_empty(),
+            "a rejected replace leaves the list untouched"
+        );
+        assert!(store::replace(&s, "  ", Vec::new()).await.is_err());
+        assert!(store::list(&s, "").await.is_err());
     }
 
-    impl BlockingGetStore {
+    #[tokio::test]
+    async fn replace_normalises_content() {
+        let s = store();
+        let snap = store::replace(
+            &s,
+            "t",
+            items(&[
+                ("  spaced  ", TodoStatus::Pending),
+                ("", TodoStatus::Pending),
+            ]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(snap.items.len(), 1);
+        assert_eq!(snap.items[0].content, "spaced");
+    }
+
+    /// A store whose first armed `put` parks until released, so a test can
+    /// hold the thread lock inside a mutation and check that a concurrent
+    /// `delete` waits at the lock instead of racing the store.
+    struct BlockingPutStore {
+        inner: InMemoryStore,
+        armed: AtomicBool,
+        first_put_started: Notify,
+        release_first_put: Notify,
+        first_put_released: AtomicBool,
+        concurrent_access: AtomicBool,
+    }
+
+    impl BlockingPutStore {
         fn new() -> Self {
             Self {
                 inner: InMemoryStore::default(),
                 armed: AtomicBool::new(false),
-                first_get_started: Notify::new(),
-                release_first_get: Notify::new(),
-                first_get_released: AtomicBool::new(false),
-                concurrent_get: AtomicBool::new(false),
+                first_put_started: Notify::new(),
+                release_first_put: Notify::new(),
+                first_put_released: AtomicBool::new(false),
+                concurrent_access: AtomicBool::new(false),
+            }
+        }
+
+        fn note_access(&self) {
+            if !self.first_put_released.load(Ordering::SeqCst) {
+                self.concurrent_access.store(true, Ordering::SeqCst);
             }
         }
     }
 
     #[async_trait]
-    impl Store for BlockingGetStore {
+    impl Store for BlockingPutStore {
         async fn get(
             &self,
             namespace: &str,
             key: &str,
         ) -> tinyagents_harness::error::Result<Option<Value>> {
-            let value = self.inner.get(namespace, key).await?;
-            if self.armed.swap(false, Ordering::SeqCst) {
-                self.first_get_started.notify_one();
-                self.release_first_get.notified().await;
-                self.first_get_released.store(true, Ordering::SeqCst);
-            } else if !self.first_get_released.load(Ordering::SeqCst) {
-                self.concurrent_get.store(true, Ordering::SeqCst);
-            }
-            Ok(value)
+            self.note_access();
+            self.inner.get(namespace, key).await
         }
 
         async fn put(
@@ -225,6 +263,13 @@ mod store_tests {
             key: &str,
             value: Value,
         ) -> tinyagents_harness::error::Result<()> {
+            if self.armed.swap(false, Ordering::SeqCst) {
+                self.first_put_started.notify_one();
+                self.release_first_put.notified().await;
+                self.first_put_released.store(true, Ordering::SeqCst);
+            } else {
+                self.note_access();
+            }
             self.inner.put(namespace, key, value).await
         }
 
@@ -233,6 +278,7 @@ mod store_tests {
             namespace: &str,
             key: &str,
         ) -> tinyagents_harness::error::Result<()> {
+            self.note_access();
             self.inner.delete(namespace, key).await
         }
 
@@ -243,29 +289,15 @@ mod store_tests {
 
     #[tokio::test]
     async fn delete_waits_for_an_in_flight_mutation() {
-        let concrete = Arc::new(BlockingGetStore::new());
+        let concrete = Arc::new(BlockingPutStore::new());
         let s: Arc<dyn Store> = concrete.clone();
-        let snap = store::add(&s, "t", "original", CardPatch::default())
-            .await
-            .unwrap();
-        let card_id = snap.cards[0].id.clone();
 
-        concrete.concurrent_get.store(false, Ordering::SeqCst);
         concrete.armed.store(true, Ordering::SeqCst);
-        let edit_store = s.clone();
-        let edit = tokio::spawn(async move {
-            store::edit(
-                &edit_store,
-                "t",
-                &card_id,
-                CardPatch {
-                    content: Some("edited".into()),
-                    ..CardPatch::default()
-                },
-            )
-            .await
+        let replace_store = s.clone();
+        let replace = tokio::spawn(async move {
+            store::replace(&replace_store, "t", vec![TodoItem::new("original")]).await
         });
-        concrete.first_get_started.notified().await;
+        concrete.first_put_started.notified().await;
 
         let delete_store = s.clone();
         let delete = tokio::spawn(async move { store::delete(&delete_store, "t").await });
@@ -273,221 +305,14 @@ mod store_tests {
             tokio::task::yield_now().await;
         }
         assert!(
-            !concrete.concurrent_get.load(Ordering::SeqCst),
+            !concrete.concurrent_access.load(Ordering::SeqCst),
             "delete must not enter the store while a mutation holds the thread lock"
         );
 
-        concrete.release_first_get.notify_one();
-        edit.await.unwrap().unwrap();
+        concrete.release_first_put.notify_one();
+        replace.await.unwrap().unwrap();
         assert!(delete.await.unwrap().unwrap());
         assert!(store::get(&s, "t").await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn import_if_absent_never_overwrites_an_existing_value() {
-        let s = store();
-        let board = super::super::types::TaskBoard::empty(" t ");
-        assert!(store::import_if_absent(&s, board).await.unwrap());
-        assert!(
-            !store::import_if_absent(&s, super::super::types::TaskBoard::empty("t"))
-                .await
-                .unwrap()
-        );
-    }
-
-    #[tokio::test]
-    async fn add_rejects_empty_content_and_blank_thread() {
-        let s = store();
-        assert!(
-            store::add(&s, "t", "   ", CardPatch::default())
-                .await
-                .is_err()
-        );
-        assert!(
-            store::add(&s, "  ", "x", CardPatch::default())
-                .await
-                .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn single_in_progress_invariant_is_enforced() {
-        let s = store();
-        let a = store::add(&s, "t", "A", CardPatch::default())
-            .await
-            .unwrap();
-        let a_id = a.cards[0].id.clone();
-        let b = store::add(&s, "t", "B", CardPatch::default())
-            .await
-            .unwrap();
-        let b_id = b.cards[1].id.clone();
-
-        store::update_status(&s, "t", &a_id, TaskCardStatus::InProgress)
-            .await
-            .unwrap();
-        // A second in-progress card is rejected, not silently fixed.
-        let err = store::update_status(&s, "t", &b_id, TaskCardStatus::InProgress)
-            .await
-            .unwrap_err();
-        assert!(format!("{err}").contains("in_progress"));
-        // The board still has exactly one in-progress card.
-        let listed = store::list(&s, "t").await.unwrap();
-        let in_progress = listed
-            .cards
-            .iter()
-            .filter(|c| c.status == TaskCardStatus::InProgress)
-            .count();
-        assert_eq!(in_progress, 1);
-    }
-
-    #[tokio::test]
-    async fn replace_enforces_invariant() {
-        let s = store();
-        let two_in_progress = vec![
-            TaskBoardCard {
-                status: TaskCardStatus::InProgress,
-                ..TaskBoardCard::new("A")
-            },
-            TaskBoardCard {
-                status: TaskCardStatus::InProgress,
-                ..TaskBoardCard::new("B")
-            },
-        ];
-        assert!(store::replace(&s, "t", two_in_progress).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn decide_plan_only_from_awaiting_approval() {
-        let s = store();
-        let snap = store::add(
-            &s,
-            "t",
-            "Gated work",
-            CardPatch {
-                status: Some(TaskCardStatus::AwaitingApproval),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let id = snap.cards[0].id.clone();
-
-        let approved = store::decide_plan(&s, "t", &id, true).await.unwrap();
-        assert_eq!(approved.cards[0].status, TaskCardStatus::Ready);
-        // A second decision on a now-Ready card errors (can't resurrect).
-        assert!(store::decide_plan(&s, "t", &id, false).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn revise_plan_rejects_all_awaiting_and_is_lenient_when_empty() {
-        let s = store();
-        store::add(
-            &s,
-            "t",
-            "Gated",
-            CardPatch {
-                status: Some(TaskCardStatus::AwaitingApproval),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let after = store::revise_plan(&s, "t").await.unwrap();
-        assert_eq!(after.cards[0].status, TaskCardStatus::Rejected);
-        // Nothing awaiting now → benign no-op.
-        let again = store::revise_plan(&s, "t").await.unwrap();
-        assert_eq!(again.cards[0].status, TaskCardStatus::Rejected);
-    }
-
-    #[tokio::test]
-    async fn claim_card_cas_accepts_then_rejects() {
-        let s = store();
-        let snap = store::add(
-            &s,
-            "t",
-            "Runnable",
-            CardPatch {
-                status: Some(TaskCardStatus::Ready),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let id = snap.cards[0].id.clone();
-
-        let claimed = store::claim_card(
-            &s,
-            "t",
-            &id,
-            &[TaskCardStatus::Ready],
-            TaskCardStatus::InProgress,
-        )
-        .await
-        .unwrap();
-        assert_eq!(claimed.status, TaskCardStatus::InProgress);
-        // A second claim expecting Ready now fails (already in progress).
-        assert!(
-            store::claim_card(
-                &s,
-                "t",
-                &id,
-                &[TaskCardStatus::Ready],
-                TaskCardStatus::InProgress
-            )
-            .await
-            .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn edit_leaves_unset_fields_untouched() {
-        let s = store();
-        let snap = store::add(
-            &s,
-            "t",
-            "Task",
-            CardPatch {
-                objective: Some("keep me".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let id = snap.cards[0].id.clone();
-        // Edit only the notes; objective is preserved.
-        let edited = store::edit(
-            &s,
-            "t",
-            &id,
-            CardPatch {
-                notes: Some("a note".into()),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(edited.cards[0].objective.as_deref(), Some("keep me"));
-        assert_eq!(edited.cards[0].notes.as_deref(), Some("a note"));
-    }
-
-    #[tokio::test]
-    async fn set_session_thread_links_then_clears() {
-        let s = store();
-        let snap = store::add(&s, "t", "Task", CardPatch::default())
-            .await
-            .unwrap();
-        let id = snap.cards[0].id.clone();
-        let linked = store::set_session_thread(&s, "t", &id, Some("thread-xyz".into()))
-            .await
-            .unwrap();
-        assert_eq!(
-            linked.cards[0].session_thread_id.as_deref(),
-            Some("thread-xyz")
-        );
-        let cleared = store::set_session_thread(&s, "t", &id, Some("  ".into()))
-            .await
-            .unwrap();
-        assert_eq!(cleared.cards[0].session_thread_id, None);
     }
 }
 
@@ -497,7 +322,6 @@ mod tool_tests {
     use serde_json::json;
 
     use super::super::tool::{TodoTool, todo_tools};
-    use super::super::types::TaskCardStatus;
     use tinyagents_harness::store::{InMemoryStore, Store};
     use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
 
@@ -526,11 +350,36 @@ mod tool_tests {
             .iter()
             .find_map(|block| match block {
                 ToolContent::Json { data } => Some(data),
-                ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => {
-                    None
-                }
+                _ => None,
             })
             .expect("successful todo result has a JSON payload")
+    }
+
+    /// The description is what makes a model treat the list as bookkeeping
+    /// rather than as the work itself: without the "same response carries the
+    /// next call" rule, models write a list, stop, and wait to be prompted;
+    /// without the "only after its work has run" rule they tick items off
+    /// ahead of doing them.
+    #[test]
+    fn description_states_when_an_item_may_be_completed_and_that_writing_is_not_working() {
+        let tool = TodoTool::new(store());
+        let description = Tool::description(&tool);
+        assert!(
+            description.contains("only after its work has actually run"),
+            "an item is completed after its result exists: {description}"
+        );
+        assert!(
+            description.contains("bookkeeping, not work"),
+            "writing the list is not the work: {description}"
+        );
+        assert!(
+            description.contains("immediately carry out the next step"),
+            "the model advances after bookkeeping: {description}"
+        );
+        assert!(
+            description.contains("next model turn"),
+            "sequential providers may advance on their next turn: {description}"
+        );
     }
 
     #[test]
@@ -540,304 +389,129 @@ mod tool_tests {
         assert_eq!(Tool::name(tools[0].as_ref()), "todo");
     }
 
+    #[test]
+    fn schema_admits_the_documented_read_and_status_forms() {
+        let tool = TodoTool::new(store());
+        let schema = tool.parameters_schema();
+        assert_eq!(
+            schema["properties"]["todos"]["items"]["properties"]["status"]["enum"],
+            json!([
+                "pending",
+                "todo",
+                "open",
+                "not_started",
+                "in_progress",
+                "in-progress",
+                "inprogress",
+                "started",
+                "active",
+                "completed",
+                "complete",
+                "done",
+                "finished"
+            ])
+        );
+        assert_eq!(
+            schema["properties"]["todos"]["type"],
+            json!(["array", "null"])
+        );
+        assert_eq!(schema["additionalProperties"], false);
+        assert!(schema["properties"].get("op").is_none());
+    }
+
     #[tokio::test]
-    async fn add_list_via_tool_persists_to_the_thread() {
+    async fn write_then_read_via_tool_persists_to_the_thread() {
         let tool = TodoTool::new(store());
         let res = run(
             &tool,
             Some("t"),
-            json!({ "op": "add", "content": "Write tests" }),
+            json!({ "todos": [
+                { "content": "Write tests", "status": "in_progress" },
+                { "content": "Ship", "status": "pending" }
+            ] }),
         )
         .await;
         assert!(!res.is_error, "{res:?}");
         assert_eq!(raw(&res)["threadId"], "t");
-        assert!(
-            raw(&res)["markdown"]
-                .as_str()
-                .unwrap()
-                .contains("Write tests")
+        assert_eq!(raw(&res)["todos"][0]["status"], "in_progress");
+        assert_eq!(
+            raw(&res)["markdown"].as_str().unwrap(),
+            "- [~] Write tests\n- [ ] Ship"
         );
 
-        let res = run(&tool, Some("t"), json!({ "op": "list" })).await;
-        assert_eq!(raw(&res)["cards"].as_array().unwrap().len(), 1);
+        // No `todos` reads the list back unchanged.
+        let res = run(&tool, Some("t"), json!({})).await;
+        assert_eq!(raw(&res)["todos"].as_array().unwrap().len(), 2);
+        let res = run(&tool, Some("t"), json!({ "todos": null })).await;
+        assert_eq!(raw(&res)["todos"].as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
-    async fn add_then_update_status() {
+    async fn status_aliases_and_default_are_accepted() {
         let tool = TodoTool::new(store());
-        let res = run(&tool, Some("t"), json!({ "op": "add", "content": "Task" })).await;
-        let id = raw(&res)["cards"][0]["id"].as_str().unwrap().to_string();
         let res = run(
             &tool,
             Some("t"),
-            json!({ "op": "update_status", "id": id, "status": "in_progress" }),
+            json!({ "todos": [
+                { "content": "A", "status": "done" },
+                { "content": "B" }
+            ] }),
         )
         .await;
-        assert_eq!(raw(&res)["cards"][0]["status"], "in_progress");
+        assert!(!res.is_error, "{res:?}");
+        assert_eq!(raw(&res)["todos"][0]["status"], "completed");
+        assert_eq!(raw(&res)["todos"][1]["status"], "pending");
     }
 
     #[tokio::test]
     async fn tool_requires_a_thread() {
         let tool = TodoTool::new(store());
         // Bare call (no context).
-        let res = tool.execute(json!({ "op": "list" })).await.unwrap();
+        let res = tool.execute(json!({})).await.unwrap();
         assert!(res.is_error && res.output().contains("active thread"));
         // Context without a thread id.
-        let res = run(&tool, None, json!({ "op": "list" })).await;
+        let res = run(&tool, None, json!({})).await;
         assert!(res.is_error);
     }
 
     #[tokio::test]
-    async fn unknown_op_and_missing_field_are_soft_errors() {
+    async fn malformed_items_are_soft_errors() {
         let tool = TodoTool::new(store());
-        let res = run(&tool, Some("t"), json!({ "op": "frobnicate" })).await;
-        assert!(res.is_error && res.output().contains("unknown op"));
-        let res = run(&tool, Some("t"), json!({ "op": "add" })).await;
+        let res = run(&tool, Some("t"), json!({ "todos": "nope" })).await;
+        assert!(res.is_error && res.output().contains("invalid `todos`"));
+        let res = run(&tool, Some("t"), json!({ "todos": [{ "content": "  " }] })).await;
         assert!(res.is_error && res.output().contains("content"));
+        let res = run(
+            &tool,
+            Some("t"),
+            json!({ "todos": [{ "content": "x", "status": "blocked" }] }),
+        )
+        .await;
+        assert!(res.is_error && res.output().contains("invalid status"));
+
+        for args in [
+            json!(null),
+            json!([]),
+            json!("not an object"),
+            json!({ "op": "clear" }),
+        ] {
+            let res = run(&tool, Some("t"), args).await;
+            assert!(res.is_error, "invalid arguments must be a tool error");
+        }
     }
 
     #[tokio::test]
     async fn invariant_violation_is_a_soft_error() {
         let tool = TodoTool::new(store());
-        let a = run(&tool, Some("t"), json!({ "op": "add", "content": "A" })).await;
-        let a_id = raw(&a)["cards"][0]["id"].as_str().unwrap().to_string();
-        run(&tool, Some("t"), json!({ "op": "add", "content": "B" })).await;
-        run(
-            &tool,
-            Some("t"),
-            json!({ "op": "update_status", "id": a_id, "status": "in_progress" }),
-        )
-        .await;
-        // Second in-progress via replace/update is surfaced as an error, run continues.
-        let b = run(&tool, Some("t"), json!({ "op": "list" })).await;
-        let b_id = raw(&b)["cards"][1]["id"].as_str().unwrap().to_string();
         let res = run(
-            &tool,
-            Some("t"),
-            json!({ "op": "update_status", "id": b_id, "status": "in_progress" }),
-        )
-        .await;
-        assert!(res.is_error && res.output().contains("in_progress"));
-    }
-
-    #[tokio::test]
-    async fn decide_plan_via_tool() {
-        let tool = TodoTool::new(store());
-        let res = run(
-            &tool,
-            Some("t"),
-            json!({ "op": "add", "content": "Gated", "status": "awaiting_approval" }),
-        )
-        .await;
-        let id = raw(&res)["cards"][0]["id"].as_str().unwrap().to_string();
-        let res = run(
-            &tool,
-            Some("t"),
-            json!({ "op": "decide_plan", "id": id, "approve": true }),
-        )
-        .await;
-        assert_eq!(
-            raw(&res)["cards"][0]["status"],
-            TaskCardStatus::Ready.as_str()
-        );
-    }
-}
-
-mod session_list_tests {
-    use std::sync::Arc;
-
-    use serde_json::json;
-
-    use super::super::dispatch::pick_next_card;
-    use super::super::session_list::SessionTodoTool;
-    use tinyagents_harness::store::{InMemoryStore, Store};
-    use tinyagents_harness::tool::{SchemaPreparation, prepare_parameters};
-    use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
-
-    fn store() -> Arc<dyn Store> {
-        Arc::new(InMemoryStore::default())
-    }
-
-    struct ThreadContext(Option<String>);
-
-    impl ToolRunContext for ThreadContext {
-        fn thread_id(&self) -> Option<&str> {
-            self.0.as_deref()
-        }
-    }
-
-    async fn run(
-        tool: &SessionTodoTool,
-        thread: Option<&str>,
-        args: serde_json::Value,
-    ) -> ToolResult {
-        let context = ThreadContext(thread.map(str::to_owned));
-        tool.execute_with_context(args, Default::default(), Some(&context))
-            .await
-            .unwrap()
-    }
-
-    fn raw(result: &ToolResult) -> &serde_json::Value {
-        result
-            .content
-            .iter()
-            .find_map(|block| match block {
-                ToolContent::Json { data } => Some(data),
-                _ => None,
-            })
-            .expect("json payload")
-    }
-
-    #[tokio::test]
-    async fn a_write_replaces_the_whole_list_and_a_read_returns_it() {
-        let tool = SessionTodoTool::new(store());
-
-        let written = run(
             &tool,
             Some("t"),
             json!({ "todos": [
-                { "content": "Write tests", "status": "in_progress" },
-                { "content": "Ship it", "status": "pending" }
+                { "content": "A", "status": "in_progress" },
+                { "content": "B", "status": "in_progress" }
             ] }),
         )
         .await;
-        assert!(!written.is_error, "{written:?}");
-        let p = raw(&written);
-        assert_eq!(p["todos"][0]["status"], "in_progress");
-        assert_eq!(p["todos"][1]["status"], "pending");
-        let markdown = p["markdown"].as_str().unwrap();
-        assert_eq!(
-            markdown, "- [~] Write tests\n- [ ] Ship it",
-            "no ids, no board fields"
-        );
-
-        let read = run(&tool, Some("t"), json!({})).await;
-        assert_eq!(raw(&read)["todos"].as_array().unwrap().len(), 2);
-
-        let rewritten = run(
-            &tool,
-            Some("t"),
-            json!({ "todos": [{ "content": "Write tests", "status": "completed" }] }),
-        )
-        .await;
-        let p = raw(&rewritten);
-        assert_eq!(
-            p["todos"].as_array().unwrap().len(),
-            1,
-            "a write is the whole list"
-        );
-        assert_eq!(p["todos"][0]["status"], "completed");
-
-        let cleared = run(&tool, Some("t"), json!({ "todos": [] })).await;
-        assert!(raw(&cleared)["todos"].as_array().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn lists_are_keyed_by_thread() {
-        let tool = SessionTodoTool::new(store());
-        run(
-            &tool,
-            Some("a"),
-            json!({ "todos": [{ "content": "only a", "status": "pending" }] }),
-        )
-        .await;
-        let b = run(&tool, Some("b"), json!({})).await;
-        assert!(raw(&b)["todos"].as_array().unwrap().is_empty());
-    }
-
-    /// Every argument problem is a tool error the model can correct, never an
-    /// `Err` — an `Err` out of a dispatch is fatal to the run, and a host died
-    /// exactly that way when a model sent the retired `{"cards": …}` shape.
-    #[tokio::test]
-    async fn bad_input_is_a_tool_error_not_an_err() {
-        let tool = SessionTodoTool::new(store());
-        for (args, expect) in [
-            (
-                json!({ "todos": [{ "content": "  ", "status": "pending" }] }),
-                "content",
-            ),
-            (
-                json!({ "todos": [{ "content": "x", "status": "someday" }] }),
-                "status must",
-            ),
-            (json!({ "todos": "not a list" }), "invalid `todos`"),
-            (json!({ "todos": null, "extra": true }), "unknown arguments"),
-            (
-                json!({ "todos": [{ "content": "x", "status": "ready" }] }),
-                "status must",
-            ),
-            (
-                json!({ "cards": [{ "content": "x", "status": "todo" }] }),
-                "pass `todos`",
-            ),
-            (
-                json!({ "todos": [
-                    { "content": "a", "status": "in_progress" },
-                    { "content": "b", "status": "in_progress" }
-                ] }),
-                "in_progress",
-            ),
-        ] {
-            let result = run(&tool, Some("t"), args.clone()).await;
-            assert!(result.is_error, "{args}");
-            let text = format!("{result:?}");
-            assert!(text.contains(expect), "{args}: {text}");
-        }
-        for args in [json!(null), json!([]), json!("not an object")] {
-            let result = run(&tool, Some("t"), args).await;
-            assert!(result.is_error, "non-object arguments must fail");
-        }
-        let no_thread = run(&tool, None, json!({})).await;
-        assert!(no_thread.is_error);
-    }
-
-    #[test]
-    fn schema_is_the_claude_shape() {
-        let tool = SessionTodoTool::new(store());
-        let schema = tool.parameters_schema();
-        assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
-        assert_eq!(
-            schema["properties"]["todos"]["items"]["properties"]["status"]["enum"],
-            json!(["pending", "in_progress", "completed"])
-        );
-        assert_eq!(tool.name(), "todo");
-        assert!(!tool.description().contains("board"));
-    }
-
-    #[tokio::test]
-    async fn strict_openai_schema_can_read_with_a_required_null_todos_field() {
-        let tool = SessionTodoTool::new(store());
-        let schema = prepare_parameters(
-            &tool.parameters_schema(),
-            &SchemaPreparation::openai().with_strict(),
-        );
-
-        assert_eq!(schema["required"], json!(["todos"]));
-        assert_eq!(
-            schema["properties"]["todos"]["type"],
-            json!(["array", "null"])
-        );
-        assert!(
-            !run(&tool, Some("t"), json!({ "todos": null }))
-                .await
-                .is_error
-        );
-    }
-
-    #[tokio::test]
-    async fn session_todos_are_not_dispatchable_board_cards() {
-        let backing_store = store();
-        let tool = SessionTodoTool::new(backing_store.clone());
-        run(
-            &tool,
-            Some("t"),
-            json!({ "todos": [{ "content": "Keep checklist", "status": "pending" }] }),
-        )
-        .await;
-
-        let snapshot = super::super::store::list(&backing_store, "t")
-            .await
-            .unwrap();
-        assert!(pick_next_card(&snapshot.cards).is_none());
+        assert!(res.is_error && res.output().contains("in_progress"));
     }
 }

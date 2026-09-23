@@ -103,7 +103,7 @@ pub struct HostCapabilities<State: Send + Sync> {
     /// Procedural memory of how this agent has performed before. `None` means
     /// no experience is recorded or recalled.
     pub experience: Option<Arc<dyn ExperienceStore>>,
-    /// Whether a resolved [`AgentDefinition`] that declares no tools (an
+    /// Whether a resolved [`tinyagents_definition::AgentDefinition`] that declares no tools (an
     /// empty or absent `tools` list) denies every tool, instead of granting
     /// the whole registered catalogue.
     ///

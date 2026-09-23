@@ -48,7 +48,7 @@
 //! `structured_strategy_override`) or `EndStrategy::Early`/`Exhaustive` (A6);
 //! `resolve_structured_plan` also resolves the profile-driven `Auto` choice
 //! against the *default* model binding rather than the turn's actually-
-//! resolved model (see that function's docs). [`RunPolicy::execution`]
+//! resolved model (see that function's docs). [`tinyagents_harness::runtime::RunPolicy::execution`]
 //! defaults to [`tinyagents_harness::runtime::LoopExecution::Direct`], so
 //! every existing caller is unaffected unless it opts in.
 //!
@@ -93,7 +93,7 @@
 //!   make installing a driver on a not-yet-`Arc`'d harness impossible — a
 //!   real usability regression) or unsafely extending the borrow's lifetime
 //!   (which this workspace denies via `unsafe_code = "deny"`). So
-//!   [`GraphLoopDriver::drive`] instead calls the exact same node bodies
+//!   [`GraphLoopDriver`]'s `drive` instead calls the exact same node bodies
 //!   directly, in a hand-rolled loop, against the real borrowed `&mut`
 //!   state — no `Arc`, no `Mutex`, no `CompiledGraph` involved — which is
 //!   sound with zero unsafe code precisely because a borrowed async call

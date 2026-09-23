@@ -14,9 +14,8 @@
 //! streaming/events ([`stream`]), run-status snapshots ([`status`]), graph
 //! export/visualization ([`export`]), dependency-DAG validation ([`dag`]),
 //! subgraph embedding ([`subgraph`]), and
-//! per-thread productivity primitives — a durable goal ([`goals`]) and a kanban
-//! task board ([`todos`], with its claim/heartbeat run log and dispatch policy)
-//! — exposed as harness tools.
+//! per-thread productivity primitives — a durable goal ([`goals`]) and a todo
+//! checklist ([`todos`]) — exposed as harness tools.
 //!
 //! Each concern lives in its own submodule with `types.rs` (definitions),
 //! `mod.rs` (implementations), and `test.rs` (unit tests).
@@ -128,17 +127,8 @@ pub use testkit::{
     assert_graph, failing_node, fanout_node, interrupting_node, noop_node, run_recorded,
     scripted_route_node, scripted_update_node, subagent_fake_node, subgraph_test_node,
 };
-pub use todos::dispatch::{
-    ActiveRun, ActiveRunRegistry, PollCadence, TaskPromptTools, build_progress_instruction,
-    build_task_prompt, card_urgency, has_card_in_progress, pick_next_card, requires_plan_approval,
-};
-pub use todos::runs::store as task_run_store;
-pub use todos::runs::{
-    ReclaimDetail, ReclaimResult, RunLimits, RunOutcome, TaskRun, staleness_reason,
-};
 pub use todos::store as todo_store;
 pub use todos::{
-    CardPatch, SessionTodoTool, TaskApprovalMode, TaskBoard, TaskBoardCard, TaskCardStatus,
-    TodoTool, TodosSnapshot, normalise_board, parse_status, register_session_todo_tool,
+    TodoItem, TodoList, TodoStatus, TodoTool, TodosSnapshot, normalise_list, parse_status,
     register_todo_tools, render_markdown, todo_tools,
 };

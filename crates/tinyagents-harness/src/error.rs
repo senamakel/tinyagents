@@ -151,7 +151,7 @@ pub enum TinyAgentsError {
     /// the counterpart to [`Self::ModelRetry`]. Folded into a
     /// [`tinytools::ToolResult::failed`] result (still recoverable at the
     /// transcript level — the model sees the message — but
-    /// [`crate::retry::RetryMiddleware`] and any other retry policy treat it
+    /// [`crate::middleware::library::RetryMiddleware`] and any other retry policy treat it
     /// as non-retryable rather than re-attempting the call).
     #[error("permanent tool failure: {0}")]
     ToolFailed(String),
