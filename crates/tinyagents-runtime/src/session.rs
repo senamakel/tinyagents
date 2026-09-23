@@ -102,6 +102,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        // Captured before the scanned transcript's metadata overwrites
+        // `target.meta` below, so a session-bound target resumed through
+        // `Thread`/`LatestForAgent` can fall back to its own pre-resume
+        // metadata if the write destination turns out not to exist yet —
+        // see the re-derivation block near the end of this method.
+        let pre_scan_meta = target.meta.clone();
         let mut session_binding: Option<SessionRef> = None;
         let read = match options.resume {
             ResumeMode::Never => None,
