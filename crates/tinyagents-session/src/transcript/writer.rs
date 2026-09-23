@@ -421,10 +421,11 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
     let tmp_path = unique_tmp_path(path);
 
-    if let Err(error) = fs::write(&tmp_path, contents) {
-        // Same orphaned-temp-file hazard as `atomic_write` — see its comment.
+    if let Err(error) = write_temp_file(&tmp_path, contents) {
+        // Same orphaned-temp-file / symlink hazard as `atomic_write` — see
+        // `write_temp_file`'s comment.
         let _ = fs::remove_file(&tmp_path);
-        return Err(error).with_context(|| format!("write temp transcript {}", tmp_path.display()));
+        return Err(error);
     }
     let published = match fs::hard_link(&tmp_path, path) {
         Ok(()) => true,
