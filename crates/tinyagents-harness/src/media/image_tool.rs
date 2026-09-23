@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tinyinference_image::{ImageGenerator, ImageRequest, MAX_IMAGES_PER_REQUEST};
 use tinytools::{
-    PermissionLevel, Tool, ToolCallOptions, ToolPolicy, ToolResult, ToolRunContext, ToolTimeout,
+    PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolPolicy, ToolResult, ToolRunContext,
+    ToolTimeout,
 };
 
 use super::types::{MediaOutput, arg_i64, arg_list, arg_str, arg_u64};
@@ -29,6 +30,8 @@ pub struct GenerateImageTool {
     output: MediaOutput,
     name: String,
     description: String,
+    permission: PermissionLevel,
+    category: ToolCategory,
 }
 
 impl GenerateImageTool {
@@ -44,6 +47,8 @@ impl GenerateImageTool {
                           consistent. Saves each image into the workspace and returns its path. \
                           Billed per call: do not call again after an error that says it was billed."
                 .to_owned(),
+            permission: PermissionLevel::Write,
+            category: ToolCategory::System,
         }
     }
 
@@ -58,6 +63,21 @@ impl GenerateImageTool {
     #[must_use]
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    /// Overrides the permission level the host gates the call on
+    /// (default [`PermissionLevel::Write`]).
+    #[must_use]
+    pub fn with_permission_level(mut self, permission: PermissionLevel) -> Self {
+        self.permission = permission;
+        self
+    }
+
+    /// Overrides the tool's category (default [`ToolCategory::System`]).
+    #[must_use]
+    pub fn with_category(mut self, category: ToolCategory) -> Self {
+        self.category = category;
         self
     }
 
@@ -201,7 +221,15 @@ impl Tool for GenerateImageTool {
     }
 
     fn permission_level(&self) -> PermissionLevel {
-        PermissionLevel::Write
+        self.permission
+    }
+
+    fn permission_level_with_args(&self, _args: &Value) -> PermissionLevel {
+        self.permission
+    }
+
+    fn category(&self) -> ToolCategory {
+        self.category
     }
 
     fn external_effect(&self) -> bool {
