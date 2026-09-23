@@ -242,12 +242,43 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // coming from the scanned `read`, which is the intended recovery
         // behavior for those modes.
         if target.session.is_some() && options.resume != ResumeMode::Session {
-            self.persisted = self
+            // The scanned file's `_meta` (set a few lines up, from `read`)
+            // is equally wrong as an append baseline when `read` was a
+            // different file: without this, the destination's next `_meta`
+            // record would carry over the scanned file's `agent_id`,
+            // `created`, provider/model, token/cost totals and (unless the
+            // head changed) session identifiers — none of which describe
+            // the file actually being appended to.
+            let destination = self
                 .transcript
                 .as_ref()
                 .expect("bound above")
-                .messages()
+                .read_session()
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+            match destination {
+                Some(destination_transcript) => {
+                    self.persisted = destination_transcript.messages;
+                    if let Some(target) = self.target.as_mut() {
+                        target.meta = destination_transcript.meta;
+                    }
+                }
+                None => {
+                    // Nothing at the destination yet: fall back to this
+                    // target's own pre-resume metadata rather than the
+                    // scanned file's, then reapply the session binding so
+                    // `session_id`/`parent_session_id` stay canonical for
+                    // whatever session this target now names (`resume`'s
+                    // own head-resolution above may have rebound it).
+                    self.persisted = Vec::new();
+                    if let Some(target) = self.target.as_mut() {
+                        target.meta = pre_scan_meta;
+                        if let Some(session) = target.session.clone() {
+                            target.meta.session_id = Some(session.session_id());
+                            target.meta.parent_session_id = session.parent_session_id();
+                        }
+                    }
+                }
+            }
         }
         Ok(SessionResume {
             loaded: true,
