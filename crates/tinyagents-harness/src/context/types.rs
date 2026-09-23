@@ -489,7 +489,7 @@ pub struct RunContext<Ctx = ()> {
     pub(crate) child_ordinal: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Durable tool-effect ledger for this run, when a host wants crash-safe
     /// bookkeeping of tool-call side effects (B5). `None` (the default) means
-    /// no ledger writes happen and [`crate::tool::ToolPolicy`]'s
+    /// no ledger writes happen and [`tinytools::ToolPolicy`]'s
     /// `runtime.replay` declaration has nothing to guard resume against — the
     /// agent loop behaves exactly as it did before this existed. Attach one
     /// with [`RunContext::with_tool_effect_ledger`]; a child context inherits

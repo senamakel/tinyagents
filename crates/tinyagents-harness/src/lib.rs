@@ -29,10 +29,9 @@
 //!
 //! # Host utilities not on the agent loop path (M-10)
 //!
-//! [`handoff`] and the [`memory`] module's
-//! [`memory::ChatHistory`]/[`memory::ShortTermMemory`] are exported for a
-//! host to build on, but [`agent_loop`] does not call into any of them on its
-//! own — they are opt-in plumbing, not implicit loop behavior. (A
+//! [`handoff`] is exported for a host to build on, but [`agent_loop`] does
+//! not call into it on its own — it is opt-in plumbing, not implicit loop
+//! behavior. (A
 //! [`run_queue::RunQueue`] *is* drained by the loop once attached via
 //! [`context::RunContext::with_run_queue`]; see that module's docs.)
 //!
@@ -40,9 +39,10 @@
 //!   results; a host calls [`handoff::apply_handoff`] itself before
 //!   appending a tool result to history, and registers an extraction tool
 //!   that reads the same [`handoff::ResultHandoffCache`].
-//! - [`memory::ChatHistory`]/[`memory::ShortTermMemory`] persist a thread's
-//!   transcript across runs; a host reads history into a run's `input` and
-//!   appends the run's messages back afterward.
+//!
+//! Persisting a thread's transcript across runs lives in the separate
+//! `tinyagents-session` crate: a host reads history into a run's `input` and
+//! appends the run's messages back afterward.
 //!
 //! Wiring any of these directly into the loop is deliberately future work
 //! rather than default behavior, so a host that does not need one pays

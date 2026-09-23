@@ -150,7 +150,7 @@ impl ReducerRegistry {
 
     /// The `{"reducer": name}` config payload for a named `BinaryAggregate`
     /// channel, or `{"reducer": null}` for an unnamed one (which
-    /// [`crate::channel::channel_from_config`] then rejects on decode).
+    /// `channel_from_config` then rejects on decode).
     pub(crate) fn config_for(name: Option<&str>) -> Value {
         json!({ "reducer": name })
     }

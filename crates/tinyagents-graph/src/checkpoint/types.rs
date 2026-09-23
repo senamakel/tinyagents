@@ -607,7 +607,7 @@ impl<State> Checkpoint<State> {
     /// re-serializes as clean v2), and stamps [`Checkpoint::version`] to
     /// [`CHECKPOINT_FORMAT_VERSION`].
     ///
-    /// A no-op on an already-v2 record. Every bundled [`Checkpointer`]
+    /// A no-op on an already-v2 record. Every bundled [`crate::checkpoint::Checkpointer`]
     /// backend calls this on every decode path (`get`/`get_scoped`/`list`/
     /// `state_history`/`get_thread`), so callers outside this module never
     /// observe a v1 record — see `docs/modules/graph/checkpointing.md`.
