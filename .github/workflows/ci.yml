@@ -95,7 +95,7 @@ jobs:
         include:
           - name: default
             features: ""
-          - name: all features
+          - name: all-features
             features: "--all-features"
           - name: sqlite
             features: "--no-default-features --features sqlite"
