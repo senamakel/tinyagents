@@ -2660,6 +2660,87 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
 /// `session_binding` is only ever set on the `ResumeMode::Session` path, so
 /// without rebinding for every mode, a session-bound target resumed through
 /// `Thread`/`LatestForAgent` after an earlier compaction would still bind
+/// A session-bound target resumed through `Thread`/`LatestForAgent` sets
+/// `target.meta` from whatever file the scan read — which, per
+/// `thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destination`,
+/// can legitimately be a different file than the write destination. Reusing
+/// that scanned metadata as the destination's next `_meta` record would
+/// carry over the scanned file's `agent_id`/`created`/etc. into a file that
+/// has its own, different metadata.
+#[tokio::test]
+async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+
+    // The destination's own metadata: a distinct `agent_id` and `created`
+    // from whatever the scan below will find.
+    let mut destination_meta = meta();
+    destination_meta.agent_id = Some("destination-agent".into());
+    destination_meta.created = "destination-created".into();
+    locator
+        .open_session(&session_ref, destination_meta)
+        .unwrap()
+        .append(TranscriptMessage::new(
+            "user",
+            "already on the session file",
+        ))
+        .unwrap();
+
+    // A newer, different root transcript for the same thread — what
+    // Thread-mode's newest-wins scan will read instead.
+    let mut legacy = meta();
+    legacy.thread_id = Some("thread-1".into());
+    legacy.created = "zzz-scanned-created";
+    legacy.created = "zzz-scanned-created".into();
+    legacy.agent_id = Some("scanned-agent".into());
+    tinyagents_session::transcript::write_transcript(
+        &directory.path().join("session_raw/legacy_other.jsonl"),
+        &[TranscriptMessage::new(
+            "user",
+            "from a different file entirely",
+        )],
+        &legacy,
+        None,
+    )
+    .unwrap();
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
+        vec![
+            Message::user("from a different file entirely"),
+            Message::assistant("new reply"),
+        ],
+        "new reply",
+    ))])))
+    .codec(Arc::new(Codec::default()))
+    .session(locator.clone(), session_ref.clone(), meta())
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("from a different file entirely")),
+            session_turn_options(ResumeMode::Thread, "thread-1"),
+        )
+        .await
+        .unwrap();
+
+    let destination_path = directory
+        .path()
+        .join("session_raw")
+        .join(format!("{}.jsonl", session_stem(&session_ref)));
+    let on_disk = read_transcript(&destination_path).unwrap();
+    assert_eq!(
+        on_disk.meta.agent_id.as_deref(),
+        Some("destination-agent"),
+        "the destination's own agent_id must survive, not the scanned file's"
+    );
+    assert_eq!(
+        on_disk.meta.created, "destination-created",
+        "the destination's own created timestamp must survive, not the scanned file's"
+    );
+}
+
 /// generation 0 — a generation the design requires to stay sealed and
 /// byte-for-byte unchanged — instead of the actual head.
 #[tokio::test]
