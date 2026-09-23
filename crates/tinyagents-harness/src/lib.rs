@@ -94,6 +94,8 @@ pub mod summarization;
 pub mod testkit;
 pub mod token_estimation;
 pub mod tool;
+#[cfg(feature = "media")]
+pub mod media;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
 pub mod workspace;
@@ -106,6 +108,10 @@ pub mod workspace;
 /// independent dependency would produce a duplicate, incompatible copy of
 /// the same types.
 pub use tinyinference_llm;
+#[cfg(feature = "media")]
+pub use tinyinference_image;
+#[cfg(feature = "media")]
+pub use tinyinference_video;
 pub use tinytools;
 pub use tinytools_agent;
 
