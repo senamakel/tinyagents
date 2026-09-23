@@ -189,6 +189,12 @@ pub struct TranscriptMeta {
 pub struct SessionTranscript {
     pub meta: TranscriptMeta,
     pub messages: Vec<TranscriptMessage>,
+    /// The model-visible tool declarations most recently recorded for this
+    /// session (the last `{"kind":"tools"}` record), exactly as they were
+    /// sent. `None` for transcripts written before tool recording existed or
+    /// by a writer that records none. Opaque JSON here: the runtime owns its
+    /// shape (a list of tool specs).
+    pub tools: Option<serde_json::Value>,
 }
 
 // ── Display read types ───────────────────────────────────────────────
