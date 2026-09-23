@@ -2,18 +2,39 @@ name: CI
 
 on:
   push:
+    # Pull requests are covered by the `pull_request` trigger below. Building
+    # every branch push as well duplicated the entire suite for each PR commit
+    # (two identical ~23 minute runs), so pushes only build the mainline, which
+    # is also what keeps a shared, warm cache for PR branches to restore from.
+    branches: [main]
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # `github.head_ref` is set for pull requests and empty for pushes, so a PR's
+  # runs coalesce under one group and superseded commits cancel each other.
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental compilation only pays off across edits on one machine; in CI it
+  # costs codegen time and inflates the cached target directory.
+  CARGO_INCREMENTAL: 0
+  # Debug info dominates link time and target-directory size. Dropping it
+  # roughly halves both, and nothing in CI reads line numbers out of a
+  # backtrace.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  RUST_BACKTRACE: 1
+
 jobs:
-  rust-sdk:
-    name: Rust SDK
+  # Static analysis only: `cargo clippy` and `cargo doc` stop at metadata, so
+  # this job never links a binary and finishes long before the test matrix.
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -44,45 +65,6 @@ jobs:
       - name: Clippy all features
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Build
-        run: cargo build --workspace --all-targets
-
-      - name: Build all features
-        run: cargo build --workspace --all-targets --all-features
-
-      - name: Test
-        run: cargo test --workspace
-
-      - name: Test all features
-        run: cargo test --workspace --all-features
-
-      - name: Test optional features independently
-        run: |
-          # Each feature set links a distinct workspace graph.  Clearing the
-          # preceding graph keeps the runner's linker working set bounded and
-          # makes these genuinely independent builds.
-          cargo clean
-          cargo test --workspace --no-default-features --features sqlite
-          cargo clean
-          cargo test --workspace --no-default-features --features tools
-          cargo clean
-          cargo test --workspace --no-default-features --features multimodal
-
-      - name: Free build artifacts before coverage
-        run: cargo clean
-
-      - name: Coverage gate
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Verify line coverage
-        env:
-          CARGO_PROFILE_DEV_DEBUG: 0
-          CARGO_PROFILE_TEST_DEBUG: 0
-        run: >-
-          cargo llvm-cov --all-features --workspace
-          --ignore-filename-regex '(^|/)(tests?|examples)/|/test(_.*)?\.rs$'
-          --fail-under-lines 80
-
       # TODO: drop `continue-on-error` once the ~160 existing broken
       # intra-doc link warnings across the workspace are fixed and this can
       # block merges instead of only reporting.
@@ -98,3 +80,89 @@ jobs:
       - name: Unused dependencies
         uses: bnjbvr/cargo-machete@main
         continue-on-error: true
+
+  # Every feature selection links a distinct workspace graph, so they cannot
+  # share a target directory. Previously they ran back to back with a
+  # `cargo clean` between each, which serialised five cold builds into one job
+  # and left the cache holding whichever graph happened to be built last. As
+  # separate jobs they build concurrently and each keeps its own warm cache.
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: all features
+            features: "--all-features"
+          - name: sqlite
+            features: "--no-default-features --features sqlite"
+          - name: tools
+            features: "--no-default-features --features tools"
+          - name: multimodal
+            features: "--no-default-features --features multimodal"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          # Without a distinct key every matrix leg would race to overwrite one
+          # cache entry with its own feature graph.
+          key: ${{ matrix.name }}
+
+      - name: Build
+        run: cargo build --workspace --all-targets ${{ matrix.features }}
+
+      - name: Test
+        run: cargo test --workspace ${{ matrix.features }}
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          # Instrumented objects are not interchangeable with the test matrix's,
+          # so coverage keeps its own cache rather than invalidating theirs.
+          key: coverage
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Verify line coverage
+        run: >-
+          cargo llvm-cov --all-features --workspace
+          --ignore-filename-regex '(^|/)(tests?|examples)/|/test(_.*)?\.rs$'
+          --fail-under-lines 80
+
+  # Single required status check: branch protection can depend on this one job
+  # instead of being updated every time the matrix gains or loses a leg.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, test, coverage]
+    steps:
+      - name: Check results
+        run: |
+          echo "lint:     ${{ needs.lint.result }}"
+          echo "test:     ${{ needs.test.result }}"
+          echo "coverage: ${{ needs.coverage.result }}"
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]
