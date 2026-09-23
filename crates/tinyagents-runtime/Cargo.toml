@@ -17,6 +17,7 @@ tinyagents-session = { path = "../tinyagents-session", version = "2.1.2" }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.4.1" }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc};
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::transcript::{
-    TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn, TurnUsage,
+    SessionRef, TranscriptHistory, TranscriptMessage, TranscriptPartial, TranscriptTurn, TurnUsage,
 };
 use tinyinference_llm::message::Message;
 
@@ -102,6 +102,13 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        // Captured before the scanned transcript's metadata overwrites
+        // `target.meta` below, so a session-bound target resumed through
+        // `Thread`/`LatestForAgent` can fall back to its own pre-resume
+        // metadata if the write destination turns out not to exist yet —
+        // see the re-derivation block near the end of this method.
+        let pre_scan_meta = target.meta.clone();
+        let mut session_binding: Option<SessionRef> = None;
         let read = match options.resume {
             ResumeMode::Never => None,
             ResumeMode::LatestForAgent => target
@@ -112,6 +119,45 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     .locator
                     .root_for_thread_scoped(thread, target.meta.agent_id.as_deref())
             }),
+            ResumeMode::Session => {
+                let Some(session) = options.session.clone().or_else(|| target.session.clone())
+                else {
+                    return Ok(SessionResume {
+                        loaded: false,
+                        history: self.history.clone(),
+                    });
+                };
+                // The head generation, not the session the host named: a
+                // compaction may have sealed that one and opened a successor,
+                // and the head is the conversation the model is continuing.
+                let head = target.locator.head_generation(&session);
+                let read = target.locator.read_session_transcript(&head);
+                if read.is_some() {
+                    session_binding = Some(head);
+                } else if let Some(thread) = options.thread_id.as_deref() {
+                    // Nothing under this identity yet. A conversation written
+                    // before session identity existed is spread over one or
+                    // more timestamped stems; fold them in once so the model
+                    // regains the turns the newest-wins lookup had stranded.
+                    // Adoption is best effort: it recovers history that would
+                    // otherwise be stranded, but failing to recover it must not
+                    // fail the turn the user is waiting on.
+                    if let Err(error) = target.locator.adopt_legacy(&session, thread, &target.meta)
+                    {
+                        tracing::warn!(
+                            "[session] legacy adoption failed session={} thread={thread}: {error}",
+                            session.session_id()
+                        );
+                    }
+                    session_binding = Some(session.clone());
+                }
+                match read {
+                    Some(read) => Some(read),
+                    None => session_binding
+                        .as_ref()
+                        .and_then(|bound| target.locator.read_session_transcript(bound)),
+                }
+            }
         };
         let Some(read) = read else {
             return Ok(SessionResume {
@@ -142,13 +188,98 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         }
         // A successful explicit resume always rebinds the write handle to the
         // selected transcript. Builder construction itself remains I/O-free.
+        //
+        // For a session resume the handle must address **the file that was just
+        // read**, not the target's original stem. Binding elsewhere is what
+        // used to re-materialise a resumed history into a fresh stem and
+        // orphan the original, leaving two roots claiming one thread.
+        if let (Some(target), Some(head)) = (self.target.as_mut(), session_binding) {
+            target.rebind_session(head);
+        } else if let Some(target) = self.target.as_mut()
+            && let Some(session) = target.session.clone()
+        {
+            // `session_binding` above is set only on the `ResumeMode::Session`
+            // path, so a session-bound target resumed through `Thread` or
+            // `LatestForAgent` would otherwise reach the bind below still
+            // naming generation 0 — even when an earlier compaction already
+            // sealed it and opened a later head. That write would land in a
+            // generation the design requires to stay sealed and byte-for-byte
+            // unchanged. Resolving the head here, for every mode, is what
+            // `persist`'s own equivalent guard (`self.transcript.is_none()`)
+            // cannot substitute for: `self.transcript` is bound unconditionally
+            // a few lines down, so by the time `persist` runs on this turn
+            // that guard has already been satisfied.
+            let head = target.locator.head_generation(&session);
+            if head != session {
+                target.rebind_session(head);
+            }
+        }
         let target = self.target.as_ref().expect("target checked above");
-        self.transcript = Some(
-            target
+        self.transcript = Some(match target.session.as_ref() {
+            Some(session) => target
+                .locator
+                .open_session(session, target.meta.clone())
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+            None => target
                 .locator
                 .open_stem(&target.stem, target.meta.clone())
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-        );
+        });
+        // For a session-bound target, `target.session`/`target.stem` always
+        // name the same file (construction and `rebind_session` keep them in
+        // lockstep) — the bind above is always that file, regardless of
+        // resume mode. Under `ResumeMode::Session`, `read` was already that
+        // same file, so `self.persisted` (set above from `transcript`,
+        // i.e. from `read`) already matches what this turn will append to.
+        // Under `Thread`/`LatestForAgent`, `read` can legitimately be a
+        // *different* file — a newest-wins scan recovering history from
+        // wherever it exists is exactly their contract — while the destination
+        // this turn writes to is still the session's own, separately-tracked
+        // file. Using the scan's raw rows as the append-diff baseline for a
+        // write that lands elsewhere would corrupt whatever is already on
+        // that other file. Re-derive the baseline from the file this turn
+        // actually writes to; `self.history` (what the model sees) keeps
+        // coming from the scanned `read`, which is the intended recovery
+        // behavior for those modes.
+        if target.session.is_some() && options.resume != ResumeMode::Session {
+            // The scanned file's `_meta` (set a few lines up, from `read`)
+            // is equally wrong as an append baseline when `read` was a
+            // different file: without this, the destination's next `_meta`
+            // record would carry over the scanned file's `agent_id`,
+            // `created`, provider/model, token/cost totals and (unless the
+            // head changed) session identifiers — none of which describe
+            // the file actually being appended to.
+            let destination = self
+                .transcript
+                .as_ref()
+                .expect("bound above")
+                .read_session()
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+            match destination {
+                Some(destination_transcript) => {
+                    self.persisted = destination_transcript.messages;
+                    if let Some(target) = self.target.as_mut() {
+                        target.meta = destination_transcript.meta;
+                    }
+                }
+                None => {
+                    // Nothing at the destination yet: fall back to this
+                    // target's own pre-resume metadata rather than the
+                    // scanned file's, then reapply the session binding so
+                    // `session_id`/`parent_session_id` stay canonical for
+                    // whatever session this target now names (`resume`'s
+                    // own head-resolution above may have rebound it).
+                    self.persisted = Vec::new();
+                    if let Some(target) = self.target.as_mut() {
+                        target.meta = pre_scan_meta;
+                        if let Some(session) = target.session.clone() {
+                            target.meta.session_id = Some(session.session_id());
+                            target.meta.parent_session_id = session.parent_session_id();
+                        }
+                    }
+                }
+            }
+        }
         Ok(SessionResume {
             loaded: true,
             history,
@@ -412,22 +543,81 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             return Ok(None);
         };
         if self.transcript.is_none() {
-            self.transcript = Some(
-                target
+            // A turn can reach the first bind through a resume mode other
+            // than `ResumeMode::Session` (e.g. `Never`, `LatestForAgent`,
+            // `Thread`) on a session-bound target — `resume` only rebinds to
+            // the head generation on its own `Session` path. Without this,
+            // such a turn binds generation 0 even when a later `.g{n}`
+            // exists: it appends into a generation the design requires to
+            // stay sealed, and the next compaction's `begin_generation` then
+            // fails outright because that later generation already exists.
+            if let Some(session) = target.session.clone() {
+                let head = target.locator.head_generation(&session);
+                if head != session {
+                    target.rebind_session(head);
+                }
+            }
+            self.transcript = Some(match target.session.as_ref() {
+                Some(session) => target
+                    .locator
+                    .open_session(session, target.meta.clone())
+                    .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
+                None => target
                     .locator
                     .open_stem(&target.stem, target.meta.clone())
                     .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
-            );
+            });
         }
-        let transcript = self.transcript.as_ref().expect("bound above");
+
+        let previous_len = self.persisted.len();
+        let next_len = raw.len();
+        let common_len = previous_len.min(next_len);
+        let extends = next_len >= previous_len && raw[..common_len] == self.persisted[..common_len];
+
+        // A turn that no longer extends what is persisted is a compaction. For
+        // a session-bound target that seals the current generation and opens
+        // the next one rather than appending a replacement record: rewriting
+        // the logical set in place would make the replaced turns unreadable
+        // forever, and they are the conversation's own history.
+        //
+        // The successor generation and handle are kept in locals, not written
+        // onto `target`/`self.transcript`, until the append into them below
+        // actually succeeds. Committing them first — as this used to — left
+        // `target` pointing at `.g{n+1}` even when the append failed to
+        // create it: the next turn's `begin_generation` would then find no
+        // file at `.g{n+1}`, mint `.g{n+2}` instead, and `head_generation`
+        // would keep resolving the old sealed generation as the head,
+        // orphaning both the failed generation and the one after it.
+        let mut prev: &[TranscriptMessage] = &self.persisted;
+        let empty: [TranscriptMessage; 0] = [];
+        let mut pending_generation: Option<(SessionRef, Arc<dyn TranscriptHistory>)> = None;
         let mut meta = target.meta.clone();
+        if !extends && let Some(session) = target.session.clone() {
+            let (successor, handle) = target
+                .locator
+                .begin_generation(&session, target.meta.clone())
+                .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+            // The successor starts empty, so the retained set is written
+            // through the ordinary turn path below and keeps its usage,
+            // request ids and display partial.
+            meta.turn_count = 0;
+            meta.session_id = Some(successor.session_id());
+            meta.parent_session_id = successor.parent_session_id();
+            pending_generation = Some((successor, handle));
+            prev = &empty;
+        }
+
+        let transcript: &dyn TranscriptHistory = match pending_generation.as_ref() {
+            Some((_, handle)) => handle.as_ref(),
+            None => self.transcript.as_deref().expect("bound above"),
+        };
         meta.turn_count += 1;
         meta.updated = chrono::Utc::now().to_rfc3339();
         meta.thread_id = thread_id.map(str::to_owned).or(meta.thread_id);
         transcript
             .append_turn_with_partial(
                 TranscriptTurn {
-                    prev: &self.persisted,
+                    prev,
                     next: raw,
                     meta: &meta,
                     turn_usage,
@@ -436,12 +626,18 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 partial,
             )
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        // Captured before `pending_generation`/`self.transcript` are moved
+        // from below — `transcript` borrows out of whichever of the two held
+        // the just-appended handle.
+        let path = transcript.path().to_path_buf();
+        // Only now that the append into the successor generation has
+        // actually succeeded does the target move onto it.
+        if let Some((successor, handle)) = pending_generation {
+            target.rebind_session(successor);
+            self.transcript = Some(handle);
+        }
         target.meta = meta;
-        let previous_len = self.persisted.len();
-        let next_len = raw.len();
-        let common_len = previous_len.min(next_len);
-        let delta = if next_len >= previous_len && raw[..common_len] == self.persisted[..common_len]
-        {
+        let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,
                 appended: previous_len..next_len,
@@ -452,10 +648,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 next_len,
             }
         };
-        Ok(Some(TranscriptCommitReceipt {
-            path: transcript.path().to_path_buf(),
-            delta,
-        }))
+        Ok(Some(TranscriptCommitReceipt { path, delta }))
     }
 
     fn with_prefix(&self, history: Vec<Message>) -> Vec<Message> {
