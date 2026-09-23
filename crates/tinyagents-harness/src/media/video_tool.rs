@@ -72,16 +72,18 @@ impl GenerateVideoTool {
         args: &Value,
         workspace: Option<&std::path::Path>,
     ) -> Result<VideoRequest, String> {
-        let mut request = VideoRequest::default();
-        request.prompt = arg_str(args, &["prompt"]).map(str::to_owned);
-        request.model = arg_str(args, &["model"]).map(str::to_owned);
-        request.duration_s = arg_u64(args, &["duration", "duration_seconds", "durationSeconds"])
-            .and_then(|d| u32::try_from(d).ok());
-        request.resolution = arg_str(args, &["resolution"]).map(str::to_owned);
-        request.aspect_ratio = arg_str(args, &["aspect_ratio", "aspectRatio"]).map(str::to_owned);
-        request.size = arg_str(args, &["size"]).map(str::to_owned);
-        request.generate_audio = arg_bool(args, &["generate_audio", "audio"]);
-        request.seed = arg_i64(args, &["seed"]);
+        let mut request = VideoRequest {
+            prompt: arg_str(args, &["prompt"]).map(str::to_owned),
+            model: arg_str(args, &["model"]).map(str::to_owned),
+            duration_s: arg_u64(args, &["duration", "duration_seconds", "durationSeconds"])
+                .and_then(|d| u32::try_from(d).ok()),
+            resolution: arg_str(args, &["resolution"]).map(str::to_owned),
+            aspect_ratio: arg_str(args, &["aspect_ratio", "aspectRatio"]).map(str::to_owned),
+            size: arg_str(args, &["size"]).map(str::to_owned),
+            generate_audio: arg_bool(args, &["generate_audio", "audio"]),
+            seed: arg_i64(args, &["seed"]),
+            ..VideoRequest::default()
+        };
         if let Some(raw) = arg_str(args, &["first_frame", "inputImage", "input_image"]) {
             request.first_frame = Some(self.output.reference(raw, workspace)?);
         }
