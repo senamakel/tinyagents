@@ -115,46 +115,52 @@ fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> (Vec<P
     // every modern one regardless of when it was written. `project_from_files`
     // concatenates these in order, so that reordered the rendered view and
     // could attach a sub-agent trail to the wrong turn.
-    let mut matches: Vec<(String, PathBuf)> = entries
-        .filter_map(|entry| match entry {
-            Ok(entry) => Some(entry.path()),
+    //
+    // An explicit loop rather than a filter/filter_map chain: both the
+    // directory-entry read and the transcript read below can independently
+    // fail and need to set the same `any_unreadable` flag, and two closures
+    // cannot each hold a mutable borrow of it at once.
+    let mut matches: Vec<(String, PathBuf)> = Vec::new();
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
             Err(error) => {
                 // An entry the directory iterator itself could not read
                 // (e.g. a race with concurrent deletion, a transient I/O
                 // error) is exactly as invisible to this scan as a file that
-                // failed `read_transcript` below — the same `.flatten()`
-                // that used to drop it would have hidden it from every
-                // caller, including adoption's fail-closed contract.
+                // failed `read_transcript` below — the `.flatten()` this
+                // loop replaced would have hidden it from every caller,
+                // including adoption's fail-closed contract.
                 tracing::warn!(
                     "[transcript] could not read a directory entry in {}: {error}",
                     raw_dir.display()
                 );
                 any_unreadable = true;
-                None
+                continue;
             }
-        })
-        .filter(|path| {
-            path.extension().and_then(|s| s.to_str()) == Some("jsonl")
-                && path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|stem| !stem.contains("__"))
-        })
-        .filter_map(|path| match read_transcript(&path) {
+        };
+        let is_candidate = path.extension().and_then(|s| s.to_str()) == Some("jsonl")
+            && path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|stem| !stem.contains("__"));
+        if !is_candidate {
+            continue;
+        }
+        match read_transcript(&path) {
             Ok(transcript) if transcript.meta.thread_id.as_deref() == Some(thread_id) => {
-                Some((transcript.meta.created.clone(), path))
+                matches.push((transcript.meta.created.clone(), path));
             }
-            Ok(_) => None,
+            Ok(_) => {}
             Err(err) => {
                 tracing::warn!(
                     "[transcript] skipping unreadable root transcript candidate {}: {err}",
                     path.display()
                 );
                 any_unreadable = true;
-                None
             }
-        })
-        .collect();
+        }
+    }
 
     // Path is the tiebreak so the order stays total and deterministic when two
     // transcripts share a `created` stamp.
