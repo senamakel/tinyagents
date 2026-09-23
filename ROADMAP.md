@@ -11,7 +11,7 @@ build toward a production-grade Rust agent runtime.
 - durable typed state graph runtime: `START`/`END`, nodes, conditional
   routing, `Command`s, fan-out, reducers/channels, checkpoints, interrupts,
   subgraphs, streaming, and topology export (`graph/`)
-- per-thread `ThreadGoal` and `TaskBoard` productivity primitives, exposed as
+- per-thread `ThreadGoal` and `TodoList` productivity primitives, exposed as
   harness tools
 - named capability registry (models, tools, agents, graphs, stores,
   middleware, policy) bound by name (`registry/`)

@@ -4,7 +4,9 @@ use tinyagents_harness::{
     CancellationToken,
     context::{RunConfig, RunContext},
 };
-use tinyagents_session::transcript::{TranscriptLocator, TranscriptMessage, TranscriptMeta};
+use tinyagents_session::transcript::{
+    SessionRef, TranscriptLocator, TranscriptMessage, TranscriptMeta, session_stem,
+};
 use tinyinference_llm::message::Message;
 
 use crate::{PrefixSnapshot, ToolSnapshot};
@@ -19,6 +21,13 @@ pub enum ResumeMode {
     LatestForAgent,
     /// Load the most recent root transcript matching `TurnOptions::thread_id`.
     Thread,
+    /// Load the head generation of the session bound to this target.
+    ///
+    /// Unlike [`Self::Thread`] this is an exact lookup rather than a
+    /// newest-wins scan, and the file it reads is the file the turn then
+    /// appends to. That identity between read and write is what keeps one
+    /// conversation in one transcript across restarts and across processes.
+    Session,
 }
 
 /// Explicit runtime controls for one session turn.
@@ -31,6 +40,9 @@ pub struct TurnOptions<C = ()> {
     pub stream: bool,
     /// Transcript resume behavior requested for this turn.
     pub resume: ResumeMode,
+    /// Durable session to resume under [`ResumeMode::Session`]. When absent,
+    /// the bound target's own session is used.
+    pub session: Option<SessionRef>,
     /// Cooperative cancellation shared with the caller.
     pub cancellation: CancellationToken,
     /// Explicit live execution context consumed by the driver.
@@ -69,6 +81,10 @@ pub struct TranscriptTarget {
     /// Optional agent key used only by `ResumeMode::LatestForAgent` lookup.
     /// When absent, the write stem is also the resume lookup key.
     pub resume_agent: Option<String>,
+    /// Durable session identity, when the host binds one. Present means
+    /// `ResumeMode::Session` can resolve, and that a compaction opens the next
+    /// generation instead of rewriting this one.
+    pub session: Option<SessionRef>,
     pub meta: TranscriptMeta,
 }
 
@@ -82,8 +98,45 @@ impl TranscriptTarget {
             locator,
             stem: stem.into(),
             resume_agent: None,
+            session: None,
             meta,
         }
+    }
+
+    /// A target addressed by durable session identity rather than a raw stem.
+    ///
+    /// The stem is derived from the session, so it is stable across processes
+    /// and launches — the property a `{unix_ts}_{agent}` stem never had.
+    ///
+    /// `meta.session_id`/`parent_session_id` are populated from `session`
+    /// here, the same way [`Self::rebind_session`] keeps them in sync after a
+    /// compaction. Leaving them as whatever the caller passed in (typically
+    /// `None`, since a newly bound target usually has no opinion on session
+    /// identity yet) would otherwise let a session-addressed transcript carry
+    /// metadata that does not name its own session — metadata-based session
+    /// discovery would then fail to recognise it.
+    pub fn for_session(
+        locator: Arc<dyn TranscriptLocator>,
+        session: SessionRef,
+        mut meta: TranscriptMeta,
+    ) -> Self {
+        meta.session_id = Some(session.session_id());
+        meta.parent_session_id = session.parent_session_id();
+        Self {
+            locator,
+            stem: session_stem(&session),
+            resume_agent: None,
+            session: Some(session),
+            meta,
+        }
+    }
+
+    /// Rebinds this target onto `session` after a compaction opened it.
+    pub(crate) fn rebind_session(&mut self, session: SessionRef) {
+        self.stem = session_stem(&session);
+        self.meta.session_id = Some(session.session_id());
+        self.meta.parent_session_id = session.parent_session_id();
+        self.session = Some(session);
     }
 
     /// Uses a distinct agent key when looking up the latest transcript.
@@ -92,8 +145,27 @@ impl TranscriptTarget {
         self
     }
 
+    /// Whether `other` addresses the same durable destination as `self`.
+    ///
+    /// For a session-bound target this compares `first_generation()` rather
+    /// than the `SessionRef`s (or stems) directly: `before_resume` runs on
+    /// every turn and is expected to keep returning the *same* logical
+    /// target, but `resume`/`persist` call [`Self::rebind_session`] on it as
+    /// soon as a later generation is discovered or a compaction opens one.
+    /// Comparing the raw `session`/`stem` fields would then reject that
+    /// still-identical target the moment its generation advanced, and
+    /// `apply_resume_preparation` would fail every subsequent turn with
+    /// `InvalidSessionState`. Generation 0 is the one identity that never
+    /// changes across a session's lifetime, so it is what identifies "the
+    /// same session" here. Non-session targets have no generation to anchor
+    /// on, so they keep comparing the raw stem.
     pub(crate) fn same_binding(&self, other: &Self) -> bool {
-        self.stem == other.stem
+        let same_destination = match (&self.session, &other.session) {
+            (Some(a), Some(b)) => a.first_generation() == b.first_generation(),
+            (None, None) => self.stem == other.stem,
+            _ => false,
+        };
+        same_destination
             && self.resume_agent == other.resume_agent
             && Arc::ptr_eq(&self.locator, &other.locator)
     }
@@ -194,6 +266,7 @@ impl Default for TurnOptions<()> {
             thread_id: None,
             stream: false,
             resume: ResumeMode::Never,
+            session: None,
             run_context: RunContext::new(RunConfig::new("session"), ())
                 .with_cancellation(cancellation.clone()),
             cancellation,

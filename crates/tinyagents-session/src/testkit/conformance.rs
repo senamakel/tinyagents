@@ -44,8 +44,6 @@ fn contract_run(id: &str, parent: Option<&str>) -> AgentRunUpsert {
         status: AgentRunStatus::Running,
         prompt_ref: None,
         worker_thread_id: None,
-        task_board_id: None,
-        task_card_id: None,
         checkpoint_path: None,
         checkpoint: None,
         summary: None,
@@ -251,6 +249,8 @@ fn content_view(messages: &[TranscriptMessage]) -> Vec<(String, String)> {
 
 fn contract_meta() -> TranscriptMeta {
     TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
         agent_name: "contract-agent".to_string(),
         agent_id: Some("contract-agent-id".to_string()),
         agent_type: Some("root".to_string()),
