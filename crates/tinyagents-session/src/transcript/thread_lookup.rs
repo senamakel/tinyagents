@@ -88,8 +88,24 @@ fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> (Vec<P
         return (Vec::new(), false);
     }
 
-    let Ok(entries) = fs::read_dir(raw_dir) else {
-        return (Vec::new(), false);
+    let entries = match fs::read_dir(raw_dir) {
+        Ok(entries) => entries,
+        // A workspace with no session_raw/ yet has genuinely adopted
+        // nothing — not an error. Any other failure (permissions, a
+        // transient I/O error) means the scan could not actually see
+        // whether a matching root exists, which callers relying on
+        // `unreadable` (adoption's idempotency contract) must not treat the
+        // same as "confirmed nothing here".
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (Vec::new(), false);
+        }
+        Err(error) => {
+            tracing::warn!(
+                "[transcript] could not scan {} for thread {thread_id}: {error}",
+                raw_dir.display()
+            );
+            return (Vec::new(), true);
+        }
     };
     let mut any_unreadable = false;
     // Keyed by `meta.created` so the order is chronological rather than
