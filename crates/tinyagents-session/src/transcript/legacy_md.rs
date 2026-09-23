@@ -29,6 +29,7 @@ pub fn read_transcript_legacy_md(path: &Path) -> Result<SessionTranscript> {
     );
 
     Ok(SessionTranscript {
+        tools: None,
         meta,
         messages,
         tools: None,

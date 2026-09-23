@@ -137,6 +137,7 @@ impl TranscriptHistory for MemoryHistory {
             anyhow::bail!("planned persistence failure");
         }
         *self.state.lock().unwrap() = Some(SessionTranscript {
+            tools: None,
             meta: turn.meta.clone(),
             messages: turn.next.to_vec(),
         });
@@ -996,6 +997,7 @@ async fn dropped_turn_after_durable_append_keeps_a_completed_terminal() {
 async fn resumed_history_restores_the_prefix_once_before_the_next_driver_call() {
     let raw = TranscriptMessage::new("user", "old");
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![raw],
     }));
@@ -1359,6 +1361,7 @@ async fn lazy_target_is_opened_only_after_before_resume_selects_it() {
 #[tokio::test]
 async fn session_builder_resume_agent_reaches_the_latest_for_agent_lookup() {
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![TranscriptMessage::new("user", "resumed")],
     }));
@@ -1399,6 +1402,7 @@ async fn session_builder_resume_agent_reaches_the_latest_for_agent_lookup() {
 #[tokio::test]
 async fn latest_resume_agent_is_distinct_from_the_write_stem() {
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![TranscriptMessage::new("user", "resumed")],
     }));
@@ -1444,6 +1448,7 @@ async fn latest_resume_agent_is_distinct_from_the_write_stem() {
 #[tokio::test]
 async fn thread_resume_scopes_lookup_to_the_target_agent() {
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![TranscriptMessage::new("user", "resumed")],
     }));
@@ -1520,6 +1525,7 @@ async fn before_turn_receives_resumed_decoded_history_and_raw_rows() {
     let mut raw = TranscriptMessage::new("user", "old");
     raw.extra_metadata = Some(serde_json::json!({"preserved": true}));
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![raw.clone()],
     }));
@@ -1617,6 +1623,7 @@ impl TranscriptCodec for SystemCodec {
 async fn first_turn_prefix_accepts_an_exact_resumed_prefix_and_restores_it_after_compaction() {
     let prefix = PrefixSnapshot::new(vec![Message::system("stable")]);
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![
             TranscriptMessage::new("system", "stable"),
@@ -1680,6 +1687,7 @@ async fn changed_first_turn_prefix_replaces_a_builder_prefix_after_resume() {
     let old_prefix = PrefixSnapshot::new(vec![Message::system("old")]);
     let new_prefix = PrefixSnapshot::new(vec![Message::system("new")]);
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![
             TranscriptMessage::new("system", "old"),
@@ -1728,6 +1736,7 @@ async fn changed_first_turn_prefix_replaces_a_builder_prefix_after_resume() {
 #[tokio::test]
 async fn hook_selected_target_and_resume_mode_apply_before_driver_handoff() {
     let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![TranscriptMessage::new("user", "resumed")],
     }));
@@ -1821,6 +1830,7 @@ async fn resumed_raw_rows_and_metadata_survive_the_append() {
     let mut raw = TranscriptMessage::new("user", "old");
     raw.extra_metadata = Some(serde_json::json!({"native": true}));
     let initial = SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![raw.clone()],
     };
@@ -2266,6 +2276,7 @@ async fn cancellation_before_resume_skips_hooks_and_preserves_terminal_behavior(
 #[tokio::test]
 async fn cancellation_after_resume_before_before_turn_skips_driver_and_commit() {
     let (locator, history) = locator(Some(SessionTranscript {
+        tools: None,
         meta: meta(),
         messages: vec![TranscriptMessage::new("user", "old")],
     }));

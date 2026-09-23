@@ -155,6 +155,7 @@ fn read_transcript_jsonl(path: &Path) -> Result<SessionTranscript> {
     );
 
     Ok(SessionTranscript {
+        tools: None,
         meta,
         messages,
         tools,

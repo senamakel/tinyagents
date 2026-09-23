@@ -67,6 +67,7 @@ impl TranscriptRead for InMemoryTranscriptHistory {
             return Ok(None);
         }
         Ok(Some(SessionTranscript {
+            tools: None,
             meta: self.meta.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             messages: self
                 .messages
