@@ -668,8 +668,15 @@ fn a_turn_stamps_iteration_and_ts_on_every_step_it_appends() {
         tool_calls: Vec::new(),
         iteration: 3,
     };
-    append_transcript_turn(&path, &prior, &next, &meta(), Some(&usage), Some("request-b"))
-        .unwrap();
+    append_transcript_turn(
+        &path,
+        &prior,
+        &next,
+        &meta(),
+        Some(&usage),
+        Some("request-b"),
+    )
+    .unwrap();
     prior.clear();
 
     let display = read_transcript_display(&path).unwrap();
