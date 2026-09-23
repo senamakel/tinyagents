@@ -258,7 +258,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             match destination {
                 Some(destination_transcript) => {
                     self.persisted = destination_transcript.messages;
-                    // intentionally not reloading target.meta here (simulated bug)
+                    if let Some(target) = self.target.as_mut() {
+                        target.meta = destination_transcript.meta;
+                    }
                 }
                 None => {
                     // Nothing at the destination yet: fall back to this
