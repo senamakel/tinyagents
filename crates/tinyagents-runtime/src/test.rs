@@ -2691,7 +2691,6 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
     // Thread-mode's newest-wins scan will read instead.
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
-    legacy.created = "zzz-scanned-created";
     legacy.created = "zzz-scanned-created".into();
     legacy.agent_id = Some("scanned-agent".into());
     tinyagents_session::transcript::write_transcript(
