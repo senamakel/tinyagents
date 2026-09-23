@@ -65,21 +65,20 @@ jobs:
       - name: Clippy all features
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      # TODO: drop `continue-on-error` once the ~160 existing broken
-      # intra-doc link warnings across the workspace are fixed and this can
-      # block merges instead of only reporting.
+      # `--all-features` so links into feature-gated items resolve; without
+      # it rustdoc cannot see the very modules the docs point at.
       - name: Doc lints
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
-        run: cargo doc --workspace --no-deps
-        continue-on-error: true
+        run: cargo doc --workspace --no-deps --all-features
 
-      # TODO: drop `continue-on-error` once the existing unused-dependency
-      # findings across the workspace are cleaned up and this can block
-      # merges instead of only reporting.
+      # Scoped to `crates`, this repo's own workspace: an unscoped run also
+      # walks `vendor/`, where it reports findings against the vendored
+      # submodules that have to be fixed in their own repositories.
       - name: Unused dependencies
         uses: bnjbvr/cargo-machete@main
-        continue-on-error: true
+        with:
+          args: crates
 
   # Every feature selection links a distinct workspace graph, so they cannot
   # share a target directory. Previously they ran back to back with a
