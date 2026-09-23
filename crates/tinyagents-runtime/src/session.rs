@@ -25,6 +25,13 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     target: Option<TranscriptTarget>,
     transcript: Option<Arc<dyn TranscriptHistory>>,
     committed_turns: usize,
+    /// Tool declarations this session last sent, restored from the transcript
+    /// on resume and updated after every recorded turn.
+    recorded_tools: Option<ToolSnapshot>,
+    /// The `tools` record currently in force in the bound transcript file,
+    /// used to write a new record only when the declarations change.
+    recorded_tools_json: Option<serde_json::Value>,
+    retain_recorded_tools: bool,
 }
 
 impl<C: Clone + Send + Sync + 'static> Session<C> {
@@ -48,7 +55,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             target,
             transcript: None,
             committed_turns: 0,
+            recorded_tools: None,
+            recorded_tools_json: None,
+            retain_recorded_tools: false,
         }
+    }
+
+    pub(crate) fn set_retain_recorded_tools(&mut self, retain: bool) {
+        self.retain_recorded_tools = retain;
+    }
+
+    /// Tool declarations this session last sent (restored on resume).
+    pub fn recorded_tools(&self) -> Option<&ToolSnapshot> {
+        self.recorded_tools.as_ref()
     }
 
     /// Returns the currently committed model history.
@@ -178,8 +197,46 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .codec
             .as_ref()
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
-        let history = self.with_prefix(codec.decode_history(&transcript)?);
+        let decoded = codec.decode_history(&transcript)?;
+        // The transcript already holds the prefix it was sent with as its
+        // leading system rows. A session built without a prefix of its own
+        // adopts those rows, so resuming never has to re-render the prompt
+        // and the prefix guard below protects the stored one.
+        if self.prefix.messages().is_empty() {
+            let leading: Vec<Message> = decoded
+                .iter()
+                .take_while(|message| matches!(message, Message::System(_)))
+                .cloned()
+                .collect();
+            if !leading.is_empty() {
+                self.prefix = PrefixSnapshot::new(leading);
+            }
+        }
+        let history = self.with_prefix(decoded);
         self.history = history.clone();
+        // Every turn already on disk counts as committed: the prefix those
+        // turns were sent with is part of the conversation, in this process
+        // or the one that wrote it.
+        self.committed_turns = self.committed_turns.max(transcript.meta.turn_count);
+        self.recorded_tools_json = transcript.tools.clone();
+        self.recorded_tools = match transcript.tools.as_ref() {
+            Some(value) => match ToolSnapshot::from_json(value) {
+                Ok(tools) => Some(tools),
+                Err(error) => {
+                    tracing::warn!("[session] ignoring unreadable recorded tools: {error}");
+                    None
+                }
+            },
+            None => None,
+        };
+        tracing::debug!(
+            "[session] resumed history={} committed_turns={} recorded_tools={}",
+            history.len(),
+            self.committed_turns,
+            self.recorded_tools
+                .as_ref()
+                .map_or(0, |tools| tools.specs().len())
+        );
         self.persisted = transcript.messages;
         // The discovered metadata, not the builder seed, is authoritative for
         // the subsequent append. This keeps resume-only host fields intact.
@@ -257,6 +314,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
             match destination {
                 Some(destination_transcript) => {
+                    self.recorded_tools_json = destination_transcript.tools;
                     self.persisted = destination_transcript.messages;
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
@@ -269,6 +327,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // `session_id`/`parent_session_id` stay canonical for
                     // whatever session this target now names (`resume`'s
                     // own head-resolution above may have rebound it).
+                    self.recorded_tools_json = None;
                     self.persisted = Vec::new();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = pre_scan_meta;
@@ -343,10 +402,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .before_turn(request, options, self.state_view(resumed)),
         )
         .await?;
+        let exact_tools = preparation.exact_tools;
         let (tools, prepared_prefix) = self.apply_preparation(preparation)?;
         if let Some(prefix) = prepared_prefix {
             self.apply_prefix(prefix)?;
         }
+        let tools = if exact_tools {
+            tools
+        } else {
+            self.retain_recorded(tools)?
+        };
+        // What this turn records as the session's tools: the set actually
+        // sent, unless the host marked the turn's set as one-off.
+        let record_tools = (!exact_tools).then(|| tools.clone());
 
         let mut input = self.history.clone();
         if input.last() != Some(&request.input) {
@@ -387,6 +455,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         thread_id.as_deref(),
                         partial.partial.as_ref(),
                         turn_usage.as_ref(),
+                        record_tools.as_ref(),
                     )?;
                     self.history = partial_history;
                     self.persisted = raw;
@@ -419,6 +488,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             thread_id.as_deref(),
             None,
             turn_usage.as_ref(),
+            record_tools.as_ref(),
         )?;
         self.history = committed.history.clone();
         self.persisted = raw;
@@ -452,6 +522,23 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .unwrap_or_else(|| self.default_tools.clone()),
             preparation.prefix,
         ))
+    }
+
+    /// Merges back recorded declarations the host did not re-supply, when
+    /// retention is on. See [`crate::SessionBuilder::retain_recorded_tools`].
+    fn retain_recorded(&self, tools: ToolSnapshot) -> Result<ToolSnapshot, RuntimeError> {
+        let Some(recorded) = self.recorded_tools.as_ref().filter(|_| self.retain_recorded_tools)
+        else {
+            return Ok(tools);
+        };
+        let (merged, retained) = tools.with_retained(recorded)?;
+        if retained != 0 {
+            tracing::info!(
+                "[session] retained {retained} recorded tool declaration(s) the host did not re-supply (sending {})",
+                merged.specs().len()
+            );
+        }
+        Ok(merged)
     }
 
     fn apply_resume_preparation(
@@ -506,6 +593,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             transcript_target: self.target.as_ref(),
             committed_turns: self.committed_turns,
             resumed,
+            recorded_tools: self.recorded_tools.as_ref(),
         }
     }
 
@@ -538,6 +626,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         thread_id: Option<&str>,
         partial: Option<&TranscriptPartial>,
         turn_usage: Option<&TurnUsage>,
+        tools: Option<&ToolSnapshot>,
     ) -> Result<Option<TranscriptCommitReceipt>, RuntimeError> {
         let Some(target) = self.target.as_mut() else {
             return Ok(None);
@@ -613,6 +702,13 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         meta.turn_count += 1;
         meta.updated = chrono::Utc::now().to_rfc3339();
+        // Record the declarations when they differ from the record in force
+        // in the file being written — always for a fresh generation, whose
+        // file starts with none.
+        let tools_json = tools.map(ToolSnapshot::to_json);
+        let tools_record = tools_json.as_ref().filter(|json| {
+            pending_generation.is_some() || self.recorded_tools_json.as_ref() != Some(*json)
+        });
         meta.thread_id = thread_id.map(str::to_owned).or(meta.thread_id);
         transcript
             .append_turn_with_partial(
@@ -622,6 +718,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     meta: &meta,
                     turn_usage,
                     request_id,
+                    tools: tools_record,
                 },
                 partial,
             )
@@ -637,6 +734,10 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             self.transcript = Some(handle);
         }
         target.meta = meta;
+        if let (Some(snapshot), Some(json)) = (tools, tools_json) {
+            self.recorded_tools = Some(snapshot.clone());
+            self.recorded_tools_json = Some(json);
+        }
         let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,

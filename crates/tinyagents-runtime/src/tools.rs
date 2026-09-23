@@ -40,4 +40,36 @@ impl ToolSnapshot {
     pub fn specs(&self) -> &[ToolSpec] {
         &self.specs
     }
+
+    /// The declarations as the JSON a transcript `tools` record stores.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(&self.specs).unwrap_or(serde_json::Value::Array(Vec::new()))
+    }
+
+    /// Restores a snapshot from a transcript `tools` record.
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, RuntimeError> {
+        let specs: Vec<ToolSpec> = serde_json::from_value(value.clone()).map_err(|error| {
+            RuntimeError::Persistence(format!("decode recorded tool declarations: {error}"))
+        })?;
+        Self::new(specs)
+    }
+
+    /// This snapshot plus every declaration of `recorded` whose name it does
+    /// not already carry. A name present in both keeps this snapshot's
+    /// declaration: the live host is authoritative for a tool it still
+    /// supplies. Returns the merged snapshot and how many were retained.
+    pub fn with_retained(&self, recorded: &ToolSnapshot) -> Result<(Self, usize), RuntimeError> {
+        let retained: Vec<ToolSpec> = recorded
+            .specs
+            .iter()
+            .filter(|spec| !self.specs.iter().any(|live| live.name == spec.name))
+            .cloned()
+            .collect();
+        if retained.is_empty() {
+            return Ok((self.clone(), 0));
+        }
+        let count = retained.len();
+        let merged = Self::new(self.specs.iter().cloned().chain(retained).collect())?;
+        Ok((merged, count))
+    }
 }
