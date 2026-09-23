@@ -2984,8 +2984,7 @@ async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // A "restarted" process that has only rebuilt `alpha` so far.
-    let (driver, recorded) =
-        one_file_turn(locator, tools("alpha"), true, 1).await;
+    let (driver, recorded) = one_file_turn(locator, tools("alpha"), true, 1).await;
 
     let sent = &driver.requests.lock().unwrap()[0].tools;
     assert_eq!(tool_names(sent), vec!["alpha", "beta"]);
@@ -3000,8 +2999,7 @@ async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
     one_file_turn(locator.clone(), two_tools(), false, 0).await;
-    let (driver, _) =
-        one_file_turn(locator, tools("alpha"), false, 1).await;
+    let (driver, _) = one_file_turn(locator, tools("alpha"), false, 1).await;
 
     assert_eq!(
         tool_names(&driver.requests.lock().unwrap()[0].tools),

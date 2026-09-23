@@ -527,7 +527,10 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
     /// Merges back recorded declarations the host did not re-supply, when
     /// retention is on. See [`crate::SessionBuilder::retain_recorded_tools`].
     fn retain_recorded(&self, tools: ToolSnapshot) -> Result<ToolSnapshot, RuntimeError> {
-        let Some(recorded) = self.recorded_tools.as_ref().filter(|_| self.retain_recorded_tools)
+        let Some(recorded) = self
+            .recorded_tools
+            .as_ref()
+            .filter(|_| self.retain_recorded_tools)
         else {
             return Ok(tools);
         };
