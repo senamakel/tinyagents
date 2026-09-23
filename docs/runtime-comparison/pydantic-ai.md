@@ -102,7 +102,7 @@ G = `crates/tinyagents-graph/src`.
 | Run-state persistence (message-history checkpoints) | Harness `StepPersistence`: `InMemory/File/Sqlite/Mongo` step stores, `continue_run`, `fork_run`, tool-effect ledger `(run_id, tool_call_id)` with `started/completed/failed`, `MediaStore` externalization | **Partial** — `tinyagents-session` (history/run ledger), harness `store/`, graph checkpoints | No tool-effect ledger for crash-time "did this side effect happen". |
 | Graph library | `pydantic_graph`: `BaseNode`/`End`, builder `@g.step`, `g.join(reducer)`, `edge_from().map().to()`, broadcast, `transform`, `graph.render()` mermaid; persistence removed in v2 | **Yes, richer** — `GraphBuilder`, channels/reducers (`LastValue`, `Topic`, `BinaryAggregate`, `Barrier`, `NamedBarrier`), `Send`, `Command`, subgraphs, `map_reduce`, `to_mermaid` (`G/`) | |
 | Sub-agents / delegation | tool-call delegation, `Subagents` (`delegate_task`), `Advisor`, `DynamicWorkflow` | **Yes** — `SubAgent`, `SubAgentTool`, `subagent_node`, `DetachedTaskRegistry`, orchestration tools, steering | TinyAgents is deeper (detached, wait, steer). |
-| Declarative agent spec | `Agent.from_file('agent.yaml')`, `from_spec`, capability `from_spec` | **Yes** — `.rag` blueprints (`tinyagents-language`), `AgentDefinition` (`tinyagents-definition`) | Different scope: `.rag` describes graphs; Pydantic spec describes one agent. |
+| Declarative agent spec | `Agent.from_file('agent.yaml')`, `from_spec`, capability `from_spec` | **Yes** — `AgentDefinition` (`tinyagents-definition`) | |
 | Guardrails | Harness `InputGuardrail/OutputGuardrail/ToolGuardrail` with allow/block/replace/retry/approve; secret/PII detectors | **Partial** — `RedactionMiddleware`, `ToolPolicyMiddleware`, `RedactingSink` | No output-retry guardrail outcome. |
 | Coding-agent batteries | Harness `Coder`, `FileSystem`, `Shell`, `Planning`, `Memory`, `Skills`, `CodeMode` | **Partial** — `goals`, `todos` (task board), `workspace` isolation, `tools/time` | TinyAgents deliberately leaves file/shell tools to the host. |
 | UI protocols | `AGUIAdapter`, `VercelAIAdapter` (`dispatch_request`, `transform_stream`), untrusted-history sanitisation | **No** | |
@@ -329,12 +329,12 @@ sanitisation belong to the host (§5).
   idea than middleware: it is what a "skill" or "plugin" is. TinyAgents'
   middleware is hooks-only; a bundle type (`Capability { instructions, tools,
   middleware, model_defaults, exposure }`) registered in `tinyagents-registry`
-  would give `.rag` and `AgentDefition` a single thing to reference.
+  would give `AgentDefinition` a single thing to reference.
 - **Where TinyAgents is ahead.** Channels/reducers, `Send` fan-out,
   subgraphs, barrier channels, `map_reduce`, detached sub-agent registry,
   steering commands, task board/goals, prompt-segment cache layout, model
   resolution by capability set, fail-closed tool policy, no-progress
-  detection, and the `.rag` language. Pydantic has none of these at runtime
+  detection. Pydantic has none of these at runtime
   level; its "DynamicWorkflow" and "Subagents" are Harness capabilities on
   top of plain tool calls.
 
@@ -356,7 +356,7 @@ sanitisation belong to the host (§5).
 | 3.12 OTel semconv sink | **Runtime** (optional sink) | Langfuse already lives there. |
 | UI adapters (AG-UI/Vercel), `sanitize_messages` | **Host** | Transport; but a `sanitize_history()` helper is cheap to put in harness. |
 | Harness batteries (`Coder`, `Shell`, `FileSystem`, `Memory`, `Guardrails`, `Planning`) | **Host** (OpenHuman `tools`, `security`, `agent/goals`, `agent/todos`) | TinyAgents' stance (tools are host vocabulary) is the same as Pydantic's core/Harness split; note Pydantic still ships them as an *official* library, which TinyAgents could mirror as an optional `tinyagents-batteries` crate. |
-| Capability bundle type, agent spec loading | **Runtime** (registry) | `.rag` + `AgentDefinition` already point this way. |
+| Capability bundle type, agent spec loading | **Runtime** (registry) | `AgentDefinition` already points this way. |
 | Durable-execution engines (Temporal etc.) | Neither now | Desktop host has no workflow engine; keep the built-in checkpointer. |
 | Realtime voice, CLI, web chat | **Host** | |
 

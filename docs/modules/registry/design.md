@@ -183,8 +183,8 @@ pub struct ComponentAlias {
 ```
 
 The registry should resolve aliases before lookup and emit
-`registry.alias_resolved` so old graph specs or expressive-language files can
-survive component renames.
+`registry.alias_resolved` so existing host configurations can survive
+component renames.
 
 ## Component Metadata
 

@@ -261,7 +261,7 @@ one move.
 **Where TinyAgents is ahead.** Steering commands with policy checks, detached task registry with
 durable stores, parallel failure policies (`quorum`/`race`/`compare`), goal/task-board primitives,
 budget middleware, prompt-cache layout guards, artifact offload, tool timeouts with grace, and a
-first-class registry + `.rag` blueprints. LangGraph OSS has none of these; LangGraph *Platform* has
+first-class registry. LangGraph OSS has none of these; LangGraph *Platform* has
 some (background runs, cron, multitask) as hosted services.
 
 ## 5. Runtime-level vs harness-level split

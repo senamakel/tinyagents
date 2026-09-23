@@ -65,8 +65,8 @@ impl ModelRequestDefaults {
     }
 }
 
-/// A composable capability bundle (gap G3): the unit a `.rag` blueprint,
-/// `AgentDefinition`, or host session references as one named thing instead
+/// A composable capability bundle: the unit an `AgentDefinition` or host
+/// session references as one named thing instead
 /// of wiring a toolset, middleware, and model defaults separately.
 ///
 /// Generic over the same `State`/`Ctx` pair as

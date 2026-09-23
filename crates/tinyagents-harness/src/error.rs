@@ -328,57 +328,6 @@ pub enum TinyAgentsError {
     /// underlying driver message.
     #[error("storage error: {0}")]
     Storage(String),
-
-    /// One or more `.rag` language diagnostics, collected together instead of
-    /// stopping at the first offending reference or construct.
-    ///
-    /// The payload is [`RenderedDiagnostic`], not
-    /// `tinyagents_language::Diagnostic`, because `tinyagents-language`
-    /// depends on this crate for [`Result`]/`TinyAgentsError`; holding the
-    /// language crate's structured type here would create an import cycle.
-    /// `tinyagents_language::diagnostic::into_diagnostics_error` builds this
-    /// variant from a `Vec<tinyagents_language::Diagnostic>` by rendering each
-    /// one down to its message, code, and resolved position. Never
-    /// constructed with an empty vector.
-    #[error("{}", render_diagnostics_summary(.0))]
-    Diagnostics(Vec<RenderedDiagnostic>),
-}
-
-/// One `.rag` language diagnostic, rendered to a crate-boundary-safe,
-/// serializable payload for [`TinyAgentsError::Diagnostics`].
-///
-/// See that variant's docs for why this mirrors (rather than reuses)
-/// `tinyagents_language::Diagnostic`.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RenderedDiagnostic {
-    /// The diagnostic's stable code (e.g. `E-rag-unknown-model`), if any.
-    pub code: Option<String>,
-    /// The headline message, without source context.
-    pub message: String,
-    /// The 1-based line the diagnostic's primary span begins at.
-    pub line: usize,
-    /// The 1-based column the diagnostic's primary span begins at.
-    pub column: usize,
-    /// The full presentation: the caret-underline rendering against source
-    /// when it was available at construction time, otherwise the
-    /// source-free `message` plus a `-->` position anchor.
-    pub rendered: String,
-}
-
-/// Renders the [`TinyAgentsError::Diagnostics`] `Display` text: the first
-/// diagnostic's full rendering, plus a `(and N more)` suffix when there is
-/// more than one.
-fn render_diagnostics_summary(diagnostics: &[RenderedDiagnostic]) -> String {
-    match diagnostics.split_first() {
-        Some((first, [])) => first.rendered.clone(),
-        Some((first, rest)) => format!(
-            "{} (and {} more diagnostic{})",
-            first.rendered,
-            rest.len(),
-            if rest.len() == 1 { "" } else { "s" }
-        ),
-        None => "no diagnostics".to_string(),
-    }
 }
 
 impl From<tinyinference_llm::Error> for TinyAgentsError {
