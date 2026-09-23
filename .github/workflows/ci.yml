@@ -10,9 +10,13 @@ on:
   pull_request:
 
 concurrency:
-  # `github.head_ref` is set for pull requests and empty for pushes, so a PR's
-  # runs coalesce under one group and superseded commits cancel each other.
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  # Keyed by pull-request *identity*, not by branch name: two PRs from
+  # different forks can share a head branch name (`main`, `feature`), and
+  # keying on `github.head_ref` would put them in one group where
+  # `cancel-in-progress` lets either one cancel the other's required checks.
+  # `github.event.pull_request.number` is unset for pushes, which fall back to
+  # the ref.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
