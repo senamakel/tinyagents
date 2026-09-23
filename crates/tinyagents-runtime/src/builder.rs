@@ -14,6 +14,7 @@ pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {
     hooks: Arc<dyn SessionHooks<C>>,
     prefix: PrefixSnapshot,
     tools: ToolSnapshot,
+    retain_recorded_tools: bool,
     transcript: Option<TranscriptConfig>,
 }
 
@@ -34,6 +35,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             hooks: Arc::new(NoopSessionHooks),
             prefix: PrefixSnapshot::default(),
             tools: ToolSnapshot::default(),
+            retain_recorded_tools: false,
             transcript: None,
         }
     }
@@ -59,6 +61,26 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
     /// Freezes the tool declarations exposed to each driver invocation.
     pub fn tool_snapshot(mut self, tools: ToolSnapshot) -> Self {
         self.tools = tools;
+        self
+    }
+
+    /// Keeps every tool declaration this session has already sent, even when a
+    /// later turn's preparation no longer supplies it.
+    ///
+    /// A session always records the declarations each turn was sent with
+    /// (`{"kind":"tools"}` in its transcript) and restores them on resume.
+    /// With retention on, a declaration the host stops supplying — typically
+    /// because a new process has not rebuilt it yet — is merged back in rather
+    /// than disappearing from the model's tool list mid-conversation, which
+    /// would both break the prompt's own references to it and change the
+    /// cached request prefix. The host must then be able to execute (or
+    /// refuse) a retained declaration; it can read them from
+    /// `SessionStateView::recorded_tools` in `before_turn`.
+    ///
+    /// Off by default because a driver that requires the snapshot to equal
+    /// its own registry (`HarnessDriver`) cannot execute a retained entry.
+    pub fn retain_recorded_tools(mut self, retain: bool) -> Self {
+        self.retain_recorded_tools = retain;
         self
     }
 
@@ -129,13 +151,15 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
         if target.is_some() && self.codec.is_none() {
             return Err(RuntimeError::MissingDependency("TranscriptCodec"));
         }
-        Ok(Session::<C>::new(
+        let mut session = Session::<C>::new(
             self.driver,
             self.codec,
             self.hooks,
             self.prefix,
             self.tools,
             target,
-        ))
+        );
+        session.set_retain_recorded_tools(self.retain_recorded_tools);
+        Ok(session)
     }
 }
