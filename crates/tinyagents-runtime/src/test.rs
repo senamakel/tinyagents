@@ -2887,3 +2887,194 @@ async fn a_session_resume_with_no_history_anywhere_loads_nothing() {
 
     assert!(!resumed.loaded);
 }
+
+fn tool_names(tools: &ToolSnapshot) -> Vec<String> {
+    tools.specs().iter().map(|spec| spec.name.clone()).collect()
+}
+
+fn two_tools() -> ToolSnapshot {
+    ToolSnapshot::new(
+        tools("alpha")
+            .specs()
+            .iter()
+            .chain(tools("beta").specs())
+            .cloned()
+            .collect(),
+    )
+    .unwrap()
+}
+
+/// Runs one turn on a fresh file-backed session named `agent` that sends
+/// `sent` and returns the driver so its requests can be inspected.
+async fn one_file_turn(
+    locator: Arc<FileTranscriptLocator>,
+    sent: ToolSnapshot,
+    retain: bool,
+    resume: ResumeMode,
+) -> (Arc<Driver>, Option<ToolSnapshot>) {
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "ok",
+    )]))]));
+    let (hook, _) = hook(vec![TurnPreparation::with_tools(sent)]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(hook)
+        .retain_recorded_tools(retain)
+        .transcript(locator, "agent", meta())
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            TurnOptions {
+                resume,
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    (driver, session.recorded_tools().cloned())
+}
+
+fn tools_records(path: &std::path::Path) -> usize {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains(r#""kind":"tools""#))
+        .count()
+}
+
+#[tokio::test]
+async fn each_turn_records_the_tools_it_was_sent_with() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let (_, recorded) = one_file_turn(locator, two_tools(), false, ResumeMode::Never).await;
+
+    let path = directory.path().join("session_raw/agent.jsonl");
+    let transcript = read_transcript(&path).unwrap();
+    let stored = ToolSnapshot::from_json(transcript.tools.as_ref().unwrap()).unwrap();
+    assert_eq!(tool_names(&stored), vec!["alpha", "beta"]);
+    assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
+    // A request-state record, never a displayed message.
+    assert_eq!(read_transcript_display(&path).unwrap().records.len(), 1);
+}
+
+#[tokio::test]
+async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    one_file_turn(locator.clone(), two_tools(), true, ResumeMode::Never).await;
+
+    // A "restarted" process that has only rebuilt `alpha` so far.
+    let (driver, recorded) =
+        one_file_turn(locator, tools("alpha"), true, ResumeMode::LatestForAgent).await;
+
+    let sent = &driver.requests.lock().unwrap()[0].tools;
+    assert_eq!(tool_names(sent), vec!["alpha", "beta"]);
+    assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
+    // Unchanged declarations are not recorded twice.
+    let path = directory.path().join("session_raw/agent.jsonl");
+    assert_eq!(tools_records(&path), 1);
+}
+
+#[tokio::test]
+async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    one_file_turn(locator.clone(), two_tools(), false, ResumeMode::Never).await;
+    let (driver, _) =
+        one_file_turn(locator, tools("alpha"), false, ResumeMode::LatestForAgent).await;
+
+    assert_eq!(
+        tool_names(&driver.requests.lock().unwrap()[0].tools),
+        vec!["alpha"]
+    );
+    let path = directory.path().join("session_raw/agent.jsonl");
+    assert_eq!(tools_records(&path), 2);
+    let stored = read_transcript(&path).unwrap().tools.unwrap();
+    assert_eq!(
+        tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
+        vec!["alpha"]
+    );
+}
+
+#[tokio::test]
+async fn an_exact_tool_turn_neither_merges_nor_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    one_file_turn(locator.clone(), two_tools(), true, ResumeMode::Never).await;
+
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "ok",
+    )]))]));
+    let (hook, _) = hook(vec![TurnPreparation {
+        tools: Some(ToolSnapshot::default()),
+        exact_tools: true,
+        ..TurnPreparation::default()
+    }]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(hook)
+        .retain_recorded_tools(true)
+        .transcript(locator, "agent", meta())
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            TurnOptions {
+                resume: ResumeMode::LatestForAgent,
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert!(driver.requests.lock().unwrap()[0].tools.specs().is_empty());
+    let path = directory.path().join("session_raw/agent.jsonl");
+    let stored = read_transcript(&path).unwrap().tools.unwrap();
+    assert_eq!(
+        tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
+        vec!["alpha", "beta"]
+    );
+}
+
+#[tokio::test]
+async fn resume_adopts_the_stored_prefix_and_its_committed_turns() {
+    let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
+        meta: TranscriptMeta {
+            turn_count: 2,
+            ..meta()
+        },
+        messages: vec![TranscriptMessage::new("user", "old")],
+    }));
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "new",
+    )]))]));
+    let (hook, _) = hook(vec![TurnPreparation {
+        prefix: Some(PrefixSnapshot::new(vec![Message::system("rewritten")])),
+        ..TurnPreparation::default()
+    }]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(hook)
+        .transcript(locator, "agent", meta())
+        .build()
+        .unwrap();
+    // Two turns are already on disk, so the prompt they were sent with can no
+    // longer be swapped out from under the conversation.
+    assert!(matches!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("next")),
+                TurnOptions {
+                    resume: ResumeMode::LatestForAgent,
+                    ..TurnOptions::default()
+                },
+            )
+            .await,
+        Err(RuntimeError::InvalidSessionState(_))
+    ));
+    assert!(driver.requests.lock().unwrap().is_empty());
+}
