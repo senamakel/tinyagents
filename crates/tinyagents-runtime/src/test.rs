@@ -2904,36 +2904,51 @@ fn two_tools() -> ToolSnapshot {
     .unwrap()
 }
 
-/// Runs one turn on a fresh file-backed session named `agent` that sends
-/// `sent` and returns the driver so its requests can be inspected.
+/// Runs one turn on a fresh session bound to one durable identity — what a
+/// restarted process builds — sending `sent`, and returns the driver so its
+/// requests can be inspected. `turn` numbers the call so each outcome
+/// extends the stored history instead of reading as a compaction.
 async fn one_file_turn(
     locator: Arc<FileTranscriptLocator>,
     sent: ToolSnapshot,
     retain: bool,
-    resume: ResumeMode,
+    turn: usize,
 ) -> (Arc<Driver>, Option<ToolSnapshot>) {
-    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
-        "ok",
-    )]))]));
+    // The test codec decodes every stored row as a user message.
+    let mut history: Vec<Message> = (0..turn * 2).map(|_| Message::user("x")).collect();
+    history.extend([Message::user("x"), Message::assistant("x")]);
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(history))]));
     let (hook, _) = hook(vec![TurnPreparation::with_tools(sent)]);
     let mut session = SessionBuilder::new(driver.clone())
         .codec(Arc::new(Codec::default()))
         .hooks(hook)
         .retain_recorded_tools(retain)
-        .transcript(locator, "agent", meta())
+        .session(locator, recorded_tools_session(), meta())
         .build()
         .unwrap();
     session
         .turn(
             SessionTurnRequest::new(Message::user("x")),
-            TurnOptions {
-                resume,
-                ..TurnOptions::default()
-            },
+            session_turn_options(ResumeMode::Session, "thread-tools"),
         )
         .await
         .unwrap();
     (driver, session.recorded_tools().cloned())
+}
+
+fn recorded_tools_session() -> SessionRef {
+    SessionRef::scoped("thread-tools", "agent-id")
+}
+
+fn recorded_tools_path(directory: &std::path::Path) -> std::path::PathBuf {
+    let dir = directory.join("session_raw");
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .collect();
+    assert_eq!(files.len(), 1, "one transcript for one session: {files:?}");
+    files.remove(0)
 }
 
 fn tools_records(path: &std::path::Path) -> usize {
@@ -2948,32 +2963,35 @@ fn tools_records(path: &std::path::Path) -> usize {
 async fn each_turn_records_the_tools_it_was_sent_with() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    let (_, recorded) = one_file_turn(locator, two_tools(), false, ResumeMode::Never).await;
+    let (_, recorded) = one_file_turn(locator, two_tools(), false, 0).await;
 
-    let path = directory.path().join("session_raw/agent.jsonl");
+    let path = recorded_tools_path(directory.path());
     let transcript = read_transcript(&path).unwrap();
     let stored = ToolSnapshot::from_json(transcript.tools.as_ref().unwrap()).unwrap();
     assert_eq!(tool_names(&stored), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
     // A request-state record, never a displayed message.
-    assert_eq!(read_transcript_display(&path).unwrap().records.len(), 1);
+    assert_eq!(
+        read_transcript_display(&path).unwrap().records.len(),
+        transcript.messages.len()
+    );
 }
 
 #[tokio::test]
 async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    one_file_turn(locator.clone(), two_tools(), true, ResumeMode::Never).await;
+    one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // A "restarted" process that has only rebuilt `alpha` so far.
     let (driver, recorded) =
-        one_file_turn(locator, tools("alpha"), true, ResumeMode::LatestForAgent).await;
+        one_file_turn(locator, tools("alpha"), true, 1).await;
 
     let sent = &driver.requests.lock().unwrap()[0].tools;
     assert_eq!(tool_names(sent), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
     // Unchanged declarations are not recorded twice.
-    let path = directory.path().join("session_raw/agent.jsonl");
+    let path = recorded_tools_path(directory.path());
     assert_eq!(tools_records(&path), 1);
 }
 
@@ -2981,15 +2999,15 @@ async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
 async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    one_file_turn(locator.clone(), two_tools(), false, ResumeMode::Never).await;
+    one_file_turn(locator.clone(), two_tools(), false, 0).await;
     let (driver, _) =
-        one_file_turn(locator, tools("alpha"), false, ResumeMode::LatestForAgent).await;
+        one_file_turn(locator, tools("alpha"), false, 1).await;
 
     assert_eq!(
         tool_names(&driver.requests.lock().unwrap()[0].tools),
         vec!["alpha"]
     );
-    let path = directory.path().join("session_raw/agent.jsonl");
+    let path = recorded_tools_path(directory.path());
     assert_eq!(tools_records(&path), 2);
     let stored = read_transcript(&path).unwrap().tools.unwrap();
     assert_eq!(
@@ -3002,11 +3020,11 @@ async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
 async fn an_exact_tool_turn_neither_merges_nor_records() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    one_file_turn(locator.clone(), two_tools(), true, ResumeMode::Never).await;
+    one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
-    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
-        "ok",
-    )]))]));
+    let mut history: Vec<Message> = (0..2).map(|_| Message::user("x")).collect();
+    history.extend([Message::user("x"), Message::assistant("x")]);
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(history))]));
     let (hook, _) = hook(vec![TurnPreparation {
         tools: Some(ToolSnapshot::default()),
         exact_tools: true,
@@ -3016,23 +3034,22 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
         .codec(Arc::new(Codec::default()))
         .hooks(hook)
         .retain_recorded_tools(true)
-        .transcript(locator, "agent", meta())
+        .session(locator, recorded_tools_session(), meta())
         .build()
         .unwrap();
     session
         .turn(
             SessionTurnRequest::new(Message::user("x")),
-            TurnOptions {
-                resume: ResumeMode::LatestForAgent,
-                ..TurnOptions::default()
-            },
+            session_turn_options(ResumeMode::Session, "thread-tools"),
         )
         .await
         .unwrap();
 
     assert!(driver.requests.lock().unwrap()[0].tools.specs().is_empty());
-    let path = directory.path().join("session_raw/agent.jsonl");
-    let stored = read_transcript(&path).unwrap().tools.unwrap();
+    let stored = read_transcript(&recorded_tools_path(directory.path()))
+        .unwrap()
+        .tools
+        .unwrap();
     assert_eq!(
         tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
         vec!["alpha", "beta"]
