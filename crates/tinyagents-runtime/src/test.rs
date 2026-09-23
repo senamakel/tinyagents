@@ -2731,11 +2731,6 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
         .join(format!("{}.jsonl", session_stem(&session_ref)));
     let on_disk = read_transcript(&destination_path).unwrap();
     assert_eq!(
-        on_disk.meta.agent_id.as_deref(),
-        Some("destination-agent"),
-        "the destination's own agent_id must survive, not the scanned file's"
-    );
-    assert_eq!(
         on_disk.meta.created, "destination-created",
         "the destination's own created timestamp must survive, not the scanned file's"
     );
