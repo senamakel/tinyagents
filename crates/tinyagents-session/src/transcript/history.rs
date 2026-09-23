@@ -62,6 +62,10 @@ pub struct TranscriptTurn<'a> {
     pub turn_usage: Option<&'a TurnUsage>,
     /// Caller-provided request id, stamped on every line of the turn.
     pub request_id: Option<&'a str>,
+    /// Tool declarations this turn was sent with, when they differ from the
+    /// ones last recorded for this transcript. `None` records nothing and
+    /// leaves the previous record in force.
+    pub tools: Option<&'a serde_json::Value>,
 }
 
 /// Display-only content produced before a turn stopped without a final answer.
@@ -729,7 +733,11 @@ impl FileTranscriptHistory {
             turn.meta,
             turn.turn_usage,
             turn.request_id,
-        )
+        )?;
+        if let Some(tools) = turn.tools {
+            crate::transcript::append_tools_record(&self.path, tools)?;
+        }
+        Ok(())
     }
 
     /// [`Self::append_turn_locked`]'s counterpart for the display-partial
@@ -754,7 +762,11 @@ impl FileTranscriptHistory {
             turn.turn_usage,
             turn.request_id,
             partial,
-        )
+        )?;
+        if let Some(tools) = turn.tools {
+            crate::transcript::append_tools_record(&self.path, tools)?;
+        }
+        Ok(())
     }
 
     /// Writes `next` as the new logical set, diffing against what is
@@ -783,6 +795,7 @@ impl FileTranscriptHistory {
             meta: &meta,
             turn_usage: None,
             request_id: None,
+            tools: None,
         })
     }
 }

@@ -5,7 +5,7 @@
 use super::history::TranscriptPartial;
 use super::jsonl::{
     COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json,
-    serialise_message_lines,
+    serialise_message_lines, tools_line_json,
 };
 use super::markdown::render_markdown;
 use super::paths::md_companion_path;
@@ -234,6 +234,21 @@ pub fn append_transcript_turn_with_partial(
 
     append_bytes(jsonl_path, buf.as_bytes())?;
     render_md_companion(jsonl_path, messages, meta, turn_usage);
+    Ok(())
+}
+
+/// Appends a `{"kind":"tools"}` record naming the tool declarations the
+/// session's latest turn was sent with. The file must already exist (its
+/// first line is always `_meta`), so callers append this after the turn.
+pub fn append_tools_record(jsonl_path: &Path, tools: &serde_json::Value) -> Result<()> {
+    let mut line = tools_line_json(tools)?;
+    line.push('\n');
+    append_bytes(jsonl_path, line.as_bytes())?;
+    tracing::debug!(
+        "[transcript] recorded tool declarations ({} bytes) in {}",
+        line.len(),
+        jsonl_path.display()
+    );
     Ok(())
 }
 

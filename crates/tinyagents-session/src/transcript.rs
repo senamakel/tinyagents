@@ -141,7 +141,8 @@ pub use types::{
     TurnUsage,
 };
 pub use writer::{
-    append_interrupted_partial, append_transcript_turn, append_transcript_turn_with_partial,
+    append_interrupted_partial, append_tools_record, append_transcript_turn,
+    append_transcript_turn_with_partial,
     write_transcript, write_transcript_if_absent,
 };
 

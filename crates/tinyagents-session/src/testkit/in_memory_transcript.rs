@@ -33,6 +33,7 @@ pub struct InMemoryTranscriptHistory {
     path: PathBuf,
     meta: Mutex<TranscriptMeta>,
     messages: Mutex<Vec<TranscriptMessage>>,
+    tools: Mutex<Option<serde_json::Value>>,
     /// `None` until the first write, mirroring a file that does not exist yet.
     written: Mutex<bool>,
 }
@@ -46,6 +47,7 @@ impl InMemoryTranscriptHistory {
             path: PathBuf::from(format!("memory://{}", label.into())),
             meta: Mutex::new(seed_meta),
             messages: Mutex::new(Vec::new()),
+            tools: Mutex::new(None),
             written: Mutex::new(false),
         }
     }
@@ -71,6 +73,7 @@ impl TranscriptRead for InMemoryTranscriptHistory {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
+            tools: self.tools.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         }))
     }
 }
@@ -79,6 +82,9 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
     fn append_turn(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
         *self.messages.lock().unwrap_or_else(|e| e.into_inner()) = turn.next.to_vec();
         *self.meta.lock().unwrap_or_else(|e| e.into_inner()) = turn.meta.clone();
+        if let Some(tools) = turn.tools {
+            *self.tools.lock().unwrap_or_else(|e| e.into_inner()) = Some(tools.clone());
+        }
         self.mark_written();
         Ok(())
     }
