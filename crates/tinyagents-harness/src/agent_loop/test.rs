@@ -7092,6 +7092,40 @@ fn stable_prepend_promotes_the_zero_prefix_marker_without_caching_history() {
 }
 
 #[test]
+fn tools_added_after_zero_prefix_marking_keep_summary_volatile() {
+    use tinyinference_llm::model::SegmentRole;
+    use tinyinference_llm::tool::ToolSchema;
+
+    let build = |summary: &str| {
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.tools = vec![ToolSchema::new(
+            "lookup",
+            "look up facts",
+            serde_json::json!({"type": "object"}),
+        )];
+        request.messages.insert(0, Message::system(summary));
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let first = build("summary A");
+    let second = build("summary B");
+    assert_eq!(first.cache_segments.len(), 1);
+    assert_eq!(first.cache_segments[0].id, "tools");
+    assert_eq!(first.cache_segments[0].role, SegmentRole::Tools);
+    assert!(first.cache_segments[0].cacheable);
+    assert_eq!(
+        crate::cache::prompt_cache_key(&first),
+        crate::cache::prompt_cache_key(&second)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&first),
+        crate::cache::cache_key(&second)
+    );
+}
+
+#[test]
 fn tools_only_prefix_survives_a_leading_compaction_summary() {
     use tinyinference_llm::model::{PromptSegment, SegmentRole};
     use tinyinference_llm::tool::ToolSchema;

@@ -16,6 +16,30 @@ use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
 /// middleware can insert a leading System summary.
 pub(crate) const VOLATILE_SYSTEM_HISTORY_SEGMENT_ID: &str = "volatile-system-history";
 
+/// A zero-prefix session may acquire tools in a later `before_model` hook.
+/// Promote only the new tool declarations into the stable prefix; a System
+/// summary already in history remains volatile.
+pub(crate) fn promote_tools_after_zero_prefix_marker(request: &mut ModelRequest) {
+    if request.tools.is_empty()
+        || request.cache_segments
+            != [PromptSegment {
+                id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+                role: SegmentRole::Volatile,
+                cacheable: false,
+            }]
+    {
+        return;
+    }
+    request.cache_segments = vec![PromptSegment {
+        id: "tools".into(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    }];
+    let mut prompt = crate::prompt::PromptBuilder::new();
+    prompt.push_tools_segment("tools", request.tools.clone());
+    request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+}
+
 /// Number of messages named by an explicit canonical system-prefix layout.
 /// Extra leading System messages may be volatile summaries; their role alone
 /// cannot add them to the declared cacheable prefix.

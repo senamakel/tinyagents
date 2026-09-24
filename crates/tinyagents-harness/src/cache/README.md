@@ -68,6 +68,8 @@ cheap and deterministic:
   silently promoted into a reusable prompt tier. If a built-in dynamic or
   structured instruction is later prepended, `prepend_system_message` replaces
   that marker with one canonical stable tier and leaves the summary in history.
+  If tools are added instead, dispatch promotes only their schemas to a
+  canonical tools-only tier.
 - [`CacheLayoutEvent`] (`types.rs` + `layout.rs`) — describes a before/after
   layout change; `under_policy` evaluates it against a `CachePolicy` and is
   what makes `CachePolicy::protect_prompt_prefix` load-bearing.

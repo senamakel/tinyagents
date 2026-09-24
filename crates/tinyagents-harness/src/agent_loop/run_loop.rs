@@ -2060,6 +2060,7 @@ pub(super) fn mark_empty_frozen_prefix(
 /// middleware layer has delegated to the innermost call. Rebuilding that
 /// annotation there keeps cache routing tied to the bytes sent to the provider.
 pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
+    crate::cache::promote_tools_after_zero_prefix_marker(request);
     let leading_system_end = request
         .messages
         .iter()
