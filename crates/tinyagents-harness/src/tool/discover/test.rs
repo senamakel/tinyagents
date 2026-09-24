@@ -460,7 +460,7 @@ fn unwrap_tool_call_rejects_malformed_payloads() {
 /// survives all of them.
 #[test]
 fn tool_call_arguments_is_a_string_under_every_schema_projection() {
-    use crate::tool::schema_prepare::{prepare_tool_schema, SchemaPreparation};
+    use crate::tool::schema_prepare::{SchemaPreparation, prepare_tool_schema};
 
     let policy = ToolDiscoveryPolicy::default();
     let [_, call] = bridge_schemas(&catalog(), &policy);
@@ -475,7 +475,10 @@ fn tool_call_arguments_is_a_string_under_every_schema_projection() {
         ("openai", SchemaPreparation::openai()),
         ("conservative", SchemaPreparation::conservative()),
         ("openai strict", SchemaPreparation::openai().with_strict()),
-        ("conservative strict", SchemaPreparation::conservative().with_strict()),
+        (
+            "conservative strict",
+            SchemaPreparation::conservative().with_strict(),
+        ),
     ] {
         let prepared = prepare_tool_schema(&call, &preparation);
         let arguments = &prepared.parameters["properties"]["arguments"];
