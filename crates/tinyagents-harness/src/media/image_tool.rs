@@ -139,6 +139,16 @@ impl GenerateImageTool {
             }
         };
 
+        // Reject empty responses as billed failures, since the call was billed
+        // but produced nothing to save.
+        if response.images.is_empty() {
+            return ToolResult::error(
+                "Image generation succeeded and was billed, but returned no images. \
+                 Do not generate again; report this error to the user."
+                    .to_string(),
+            );
+        }
+
         let dir = self.output.dir(workspace);
         let stem = artifact_stem("image");
         let mut artifacts = Vec::with_capacity(response.images.len());
@@ -148,7 +158,16 @@ impl GenerateImageTool {
             response.model
         )];
         for (index, image) in response.images.iter().enumerate() {
-            match image.persist(&dir, &format!("{stem}-{index}"), "png").await {
+            // Preserve the generated image format in the artifact extension
+            let ext = image
+                .media_type
+                .split('/')
+                .nth(1)
+                .unwrap_or("png")
+                .split('+')
+                .next()
+                .unwrap_or("png");
+            match image.persist(&dir, &format!("{stem}-{index}"), ext).await {
                 Ok(path) => {
                     lines.push(format!("- {}", path.display()));
                     artifacts.push(json!({
