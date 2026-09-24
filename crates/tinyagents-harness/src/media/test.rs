@@ -169,21 +169,21 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
         .unwrap();
     assert!(text(&result).contains("host refused"), "{}", text(&result));
 
-    // Test 2: a policy that admits out-of-workspace paths. The policy runs after
-    // canonicalize, so the file must exist. We use /etc/hostname which exists on
-    // most Unix-like systems.
-    let output = MediaOutput::new("/nonexistent")
-        .with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
+    // Test 2: a policy that admits out-of-workspace paths. Create a temporary
+    // file and a policy that redirects references to it, simulating admission of
+    // an out-of-workspace path.
+    let temp_file = tempfile::NamedTempFile::new().unwrap();
+    let temp_path = temp_file.path().to_path_buf();
+    let temp_path_clone = temp_path.clone();
+    let output = MediaOutput::new(&dir)
+        .with_reference_policy(Arc::new(move |_path| Ok(temp_path_clone.clone())));
     let tool = GenerateImageTool::new(generator, output);
-    // Try to reference a file that definitely exists
-    if std::path::Path::new("/etc/hostname").exists() {
-        let result = tool
-            .execute(json!({ "prompt": "x", "references": ["/etc/hostname"] }))
-            .await
-            .unwrap();
-        // The custom policy allows the out-of-workspace path
-        assert!(!result.is_error, "{}", text(&result));
-    }
+    let result = tool
+        .execute(json!({ "prompt": "x", "references": ["any_path.png"] }))
+        .await
+        .unwrap();
+    // The custom policy allows the out-of-workspace path (by redirecting to temp file)
+    assert!(!result.is_error, "{}", text(&result));
 }
 
 fn fast() -> WaitPolicy {
