@@ -766,9 +766,17 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
     /// This is deliberately outside `persist`: sessions without a transcript
     /// target still need retention to work between their in-memory turns.
     fn remember_sent_tools(&mut self, tools: Option<&ToolSnapshot>) {
-        if let Some(tools) = tools {
-            self.recorded_tools = Some(tools.clone());
-            self.recorded_tools_json = Some(tools.to_json());
+        match tools {
+            Some(tools) => {
+                self.recorded_tools = Some(tools.clone());
+                self.recorded_tools_json = Some(tools.to_json());
+            }
+            // An exact-tools turn is deliberately one-off. Do not let a
+            // snapshot sent before it leak back into a later retained turn.
+            None => {
+                self.recorded_tools = None;
+                self.recorded_tools_json = None;
+            }
         }
     }
 
