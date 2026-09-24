@@ -227,11 +227,11 @@ impl Tool for GenerateVideoTool {
             "properties": {
                 "prompt": { "type": "string", "description": "What happens in the clip. Optional only with first_frame." },
                 "model": { "type": "string", "description": format!("Model id. Default: {}.", self.generator.default_model()) },
-                "duration": { "type": "integer", "minimum": 1, "description": "Seconds (the default model accepts 4-15)." },
+                "duration": { "type": ["integer", "string"], "description": "Seconds (integer or numeric string; the default model accepts 4-15)." },
                 "resolution": { "type": "string", "description": "480p, 720p or 1080p (model-dependent)." },
                 "aspect_ratio": { "type": "string", "description": "e.g. 16:9, 9:16, 1:1, landscape, portrait." },
-                "generate_audio": { "type": "boolean", "description": "Add an audio track, where supported." },
-                "seed": { "type": "integer" },
+                "generate_audio": { "type": ["boolean", "string"], "description": "Add an audio track (boolean or string \"true\"/\"false\"), where supported." },
+                "seed": { "type": ["integer", "string"], "description": "Deterministic seed (integer or numeric string)." },
                 "first_frame": { "type": "string", "description": "Image to start from: https URL, data: URL or workspace path." },
                 "last_frame": { "type": "string", "description": "Image to end on." },
                 "references": {
