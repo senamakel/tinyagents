@@ -228,6 +228,14 @@ pub enum AgentEvent {
         call_id: CallId,
         /// Name of the tool being invoked.
         tool_name: String,
+        /// The arguments the tool is being invoked with, captured only when
+        /// [`PayloadCapture::tool_io`][crate::runtime::PayloadCapture::tool_io]
+        /// is enabled. `None` in the default payload-free mode, and for
+        /// events serialized before this field existed. Populated so a host
+        /// or UI can render the call's arguments as soon as it starts,
+        /// instead of waiting for [`AgentEvent::ToolCompleted`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
     },
 
     /// A tool invocation returned.
