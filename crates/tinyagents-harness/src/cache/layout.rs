@@ -20,24 +20,46 @@ pub(crate) const VOLATILE_SYSTEM_HISTORY_SEGMENT_ID: &str = "volatile-system-his
 /// Promote only the new tool declarations into the stable prefix; a System
 /// summary already in history remains volatile.
 pub(crate) fn promote_tools_after_zero_prefix_marker(request: &mut ModelRequest) {
-    if request.tools.is_empty()
-        || request.cache_segments
-            != [PromptSegment {
-                id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
-                role: SegmentRole::Volatile,
-                cacheable: false,
-            }]
+    let marker = PromptSegment {
+        id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+        role: SegmentRole::Volatile,
+        cacheable: false,
+    };
+    if request.cache_segments == [marker.clone()] {
+        if request.tools.is_empty() {
+            return;
+        }
+        request.cache_segments = vec![PromptSegment {
+            id: "tools".into(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        }];
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_tools_segment("tools", request.tools.clone());
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+    } else if request.cache_segments.last() == Some(&marker) && request.prompt_fingerprint.is_some()
     {
-        return;
+        let system_count = request.cache_segments.len() - 1;
+        let canonical_system = system_count > 0
+            && (0..system_count).all(|index| {
+                request.cache_segments[index]
+                    == PromptSegment {
+                        id: crate::prompt::system_segment_id(index),
+                        role: SegmentRole::System,
+                        cacheable: true,
+                    }
+            });
+        if canonical_system {
+            request.cache_segments.pop();
+            if !request.tools.is_empty() {
+                request.cache_segments.push(PromptSegment {
+                    id: "tools".into(),
+                    role: SegmentRole::Tools,
+                    cacheable: true,
+                });
+            }
+        }
     }
-    request.cache_segments = vec![PromptSegment {
-        id: "tools".into(),
-        role: SegmentRole::Tools,
-        cacheable: true,
-    }];
-    let mut prompt = crate::prompt::PromptBuilder::new();
-    prompt.push_tools_segment("tools", request.tools.clone());
-    request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
 }
 
 /// Number of messages named by an explicit canonical system-prefix layout.
@@ -78,7 +100,15 @@ pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize
     if count == 0 && tail != [canonical_tools.clone()] {
         return None;
     }
-    let canonical_tail = if request.tools.is_empty() {
+    let pending_zero_marker = tail
+        == [PromptSegment {
+            id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+            role: SegmentRole::Volatile,
+            cacheable: false,
+        }];
+    let canonical_tail = if pending_zero_marker {
+        true
+    } else if request.tools.is_empty() {
         tail.is_empty() || tail == [canonical_tools]
     } else {
         tail == [canonical_tools]
@@ -102,11 +132,18 @@ pub(crate) fn prepend_system_message(request: &mut ModelRequest, text: String) {
         // This new instruction is the first stable tier; the old marker named
         // only volatile history. Replace it with a canonical declaration and
         // give the guard a content-derived annotation before dispatch.
-        request.cache_segments = vec![PromptSegment {
-            id: crate::prompt::system_segment_id(0),
-            role: SegmentRole::System,
-            cacheable: true,
-        }];
+        request.cache_segments = vec![
+            PromptSegment {
+                id: crate::prompt::system_segment_id(0),
+                role: SegmentRole::System,
+                cacheable: true,
+            },
+            PromptSegment {
+                id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+                role: SegmentRole::Volatile,
+                cacheable: false,
+            },
+        ];
         let mut prompt = crate::prompt::PromptBuilder::new();
         prompt.push_system_messages(&request.messages[..1]);
         request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
@@ -229,6 +266,9 @@ impl PromptCacheLayout {
     }
 
     fn has_compatible_message_history(&self, other: &PromptCacheLayout) -> bool {
+        if !self.canonical_message_boundary || !other.canonical_message_boundary {
+            return self.message_digests == other.message_digests;
+        }
         let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {
             (&self.message_digests, &other.message_digests)
         } else {
@@ -244,8 +284,9 @@ impl PromptCacheLayout {
     ///
     /// 1. the same cacheable segment ids in the same order **with the same
     ///    content** (equal [`Self::fingerprint`]), and
-    /// 2. one message stream being a pure tail-extension of the other — the
-    ///    only edit a byte-prefix cache tolerates.
+    /// 2. a pure tail-extension of the message stream when both layouts have
+    ///    a known canonical boundary; otherwise the complete histories must
+    ///    match because custom segment-to-message mappings are unknown.
     ///
     /// Comparing ids alone (the previous behaviour) reported stability after a
     /// middleware rewrote a stable segment's text, which is the precise failure

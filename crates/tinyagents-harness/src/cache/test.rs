@@ -231,6 +231,25 @@ fn unannotated_stable_prefix_comparison_is_conservative() {
 }
 
 #[test]
+fn noncanonical_layout_rejects_appended_history_without_a_known_boundary() {
+    let segment = PromptSegment {
+        id: "custom".into(),
+        role: SegmentRole::System,
+        cacheable: true,
+    };
+    let before = PromptCacheLayout::from_request(
+        &ModelRequest::new(vec![Message::user("first")]).with_cache_segments(vec![segment.clone()]),
+    );
+    let after = PromptCacheLayout::from_request(
+        &ModelRequest::new(vec![Message::user("first"), Message::user("second")])
+            .with_cache_segments(vec![segment]),
+    );
+
+    assert!(!before.has_same_stable_prefix_as(&after));
+    assert!(!before.is_prefix_stable_against(&after));
+}
+
+#[test]
 fn cache_layout_event_volatile_only_when_no_cacheable_segments() {
     let req_a = ModelRequest::new(vec![]).with_cache_segments(vec![PromptSegment {
         id: "sys".into(),

@@ -7126,6 +7126,55 @@ fn tools_added_after_zero_prefix_marking_keep_summary_volatile() {
 }
 
 #[test]
+fn zero_prefix_stable_prepend_and_tools_keep_both_segments_in_either_order() {
+    use tinyinference_llm::tool::ToolSchema;
+
+    let build = |summary: &str, tools_first: bool| {
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.messages.insert(0, Message::system(summary));
+        let add_tools = |request: &mut ModelRequest| {
+            request.tools = vec![ToolSchema::new(
+                "lookup",
+                "look up facts",
+                serde_json::json!({"type": "object"}),
+            )];
+        };
+        if tools_first {
+            add_tools(&mut request);
+        }
+        crate::cache::prepend_system_message(&mut request, "dynamic instruction".into());
+        if !tools_first {
+            add_tools(&mut request);
+        }
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    for tools_first in [false, true] {
+        let first = build("summary A", tools_first);
+        let second = build("summary B", tools_first);
+        assert_eq!(
+            first.cacheable_prefix_ids(),
+            vec!["system".to_string(), "tools".to_string()]
+        );
+        assert_eq!(first.cache_segments.len(), 2);
+        assert_eq!(
+            crate::cache::prompt_cache_key(&first),
+            crate::cache::prompt_cache_key(&second)
+        );
+        assert_ne!(
+            crate::cache::cache_key(&first),
+            crate::cache::cache_key(&second)
+        );
+    }
+    assert_eq!(
+        crate::cache::prompt_cache_key(&build("summary A", false)),
+        crate::cache::prompt_cache_key(&build("summary A", true)),
+    );
+}
+
+#[test]
 fn tools_only_prefix_survives_a_leading_compaction_summary() {
     use tinyinference_llm::model::{PromptSegment, SegmentRole};
     use tinyinference_llm::tool::ToolSchema;
