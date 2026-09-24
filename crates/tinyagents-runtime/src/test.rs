@@ -1734,6 +1734,50 @@ async fn changed_first_turn_prefix_replaces_a_builder_prefix_after_resume() {
 }
 
 #[tokio::test]
+async fn resume_discards_stale_stored_system_rows_when_builder_has_a_prefix() {
+    let (locator, _) = locator(Some(SessionTranscript {
+        tools: None,
+        meta: meta(),
+        messages: vec![
+            TranscriptMessage::new("system", "stale"),
+            TranscriptMessage::new("user", "resumed"),
+        ],
+    }));
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::system("current"),
+        Message::user("resumed"),
+        Message::assistant("answer"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(SystemCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("current")]))
+        .transcript(locator, "agent", meta())
+        .build()
+        .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("next")),
+            TurnOptions {
+                session: None,
+                resume: ResumeMode::LatestForAgent,
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        driver.requests.lock().unwrap()[0].history,
+        vec![
+            Message::system("current"),
+            Message::user("resumed"),
+            Message::user("next"),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn hook_selected_target_and_resume_mode_apply_before_driver_handoff() {
     let (locator, _) = locator(Some(SessionTranscript {
         tools: None,

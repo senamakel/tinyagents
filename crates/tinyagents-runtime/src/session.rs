@@ -198,20 +198,21 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
         let mut decoded = codec.decode_history(&transcript)?;
         // The transcript already holds the prefix it was sent with as its
-        // leading system rows. A session built without a prefix of its own
-        // adopts those rows, so resuming never has to re-render the prompt
-        // and the prefix guard below protects the stored one.
+        // leading system rows. They are legacy prefix material rather than
+        // conversational history: a session built without a prefix adopts
+        // them, while a session with a current prefix must discard them
+        // before combining the resumed history. Keeping them in the latter
+        // case would replay stale instructions alongside the current prompt.
+        let leading_len = decoded
+            .iter()
+            .take_while(|message| matches!(message, Message::System(_)))
+            .count();
         if self.prefix.messages().is_empty() {
-            let leading: Vec<Message> = decoded
-                .iter()
-                .take_while(|message| matches!(message, Message::System(_)))
-                .cloned()
-                .collect();
-            if !leading.is_empty() {
-                self.prefix = PrefixSnapshot::new(leading);
-                decoded.drain(..self.prefix.messages().len());
+            if leading_len != 0 {
+                self.prefix = PrefixSnapshot::new(decoded[..leading_len].to_vec());
             }
         }
+        decoded.drain(..leading_len);
         let history = self.with_prefix(decoded);
         self.history = history.clone();
         // Every turn already on disk counts as committed: the prefix those
