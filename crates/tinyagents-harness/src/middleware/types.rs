@@ -968,7 +968,7 @@ pub const DEFAULT_CACHE_GUARD_EVENT_CAP: usize = 1024;
 ///
 /// In `before_model` it computes the request's
 /// [`crate::cache::PromptCacheLayout`]. If a layout from a previous
-/// call was stored and the cacheable prefix changed, it records a
+/// call was stored and the cacheable segment prefix changed, it records a
 /// [`CacheLayoutEvent`] (retrievable via
 /// [`PromptCacheGuardMiddleware::layout_events`]) so KV-cache regressions are
 /// observable. This demonstrates provider prompt/KV-cache prefix protection.
@@ -980,7 +980,9 @@ pub struct PromptCacheGuardMiddleware {
     /// The run id is load-bearing. A KV-cache prefix is only meaningful
     /// *within* one conversation, so comparing the last request of one run
     /// against the first request of the next compares two unrelated
-    /// transcripts and reports an invalidation that never happened. A single
+    /// transcripts and reports an invalidation that never happened. Rewriting
+    /// the non-cacheable history within a run also leaves the stable prefix
+    /// intact, so the guard ignores it while adopting the new layout. A single
     /// guard instance is routinely shared across runs — a sub-agent's
     /// middleware stack is built once and its agent invoked many times — so
     /// this is the common case, not an edge case. It went unnoticed while

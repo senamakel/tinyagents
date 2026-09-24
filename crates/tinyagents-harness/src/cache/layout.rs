@@ -40,7 +40,11 @@ impl PromptCacheLayout {
         // cacheable-flag flip on an otherwise identically named segment is not
         // mistaken for "unchanged".
         let mut material = String::new();
-        for segment in &request.cache_segments {
+        for segment in request
+            .cache_segments
+            .iter()
+            .filter(|segment| segment.cacheable)
+        {
             material.push_str(&segment.id);
             material.push('\u{1}');
             material.push_str(
@@ -54,8 +58,25 @@ impl PromptCacheLayout {
             material.push(if segment.cacheable { '1' } else { '0' });
             material.push('\u{2}');
         }
-        // Content of the stable prefix, when the builder computed it.
-        material.push_str(request.prompt_fingerprint.as_deref().unwrap_or(""));
+        // The builder's fingerprint is authoritative when present. Direct
+        // ModelRequest callers may declare segments without one; still hash
+        // their leading system messages so a same-id prompt edit is visible.
+        let fallback_fingerprint;
+        let prompt_fingerprint = if let Some(fingerprint) = request.prompt_fingerprint.as_deref() {
+            fingerprint
+        } else {
+            let leading_system: Vec<_> = request
+                .messages
+                .iter()
+                .take_while(|message| {
+                    matches!(message, tinyinference_llm::message::Message::System(_))
+                })
+                .collect();
+            fallback_fingerprint =
+                fnv1a_hex(&serde_json::to_vec(&leading_system).unwrap_or_default());
+            &fallback_fingerprint
+        };
+        material.push_str(prompt_fingerprint);
         material.push('\u{2}');
         // Tool declarations sit inside the stable prefix on every provider that
         // caches prompts, so a schema edit invalidates it.
@@ -88,6 +109,13 @@ impl PromptCacheLayout {
         &self.fingerprint
     }
 
+    /// Whether the declared cacheable segments still have the same identity
+    /// and content. History compaction may invalidate the cached tail without
+    /// changing this reusable leading prefix.
+    pub fn has_same_stable_prefix_as(&self, other: &PromptCacheLayout) -> bool {
+        self.prefix_ids == other.prefix_ids && self.fingerprint == other.fingerprint
+    }
+
     /// Returns `true` when the provider's KV-cache prefix survives the move
     /// from `self` to `other`.
     ///
@@ -102,7 +130,7 @@ impl PromptCacheLayout {
     /// middleware rewrote a stable segment's text, which is the precise failure
     /// this type exists to catch.
     pub fn is_prefix_stable_against(&self, other: &PromptCacheLayout) -> bool {
-        if self.prefix_ids != other.prefix_ids || self.fingerprint != other.fingerprint {
+        if !self.has_same_stable_prefix_as(other) {
             return false;
         }
         let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {

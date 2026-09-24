@@ -1155,6 +1155,124 @@ async fn prompt_cache_guard_detects_prefix_change() {
 }
 
 #[tokio::test]
+async fn prompt_cache_guard_ignores_trimmed_history_when_stable_prefix_is_unchanged() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![
+        Message::system("same prompt"),
+        user("old request"),
+        Message::assistant("old answer"),
+    ])
+    .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("same-stable-prefix".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("same prompt"),
+        user("summary of old request"),
+        user("new request"),
+    ])
+    .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert!(
+        mw.layout_events().is_empty(),
+        "history compaction retains the stable prefix"
+    );
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_reports_same_id_stable_content_change() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("prompt-a".into());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
+        .with_cache_segments(segments);
+    after.prompt_fingerprint = Some("prompt-b".into());
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    let events = mw.layout_events();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].content_only_change);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_leading_system_edit_without_a_fingerprint() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+        .with_cache_segments(segments.clone());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
+        .with_cache_segments(segments);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_ignores_volatile_segment_changes() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("first")])
+        .with_cache_segments(vec![
+            segment("system", SegmentRole::System, true),
+            segment("turn-1", SegmentRole::Volatile, false),
+        ]);
+    let mut after = ModelRequest::new(vec![Message::system("stable"), user("second")])
+        .with_cache_segments(vec![
+            segment("system", SegmentRole::System, true),
+            segment("turn-2", SegmentRole::Volatile, false),
+        ]);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert!(mw.layout_events().is_empty());
+}
+
+#[tokio::test]
 async fn prompt_cache_guard_events_are_bounded_by_max_events() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new().with_max_events(2));
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
