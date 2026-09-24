@@ -22,7 +22,7 @@ use super::reader::read_transcript;
 use super::session::{SessionRef, session_stem};
 use super::thread_lookup::find_root_transcripts_for_thread_reporting_unreadable;
 use super::types::{TranscriptMessage, TranscriptMeta};
-use super::writer::write_transcript_if_absent;
+use super::writer::write_transcript_if_absent_with_tools;
 
 /// What adoption did for one session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +126,7 @@ pub fn adopt_legacy_session_transcripts(
     let mut earliest_created: Option<String> = None;
     let mut latest_updated: Option<String> = None;
     let mut adopted = Vec::new();
+    let mut tools = None;
 
     for path in legacy {
         // A legacy candidate must be read to be filtered, so an unreadable
@@ -162,6 +163,9 @@ pub fn adopt_legacy_session_transcripts(
         }
 
         messages.extend(transcript.messages);
+        if transcript.tools.is_some() {
+            tools = transcript.tools;
+        }
         meta.turn_count += transcript.meta.turn_count;
         meta.input_tokens += transcript.meta.input_tokens;
         meta.output_tokens += transcript.meta.output_tokens;
@@ -201,7 +205,7 @@ pub fn adopt_legacy_session_transcripts(
     // real conversation data that must not be clobbered with an adoption
     // fold that started before it existed — so a lost race here discards
     // this call's fold and reports `Ok(None)`, the same as "nothing to do".
-    if !write_transcript_if_absent(&destination, &messages, &meta)? {
+    if !write_transcript_if_absent_with_tools(&destination, &messages, &meta, tools.as_ref())? {
         tracing::debug!(
             "[transcript-adoption] session={stem} lost the race to a concurrent write; \
              discarding this fold"
