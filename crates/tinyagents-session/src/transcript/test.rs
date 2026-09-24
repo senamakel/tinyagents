@@ -640,6 +640,62 @@ fn write_transcript_if_absent_publishes_once_and_never_overwrites() {
     );
 }
 
+#[test]
+fn the_latest_tools_record_is_the_sessions_tools_and_never_a_message() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("agent.jsonl");
+    let rows = vec![TranscriptMessage::new("user", "hi")];
+    append_transcript_turn(&path, &[], &rows, &meta(), None, Some("r1")).unwrap();
+    append_tools_record(&path, &serde_json::json!([{"name": "first"}])).unwrap();
+    append_tools_record(&path, &serde_json::json!([{"name": "second"}])).unwrap();
+
+    let transcript = read_transcript(&path).unwrap();
+    assert_eq!(transcript.messages.len(), 1);
+    assert_eq!(
+        transcript.tools,
+        Some(serde_json::json!([{"name": "second"}]))
+    );
+    assert_eq!(read_transcript_display(&path).unwrap().records.len(), 1);
+}
+
+#[test]
+fn a_turn_and_its_tools_are_serialized_in_one_append_buffer() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("agent.jsonl");
+    let rows = vec![TranscriptMessage::new("user", "hi")];
+
+    writer::append_transcript_turn_with_extras(
+        &path,
+        &[],
+        &rows,
+        &meta(),
+        None,
+        Some("r1"),
+        writer::AppendTranscriptExtras {
+            partial: None,
+            tools: Some(&serde_json::json!([{"name": "search"}])),
+        },
+    )
+    .unwrap();
+
+    let transcript = read_transcript(&path).unwrap();
+    assert_eq!(transcript.messages.len(), 1);
+    assert_eq!(transcript.messages[0].content, "hi");
+    assert_eq!(transcript.messages[0].request_id.as_deref(), Some("r1"));
+    assert_eq!(
+        transcript.tools,
+        Some(serde_json::json!([{"name": "search"}]))
+    );
+}
+
+#[test]
+fn a_transcript_without_a_tools_record_reads_none() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("agent.jsonl");
+    let rows = vec![TranscriptMessage::new("user", "hi")];
+    append_transcript_turn(&path, &[], &rows, &meta(), None, None).unwrap();
+    assert_eq!(read_transcript(&path).unwrap().tools, None);
+}
 /// Every model call of a multi-step turn is stamped with its own iteration,
 /// not only the final answer that carries the turn's usage. Without it a
 /// reader cannot tell which call a tool-calling row (or its reasoning)

@@ -11,6 +11,7 @@ description = "Host-neutral stateful sessions over TinyAgents harness and transc
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+serde_json = { workspace = true }
 thiserror = "2"
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.2" }
 tinyagents-session = { path = "../tinyagents-session", version = "2.1.2" }

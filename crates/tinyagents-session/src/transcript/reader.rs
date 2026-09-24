@@ -63,6 +63,7 @@ fn read_transcript_jsonl(path: &Path) -> Result<SessionTranscript> {
 
     let mut meta: Option<TranscriptMeta> = None;
     let mut messages: Vec<TranscriptMessage> = Vec::new();
+    let mut tools: Option<serde_json::Value> = None;
     let mut compactions_replayed = 0usize;
     let mut interrupted_skipped = 0usize;
 
@@ -111,6 +112,10 @@ fn read_transcript_jsonl(path: &Path) -> Result<SessionTranscript> {
                 messages = replacement;
                 compactions_replayed += 1;
             }
+            Ok(LineKind::Tools(tl)) => {
+                // Declarations the session was last sent with — last wins.
+                tools = Some(tl.tools);
+            }
             Ok(LineKind::Message(ml)) => {
                 if ml.interrupted {
                     // Display-only partial — never part of the model context.
@@ -149,7 +154,11 @@ fn read_transcript_jsonl(path: &Path) -> Result<SessionTranscript> {
         path.display()
     );
 
-    Ok(SessionTranscript { meta, messages })
+    Ok(SessionTranscript {
+        meta,
+        messages,
+        tools,
+    })
 }
 
 /// Read a transcript for **display**: returns *every* record in file order,
@@ -185,6 +194,8 @@ pub fn read_transcript_display(path: &Path) -> Result<DisplaySessionTranscript> 
         }
         match classify_line(line) {
             Ok(LineKind::Meta(ml)) => meta = Some(meta_from_payload(ml.meta)),
+            // Request state, not a displayable record.
+            Ok(LineKind::Tools(_)) => {}
             Ok(LineKind::Compaction(cl)) => {
                 let replacement = cl
                     .replacement

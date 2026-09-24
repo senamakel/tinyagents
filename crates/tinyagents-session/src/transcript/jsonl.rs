@@ -13,6 +13,9 @@ use std::collections::HashMap;
 /// Discriminator value for a compaction record's `kind` field.
 pub(super) const COMPACTION_KIND: &str = "compaction";
 
+/// Discriminator value for a tool-declaration record's `kind` field.
+pub(super) const TOOLS_KIND: &str = "tools";
+
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
@@ -135,6 +138,34 @@ pub(super) struct CompactionLine {
     pub(super) request_id: Option<String>,
     #[serde(flatten)]
     pub(super) _extra: HashMap<String, serde_json::Value>,
+}
+
+/// A tool-declaration record: `{"kind":"tools","tools":[…]}`.
+///
+/// Written whenever the model-visible tool set a turn was sent with differs
+/// from the one last recorded in this file, so a resumed session can send the
+/// same declarations again instead of rebuilding them from whatever the new
+/// process happens to have registered. Last record wins. Neither reader puts
+/// it into the message stream.
+#[derive(Serialize, Deserialize)]
+pub(super) struct ToolsLine {
+    pub(super) kind: String,
+    pub(super) tools: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ts: Option<String>,
+    #[serde(flatten)]
+    pub(super) _extra: HashMap<String, serde_json::Value>,
+}
+
+/// Serialises `tools` as one `{"kind":"tools"}` record line (no trailing newline).
+pub(super) fn tools_line_json(tools: &serde_json::Value) -> Result<String> {
+    serde_json::to_string(&ToolsLine {
+        kind: TOOLS_KIND.to_string(),
+        tools: tools.clone(),
+        ts: Some(chrono::Utc::now().to_rfc3339()),
+        _extra: HashMap::new(),
+    })
+    .context("serialise transcript tools record")
 }
 
 /// Build the serialised `_meta` header line for `meta`, stamping the current
@@ -402,6 +433,7 @@ pub(super) fn message_from_line(ml: MessageLine) -> TranscriptMessage {
 pub(super) enum LineKind {
     Meta(MetaLine),
     Compaction(CompactionLine),
+    Tools(ToolsLine),
     Message(MessageLine),
 }
 
@@ -418,6 +450,9 @@ pub(super) fn classify_line(line: &str) -> Result<LineKind, serde_json::Error> {
     }
     if value.get("kind").and_then(|k| k.as_str()) == Some(COMPACTION_KIND) {
         return serde_json::from_str::<CompactionLine>(line).map(LineKind::Compaction);
+    }
+    if value.get("kind").and_then(|k| k.as_str()) == Some(TOOLS_KIND) {
+        return serde_json::from_str::<ToolsLine>(line).map(LineKind::Tools);
     }
     serde_json::from_str::<MessageLine>(line).map(LineKind::Message)
 }

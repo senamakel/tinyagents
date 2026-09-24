@@ -341,6 +341,7 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
             meta: &meta,
             turn_usage: None,
             request_id: Some("turn-1"),
+            tools: None,
         })
         .expect("append_turn (extension) succeeds");
     assert_eq!(
@@ -360,6 +361,7 @@ pub fn transcript_history_conformance(history: &dyn TranscriptHistory) {
             meta: &meta,
             turn_usage: None,
             request_id: Some("turn-1"),
+            tools: None,
         })
         .expect("re-importing the same turn succeeds");
     assert_eq!(

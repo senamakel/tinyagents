@@ -25,9 +25,9 @@ use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
     SessionAdoption, SessionRef, SessionTranscript, TranscriptMeta, TurnUsage,
-    adopt_legacy_session_transcripts, append_transcript_turn, find_latest_transcript,
-    find_root_transcript_for_thread, find_root_transcript_for_thread_scoped, read_transcript,
-    resolve_keyed_transcript_path, session_stem,
+    adopt_legacy_session_transcripts, find_latest_transcript, find_root_transcript_for_thread,
+    find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
+    session_stem,
 };
 
 /// Upper bound on the compaction generations one session may accumulate.
@@ -40,7 +40,7 @@ const MAX_GENERATIONS: u32 = 4096;
 
 /// One turn's worth of transcript write, borrowed.
 ///
-/// The fields mirror [`append_transcript_turn`]'s argument list one-for-one and
+/// The fields mirror the transcript writer's turn-append argument list one-for-one and
 /// in order, so [`TranscriptHistory::append_turn`]'s forwarding is visually
 /// checkable against the format's own signature. Nothing is transformed on the
 /// way through; that is the entire correctness claim of this seam and
@@ -62,6 +62,9 @@ pub struct TranscriptTurn<'a> {
     pub turn_usage: Option<&'a TurnUsage>,
     /// Caller-provided request id, stamped on every line of the turn.
     pub request_id: Option<&'a str>,
+    /// Tool declarations this ordinary turn was sent with. `None` records
+    /// nothing and leaves the previous record in force (for exact-tool turns).
+    pub tools: Option<&'a serde_json::Value>,
 }
 
 /// Display-only content produced before a turn stopped without a final answer.
@@ -722,14 +725,19 @@ impl FileTranscriptHistory {
             turn.request_id,
             self.path.display()
         );
-        append_transcript_turn(
+        crate::transcript::writer::append_transcript_turn_with_extras(
             &self.path,
             turn.prev,
             turn.next,
             turn.meta,
             turn.turn_usage,
             turn.request_id,
-        )
+            crate::transcript::writer::AppendTranscriptExtras {
+                partial: None,
+                tools: turn.tools,
+            },
+        )?;
+        Ok(())
     }
 
     /// [`Self::append_turn_locked`]'s counterpart for the display-partial
@@ -746,15 +754,19 @@ impl FileTranscriptHistory {
             partial.is_some(),
             self.path.display()
         );
-        crate::transcript::append_transcript_turn_with_partial(
+        crate::transcript::writer::append_transcript_turn_with_extras(
             &self.path,
             turn.prev,
             turn.next,
             turn.meta,
             turn.turn_usage,
             turn.request_id,
-            partial,
-        )
+            crate::transcript::writer::AppendTranscriptExtras {
+                partial,
+                tools: turn.tools,
+            },
+        )?;
+        Ok(())
     }
 
     /// Writes `next` as the new logical set, diffing against what is
@@ -783,12 +795,13 @@ impl FileTranscriptHistory {
             meta: &meta,
             turn_usage: None,
             request_id: None,
+            tools: None,
         })
     }
 }
 
 impl TranscriptHistory for FileTranscriptHistory {
-    /// Pure forwarder: every argument reaches [`append_transcript_turn`]
+    /// Pure forwarder: every argument reaches the transcript writer's turn append
     /// untouched, so the bytes this writes are identical to what the free
     /// function would have written at the call site.
     ///
