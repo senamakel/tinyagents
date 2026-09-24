@@ -2037,18 +2037,13 @@ pub(super) fn cacheable_system_prefix_end(
 /// Prevent the dispatch refresh from inferring a newly leading System
 /// summary as stable when a session explicitly froze zero messages. An empty
 /// annotation means "infer from roles" to the harness, so retain an explicit
-/// noncacheable marker only in this zero-prefix, no-tools case.
+/// noncacheable marker in this zero-prefix, no-tools case even if the summary
+/// has not been inserted by a later middleware yet.
 pub(super) fn mark_empty_frozen_prefix(
     request: &mut ModelRequest,
     frozen_system_prefix_len: Option<usize>,
 ) {
-    if frozen_system_prefix_len == Some(0)
-        && request.cache_segments.is_empty()
-        && request
-            .messages
-            .first()
-            .is_some_and(|message| matches!(message, Message::System(_)))
-    {
+    if frozen_system_prefix_len == Some(0) && request.cache_segments.is_empty() {
         request.cache_segments.push(PromptSegment {
             id: "volatile-system-history".into(),
             role: SegmentRole::Volatile,

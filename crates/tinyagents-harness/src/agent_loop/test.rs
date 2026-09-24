@@ -7043,8 +7043,11 @@ fn empty_frozen_prefix_does_not_promote_a_system_summary() {
         let messages = vec![Message::system(summary), Message::user("later")];
         let end = super::run_loop::cacheable_system_prefix_end(&messages, Some(0));
         assert_eq!(end, 0);
-        let mut request = crate::prompt::PromptBuilder::new().build(messages);
+        // The request starts user-only. Context compression inserts the
+        // System summary after the marker has been declared.
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
         super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.messages.insert(0, Message::system(summary));
         super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
         request
     };
