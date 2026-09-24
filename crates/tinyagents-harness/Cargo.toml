@@ -19,6 +19,7 @@ chrono-tz = { version = "0.10", optional = true }
 dirs = { version = "6", optional = true }
 flate2 = { version = "1", optional = true }
 futures = { workspace = true }
+libc = "0.2"
 regex = "1"
 reqwest = { workspace = true, features = ["stream", "http2"], optional = true }
 rusqlite = { workspace = true, optional = true }

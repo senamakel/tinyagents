@@ -189,9 +189,22 @@ impl GenerateVideoTool {
             response.job_id
         )];
         for (index, video) in response.videos.iter().enumerate() {
+            let extension = match video.media_type.split(';').next().map(str::trim) {
+                Some("video/mp4") => "mp4",
+                Some("video/webm") => "webm",
+                Some("video/quicktime") => "mov",
+                other => {
+                    return ToolResult::error(format!(
+                        "Video job {} delivered and was billed, but clip {index} has unsupported media type {}. \
+                         Do not generate again; report this error to the user.",
+                        response.job_id,
+                        other.unwrap_or("(missing)")
+                    ));
+                }
+            };
             match self
                 .output
-                .persist(&dir, &format!("{stem}-{index}"), "mp4", &video.data)
+                .persist(&dir, &format!("{stem}-{index}"), extension, &video.data)
             {
                 Ok(path) => {
                     lines.push(format!("- {}", path.display()));

@@ -1,6 +1,6 @@
 //! Shared configuration for the media generation tools.
 
-use std::fs::OpenOptions;
+use std::fs::File;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -26,6 +26,14 @@ pub struct MediaOutput {
     /// Local-reference admission policy; `None` confines references to the
     /// workspace (or fallback) root.
     pub reference_policy: Option<ReferencePathPolicy>,
+}
+
+/// A verified artifact directory whose open handle prevents a later rename
+/// from redirecting writes through a swapped ancestor.
+pub(crate) struct ArtifactDirectory {
+    path: PathBuf,
+    #[cfg(unix)]
+    handle: File,
 }
 
 impl MediaOutput {
@@ -64,7 +72,7 @@ impl MediaOutput {
     /// then the resolved directory is checked against the resolved root. This
     /// makes a scoped workspace reject an output directory redirected outside
     /// the workspace before a generation request can be billed.
-    pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<PathBuf, String> {
+    pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<ArtifactDirectory, String> {
         let subdir = Path::new(&self.subdir);
         if subdir
             .components()
@@ -149,36 +157,79 @@ impl MediaOutput {
                 canonical_dir.display()
             ));
         }
-        Ok(canonical_dir)
+        #[cfg(unix)]
+        let handle = {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut options = File::options();
+            options.read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+            options.open(&canonical_dir).map_err(|error| {
+                format!(
+                    "artifact directory {} could not be opened safely: {error}",
+                    canonical_dir.display()
+                )
+            })?
+        };
+        Ok(ArtifactDirectory {
+            path: canonical_dir,
+            #[cfg(unix)]
+            handle,
+        })
     }
 
     /// Persists one artifact without following a final-path symlink or
     /// replacing an existing file.
     pub(crate) fn persist(
         &self,
-        dir: &Path,
+        dir: &ArtifactDirectory,
         stem: &str,
         extension: &str,
         bytes: &[u8],
     ) -> Result<PathBuf, String> {
-        let path = dir.join(format!("{stem}.{extension}"));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
+        let filename = format!("{stem}.{extension}");
+        let path = dir.path.join(&filename);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
-            // O_NOFOLLOW: refuse a final path that has been swapped for a symlink.
-            options.custom_flags(0o400_000);
+            use std::ffi::CString;
+            use std::os::fd::{AsRawFd, FromRawFd};
+
+            let filename = CString::new(filename).expect("artifact filenames contain no NUL bytes");
+            // `openat` writes relative to the verified directory handle, so an
+            // attacker cannot redirect this write by replacing an ancestor.
+            let fd = unsafe {
+                libc::openat(
+                    dir.handle.as_raw_fd(),
+                    filename.as_ptr(),
+                    libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    0o666,
+                )
+            };
+            if fd < 0 {
+                return Err(format!(
+                    "artifact {} could not be created safely: {}",
+                    path.display(),
+                    std::io::Error::last_os_error()
+                ));
+            }
+            // SAFETY: `openat` returned a new owned descriptor above.
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            file.write_all(bytes).map_err(|error| {
+                format!("artifact {} could not be written: {error}", path.display())
+            })?;
+            return Ok(path);
         }
-        let mut file = options.open(&path).map_err(|error| {
+        #[cfg(not(unix))]
+        let mut file = File::options().write(true).create_new(true).open(&path).map_err(|error| {
             format!(
                 "artifact {} could not be created safely: {error}",
                 path.display()
             )
         })?;
+        #[cfg(not(unix))]
         file.write_all(bytes).map_err(|error| {
             format!("artifact {} could not be written: {error}", path.display())
         })?;
+        #[cfg(not(unix))]
         Ok(path)
     }
 
