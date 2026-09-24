@@ -178,7 +178,10 @@ impl GenerateImageTool {
                     ));
                 }
             };
-            match image.persist(&dir, &format!("{stem}-{index}"), ext).await {
+            match self
+                .output
+                .persist(&dir, &format!("{stem}-{index}"), ext, &image.data)
+            {
                 Ok(path) => {
                     lines.push(format!("- {}", path.display()));
                     artifacts.push(json!({

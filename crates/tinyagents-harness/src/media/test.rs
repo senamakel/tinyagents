@@ -513,6 +513,43 @@ async fn artifact_subdirectory_must_stay_below_the_output_root() {
     );
 }
 
+/// A pre-existing output symlink must be rejected before the provider is
+/// called, otherwise a scoped workspace can write artifacts outside itself.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinked_artifact_directory_cannot_escape_the_workspace() {
+    let workspace_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        outside_dir.path(),
+        workspace_dir.path().join("generated-media"),
+    )
+    .unwrap();
+
+    let generator = Arc::new(MockImageGenerator::new());
+    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"));
+    let result = tool
+        .execute_with_context(
+            json!({ "prompt": "x" }),
+            ToolCallOptions::default(),
+            Some(&workspace(workspace_dir.path())),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error, "{}", text(&result));
+    assert!(
+        generator.requests().is_empty(),
+        "must reject before billing"
+    );
+    assert!(
+        std::fs::read_dir(outside_dir.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
 #[test]
 fn schemas_advertise_a_single_reference_string() {
     let image = GenerateImageTool::new(

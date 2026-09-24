@@ -1,5 +1,7 @@
 //! Shared configuration for the media generation tools.
 
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -56,7 +58,12 @@ impl MediaOutput {
         workspace.unwrap_or(&self.fallback_root)
     }
 
-    /// The artifact directory for this call.
+    /// Creates and returns the artifact directory for this call.
+    ///
+    /// Every pre-existing component is inspected without following symlinks,
+    /// then the resolved directory is checked against the resolved root. This
+    /// makes a scoped workspace reject an output directory redirected outside
+    /// the workspace before a generation request can be billed.
     pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<PathBuf, String> {
         let subdir = Path::new(&self.subdir);
         if subdir
@@ -68,7 +75,111 @@ impl MediaOutput {
                 self.subdir
             ));
         }
-        Ok(self.root(workspace).join(subdir))
+        let root = self.root(workspace);
+        std::fs::create_dir_all(root).map_err(|error| {
+            format!(
+                "output root {} could not be created: {error}",
+                root.display()
+            )
+        })?;
+        let canonical_root = root.canonicalize().map_err(|error| {
+            format!(
+                "output root {} could not be resolved: {error}",
+                root.display()
+            )
+        })?;
+
+        let mut dir = canonical_root.clone();
+        for component in subdir.components() {
+            let Component::Normal(component) = component else {
+                unreachable!("subdirectory components were validated above");
+            };
+            dir.push(component);
+            match std::fs::symlink_metadata(&dir) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "artifact directory {} must not contain symlinks",
+                        dir.display()
+                    ));
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(format!(
+                        "artifact path {} is not a directory",
+                        dir.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::create_dir(&dir).map_err(|error| {
+                        format!(
+                            "artifact directory {} could not be created: {error}",
+                            dir.display()
+                        )
+                    })?;
+                    let metadata = std::fs::symlink_metadata(&dir).map_err(|error| {
+                        format!(
+                            "artifact directory {} could not be inspected: {error}",
+                            dir.display()
+                        )
+                    })?;
+                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                        return Err(format!(
+                            "artifact directory {} changed while being created",
+                            dir.display()
+                        ));
+                    }
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "artifact directory {} could not be inspected: {error}",
+                        dir.display()
+                    ));
+                }
+            }
+        }
+        let canonical_dir = dir.canonicalize().map_err(|error| {
+            format!(
+                "artifact directory {} could not be resolved: {error}",
+                dir.display()
+            )
+        })?;
+        if !canonical_dir.starts_with(&canonical_root) {
+            return Err(format!(
+                "artifact directory {} is outside the output root",
+                canonical_dir.display()
+            ));
+        }
+        Ok(canonical_dir)
+    }
+
+    /// Persists one artifact without following a final-path symlink or
+    /// replacing an existing file.
+    pub(crate) fn persist(
+        &self,
+        dir: &Path,
+        stem: &str,
+        extension: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
+        let path = dir.join(format!("{stem}.{extension}"));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // O_NOFOLLOW: refuse a final path that has been swapped for a symlink.
+            options.custom_flags(0o400_000);
+        }
+        let mut file = options.open(&path).map_err(|error| {
+            format!(
+                "artifact {} could not be created safely: {error}",
+                path.display()
+            )
+        })?;
+        file.write_all(bytes).map_err(|error| {
+            format!("artifact {} could not be written: {error}", path.display())
+        })?;
+        Ok(path)
     }
 
     /// Converts a model-supplied reference string into a [`MediaReference`],

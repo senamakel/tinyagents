@@ -189,7 +189,10 @@ impl GenerateVideoTool {
             response.job_id
         )];
         for (index, video) in response.videos.iter().enumerate() {
-            match video.persist(&dir, &format!("{stem}-{index}"), "mp4").await {
+            match self
+                .output
+                .persist(&dir, &format!("{stem}-{index}"), "mp4", &video.data)
+            {
                 Ok(path) => {
                     lines.push(format!("- {}", path.display()));
                     artifacts.push(json!({
