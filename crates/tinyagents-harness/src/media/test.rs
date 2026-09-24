@@ -5,6 +5,11 @@ use std::time::Duration;
 
 use serde_json::json;
 use tinyinference_image::{MediaReference, MockImageGenerator};
+use tinyinference_llm::message::{AssistantMessage, Message};
+use tinyinference_llm::model::ModelResponse;
+use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 use tinyinference_video::{
     JobState, MediaModel, MockVideoGenerator, MockVideoScript, VideoGenerator, VideoJob,
     VideoJobStatus, VideoRequest, VideoResponse, WaitPolicy,
@@ -12,6 +17,9 @@ use tinyinference_video::{
 use tinytools::{Tool, ToolCallOptions, ToolRunContext, ToolTimeout, WorkspaceDescriptor};
 
 use super::{GenerateImageTool, GenerateVideoTool, MediaOutput};
+use crate::context::RunConfig;
+use crate::runtime::AgentHarness;
+use crate::tool::ToolTimeoutSettings;
 
 struct Workspace(WorkspaceDescriptor);
 
@@ -362,7 +370,41 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
     assert_eq!(request.duration_s, Some(5), "legacy durationSeconds alias");
     assert_eq!(request.generate_audio, Some(true));
     assert!(request.first_frame.is_some());
-    assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Millis(5_000));
+    assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Unbounded);
+}
+
+fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> ModelResponse {
+    ModelResponse {
+        message: AssistantMessage {
+            id: Some(format!("msg-{id}")),
+            content: Vec::new(),
+            tool_calls: vec![ToolCall::new(id, name, arguments)],
+            usage: Some(Usage::new(1, 1)),
+            origin: None,
+        },
+        usage: Some(Usage::new(1, 1)),
+        finish_reason: Some("tool_calls".to_owned()),
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    }
+}
+
+fn text_response(text: &str) -> ModelResponse {
+    ModelResponse {
+        message: AssistantMessage::text(text),
+        usage: Some(Usage::new(1, 1)),
+        finish_reason: Some("stop".to_owned()),
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    }
 }
 
 #[tokio::test]
@@ -415,6 +457,45 @@ async fn video_timeout_names_the_job_and_resume_collects_it() {
         delivered.requests().is_empty(),
         "resume must not submit a new job"
     );
+}
+
+/// The harness must not replace the provider's resumable timeout with its
+/// generic tool-timeout result, even when host settings clamp explicit tools
+/// to a shorter deadline.
+#[tokio::test]
+async fn video_timeout_stays_resumable_through_agent_harness() {
+    let dir = tempfile::tempdir().unwrap();
+    let generator = Arc::new(MockVideoGenerator::new(MockVideoScript {
+        polls: vec![(JobState::InProgress, 0)],
+        error: None,
+    }));
+    let video = GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(
+        WaitPolicy::new(Duration::from_millis(1), Duration::from_millis(10)),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_tool_timeout_settings(ToolTimeoutSettings::new(1, 1, 1, 0));
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("call-1", GENERATE_VIDEO_TOOL_NAME, json!({ "prompt": "x" })),
+            text_response("recovered"),
+        ])),
+    );
+    harness.register_tool(Arc::new(video));
+
+    let run = harness
+        .invoke(
+            &(),
+            (),
+            RunConfig::new("resumable-video-timeout"),
+            vec![Message::user("go")],
+        )
+        .await
+        .expect("the recoverable video timeout should not abort the run");
+
+    assert_eq!(run.text(), Some("recovered".to_owned()));
+    assert!(run.messages[2].text().contains("mock-job"));
+    assert!(run.messages[2].text().contains("do not resubmit"));
 }
 
 #[tokio::test]

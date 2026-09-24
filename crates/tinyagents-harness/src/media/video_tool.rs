@@ -342,7 +342,12 @@ impl Tool for GenerateVideoTool {
     }
 
     fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
-        ToolTimeout::Millis(u64::try_from(self.wait.timeout.as_millis()).unwrap_or(u64::MAX))
+        // `wait_for_job` owns the provider wait budget and returns a resumable
+        // timeout containing the billed job id.  A harness deadline around the
+        // whole call could expire during request setup or submission first and
+        // replace that result with a generic timeout, so leave this outer
+        // policy unbounded. The run's wall-clock budget remains a hard limit.
+        ToolTimeout::Unbounded
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
