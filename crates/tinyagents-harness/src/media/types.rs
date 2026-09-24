@@ -76,9 +76,17 @@ impl MediaOutput {
                 } else {
                     root.join(path)
                 };
+                // Canonicalize the path to resolve symlinks before checking confinement
+                let canonical = joined.canonicalize().map_err(|e| {
+                    format!(
+                        "reference path {} could not be resolved: {}",
+                        joined.display(),
+                        e
+                    )
+                })?;
                 let admitted = match &self.reference_policy {
-                    Some(policy) => policy(&joined)?,
-                    None => confine(&joined, root)?,
+                    Some(policy) => policy(&canonical)?,
+                    None => confine(&canonical, root)?,
                 };
                 Ok(MediaReference::Path(admitted))
             }
