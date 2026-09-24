@@ -2,21 +2,46 @@ name: CI
 
 on:
   push:
+    # Pull requests are covered by the `pull_request` trigger below. Building
+    # every branch push as well duplicated the entire suite for each PR commit
+    # (two identical ~23 minute runs), so pushes only build the mainline, which
+    # is also what keeps a shared, warm cache for PR branches to restore from.
+    branches: [main]
   pull_request:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Keyed by pull-request *identity*, not by branch name: two PRs from
+  # different forks can share a head branch name (`main`, `feature`), and
+  # keying on `github.head_ref` would put them in one group where
+  # `cancel-in-progress` lets either one cancel the other's required checks.
+  # `github.event.pull_request.number` is unset for pushes, which fall back to
+  # the ref.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental compilation only pays off across edits on one machine; in CI it
+  # costs codegen time and inflates the cached target directory.
+  CARGO_INCREMENTAL: 0
+  # Debug info dominates link time and target-directory size. Dropping it
+  # roughly halves both, and nothing in CI reads line numbers out of a
+  # backtrace.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  RUST_BACKTRACE: 1
+
 jobs:
-  rust-sdk:
-    name: Rust SDK
+  # Static analysis only: `cargo clippy` and `cargo doc` stop at metadata, so
+  # this job never links a binary and finishes long before the test matrix.
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # This job executes repo code (cargo build/test); don't persist the
           # token in git config.
@@ -27,11 +52,12 @@ jobs:
           # vendor/tinytools/crates/tinytools/Cargo.toml".
           submodules: recursive
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: .
 
@@ -44,57 +70,108 @@ jobs:
       - name: Clippy all features
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Build
-        run: cargo build --workspace --all-targets
+      # `--all-features` so links into feature-gated items resolve; without
+      # it rustdoc cannot see the very modules the docs point at.
+      - name: Doc lints
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+        run: cargo doc --workspace --no-deps --all-features
 
-      - name: Build all features
-        run: cargo build --workspace --all-targets --all-features
+      # Scoped to `crates`, this repo's own workspace: an unscoped run also
+      # walks `vendor/`, where it reports findings against the vendored
+      # submodules that have to be fixed in their own repositories.
+      - name: Unused dependencies
+        uses: bnjbvr/cargo-machete@ac30a525c0a8d163a92d727b3ff079ee3f6ecb08 # v0.9.2
+        with:
+          args: crates
+
+  # Every feature selection links a distinct workspace graph, so they cannot
+  # share a target directory. Previously they ran back to back with a
+  # `cargo clean` between each, which serialised five cold builds into one job
+  # and left the cache holding whichever graph happened to be built last. As
+  # separate jobs they build concurrently and each keeps its own warm cache.
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+          - name: all-features
+            features: "--all-features"
+          - name: sqlite
+            features: "--no-default-features --features sqlite"
+          - name: tools
+            features: "--no-default-features --features tools"
+          - name: multimodal
+            features: "--no-default-features --features multimodal"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: .
+          # Without a distinct key every matrix leg would race to overwrite one
+          # cache entry with its own feature graph.
+          key: ${{ matrix.name }}
+
+      - name: Build
+        run: cargo build --workspace --all-targets ${{ matrix.features }}
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace ${{ matrix.features }}
 
-      - name: Test all features
-        run: cargo test --workspace --all-features
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: recursive
 
-      - name: Test optional features independently
-        run: |
-          # Each feature set links a distinct workspace graph.  Clearing the
-          # preceding graph keeps the runner's linker working set bounded and
-          # makes these genuinely independent builds.
-          cargo clean
-          cargo test --workspace --no-default-features --features sqlite
-          cargo clean
-          cargo test --workspace --no-default-features --features tools
-          cargo clean
-          cargo test --workspace --no-default-features --features multimodal
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
 
-      - name: Free build artifacts before coverage
-        run: cargo clean
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: .
+          # Instrumented objects are not interchangeable with the test matrix's,
+          # so coverage keeps its own cache rather than invalidating theirs.
+          key: coverage
 
-      - name: Coverage gate
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5 # v2.87.19
+        with:
+          tool: cargo-llvm-cov
 
       - name: Verify line coverage
-        env:
-          CARGO_PROFILE_DEV_DEBUG: 0
-          CARGO_PROFILE_TEST_DEBUG: 0
         run: >-
           cargo llvm-cov --all-features --workspace
           --ignore-filename-regex '(^|/)(tests?|examples)/|/test(_.*)?\.rs$'
           --fail-under-lines 80
 
-      # TODO: drop `continue-on-error` once the ~160 existing broken
-      # intra-doc link warnings across the workspace are fixed and this can
-      # block merges instead of only reporting.
-      - name: Doc lints
-        env:
-          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
-        run: cargo doc --workspace --no-deps
-        continue-on-error: true
-
-      # TODO: drop `continue-on-error` once the existing unused-dependency
-      # findings across the workspace are cleaned up and this can block
-      # merges instead of only reporting.
-      - name: Unused dependencies
-        uses: bnjbvr/cargo-machete@main
-        continue-on-error: true
+  # Single required status check: branch protection can depend on this one job
+  # instead of being updated every time the matrix gains or loses a leg.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, test, coverage]
+    steps:
+      - name: Check results
+        run: |
+          echo "lint:     ${{ needs.lint.result }}"
+          echo "test:     ${{ needs.test.result }}"
+          echo "coverage: ${{ needs.coverage.result }}"
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]

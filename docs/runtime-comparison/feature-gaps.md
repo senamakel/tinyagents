@@ -83,7 +83,7 @@ that the feature would extend.
 |---|---|---|---|---|---|---|---|
 | G1 | Evals: `Dataset` / `Case` / `Evaluator` trait, `LLMJudge`, span-based evaluators, report | PA (`pydantic_evals`), LG (`agentevals`) | PA §3.7 | `testkit::Trajectory` | RT new crate `tinyagents-evals`; datasets in OH | 2 | OpenHuman |
 | G2 | Schema-driven `TestModel` (auto-calls every tool with generated args), process-wide `deny_network_models()` kill-switch | PA | PA §3.10 | `ScriptedModel`, `StreamingMock`, `FakeTool` | RT harness testkit + tinyinference | 3 | shipped (`SchemaDrivenModel` in harness testkit; `deny_network_models()` in vendor tinyinference) |
-| G3 | Capability bundle: instructions + toolset + middleware + model defaults + exposure, loadable on demand, `from_spec`; what a "skill"/"plugin" is at runtime level | PA v2 (`Capability`) | PA §4 | `Middleware`, `AgentDefinition`, `.rag`, `ToolExposure::Deferred` | RT registry; discovery from disk in OH `skills/` | 2 | shipped |
+| G3 | Capability bundle: instructions + toolset + middleware + model defaults + exposure, loadable on demand, `from_spec`; what a "skill"/"plugin" is at runtime level | PA v2 (`Capability`) | PA §4 | `Middleware`, `AgentDefinition`, `ToolExposure::Deferred` | RT registry; discovery from disk in OH `skills/` | 2 | shipped |
 | G4 | Backend conformance suites for sessions / stores run against every backend | pi (`session/testing/conformance`), LG | pi §3, `sdk-gaps/durability.md` §17 | graph `testkit/conformance.rs` (checkpointers, task stores) | RT | 3 | shipped |
 
 ## Stays in OpenHuman
@@ -108,5 +108,5 @@ built-in checkpointer with `DurabilityMode` and time travel, policy-checked
 `ToolPolicy` declarations, prompt-cache segment layout and guard middleware,
 `CapabilitySet` model resolution with fallback chains, per-tool timeouts with
 grace, run limits and budgets, no-progress detection, goals and task board,
-`.rag` blueprints with diagnostics, and a 637-test integration suite with
+and a 637-test integration suite with
 checkpointer conformance.

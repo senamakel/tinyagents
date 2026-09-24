@@ -2,8 +2,8 @@
 //! catalog** that makes TinyAgents recursive.
 //!
 //! In the recursive architecture, a model, agent, or graph can reach for
-//! capabilities it never hardcoded: a `.rag` blueprint (or a host orchestration
-//! session) references a model/tool/agent/graph *by name*, and the registry is
+//! capabilities it never hardcoded: a host orchestration session references a
+//! model/tool/agent/graph *by name*, and the registry is
 //! what resolves that name to a real, Rust-registered handle. By owning the set
 //! of legal names, the registry is also the boundary that makes agent-authored
 //! plans safe to compile — a self-authored workflow can only bind to
@@ -13,8 +13,7 @@
 //! two complementary pieces:
 //!
 //! - [`CapabilityRegistry`] ([`capability`]) — the name-addressable catalog of
-//!   models, tools, graph blueprints, routers, and reducers that `.rag`
-//!   sources bind against, plus the discovery [`component`] types
+//!   models, tools, graph blueprints, routers, and reducers, plus the discovery [`component`] types
 //!   ([`ComponentKind`]/[`ComponentId`]/[`ComponentMetadata`]) that describe
 //!   what is registered.
 //! - [`ModelCatalog`] ([`catalog`]) — a checked-in snapshot of provider model

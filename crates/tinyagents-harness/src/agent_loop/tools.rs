@@ -1844,7 +1844,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ///   re-attempts the call.
     ///
     /// A call whose tool is no longer registered on this harness (renamed,
-    /// removed since the interrupted run) is treated as [`ToolReplay::Never`]
+    /// removed since the interrupted run) is treated as [`tinytools::ToolReplay::Never`]
     /// — fail closed rather than blindly re-run an unknown effect.
     ///
     /// Only ledger rows still in [`crate::tool::ToolEffectStatus::Started`]

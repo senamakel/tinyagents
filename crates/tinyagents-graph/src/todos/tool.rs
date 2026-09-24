@@ -27,8 +27,9 @@ const TODO_DESCRIPTION: &str = "Your todo list for this thread. Pass the complet
     time; it replaces what was there. Use it for work with 3+ steps: write the steps up front, \
     keep exactly one `in_progress`, mark each `completed` only after its work has actually run \
     and its result is in this conversation. Writing the list is bookkeeping, not work: after \
-    updating it, immediately carry out the next step. Providers that cannot issue parallel tool \
-    calls may make that call in the next model turn, and one update per response is enough. Omit \
+    updating it, immediately carry out the next step, unless this update completes the final item. \
+    Providers that cannot issue parallel tool calls may make that call in the next model turn, and \
+    one update per response is enough. Omit \
     `todos` to read the current list. The list is bound \
     automatically to the current thread — do not pass a thread id.";
 
