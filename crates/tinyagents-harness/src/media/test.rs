@@ -407,7 +407,7 @@ async fn video_timeout_names_the_job_and_resume_collects_it() {
     let resume = GenerateVideoTool::new(delivered.clone(), MediaOutput::new(dir.path()))
         .with_wait_policy(fast());
     let result = resume
-        .execute(json!({ "resume_job_id": "mock-job" }))
+        .execute(json!({ "resume_job_id": "mock-job", "model": "mock/video" }))
         .await
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
