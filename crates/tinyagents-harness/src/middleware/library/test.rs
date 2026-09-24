@@ -1676,3 +1676,157 @@ async fn tracing_records_are_bounded_by_max_records() {
     let counts = tracing.counts();
     assert_eq!(counts.agent, 50);
 }
+
+// ── PlanModeMiddleware ───────────────────────────────────────────────────────
+
+fn plan_mode_policies() -> std::collections::HashMap<String, ToolPolicy> {
+    let mut policies = std::collections::HashMap::new();
+    policies.insert("read_file".to_string(), ToolPolicy::read_only());
+    policies.insert(
+        "write_file".to_string(),
+        ToolPolicy::classified().with_side_effects(ToolSideEffects {
+            writes_files: true,
+            ..ToolSideEffects::default()
+        }),
+    );
+    policies
+}
+
+#[tokio::test]
+async fn build_mode_leaves_every_tool_exposed_and_executable() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mode = RunModeHandle::new(RunMode::Build);
+    let mw = plan_mode_middleware(mode, plan_mode_policies());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let mut request = ModelRequest::new(Vec::new())
+        .with_tools(vec![schema_named("read_file"), schema_named("write_file")]);
+    stack
+        .run_before_model(&mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    assert_eq!(request.tools.len(), 2);
+
+    let mut call = tool_call("write_file");
+    stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect("build mode admits every tool");
+}
+
+#[tokio::test]
+async fn plan_mode_hides_side_effecting_tools_and_keeps_read_only_ones() {
+    let (mut ctx, recorder) = ctx_with_recorder();
+    let mode = RunModeHandle::new(RunMode::Plan);
+    let mw = plan_mode_middleware(mode, plan_mode_policies());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let mut request = ModelRequest::new(Vec::new())
+        .with_tools(vec![schema_named("read_file"), schema_named("write_file")]);
+    stack
+        .run_before_model(&mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    assert_eq!(request.tools.len(), 1);
+    assert_eq!(request.tools[0].name, "read_file");
+
+    let filtered = recorder.events().into_iter().find_map(|r| match r.event {
+        AgentEvent::ToolsFiltered { excluded, .. } => Some(excluded),
+        _ => None,
+    });
+    assert_eq!(filtered, Some(vec!["write_file".to_string()]));
+}
+
+#[tokio::test]
+async fn plan_mode_denies_side_effecting_tool_at_execution() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mode = RunModeHandle::new(RunMode::Plan);
+    let mw = plan_mode_middleware(mode, plan_mode_policies());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let mut call = tool_call("write_file");
+    let err = stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect_err("side-effecting tool denied in plan mode");
+    assert!(matches!(err, TinyAgentsError::Validation(_)));
+
+    let mut call = tool_call("read_file");
+    stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect("read-only tool stays executable in plan mode");
+}
+
+#[tokio::test]
+async fn plan_mode_allowlist_keeps_specific_tools_available() {
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mode = RunModeHandle::new(RunMode::Plan);
+    let mw = plan_mode_middleware(mode, plan_mode_policies()).allow(["plan_exit"]);
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let mut request = ModelRequest::new(Vec::new()).with_tools(vec![
+        schema_named("read_file"),
+        schema_named("write_file"),
+        schema_named("plan_exit"),
+    ]);
+    stack
+        .run_before_model(&mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    let names: Vec<_> = request.tools.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["read_file", "plan_exit"]);
+
+    let mut call = tool_call("plan_exit");
+    stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect("allowlisted tool stays executable in plan mode");
+}
+
+#[tokio::test]
+async fn plan_mode_treats_unclassified_tools_as_side_effecting() {
+    // Fail-closed: a tool with no policy entry at all is hidden/denied in
+    // plan mode unless explicitly allowlisted.
+    let (mut ctx, _recorder) = ctx_with_recorder();
+    let mode = RunModeHandle::new(RunMode::Plan);
+    let mw = plan_mode_middleware(mode, std::collections::HashMap::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+
+    let mut call = tool_call("mystery");
+    let err = stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect_err("unclassified tool denied by default in plan mode");
+    assert!(matches!(err, TinyAgentsError::Validation(_)));
+}
+
+#[tokio::test]
+async fn run_mode_handle_set_takes_effect_immediately_on_shared_clones() {
+    let mode = RunModeHandle::new(RunMode::Build);
+    let mw_mode = mode.clone();
+    let mw = plan_mode_middleware(mw_mode, plan_mode_policies());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(mw));
+    let (mut ctx, _recorder) = ctx_with_recorder();
+
+    let mut call = tool_call("write_file");
+    stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect("build mode admits the call");
+
+    // Flip the shared handle; the middleware's own clone observes it.
+    mode.set(RunMode::Plan);
+
+    let mut call = tool_call("write_file");
+    stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .expect_err("plan mode now denies the same call");
+}
