@@ -92,8 +92,9 @@ impl GenerateVideoTool {
         args: &Value,
         workspace: Option<&std::path::Path>,
     ) -> Result<VideoRequest, String> {
+        let prompt = arg_str(args, &["prompt"]).map(str::to_owned);
         let mut request = VideoRequest {
-            prompt: arg_str(args, &["prompt"]).map(str::to_owned),
+            prompt: prompt.clone(),
             model: arg_str(args, &["model"]).map(str::to_owned),
             duration_s: arg_u64(args, &["duration", "duration_seconds", "durationSeconds"])
                 .and_then(|d| u32::try_from(d).ok()),
@@ -114,6 +115,13 @@ impl GenerateVideoTool {
             request
                 .references
                 .push(self.output.reference(&raw, workspace)?);
+        }
+        // Reject requests without a prompt or first frame: prompt is optional only with
+        // first_frame, and first_frame is optional only with prompt.
+        if prompt.is_none() && request.first_frame.is_none() {
+            return Err(
+                "either `prompt` or `first_frame` is required for video generation".to_string(),
+            );
         }
         Ok(request)
     }
