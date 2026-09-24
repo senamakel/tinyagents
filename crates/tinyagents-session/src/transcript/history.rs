@@ -62,9 +62,8 @@ pub struct TranscriptTurn<'a> {
     pub turn_usage: Option<&'a TurnUsage>,
     /// Caller-provided request id, stamped on every line of the turn.
     pub request_id: Option<&'a str>,
-    /// Tool declarations this turn was sent with, when they differ from the
-    /// ones last recorded for this transcript. `None` records nothing and
-    /// leaves the previous record in force.
+    /// Tool declarations this ordinary turn was sent with. `None` records
+    /// nothing and leaves the previous record in force (for exact-tool turns).
     pub tools: Option<&'a serde_json::Value>,
 }
 

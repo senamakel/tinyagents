@@ -28,8 +28,7 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     /// Tool declarations this session last sent, restored from the transcript
     /// on resume and updated after every recorded turn.
     recorded_tools: Option<ToolSnapshot>,
-    /// The `tools` record currently in force in the bound transcript file,
-    /// used to write a new record only when the declarations change.
+    /// The `tools` record currently in force in the bound transcript file.
     recorded_tools_json: Option<serde_json::Value>,
     retain_recorded_tools: bool,
 }
@@ -452,6 +451,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         turn_usage.as_ref(),
                         record_tools.as_ref(),
                     )?;
+                    self.remember_sent_tools(record_tools.as_ref());
                     self.history = partial_history;
                     self.persisted = raw;
                     if receipt.is_some() {
@@ -485,6 +485,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             turn_usage.as_ref(),
             record_tools.as_ref(),
         )?;
+        self.remember_sent_tools(record_tools.as_ref());
         self.history = committed.history.clone();
         self.persisted = raw;
         self.committed_turns += 1;
@@ -710,9 +711,10 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         meta.turn_count += 1;
         meta.updated = chrono::Utc::now().to_rfc3339();
-        // Record the declarations when they differ from the record in force
-        // in the file being written — always for a fresh generation, whose
-        // file starts with none.
+        // Record every ordinary turn's declarations. Comparing against this
+        // session's cached snapshot is unsafe when another live Session has
+        // appended to the same transcript since our last turn; this append is
+        // performed under the history's path lock.
         let tools_json = tools.map(ToolSnapshot::to_json);
         let tools_record = if pending_generation.is_some() {
             // Exact-tool turns deliberately do not replace the durable tool
@@ -720,9 +722,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             // must carry that list forward or a later resume would lose it.
             tools_json.as_ref().or(self.recorded_tools_json.as_ref())
         } else {
-            tools_json
-                .as_ref()
-                .filter(|json| self.recorded_tools_json.as_ref() != Some(*json))
+            tools_json.as_ref()
         };
         meta.thread_id = thread_id.map(str::to_owned).or(meta.thread_id);
         transcript
@@ -749,10 +749,6 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             self.transcript = Some(handle);
         }
         target.meta = meta;
-        if let (Some(snapshot), Some(json)) = (tools, tools_json) {
-            self.recorded_tools = Some(snapshot.clone());
-            self.recorded_tools_json = Some(json);
-        }
         let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,
@@ -765,6 +761,16 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             }
         };
         Ok(Some(TranscriptCommitReceipt { path, delta }))
+    }
+
+    /// Records the declarations a successfully completed ordinary turn sent.
+    /// This is deliberately outside `persist`: sessions without a transcript
+    /// target still need retention to work between their in-memory turns.
+    fn remember_sent_tools(&mut self, tools: Option<&ToolSnapshot>) {
+        if let Some(tools) = tools {
+            self.recorded_tools = Some(tools.clone());
+            self.recorded_tools_json = Some(tools.to_json());
+        }
     }
 
     fn with_prefix(&self, history: Vec<Message>) -> Vec<Message> {

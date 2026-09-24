@@ -2989,9 +2989,54 @@ async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
     let sent = &driver.requests.lock().unwrap()[0].tools;
     assert_eq!(tool_names(sent), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);
-    // Unchanged declarations are not recorded twice.
+    // Every ordinary turn records its sent snapshot so concurrent session
+    // handles cannot leave an earlier turn's declarations in force.
     let path = recorded_tools_path(directory.path());
-    assert_eq!(tools_records(&path), 1);
+    assert_eq!(tools_records(&path), 2);
+}
+
+#[tokio::test]
+async fn in_memory_sessions_retain_tools_sent_on_earlier_turns() {
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::assistant("first")])),
+        Ok(outcome(vec![
+            Message::assistant("first"),
+            Message::assistant("second"),
+        ])),
+    ]));
+    let (hook, _) = hook(vec![
+        TurnPreparation::with_tools(two_tools()),
+        TurnPreparation::with_tools(tools("alpha")),
+    ]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .hooks(hook)
+        .retain_recorded_tools(true)
+        .build()
+        .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("one")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("two")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&driver.requests.lock().unwrap()[1].tools),
+        vec!["alpha", "beta"]
+    );
+    assert_eq!(
+        tool_names(session.recorded_tools().unwrap()),
+        vec!["alpha", "beta"]
+    );
 }
 
 #[tokio::test]
