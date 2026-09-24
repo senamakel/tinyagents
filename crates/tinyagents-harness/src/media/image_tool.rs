@@ -226,14 +226,14 @@ impl Tool for GenerateImageTool {
             "properties": {
                 "prompt": { "type": "string", "description": "What to draw, or the edit to apply to the reference images." },
                 "model": { "type": "string", "description": format!("Model id. Default: {}.", self.generator.default_model()) },
-                "n": { "type": "integer", "minimum": 1, "maximum": MAX_IMAGES_PER_REQUEST, "description": "Number of images (default 1)." },
+                "n": { "type": ["integer", "string"], "description": "Number of images, integer or numeric string (default 1)." },
                 "aspect_ratio": { "type": "string", "description": "e.g. 1:1, 16:9, 9:16, 4:3, landscape, portrait, square, auto." },
                 "resolution": { "type": "string", "description": "Resolution tier: 1K, 2K or 4K." },
                 "size": { "type": "string", "description": "Exact pixels such as 1536x1024 (overrides resolution/aspect_ratio)." },
                 "quality": { "type": "string", "enum": ["auto", "low", "medium", "high"] },
                 "output_format": { "type": "string", "enum": ["png", "jpeg", "webp"] },
                 "background": { "type": "string", "enum": ["auto", "transparent", "opaque"] },
-                "seed": { "type": "integer", "description": "Deterministic seed, where supported." },
+                "seed": { "type": ["integer", "string"], "description": "Deterministic seed, integer or numeric string, where supported." },
                 "references": {
                     "type": "array",
                     "items": { "type": "string" },
