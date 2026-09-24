@@ -301,6 +301,7 @@ impl<Ctx> RunContext<Ctx> {
             instance_id: next_context_instance_id(),
             config,
             data,
+            frozen_system_prefix_len: None,
             stores: StoreRegistry::new(),
             namespaced_store: None,
             state_view: None,
@@ -326,6 +327,15 @@ impl<Ctx> RunContext<Ctx> {
             tool_effect_ledger_failure: crate::tool::LedgerFailure::default(),
             compaction_sink: None,
         }
+    }
+
+    /// Pin the count of session-owned leading System tiers for this run.
+    /// Later System compaction summaries remain in history rather than being
+    /// promoted into the provider's reusable prompt prefix.
+    #[must_use]
+    pub fn with_frozen_system_prefix_len(mut self, count: usize) -> Self {
+        self.frozen_system_prefix_len = Some(count);
+        self
     }
 
     /// Attaches the resolutions for the deferred tool calls this run resumes

@@ -2847,6 +2847,42 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert_eq!(recorded.prefix_snapshot().messages().len(), 1);
     assert_eq!(resumed.history[1].text(), "changing history summary");
 
+    let few_shot_dir = tempfile::tempdir().unwrap();
+    let few_shot_ref = SessionRef::scoped("few-shot-prefix", "agent-id");
+    let few_shot_locator = Arc::new(FileTranscriptLocator::new(few_shot_dir.path()));
+    let mut few_shot_meta = meta();
+    few_shot_meta.prefix_message_count = Some(2);
+    let few_shot_history = few_shot_locator
+        .open_session(&few_shot_ref, few_shot_meta.clone())
+        .unwrap();
+    for (role, content) in [
+        ("system", "policy"),
+        ("user", "stable example"),
+        ("user", "latest turn"),
+    ] {
+        few_shot_history
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let mut few_shot = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(few_shot_locator, few_shot_ref, few_shot_meta)
+        .build()
+        .unwrap();
+    let resumed = few_shot
+        .resume(&session_turn_options(
+            ResumeMode::Session,
+            "few-shot-prefix",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(few_shot.prefix_snapshot().messages().len(), 2);
+    assert_eq!(
+        few_shot.prefix_snapshot().messages()[1].text(),
+        "stable example"
+    );
+    assert_eq!(resumed.history[2].text(), "latest turn");
+
     // If a custom locator can read a compacted head but not its sealed root,
     // no number of leading System rows can be proven to be frozen instructions.
     let orphan_head = SessionRef::scoped("orphan", "agent-id").next_generation();
@@ -2946,6 +2982,58 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
             .await,
         Err(RuntimeError::Persistence(_))
     ));
+}
+
+#[tokio::test]
+async fn session_driver_receives_the_frozen_system_boundary() {
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "done",
+    )]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .prefix(PrefixSnapshot::new(vec![
+            Message::system("stable"),
+            Message::system("context"),
+        ]))
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("go")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        driver.requests.lock().unwrap()[0]
+            .run_context
+            .frozen_system_prefix_len,
+        Some(2)
+    );
+
+    let mixed_driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "done",
+    )]))]));
+    let mut mixed = SessionBuilder::new(mixed_driver.clone())
+        .prefix(PrefixSnapshot::new(vec![
+            Message::system("policy"),
+            Message::user("stable example"),
+        ]))
+        .build()
+        .unwrap();
+    mixed
+        .turn(
+            SessionTurnRequest::new(Message::user("go")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        mixed_driver.requests.lock().unwrap()[0]
+            .run_context
+            .frozen_system_prefix_len,
+        None
+    );
 }
 
 /// A session-bound target's write destination is always its own session

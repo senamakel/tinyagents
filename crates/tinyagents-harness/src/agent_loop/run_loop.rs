@@ -558,10 +558,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // an explicit stable prefix, and the system instructions plus the
             // name-sorted tool schemas are stable for this whole run.
             status.mark_running(HarnessPhase::BuildingRequest);
-            let system_end = messages
-                .iter()
-                .take_while(|message| matches!(message, Message::System(_)))
-                .count();
+            let system_end = cacheable_system_prefix_end(messages, ctx.frozen_system_prefix_len);
             let mut prompt = crate::prompt::PromptBuilder::new();
             prompt.push_system_messages(&messages[..system_end]);
             if !tool_schemas.is_empty() {
@@ -2020,6 +2017,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         })
         .await
     }
+}
+
+/// Use the frozen boundary supplied by a durable session when rebuilding a
+/// model request on the next harness invocation. A later System summary is
+/// model-visible history, not another stable prompt tier.
+pub(super) fn cacheable_system_prefix_end(
+    messages: &[Message],
+    frozen_system_prefix_len: Option<usize>,
+) -> usize {
+    let leading_system = messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    frozen_system_prefix_len.map_or(leading_system, |count| count.min(leading_system))
 }
 
 /// Refreshes the harness-owned stable-prefix annotation at model-call dispatch.

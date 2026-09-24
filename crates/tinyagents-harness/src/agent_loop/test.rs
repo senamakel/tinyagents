@@ -6989,6 +6989,45 @@ fn compaction_summary_keeps_declared_system_prefix_cache_key() {
 }
 
 #[test]
+fn rebuilt_session_request_keeps_the_summary_after_frozen_system_tiers() {
+    let messages = vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::system("changing summary"),
+        Message::user("later"),
+    ];
+    let system_end = super::run_loop::cacheable_system_prefix_end(&messages, Some(2));
+    assert_eq!(system_end, 2);
+    assert_eq!(
+        super::run_loop::cacheable_system_prefix_end(&messages, None),
+        3,
+        "standalone harnesses retain their leading-System fallback"
+    );
+    let mut prompt = crate::prompt::PromptBuilder::new();
+    prompt.push_system_messages(&messages[..system_end]);
+    let mut request = prompt.build(messages[system_end..].to_vec());
+
+    assert_eq!(request.cache_segments.len(), 2);
+    assert_eq!(request.cache_segments[0].id, "system");
+    assert_eq!(request.cache_segments[1].id, "system.1");
+    assert_eq!(request.messages[2].text(), "changing summary");
+
+    let mut previous = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::user("first"),
+    ]);
+    previous.cache_segments = request.cache_segments.clone();
+    previous.prompt_fingerprint = request.prompt_fingerprint.clone();
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut previous);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+    assert_eq!(
+        crate::cache::prompt_cache_key(&previous),
+        crate::cache::prompt_cache_key(&request)
+    );
+}
+
+#[test]
 fn tools_only_prefix_survives_a_leading_compaction_summary() {
     use tinyinference_llm::model::{PromptSegment, SegmentRole};
     use tinyinference_llm::tool::ToolSchema;

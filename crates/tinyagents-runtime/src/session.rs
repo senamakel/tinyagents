@@ -313,7 +313,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 ));
             }
         }
-        let stored_len = stored_len.min(leading_len);
+        let stored_len = if recorded_boundary.is_some() || cached_boundary.is_some() {
+            // An explicit frozen prefix may include non-System few-shot rows.
+            // Only the legacy inferred boundary is limited to leading System
+            // messages; a recorded count is bounded by the transcript itself.
+            stored_len.min(decoded.len())
+        } else {
+            stored_len.min(leading_len)
+        };
         self.persisted_prefix_len = Some(stored_len);
         if self.prefix.messages().is_empty() && stored_len != 0 {
             self.prefix = PrefixSnapshot::new(decoded[..stored_len].to_vec());
@@ -536,6 +543,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             ),
         )
         .with_cancellation(cancellation.clone());
+        let run_context = if self
+            .prefix
+            .messages()
+            .iter()
+            .all(|message| matches!(message, Message::System(_)))
+        {
+            run_context.with_frozen_system_prefix_len(self.prefix.messages().len())
+        } else {
+            // A mixed-role prefix is still restored by its recorded count,
+            // but the harness's System-tier cache layout cannot represent its
+            // non-System rows. Keep conservative request construction there.
+            run_context
+        };
         let driver_result = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
             result = self.driver.execute(DriverRequest { history: input, tools, run_context, stream }) => result,

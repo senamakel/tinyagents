@@ -58,6 +58,9 @@ cheap and deterministic:
   dynamic-prompt and prompted structured-output paths share
   `prepend_system_message` for this. Segment ids alone cannot distinguish a
   prepended instruction from a later volatile System history summary.
+  A durable session supplies its frozen System-tier count through `RunContext`
+  when the harness rebuilds a request on the next invocation; standalone runs
+  retain leading-System inference.
 - [`CacheLayoutEvent`] (`types.rs` + `layout.rs`) — describes a before/after
   layout change; `under_policy` evaluates it against a `CachePolicy` and is
   what makes `CachePolicy::protect_prompt_prefix` load-bearing.
