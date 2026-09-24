@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use tinyinference_image::{GeneratedMedia, MediaReference, MockImageGenerator};
+use tinyinference_image::{MediaReference, MockImageGenerator};
 use tinyinference_video::{
     JobState, MediaModel, MockVideoGenerator, MockVideoScript, VideoGenerator, VideoJob,
     VideoJobStatus, VideoRequest, VideoResponse, WaitPolicy,
@@ -118,7 +118,7 @@ impl VideoGenerator for WebmVideoGenerator {
         Ok(VideoResponse {
             job_id: "webm-job".into(),
             model: self.default_model().into(),
-            videos: vec![GeneratedMedia::new(
+            videos: vec![tinyinference_video::GeneratedMedia::new(
                 "video/webm; codecs=vp9",
                 b"webm".as_slice(),
             )],

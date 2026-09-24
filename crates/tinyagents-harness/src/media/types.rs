@@ -74,9 +74,10 @@ impl MediaOutput {
     /// the workspace before a generation request can be billed.
     pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<ArtifactDirectory, String> {
         let subdir = Path::new(&self.subdir);
-        if subdir
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
+        if self.subdir.trim().is_empty()
+            || subdir
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
         {
             return Err(format!(
                 "artifact subdirectory `{}` must be a relative path below the output root",
@@ -190,6 +191,11 @@ impl MediaOutput {
         extension: &str,
         bytes: &[u8],
     ) -> Result<PathBuf, String> {
+        if !is_filename_component(stem) || !is_filename_component(extension) {
+            return Err(
+                "artifact name components must be non-empty filename components".to_owned(),
+            );
+        }
         let filename = format!("{stem}.{extension}");
         let path = dir.path.join(&filename);
         #[cfg(unix)]
@@ -276,6 +282,15 @@ impl MediaOutput {
     }
 }
 
+fn is_filename_component(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && Path::new(value)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+}
+
 impl std::fmt::Debug for MediaOutput {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -346,6 +361,36 @@ pub(crate) fn check_option_types(
             None | Some(Value::Null) | Some(Value::Bool(_)) => {}
             Some(Value::String(text)) if text.trim().parse::<bool>().is_ok() => {}
             Some(other) => return Err(format!("`{key}` must be true or false, got {other}")),
+        }
+    }
+    Ok(())
+}
+
+/// Rejects present string options that would otherwise be treated as absent.
+pub(crate) fn check_string_options(args: &Value, keys: &[&str]) -> Result<(), String> {
+    for key in keys {
+        match args.get(*key) {
+            None | Some(Value::Null) | Some(Value::String(_)) => {}
+            Some(other) => return Err(format!("`{key}` must be a string, got {other}")),
+        }
+    }
+    Ok(())
+}
+
+/// Rejects a present list unless every entry is a non-empty string.
+pub(crate) fn check_string_lists(args: &Value, keys: &[&str]) -> Result<(), String> {
+    for key in keys {
+        match args.get(*key) {
+            None | Some(Value::Null) | Some(Value::String(_)) => {}
+            Some(Value::Array(items))
+                if items
+                    .iter()
+                    .all(|item| item.as_str().is_some_and(|s| !s.trim().is_empty())) => {}
+            Some(other) => {
+                return Err(format!(
+                    "`{key}` must be a string or an array of non-empty strings, got {other}"
+                ));
+            }
         }
     }
     Ok(())

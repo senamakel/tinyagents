@@ -12,6 +12,7 @@ use tinytools::{
 
 use super::types::{
     MediaOutput, arg_bool, arg_i64, arg_list, arg_str, arg_u64, check_option_types,
+    check_string_lists, check_string_options,
 };
 use super::{artifact_stem, media_policy};
 
@@ -22,7 +23,7 @@ pub const GENERATE_VIDEO_TOOL_NAME: &str = "generate_video";
 /// the clips to the run's workspace.
 ///
 /// A job that is still running when the wait budget runs out is reported with
-/// its id; calling the tool again with `resume_job_id` collects it without
+/// its id; calling the tool again with `resume_job_id` and its original model collects it without
 /// paying for a new generation.
 pub struct GenerateVideoTool {
     generator: Arc<dyn VideoGenerator>,
@@ -100,6 +101,22 @@ impl GenerateVideoTool {
             &["seed"],
             &["generate_audio", "audio"],
         )?;
+        check_string_options(
+            args,
+            &[
+                "prompt",
+                "model",
+                "resolution",
+                "aspect_ratio",
+                "aspectRatio",
+                "size",
+                "first_frame",
+                "inputImage",
+                "input_image",
+                "last_frame",
+            ],
+        )?;
+        check_string_lists(args, &["references", "reference_images"])?;
         let prompt = arg_str(args, &["prompt"]).map(str::to_owned);
         let duration_s = match arg_u64(args, &["duration", "duration_seconds", "durationSeconds"]) {
             Some(duration) => Some(
@@ -142,12 +159,27 @@ impl GenerateVideoTool {
 
     async fn run(&self, args: &Value, context: Option<&dyn ToolRunContext>) -> ToolResult {
         let workspace = context.and_then(ToolRunContext::workspace_root);
+        if let Err(message) = check_string_options(args, &["resume_job_id", "model"]) {
+            return ToolResult::error(message);
+        }
         let dir = match self.output.dir(workspace) {
             Ok(dir) => dir,
             Err(message) => return ToolResult::error(message),
         };
         let outcome = if let Some(job_id) = arg_str(args, &["resume_job_id"]) {
-            let model = arg_str(args, &["model"]).unwrap_or(self.generator.default_model());
+            if !job_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            {
+                return ToolResult::error(
+                    "`resume_job_id` must contain only ASCII letters, digits, `_`, or `-`",
+                );
+            }
+            let Some(model) = arg_str(args, &["model"]) else {
+                return ToolResult::error(
+                    "`model` is required with `resume_job_id` so the resumed result retains its submitted model",
+                );
+            };
             tracing::info!(tool = %self.name, job_id, "[media] resuming video job");
             wait_for_job(self.generator.as_ref(), job_id, model, &self.wait).await
         } else {
@@ -266,7 +298,7 @@ impl Tool for GenerateVideoTool {
             "type": "object",
             "properties": {
                 "prompt": { "type": "string", "description": "What happens in the clip. Optional only with first_frame." },
-                "model": { "type": "string", "description": format!("Model id. Default: {}.", self.generator.default_model()) },
+                "model": { "type": "string", "description": format!("Model id. Default for a new job: {}. Required when resuming a job.", self.generator.default_model()) },
                 "duration": { "type": ["integer", "string"], "description": "Seconds (integer or numeric string; the default model accepts 4-15)." },
                 "resolution": { "type": "string", "description": "480p, 720p or 1080p (model-dependent)." },
                 "aspect_ratio": { "type": "string", "description": "e.g. 16:9, 9:16, 1:1, landscape, portrait." },
@@ -280,7 +312,7 @@ impl Tool for GenerateVideoTool {
                     "items": { "type": "string" },
                     "description": "Reference images/clips guiding subject or style. Local paths are canonicalized and must remain inside the workspace, including after symlink resolution."
                 },
-                "resume_job_id": { "type": "string", "description": "Collect an earlier job that timed out, without paying again." }
+                "resume_job_id": { "type": "string", "description": "Collect an earlier job that timed out, without paying again. Also pass the original model." }
             }
         })
     }

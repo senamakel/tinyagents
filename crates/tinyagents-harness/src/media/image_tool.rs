@@ -10,7 +10,10 @@ use tinytools::{
     ToolTimeout,
 };
 
-use super::types::{MediaOutput, arg_i64, arg_list, arg_str, arg_u64, check_option_types};
+use super::types::{
+    MediaOutput, arg_i64, arg_list, arg_str, arg_u64, check_option_types, check_string_lists,
+    check_string_options,
+};
 use super::{artifact_stem, media_policy};
 
 /// Default model-visible name.
@@ -87,6 +90,34 @@ impl GenerateImageTool {
             return ToolResult::error("`prompt` is required");
         };
         if let Err(message) = check_option_types(args, &["n", "count"], &["seed"], &[]) {
+            return ToolResult::error(message);
+        }
+        if let Err(message) = check_string_options(
+            args,
+            &[
+                "prompt",
+                "model",
+                "size",
+                "resolution",
+                "aspect_ratio",
+                "aspectRatio",
+                "quality",
+                "output_format",
+                "format",
+                "background",
+            ],
+        ) {
+            return ToolResult::error(message);
+        }
+        if let Err(message) = check_string_lists(
+            args,
+            &[
+                "references",
+                "reference_images",
+                "input_images",
+                "inputImages",
+            ],
+        ) {
             return ToolResult::error(message);
         }
         let mut request = ImageRequest::new(prompt);
