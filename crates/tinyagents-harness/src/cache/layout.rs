@@ -266,9 +266,6 @@ impl PromptCacheLayout {
     }
 
     fn has_compatible_message_history(&self, other: &PromptCacheLayout) -> bool {
-        if !self.canonical_message_boundary || !other.canonical_message_boundary {
-            return self.message_digests == other.message_digests;
-        }
         let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {
             (&self.message_digests, &other.message_digests)
         } else {
@@ -284,9 +281,8 @@ impl PromptCacheLayout {
     ///
     /// 1. the same cacheable segment ids in the same order **with the same
     ///    content** (equal [`Self::fingerprint`]), and
-    /// 2. a pure tail-extension of the message stream when both layouts have
-    ///    a known canonical boundary; otherwise the complete histories must
-    ///    match because custom segment-to-message mappings are unknown.
+    /// 2. one message stream being a pure tail-extension of the other — the
+    ///    only edit a byte-prefix cache tolerates.
     ///
     /// Comparing ids alone (the previous behaviour) reported stability after a
     /// middleware rewrote a stable segment's text, which is the precise failure

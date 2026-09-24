@@ -6994,6 +6994,37 @@ fn compaction_summary_keeps_declared_system_prefix_cache_key() {
 }
 
 #[test]
+fn changing_or_prepending_a_declared_system_message_invalidates_the_prefix() {
+    let build = |system: &str| {
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_system_messages(&[Message::system(system)]);
+        prompt.build(vec![Message::user("question")])
+    };
+    let original = build("stable");
+    let changed = build("revised");
+    assert_ne!(
+        crate::cache::prompt_cache_key(&original),
+        crate::cache::prompt_cache_key(&changed)
+    );
+    assert!(
+        !crate::cache::PromptCacheLayout::from_request(&original)
+            .is_prefix_stable_against(&crate::cache::PromptCacheLayout::from_request(&changed))
+    );
+
+    let mut prepended = original.clone();
+    crate::cache::prepend_system_message(&mut prepended, "new instruction".into());
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut prepended);
+    assert_ne!(
+        crate::cache::prompt_cache_key(&original),
+        crate::cache::prompt_cache_key(&prepended)
+    );
+    assert!(
+        !crate::cache::PromptCacheLayout::from_request(&original)
+            .is_prefix_stable_against(&crate::cache::PromptCacheLayout::from_request(&prepended))
+    );
+}
+
+#[test]
 fn rebuilt_session_request_keeps_the_summary_after_frozen_system_tiers() {
     let messages = vec![
         Message::system("stable"),
