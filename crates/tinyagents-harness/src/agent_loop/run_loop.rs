@@ -761,11 +761,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             crate::structured::default_prompted_template().to_string()
                         });
                         let schema_text = serde_json::to_string_pretty(&schema).unwrap_or_default();
-                        request.messages.insert(
-                            0,
-                            Message::system(format!(
-                                "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
-                            )),
+                        crate::cache::prepend_system_message(
+                            &mut request,
+                            format!("{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"),
                         );
                         Some((StructuredStrategy::Prompted { template }, name, schema))
                     }
@@ -872,11 +870,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 });
                                 let schema_text =
                                     serde_json::to_string_pretty(&schema).unwrap_or_default();
-                                request.messages.insert(
-                                    0,
-                                    Message::system(format!(
+                                crate::cache::prepend_system_message(
+                                    &mut request,
+                                    format!(
                                         "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
-                                    )),
+                                    ),
                                 );
                             }
                             // `for_profile` never returns `ToolCallUnion`;

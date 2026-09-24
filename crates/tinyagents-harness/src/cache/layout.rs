@@ -58,6 +58,25 @@ pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize
     (canonical_head && canonical_tail).then_some(count)
 }
 
+/// Prepend a new stable instruction without dropping any previously declared
+/// system tier from the provider cache key. Dynamic prompts and prompted
+/// structured-output schemas both use this path.
+pub(crate) fn prepend_system_message(request: &mut ModelRequest, text: String) {
+    let declared_system_len = declared_system_prefix_len(request);
+    request.messages.insert(0, Message::system(text));
+    if let Some(count) = declared_system_len {
+        let mut suffix = request.cache_segments.split_off(count);
+        request.cache_segments = (0..=count)
+            .map(|index| PromptSegment {
+                id: crate::prompt::system_segment_id(index),
+                role: SegmentRole::System,
+                cacheable: true,
+            })
+            .collect();
+        request.cache_segments.append(&mut suffix);
+    }
+}
+
 impl PromptCacheLayout {
     /// Builds a [`PromptCacheLayout`] from `request`.
     ///

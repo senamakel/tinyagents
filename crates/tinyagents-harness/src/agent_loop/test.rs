@@ -7054,6 +7054,37 @@ fn grouped_system_segment_cannot_masquerade_as_one_canonical_message() {
     assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
 }
 
+#[test]
+fn prompted_schema_instruction_preserves_all_original_system_tiers() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let segments = (0..2)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    let build = |second: &str| {
+        let mut request = ModelRequest::new(vec![
+            Message::system("first"),
+            Message::system(second),
+            Message::user("question"),
+        ]);
+        request.cache_segments = segments.clone();
+        request.prompt_fingerprint = Some("pre-structured-annotation".into());
+        crate::cache::prepend_system_message(&mut request, "JSON Schema: fixed".into());
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let before = build("second A");
+    let after = build("second B");
+    assert_eq!(before.cache_segments.len(), 3);
+    assert_eq!(after.cache_segments.len(), 3);
+    assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
 /// A text-dialect run that starts with *no* leading system message declares
 /// only the `tools` segment (`PromptBuilder` has no system prefix to name
 /// yet). The dialect then synthesizes exactly one new leading system message
