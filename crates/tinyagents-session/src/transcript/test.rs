@@ -659,6 +659,32 @@ fn the_latest_tools_record_is_the_sessions_tools_and_never_a_message() {
 }
 
 #[test]
+fn a_turn_and_its_tools_are_serialized_in_one_append_buffer() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("agent.jsonl");
+    let rows = vec![TranscriptMessage::new("user", "hi")];
+
+    append_transcript_turn_with_partial_and_tools(
+        &path,
+        &[],
+        &rows,
+        &meta(),
+        None,
+        Some("r1"),
+        None,
+        Some(&serde_json::json!([{"name": "search"}])),
+    )
+    .unwrap();
+
+    let transcript = read_transcript(&path).unwrap();
+    assert_eq!(transcript.messages, rows);
+    assert_eq!(
+        transcript.tools,
+        Some(serde_json::json!([{"name": "search"}]))
+    );
+}
+
+#[test]
 fn a_transcript_without_a_tools_record_reads_none() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("agent.jsonl");

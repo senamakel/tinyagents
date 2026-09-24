@@ -1,7 +1,8 @@
 use super::*;
 use crate::transcript::{
     FileTranscriptLocator, MessageUsage, TranscriptLocator, TranscriptToolCall, TurnUsage,
-    append_transcript_turn, read_transcript, write_transcript, write_transcript_if_absent,
+    append_tools_record, append_transcript_turn, read_transcript, write_transcript,
+    write_transcript_if_absent,
 };
 use tempfile::tempdir;
 
@@ -122,6 +123,31 @@ fn adoption_sums_usage_and_spans_the_whole_conversation() {
     assert_eq!(meta.charged_amount_usd, 1.0);
     assert_eq!(meta.created, "2026-01-01T00:00:00Z");
     assert_eq!(meta.updated, "2026-02-02T00:00:00Z");
+}
+
+#[test]
+fn adoption_preserves_the_newest_legacy_tool_snapshot() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-tools";
+    write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "one", thread);
+    write_legacy(dir.path(), "2000_a", "2026-01-02T00:00:00Z", "two", thread);
+    let newer = dir.path().join("2000_a.jsonl");
+    append_tools_record(&newer, &serde_json::json!([{"name": "newer"}])).unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adoption = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .expect("legacy roots should be adopted");
+
+    assert_eq!(
+        read_transcript(&adoption.path).unwrap().tools,
+        Some(serde_json::json!([{"name": "newer"}]))
+    );
 }
 
 #[test]

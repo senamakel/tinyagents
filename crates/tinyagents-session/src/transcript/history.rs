@@ -25,9 +25,9 @@ use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
     SessionAdoption, SessionRef, SessionTranscript, TranscriptMeta, TurnUsage,
-    adopt_legacy_session_transcripts, append_transcript_turn, find_latest_transcript,
-    find_root_transcript_for_thread, find_root_transcript_for_thread_scoped, read_transcript,
-    resolve_keyed_transcript_path, session_stem,
+    adopt_legacy_session_transcripts, find_latest_transcript, find_root_transcript_for_thread,
+    find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
+    session_stem,
 };
 
 /// Upper bound on the compaction generations one session may accumulate.
