@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use serde_json::json;
 use tinyinference_image::{MediaReference, MockImageGenerator};
-use tinyinference_video::{JobState, MockVideoGenerator, MockVideoScript, WaitPolicy};
+use tinyinference_video::{
+    JobState, MediaModel, MockVideoGenerator, MockVideoScript, VideoGenerator, VideoJob,
+    VideoJobStatus, VideoRequest, VideoResponse, WaitPolicy,
+};
 use tinytools::{Tool, ToolCallOptions, ToolRunContext, ToolTimeout, WorkspaceDescriptor};
 
 use super::{GenerateImageTool, GenerateVideoTool, MediaOutput};
@@ -24,6 +27,54 @@ fn workspace(root: &std::path::Path) -> Workspace {
 
 fn text(result: &tinytools::ToolResult) -> String {
     serde_json::to_string(result).unwrap()
+}
+
+/// Simulates a provider implementation that violates TinyInference's normal
+/// non-empty response guarantee, so the harness keeps its billed-safety guard.
+struct EmptyVideoGenerator;
+
+#[async_trait::async_trait]
+impl VideoGenerator for EmptyVideoGenerator {
+    fn name(&self) -> &str {
+        "empty"
+    }
+
+    fn default_model(&self) -> &str {
+        "empty/video"
+    }
+
+    async fn submit(&self, _: VideoRequest) -> tinyinference_video::Result<VideoJob> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn poll(&self, _: &str) -> tinyinference_video::Result<VideoJobStatus> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn content(
+        &self,
+        _: &str,
+        _: usize,
+    ) -> tinyinference_video::Result<tinyinference_video::GeneratedMedia> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn list_models(&self) -> tinyinference_video::Result<Vec<MediaModel>> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn generate(
+        &self,
+        _: VideoRequest,
+        _: &WaitPolicy,
+    ) -> tinyinference_video::Result<VideoResponse> {
+        Ok(VideoResponse {
+            job_id: "empty-job".into(),
+            model: self.default_model().into(),
+            videos: Vec::new(),
+            cost_usd: Some(0.0),
+        })
+    }
 }
 
 #[tokio::test]
@@ -71,9 +122,10 @@ async fn billed_non_delivery_tells_the_model_not_to_retry() {
     assert!(result.is_error);
     let message = text(&result);
     assert!(
-        message.contains("billed") && message.contains("Do not generate again"),
+        message.contains("billed") && message.contains("do not retry"),
         "{message}"
     );
+    assert!(message.contains("mock-request"), "{message}");
 }
 
 #[tokio::test]
@@ -315,10 +367,7 @@ async fn video_failure_surfaces_the_provider_reason() {
 #[tokio::test]
 async fn empty_video_delivery_is_a_billed_non_retryable_error() {
     let dir = tempfile::tempdir().unwrap();
-    let generator = Arc::new(MockVideoGenerator::new(MockVideoScript {
-        polls: vec![(JobState::Completed, 0)],
-        error: None,
-    }));
+    let generator = Arc::new(EmptyVideoGenerator);
     let tool =
         GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(fast());
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
