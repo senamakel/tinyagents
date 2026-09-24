@@ -59,7 +59,10 @@ impl MediaOutput {
     /// The artifact directory for this call.
     pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<PathBuf, String> {
         let subdir = Path::new(&self.subdir);
-        if subdir.components().any(|component| !matches!(component, Component::Normal(_))) {
+        if subdir
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
             return Err(format!(
                 "artifact subdirectory `{}` must be a relative path below the output root",
                 self.subdir

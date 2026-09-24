@@ -102,9 +102,10 @@ impl GenerateVideoTool {
         )?;
         let prompt = arg_str(args, &["prompt"]).map(str::to_owned);
         let duration_s = match arg_u64(args, &["duration", "duration_seconds", "durationSeconds"]) {
-            Some(duration) => Some(u32::try_from(duration).map_err(|_| {
-                format!("`duration` must not exceed {}", u32::MAX)
-            })?),
+            Some(duration) => Some(
+                u32::try_from(duration)
+                    .map_err(|_| format!("`duration` must not exceed {}", u32::MAX))?,
+            ),
             None => None,
         };
         let mut request = VideoRequest {

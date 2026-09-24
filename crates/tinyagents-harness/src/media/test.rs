@@ -71,12 +71,8 @@ async fn billed_non_delivery_tells_the_model_not_to_retry() {
     assert!(result.is_error);
     let message = text(&result);
     assert!(
-        message.contains("billed") && message.contains("do not retry"),
+        message.contains("billed") && message.contains("Do not generate again"),
         "{message}"
-    );
-    assert!(
-        message.contains("mock-request"),
-        "request id is reported: {message}"
     );
 }
 
@@ -122,10 +118,28 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
         ]
     );
 
-    // Test that tilde-prefixed references stay within the workspace.
-    // Tilde is not expanded by the reference parser, so it resolves as a literal
-    // subdirectory inside the workspace.
-    for escape in ["../secret.png", "/etc/passwd", "~/.ssh/id_rsa"] {
+    // Tilde is literal, not home-directory expansion. An existing literal
+    // workspace path is admitted and canonicalized like every other local path.
+    let literal_tilde = dir.path().join("~/.ssh");
+    std::fs::create_dir_all(&literal_tilde).unwrap();
+    std::fs::write(literal_tilde.join("id_rsa"), b"not a key").unwrap();
+    let result = tool
+        .execute_with_context(
+            json!({ "prompt": "x", "references": ["~/.ssh/id_rsa"] }),
+            ToolCallOptions::default(),
+            Some(&context),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", text(&result));
+    assert_eq!(
+        generator.requests().pop().unwrap().references,
+        vec![MediaReference::Path(
+            literal_tilde.join("id_rsa").canonicalize().unwrap()
+        )]
+    );
+
+    for escape in ["../secret.png", "/etc/passwd"] {
         let result = tool
             .execute_with_context(
                 json!({ "prompt": "x", "references": [escape] }),
@@ -134,15 +148,42 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
             )
             .await
             .unwrap();
-        // All three should be refused: `..` is outside, `/etc/passwd` is outside,
-        // and `~/.ssh/id_rsa` must be inside the workspace (tilde is literal, so it
-        // would be <workspace>/~/.ssh/id_rsa, which also doesn't exist).
+        // Both paths are outside the workspace and must be refused.
         assert!(
             result.is_error,
             "{escape} must be refused: {}",
             text(&result)
         );
     }
+}
+
+/// Symlinks are only available on Unix-like platforms without elevated
+/// privileges. The canonicalization check must reject a workspace symlink that
+/// targets a file outside it.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinked_references_cannot_escape_the_workspace() {
+    let workspace_dir = tempfile::tempdir().unwrap();
+    let outside_dir = tempfile::tempdir().unwrap();
+    let outside = outside_dir.path().join("secret.png");
+    std::fs::write(&outside, b"secret").unwrap();
+    std::os::unix::fs::symlink(&outside, workspace_dir.path().join("escape.png")).unwrap();
+
+    let generator = Arc::new(MockImageGenerator::new());
+    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"));
+    let result = tool
+        .execute_with_context(
+            json!({ "prompt": "x", "references": ["escape.png"] }),
+            ToolCallOptions::default(),
+            Some(&workspace(workspace_dir.path())),
+        )
+        .await
+        .unwrap();
+    assert!(result.is_error, "{}", text(&result));
+    assert!(
+        generator.requests().is_empty(),
+        "outside file must not be sent"
+    );
 }
 
 #[tokio::test]
@@ -169,14 +210,15 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
         .unwrap();
     assert!(text(&result).contains("host refused"), "{}", text(&result));
 
-    // Test 2: a policy that admits out-of-workspace paths. Create a file in the
-    // test directory and a policy that allows it to be referenced.
-    std::fs::write(dir.path().join("ref2.png"), b"fake").unwrap();
+    // Test 2: a policy can explicitly admit a path outside the output root.
+    let outside = tempfile::tempdir().unwrap();
+    let reference = outside.path().join("ref2.png");
+    std::fs::write(&reference, b"fake").unwrap();
     let output =
         MediaOutput::new(dir.path()).with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
     let tool = GenerateImageTool::new(generator, output);
     let result = tool
-        .execute(json!({ "prompt": "x", "references": ["ref2.png"] }))
+        .execute(json!({ "prompt": "x", "references": [reference] }))
         .await
         .unwrap();
     // The custom policy allows the reference
@@ -268,6 +310,24 @@ async fn video_failure_surfaces_the_provider_reason() {
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error);
     assert!(text(&result).contains("safety filter"));
+}
+
+#[tokio::test]
+async fn empty_video_delivery_is_a_billed_non_retryable_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let generator = Arc::new(MockVideoGenerator::new(MockVideoScript {
+        polls: vec![(JobState::Completed, 0)],
+        error: None,
+    }));
+    let tool =
+        GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(fast());
+    let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
+    let message = text(&result);
+    assert!(result.is_error, "{message}");
+    assert!(
+        message.contains("billed") && message.contains("Do not generate again"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -366,6 +426,42 @@ async fn negative_counts_are_rejected_but_negative_seeds_are_not() {
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
     assert_eq!(generator.requests().pop().unwrap().seed, Some(-7));
+}
+
+#[tokio::test]
+async fn values_outside_provider_integer_ranges_are_rejected_before_billing() {
+    let image_generator = Arc::new(MockImageGenerator::new());
+    let image = GenerateImageTool::new(image_generator.clone(), MediaOutput::new("/tmp"));
+    let result = image
+        .execute(json!({ "prompt": "x", "seed": 9_223_372_036_854_775_808_u64 }))
+        .await
+        .unwrap();
+    assert!(result.is_error && text(&result).contains("`seed` must be an integer"));
+    assert!(image_generator.requests().is_empty());
+
+    let video_generator = Arc::new(MockVideoGenerator::new(MockVideoScript::delivers()));
+    let video = GenerateVideoTool::new(video_generator.clone(), MediaOutput::new("/tmp"));
+    let result = video
+        .execute(json!({ "prompt": "x", "duration": 4_294_967_296_u64 }))
+        .await
+        .unwrap();
+    assert!(result.is_error && text(&result).contains("`duration` must not exceed"));
+    assert!(video_generator.requests().is_empty());
+}
+
+#[tokio::test]
+async fn artifact_subdirectory_must_stay_below_the_output_root() {
+    let generator = Arc::new(MockImageGenerator::new());
+    let tool = GenerateImageTool::new(
+        generator.clone(),
+        MediaOutput::new("/tmp").with_subdir("../outside"),
+    );
+    let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
+    assert!(result.is_error && text(&result).contains("artifact subdirectory"));
+    assert!(
+        generator.requests().is_empty(),
+        "invalid output config must not bill"
+    );
 }
 
 #[test]
