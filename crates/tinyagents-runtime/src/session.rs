@@ -395,11 +395,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .before_turn(request, options, self.state_view(resumed)),
         )
         .await?;
-        let exact_tools = preparation.exact_tools;
         let (tools, prepared_prefix) = self.apply_preparation(preparation)?;
         if let Some(prefix) = prepared_prefix {
             self.apply_prefix(prefix)?;
         }
+        let exact_tools = tools.is_exact();
         let tools = if exact_tools {
             tools
         } else {
@@ -601,7 +601,6 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             transcript_target: self.target.as_ref(),
             committed_turns: self.committed_turns,
             resumed,
-            recorded_tools: self.recorded_tools.as_ref(),
         }
     }
 

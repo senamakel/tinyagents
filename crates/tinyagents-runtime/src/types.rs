@@ -189,11 +189,6 @@ pub struct TurnPreparation {
     /// the builder's compatibility default and is never retained from a prior
     /// preparation.
     pub tools: Option<ToolSnapshot>,
-    /// Send `tools` exactly as given: recorded declarations are not merged
-    /// back in, and this turn's set is not recorded as the session's tools.
-    /// For a deliberately tool-less or otherwise one-off turn, so it cannot
-    /// erase the conversation's durable tool list.
-    pub exact_tools: bool,
 }
 
 impl TurnPreparation {
@@ -216,10 +211,6 @@ pub struct SessionStateView<'a> {
     /// `true` only when this call loaded and decoded a durable transcript
     /// before `before_turn` ran.
     pub resumed: bool,
-    /// Tool declarations this session last sent, restored from its transcript
-    /// on resume. A host rebuilding executors after a restart can start from
-    /// these instead of re-deriving the set from live state.
-    pub recorded_tools: Option<&'a ToolSnapshot>,
 }
 
 /// The shape of a successful logical transcript transition.

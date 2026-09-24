@@ -75,7 +75,8 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
     /// would both break the prompt's own references to it and change the
     /// cached request prefix. The host must then be able to execute (or
     /// refuse) a retained declaration; it can read them from
-    /// `SessionStateView::recorded_tools` in `before_turn`.
+    /// [`Session::recorded_tools`](crate::Session::recorded_tools) after
+    /// resuming a session.
     ///
     /// Off by default because a driver that requires the snapshot to equal
     /// its own registry (`HarnessDriver`) cannot execute a retained entry.

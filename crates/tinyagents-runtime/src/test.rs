@@ -3170,8 +3170,7 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
     history.extend([Message::user("x"), Message::assistant("x")]);
     let driver = Arc::new(Driver::new(vec![Ok(outcome(history))]));
     let (hook, _) = hook(vec![TurnPreparation {
-        tools: Some(ToolSnapshot::default()),
-        exact_tools: true,
+        tools: Some(ToolSnapshot::default().exact()),
         ..TurnPreparation::default()
     }]);
     let mut session = SessionBuilder::new(driver.clone())
@@ -3211,8 +3210,7 @@ async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation(
         "compacted",
     )]))]));
     let (hook, _) = hook(vec![TurnPreparation {
-        tools: Some(ToolSnapshot::default()),
-        exact_tools: true,
+        tools: Some(ToolSnapshot::default().exact()),
         ..TurnPreparation::default()
     }]);
     let mut session = SessionBuilder::new(driver)

@@ -11,6 +11,7 @@ use crate::RuntimeError;
 #[derive(Clone, Debug, Default)]
 pub struct ToolSnapshot {
     specs: Vec<ToolSpec>,
+    exact: bool,
 }
 
 impl ToolSnapshot {
@@ -33,7 +34,19 @@ impl ToolSnapshot {
         }
         Ok(Self {
             specs: names.into_values().collect(),
+            exact: false,
         })
+    }
+
+    /// Marks this snapshot as a one-off declaration set. It is sent exactly
+    /// as supplied and is not retained for a later turn.
+    pub fn exact(mut self) -> Self {
+        self.exact = true;
+        self
+    }
+
+    pub(crate) fn is_exact(&self) -> bool {
+        self.exact
     }
 
     /// Returns the frozen declarations in stable name order.
