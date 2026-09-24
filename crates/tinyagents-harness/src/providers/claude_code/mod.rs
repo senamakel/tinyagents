@@ -88,6 +88,7 @@ pub fn render_request_stdin(request: &ModelRequest, is_new_session: bool) -> Vec
 pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 pub(crate) fn test_set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: every moved environment-mutating test serializes access through
     // `ENV_TEST_LOCK`; no provider work runs concurrently in those tests.
@@ -95,6 +96,7 @@ pub(crate) fn test_set_env(key: impl AsRef<std::ffi::OsStr>, value: impl AsRef<s
 }
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 pub(crate) fn test_remove_env(key: impl AsRef<std::ffi::OsStr>) {
     // SAFETY: see `test_set_env`.
     unsafe { std::env::remove_var(key) }
@@ -221,12 +223,13 @@ impl ClaudeCodeProvider {
         model_override: Option<&str>,
         thread_id: String,
     ) -> anyhow::Result<ChatResponse> {
-        let _permit = self
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
+        // Acquire the per-thread mutex *before* the global concurrency
+        // semaphore (M-14). Reversed, N callers on one busy thread each hold
+        // a global permit while blocked on the same thread lock — that is
+        // head-of-line blocking for every *other* thread's turns, which the
+        // semaphore exists to admit. Waiting on the free, per-thread lock
+        // first means a caller only claims a global permit once it can
+        // actually make progress.
         let lock_key = thread_id.clone();
         let thread_lock = {
             let mut locks = self
@@ -239,6 +242,12 @@ impl ClaudeCodeProvider {
                 .clone()
         };
         let _thread_guard = thread_lock.lock().await;
+        let _permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|error| anyhow::anyhow!("claude-code semaphore closed: {error}"))?;
         let append_system_prompt = coalesce_system_prompt(messages);
         let result = driver::run_turn(driver::TurnContext {
             bin_path: self.bin_path.clone(),
@@ -322,8 +331,20 @@ fn thread_key_from_request(request: &ModelRequest) -> String {
 /// provider sends downstream: prompt-tool coalescing/instructions applied
 /// first, then any structured [`ResponseFormat`] is appended as a trailing
 /// system instruction (see [`response_format_instruction`]).
+///
+/// `Message::Custom` remains in the host transcript as out-of-band metadata;
+/// it is intentionally omitted from the provider prompt. Hosts that want such
+/// information available to the model must add it as an explicit system or
+/// user message. Its optional `display` text is for transcript presentation,
+/// not an implicit prompt channel.
 fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
-    let mut messages = coalesce_tool_results(&request.messages);
+    let provider_messages: Vec<_> = request
+        .messages
+        .iter()
+        .filter(|message| !matches!(message, Message::Custom(_)))
+        .cloned()
+        .collect();
+    let mut messages = coalesce_tool_results(&provider_messages);
     if !request.tools.is_empty() {
         messages = with_tool_instructions(&messages, &request.tools, &request.tool_choice);
     }
@@ -332,18 +353,23 @@ fn request_messages(request: &ModelRequest) -> Vec<ChatMessage> {
     }
     messages
         .iter()
+        // `Message::Custom` is a host-side out-of-band record; never sent to
+        // the provider.
+        .filter(|message| !matches!(message, Message::Custom(_)))
         .map(|message| {
             let role = match message {
                 Message::System(_) => "system",
                 Message::User(_) => "user",
                 Message::Assistant(_) => "assistant",
                 Message::Tool(_) => "tool",
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             let content = match message {
                 Message::System(value) => render_content(&value.content),
                 Message::User(value) => render_content(&value.content),
                 Message::Assistant(value) => render_content(&value.content),
                 Message::Tool(value) => render_content(&value.content),
+                Message::Custom(_) => unreachable!("custom messages were filtered"),
             };
             ChatMessage::new(role, content)
         })
@@ -369,23 +395,64 @@ fn response_format_instruction(format: Option<&ResponseFormat>) -> Option<String
 }
 
 /// Flattens a message's content blocks to plain text: text and reasoning
-/// blocks pass through, JSON/extension blocks are stringified, an image
-/// becomes an `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
+/// blocks pass through (with internal image-looking text escaped),
+/// JSON/extension blocks are stringified, an image becomes an
+/// `[OH_IMAGE:<url>]` marker `input_builder` later rehydrates,
 /// and redacted-thinking blocks are dropped (nothing to show).
 fn render_content(content: &[ContentBlock]) -> String {
     content
         .iter()
         .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.clone()),
+            // Typed image blocks are flattened into the private marker below
+            // and rehydrated by `input_builder::content_blocks`. Escape the
+            // same marker when it occurs in ordinary text so user-authored
+            // prose can never be mistaken for an attachment.
+            ContentBlock::Text(text) => Some(escape_native_image_markers(text)),
             ContentBlock::Image(image) => Some(format!("[OH_IMAGE:{}]", image.url)),
             ContentBlock::Json(value) | ContentBlock::ProviderExtension(value) => {
                 Some(value.to_string())
             }
             ContentBlock::Thinking { text, .. } => Some(text.clone()),
             ContentBlock::RedactedThinking { .. } => None,
+            ContentBlock::Audio(media) => Some(format!("[OH_AUDIO:{media:?}]")),
+            ContentBlock::Video(media) => Some(format!("[OH_VIDEO:{media:?}]")),
+            ContentBlock::Document(media) => Some(format!("[OH_DOCUMENT:{media:?}]")),
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        // Content-block boundaries carry no implicit whitespace. Inserting a
+        // newline here changes adjacent captions and diverges from
+        // `tinyinference_llm::Message::text`, which concatenates text blocks.
+        .join("")
+}
+
+/// Escapes complete private image markers in user-authored text.
+///
+/// An unmatched `[OH_IMAGE:` prefix is ordinary prose and must remain byte-for-byte
+/// unchanged; `input_builder::content_blocks` only interprets bracket-terminated
+/// markers, so escaping an unmatched prefix would make that malformed prose visible
+/// to the user as `[OH_IMAGE_LITERAL:`.
+fn escape_native_image_markers(text: &str) -> String {
+    const IMAGE_PREFIX: &str = "[OH_IMAGE:";
+    const LITERAL_IMAGE_PREFIX: &str = "[OH_IMAGE_LITERAL:";
+
+    let mut escaped = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(relative_start) = text[cursor..].find(IMAGE_PREFIX) {
+        let start = cursor + relative_start;
+        let marker_body = start + IMAGE_PREFIX.len();
+        let Some(relative_end) = text[marker_body..].find(']') else {
+            escaped.push_str(&text[cursor..]);
+            return escaped;
+        };
+        let end = marker_body + relative_end + 1;
+
+        escaped.push_str(&text[cursor..start]);
+        escaped.push_str(LITERAL_IMAGE_PREFIX);
+        escaped.push_str(&text[marker_body..end]);
+        cursor = end;
+    }
+    escaped.push_str(&text[cursor..]);
+    escaped
 }
 
 /// Converts an internal [`ChatResponse`] into the harness's `ModelResponse`.
@@ -409,6 +476,7 @@ fn model_response(response: ChatResponse) -> ModelResponse {
             content: response.text.into_iter().map(ContentBlock::Text).collect(),
             tool_calls: Vec::new(),
             usage,
+            origin: None,
         },
         usage,
         finish_reason: Some("stop".into()),

@@ -14,7 +14,8 @@ use super::types::{TranscriptMeta, TurnUsage};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Write JSONL as source of truth **and** re-render the companion `.md`.
 ///
@@ -40,10 +41,10 @@ pub fn write_transcript(
     jsonl_buf.push('\n');
     serialise_message_lines(messages, last_assistant_turn_usage, None, &mut jsonl_buf)?;
 
-    fs::write(jsonl_path, jsonl_buf.as_bytes())
+    atomic_write(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("write transcript {}", jsonl_path.display()))?;
 
-    log::debug!(
+    tracing::debug!(
         "[transcript] wrote {} messages (jsonl, full rewrite) to {}",
         messages.len(),
         jsonl_path.display()
@@ -51,6 +52,46 @@ pub fn write_transcript(
 
     render_md_companion(jsonl_path, messages, meta, last_assistant_turn_usage);
     Ok(())
+}
+
+/// Like [`write_transcript`], but never overwrites an existing destination —
+/// see [`publish_transcript_if_absent`] for why adoption needs that instead
+/// of the full-rewrite semantics every other `write_transcript` caller
+/// wants. Returns `Ok(true)` when this call created `jsonl_path`, `Ok(false)`
+/// when it already existed (some other write already won the race and this
+/// call's `messages`/`meta` were discarded).
+pub fn write_transcript_if_absent(
+    jsonl_path: &Path,
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+) -> Result<bool> {
+    if let Some(parent) = jsonl_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create transcript dir {}", parent.display()))?;
+    }
+
+    let mut jsonl_buf = String::new();
+    jsonl_buf.push_str(&meta_line_json(meta)?);
+    jsonl_buf.push('\n');
+    serialise_message_lines(messages, None, None, &mut jsonl_buf)?;
+
+    let published = publish_transcript_if_absent(jsonl_path, jsonl_buf.as_bytes())
+        .with_context(|| format!("publish transcript {}", jsonl_path.display()))?;
+
+    if published {
+        tracing::debug!(
+            "[transcript] published {} messages (jsonl, create-if-absent) to {}",
+            messages.len(),
+            jsonl_path.display()
+        );
+        render_md_companion(jsonl_path, messages, meta, None);
+    } else {
+        tracing::debug!(
+            "[transcript] create-if-absent lost the race, {} already exists",
+            jsonl_path.display()
+        );
+    }
+    Ok(published)
 }
 
 /// Append this turn's delta to an **append-only** transcript, never rewriting
@@ -125,7 +166,7 @@ pub fn append_transcript_turn_with_partial(
         serialise_interrupted_partial(partial, request_id, &mut buf)?;
         fs::write(jsonl_path, buf.as_bytes())
             .with_context(|| format!("create transcript {}", jsonl_path.display()))?;
-        log::debug!(
+        tracing::debug!(
             "[transcript] created append-only transcript with {} message(s) at {}",
             messages.len(),
             jsonl_path.display()
@@ -141,7 +182,7 @@ pub fn append_transcript_turn_with_partial(
     if common == prev_persisted.len() {
         // Pure extension — append only the new tail.
         let tail = &messages[common..];
-        log::debug!(
+        tracing::debug!(
             "[transcript] append: extending on-disk set (prev={}, new={}, appending {} tail line(s)) {}",
             prev_persisted.len(),
             messages.len(),
@@ -153,7 +194,7 @@ pub fn append_transcript_turn_with_partial(
         // Reduction / rewrite — the on-disk set is no longer a prefix. Append a
         // compaction record carrying the full reduced context so the
         // model-context reader can replay it, without destroying earlier lines.
-        log::debug!(
+        tracing::debug!(
             "[transcript] append: context reduced (prev={}, new={}, common_prefix={}) — writing compaction record {}",
             prev_persisted.len(),
             messages.len(),
@@ -256,7 +297,7 @@ pub fn append_interrupted_partial(
         &mut buf,
     )?;
     append_bytes(jsonl_path, buf.as_bytes())?;
-    log::debug!(
+    tracing::debug!(
         "[transcript] appended interrupted partial ({} chars, request_id={:?}) to {}",
         partial_content.len(),
         request_id,
@@ -275,6 +316,130 @@ fn common_prefix_len(a: &[TranscriptMessage], b: &[TranscriptMessage]) -> usize 
         .zip(b.iter())
         .take_while(|(x, y)| x.role == y.role && x.content == y.content && x.id == y.id)
         .count()
+}
+
+/// A same-directory temp path for `path`, unique per call within this
+/// process. Shared by [`atomic_write`] and [`publish_transcript_if_absent`],
+/// both of which stage full contents in a temp file before publishing it
+/// with one atomic filesystem operation.
+fn unique_tmp_path(path: &Path) -> PathBuf {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("transcript");
+    let nonce = NONCE.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()))
+}
+
+/// Writes `contents` to `path` via a same-directory temp file and an atomic
+/// rename, rather than truncating `path` in place.
+///
+/// [`write_transcript`] is a full rewrite of the source-of-truth JSONL — used
+/// directly by migrations, sub-agent runners, and (through
+/// [`publish_transcript_if_absent`]) adoption. A plain `fs::write` truncates
+/// the destination before the new bytes land, so a process or filesystem
+/// failure partway through leaves a truncated file that nonetheless
+/// satisfies `path.exists()`. Writing to a temp file first and renaming it
+/// into place means the destination only ever transitions from "absent"
+/// straight to "complete"; there is no truncated intermediate state a crash
+/// can strand callers on. `fs::rename` always **replaces** an existing
+/// destination on both Unix and Windows (`MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING`, with a `SetFileInformationByHandle` fallback
+/// — see the `std::fs::rename` docs), which is exactly the full-rewrite
+/// semantics this function's other callers want.
+/// Writes `contents` to a fresh temp file at `tmp_path`, refusing to follow
+/// (and so overwrite the target of) any pre-existing filesystem entry —
+/// including a symlink — already at that path.
+///
+/// `unique_tmp_path` mints a name unique to this process and call, so this
+/// should never race with a legitimate temp file of ours; a party able to
+/// pre-create an entry at the exact predicted name is exactly the case this
+/// guards against. `fs::write` alone would instead follow a pre-planted
+/// symlink and write our transcript content through it into whatever the
+/// symlink points at — a party with write access to this directory could aim
+/// that at a file elsewhere the process can write but should not overwrite.
+/// `create_new` fails instead, atomically, without ever opening whatever was
+/// really there.
+fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(tmp_path)
+        .with_context(|| format!("create temp transcript {}", tmp_path.display()))?;
+    file.write_all(contents)
+        .with_context(|| format!("write temp transcript {}", tmp_path.display()))?;
+    Ok(())
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let tmp_path = unique_tmp_path(path);
+
+    if let Err(error) = write_temp_file(&tmp_path, contents) {
+        // A failure after `create_new` succeeded (a full disk, a signal
+        // interruption partway through `write_all`) leaves the temp file
+        // behind; nothing else ever looks for or cleans up a name only this
+        // call ever mints, so it would otherwise orphan forever. A failure
+        // from `create_new` itself (the guarded case above) means there is
+        // nothing of ours to clean up.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+    fs::rename(&tmp_path, path).with_context(|| {
+        let _ = fs::remove_file(&tmp_path);
+        format!(
+            "rename temp transcript {} to {}",
+            tmp_path.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Publishes `contents` at `path` only if nothing is there yet, atomically.
+///
+/// Unlike [`atomic_write`] (and [`write_transcript`], which uses it),
+/// **never overwrites an existing destination**. `fs::rename` cannot express
+/// "fail if the destination exists" — as documented on [`atomic_write`], it
+/// always replaces on both platforms — so this uses `fs::hard_link` instead,
+/// which fails with `AlreadyExists` without touching whatever is already at
+/// `path`. That failure is reported by returning `Ok(false)` rather than an
+/// error: it means some other write legitimately won the race, not that
+/// anything went wrong.
+///
+/// Adoption is this function's one caller and the reason it exists: its
+/// destination is the session's very first transcript, and a session's own
+/// normal turn persistence can independently create that same file at any
+/// point during adoption's scan. Adoption must publish only if it still
+/// holds the honor of "first write" when it finishes — never clobber a
+/// conversation's genuine first turn with an adoption fold that started
+/// scanning before that turn existed.
+fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
+    let tmp_path = unique_tmp_path(path);
+
+    if let Err(error) = write_temp_file(&tmp_path, contents) {
+        // Same orphaned-temp-file / symlink hazard as `atomic_write` — see
+        // `write_temp_file`'s comment.
+        let _ = fs::remove_file(&tmp_path);
+        return Err(error);
+    }
+    let published = match fs::hard_link(&tmp_path, path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+        Err(error) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(error).with_context(|| format!("publish transcript {}", path.display()));
+        }
+    };
+    // The temp file and its hard-linked destination share one inode; once
+    // linked (or once we know we lost the race), the temp name itself has
+    // no further purpose.
+    let _ = fs::remove_file(&tmp_path);
+    Ok(published)
 }
 
 /// Append raw bytes to a file, opening in append mode (O(1), no read-back).
@@ -323,7 +488,7 @@ fn render_md_companion(
     if let Some(parent) = md_path.parent()
         && let Err(err) = fs::create_dir_all(parent)
     {
-        log::warn!(
+        tracing::warn!(
             "[transcript] failed to create md companion dir {}: {err}",
             parent.display()
         );
@@ -331,13 +496,13 @@ fn render_md_companion(
     }
     let md = render_markdown(messages, meta, &per_msg_usage);
     if let Err(err) = fs::write(&md_path, md.as_bytes()) {
-        log::warn!(
+        tracing::warn!(
             "[transcript] failed to write markdown companion {}: {err}",
             md_path.display()
         );
         return;
     }
-    log::debug!(
+    tracing::debug!(
         "[transcript] wrote markdown companion to {}",
         md_path.display()
     );

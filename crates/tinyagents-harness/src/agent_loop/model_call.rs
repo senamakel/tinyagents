@@ -60,21 +60,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         let resolution = host_run.host.models.resolve(&resolve);
         let (budget, bound) = self.model_call_budget(ctx);
-        let model = match budget {
-            Some(remaining) => tokio::select! {
-                biased;
-                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = tokio::time::timeout(remaining, resolution) => result.map_err(|_| TinyAgentsError::Timeout(format!("host model resolution for run `{}` exceeded its {bound}", ctx.run_id())))?,
-            },
-            None => tokio::select! {
-                biased;
-                _ = ctx.cancellation.cancelled() => return Err(TinyAgentsError::Cancelled),
-                result = resolution => result,
-            },
-        }.map_err(|error| match error {
-            TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
-            _ => { tinyagents_tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed"); TinyAgentsError::Model("host model resolution failed".to_string()) }
-        })?;
+        let model = ctx
+            .bounded(budget, resolution, || {
+                format!(
+                    "host model resolution for run `{}` exceeded its {bound}",
+                    ctx.run_id()
+                )
+            })
+            .await
+            .map_err(|error| match error {
+                TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) => error,
+                _ => {
+                    tracing::warn!(agent_id = %host_run.agent_id, "[host] model resolution failed");
+                    TinyAgentsError::Model("host model resolution failed".to_string())
+                }
+            })?;
         let name = model
             .profile()
             .and_then(|profile| profile.model.clone())
@@ -175,14 +175,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
 
         if side_effecting_provider {
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 provider = "claude-code",
                 "[cache] response cache disabled for side-effecting provider"
             );
         } else if decision.is_none() {
             let reason = self.cache_skip_reason(request);
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 reason = reason.as_str(),
                 "[cache] response cache not consulted for this model call"
@@ -197,7 +197,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let looked_up = match cache.get(key).await {
                 Ok(hit) => hit,
                 Err(error) => {
-                    tinyagents_tracing::warn!(
+                    tracing::warn!(
                         call_id = %call_id.as_str(),
                         %error,
                         "[cache] response-cache lookup failed; treating as a miss"
@@ -257,7 +257,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             let injected =
                 policy.protect_prompt_prefix && apply_prompt_cache_breakpoints(&mut breakpointed);
-            tinyagents_tracing::debug!(
+            tracing::debug!(
                 call_id = %call_id.as_str(),
                 protect_prompt_prefix = policy.protect_prompt_prefix,
                 prompt_cache_key_injected = injected,
@@ -285,7 +285,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 .as_ref()
                 .map(|resolved| resolved.name.as_str());
             if served_by.is_some_and(|name| name != primary_name) {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     call_id = %call_id.as_str(),
                     primary = %primary_name,
                     served_by = served_by.unwrap_or_default(),
@@ -298,7 +298,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // The provider call already succeeded and was paid for.
                 // Discarding its answer because the cache is unavailable would
                 // be strictly worse than not caching.
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     call_id = %call_id.as_str(),
                     %error,
                     "[cache] response-cache write failed; returning the response uncached"
@@ -360,7 +360,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<ModelResponse> {
         let content = cached.message.content.clone();
         let tool_calls = cached.tool_calls().to_vec();
-        tinyagents_tracing::debug!(
+        tracing::debug!(
             call_id = %call_id.as_str(),
             text_len = cached.text().len(),
             tool_calls = tool_calls.len(),
@@ -395,6 +395,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     call_id: call.id.clone(),
                     content: serde_json::to_string(&call.arguments).unwrap_or_default(),
                     tool_name: Some(call.name.clone()),
+                    ..Default::default()
                 }),
             });
         }
@@ -442,8 +443,41 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
         }
         if saw_streamed_content {
+            // Same rule as the live streaming path (see the matching comment
+            // in `invoke_model_streaming_once`): keep the cached response's
+            // own `Thinking` blocks (with their signature) verbatim unless
+            // the synthetic replay deltas were actually transformed by
+            // `on_model_delta`, since a signed thinking block must be
+            // replayed byte-for-byte ahead of a tool call on the next turn.
+            let cached_reasoning: String = cached
+                .message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let reasoning_untransformed = cached_reasoning == streamed_reasoning;
+
             let mut transformed_content = Vec::new();
-            if !streamed_reasoning.is_empty() {
+            if reasoning_untransformed {
+                transformed_content.extend(
+                    cached
+                        .message
+                        .content
+                        .iter()
+                        .filter(|block| {
+                            matches!(
+                                block,
+                                tinyinference_llm::message::ContentBlock::Thinking { .. }
+                            )
+                        })
+                        .cloned(),
+                );
+            } else if !streamed_reasoning.is_empty() {
                 transformed_content.push(tinyinference_llm::message::ContentBlock::Thinking {
                     text: streamed_reasoning,
                     signature: None,
@@ -549,7 +583,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // for the call to run to completion. `cancelled()` is
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
-                    let cancellation = ctx.cancellation.clone();
                     let fut = async {
                         model
                             .invoke(state, request.clone())
@@ -563,11 +596,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         bound,
                         fut,
                     );
-                    tokio::select! {
-                        biased;
-                        _ = cancellation.cancelled() => Err(TinyAgentsError::Cancelled),
-                        result = budgeted => result,
-                    }
+                    // `with_call_budget` already applies its own deadline, so
+                    // this only needs to race cancellation against an
+                    // otherwise-unbounded future — `bounded`'s `None` arm,
+                    // which never calls `timeout_message`.
+                    ctx.bounded(None, budgeted, || {
+                        unreachable!("with_call_budget already applies its own timeout")
+                    })
+                    .await
                 };
                 match attempt_result {
                     Ok(response) => break Ok(response),
@@ -575,6 +611,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // `RunLimits::max_retries_per_call` is a hard ceiling
                         // that a looser `RetryPolicy::max_attempts` cannot
                         // exceed; whichever is stricter wins.
+                        // A registered `RetryMiddleware` (or any other
+                        // `ModelMiddleware::overrides_retry`) already retries
+                        // the whole wrap onion around this base call. Retrying
+                        // again here would multiply attempts
+                        // (`mw.max_attempts × policy.retry.max_attempts ×
+                        // |fallback|` for one logical failure) and emit
+                        // `RetryScheduled` for attempts the middleware cannot
+                        // see, so the base call skips its own retry loop and
+                        // defers entirely to the middleware (I-7); the
+                        // fallback chain below is unaffected.
+                        let retry_overridden = self.middleware.has_retry_override();
                         let max_attempts = self
                             .policy
                             .retry
@@ -585,7 +632,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         // uses), applying the harness ceiling by capping a
                         // cloned policy first so the two sites cannot drift.
                         let capped = self.policy.retry.clone().with_max_attempts(max_attempts);
-                        if capped.should_retry_error(attempt, &error) {
+                        if !retry_overridden && capped.should_retry_error(attempt, &error) {
                             // Compute the backoff from the *pre-increment*
                             // attempt number: `attempt == 0` is the first
                             // retry and must sleep `initial_backoff_ms`
@@ -602,7 +649,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 // for a streaming call *is* the signal that
                                 // every delta seen so far for this `call_id`
                                 // must be dropped.
-                                tinyagents_tracing::warn!(
+                                tracing::warn!(
                                     call_id = %call_id.as_str(),
                                     discarded_deltas = deltas_emitted,
                                     attempt,
@@ -635,6 +682,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     if response.resolved_model.is_none() {
                         response.resolved_model = Some(resolved);
                     }
+                    split_thinking_tags(&mut response, model.profile());
                     return Ok(response);
                 }
                 Err(error) => {
@@ -803,10 +851,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         match budget {
             Some(budget) => match tokio::time::timeout(budget, fut).await {
                 Ok(result) => result,
-                Err(_) => Err(TinyAgentsError::Timeout(format!(
-                    "{what} for run `{run_id}` exceeded its {bound} ({} ms)",
-                    budget.as_millis()
-                ))),
+                Err(_) => {
+                    let message = format!(
+                        "{what} for run `{run_id}` exceeded its {bound} ({} ms)",
+                        budget.as_millis()
+                    );
+                    // Only the per-model-call ceiling is retryable: it means
+                    // this one call wedged, not that the run is out of time.
+                    // Every other bound this helper is used with (the run's
+                    // remaining wall-clock budget, for model calls, tool
+                    // calls, host resolution, tool authorization/screening,
+                    // and host turn preparation) is terminal.
+                    if bound == PER_CALL_BOUND_LABEL {
+                        Err(TinyAgentsError::CallTimeout(message))
+                    } else {
+                        Err(TinyAgentsError::Timeout(message))
+                    }
+                }
             },
             None => fut.await,
         }
@@ -859,6 +920,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut saw_streamed_content = false;
         let mut transformed_tools = StreamAccumulator::new();
         let mut saw_tool_delta = false;
+
+        // Some providers pad the very first streamed text chunk with
+        // whitespace that is a wire-format artifact, not content (see
+        // `ModelProfile::ignore_streamed_leading_whitespace`). Stripped once,
+        // on the first delta that actually carries non-whitespace text;
+        // deltas consisting only of leading whitespace are dropped outright
+        // rather than surfaced empty.
+        let mut strip_leading_whitespace = model
+            .profile()
+            .map(|profile| profile.ignore_streamed_leading_whitespace)
+            .unwrap_or(false);
 
         // Clone the cheap token so the cancellation future does not borrow
         // `ctx` for the duration of the stream loop (the body still needs
@@ -953,7 +1025,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 _ => None,
             };
 
-            if let Some(message_delta) = message_delta {
+            if let Some(mut message_delta) = message_delta {
+                if strip_leading_whitespace && !message_delta.text.is_empty() {
+                    let stripped = message_delta.text.trim_start();
+                    if stripped.is_empty() {
+                        message_delta.text.clear();
+                    } else if stripped.len() == message_delta.text.len() {
+                        // No leading whitespace to strip in this delta; the
+                        // next delta carrying text is no longer the first.
+                        strip_leading_whitespace = false;
+                    } else {
+                        message_delta.text = stripped.to_string();
+                        strip_leading_whitespace = false;
+                    }
+                }
                 saw_tool_delta |= message_delta.tool_call.is_some();
                 // Build the middleware-facing delta first (it needs owned
                 // copies of the fields), then move `message_delta` into the
@@ -1039,11 +1124,53 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             {
                 // Deltas represent only text/thinking, so preserve terminal
                 // blocks that cannot be streamed as a `ModelDelta` (JSON,
-                // images, and provider extensions).  Provider signatures on
-                // thinking are intentionally discarded: a transformed block
-                // can no longer be replayed as the signed raw one.
+                // images, and provider extensions).
+                //
+                // A signed `Thinking` block must be replayed *verbatim* on
+                // the next model call when thinking + tool calls are both in
+                // play (Anthropic requires the exact signed block ahead of a
+                // `tool_use`); synthesizing a fresh, unsigned block here would
+                // make that replay fail. So the terminal provider blocks are
+                // kept as-is unless a delta middleware actually rewrote the
+                // reasoning text: compare the concatenated `Thinking` text
+                // that crossed `on_model_delta` against the terminal
+                // response's own `Thinking` text. Equal means no middleware
+                // touched it — keep the terminal blocks (signature intact).
+                // Different means the delta stream was transformed — fall
+                // back to a synthetic, unsigned block built from what
+                // actually crossed the middleware boundary, same as before.
+                // `RedactedThinking` carries no reasoning text at all (it is
+                // opaque), so it is always kept verbatim.
+                let terminal_reasoning: String = response
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        tinyinference_llm::message::ContentBlock::Thinking { text, .. } => {
+                            Some(text.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let reasoning_untransformed = terminal_reasoning == streamed_reasoning;
+
                 let mut content = Vec::new();
-                if !streamed_reasoning.is_empty() {
+                if reasoning_untransformed {
+                    content.extend(
+                        response
+                            .message
+                            .content
+                            .iter()
+                            .filter(|block| {
+                                matches!(
+                                    block,
+                                    tinyinference_llm::message::ContentBlock::Thinking { .. }
+                                )
+                            })
+                            .cloned(),
+                    );
+                    streamed_reasoning.clear();
+                } else if !streamed_reasoning.is_empty() {
                     content.push(tinyinference_llm::message::ContentBlock::Thinking {
                         text: std::mem::take(&mut streamed_reasoning),
                         signature: None,
@@ -1093,8 +1220,78 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             accumulator.push(&item);
         }
 
-        Ok(accumulator.finish()?)
+        let mut response = accumulator.finish()?;
+        split_thinking_tags(&mut response, model.profile());
+        Ok(response)
     }
+}
+
+/// Splits a model's inline `<open>...</close>`-tagged reasoning span out of a
+/// `Text` content block into a dedicated [`ContentBlock::Thinking`] block,
+/// for a model whose [`ModelProfile::thinking_tags`] declares the tag pair it
+/// emits inline instead of on a distinct reasoning channel.
+///
+/// A no-op when the profile declares no tag pair, or the response carries no
+/// text block containing both tags. Only the first tagged span in each text
+/// block is extracted — every provider that uses this convention emits at
+/// most one reasoning span ahead of the visible answer — and any text before
+/// or after the span is preserved as ordinary `Text` blocks in the same
+/// position.
+///
+/// [`ContentBlock::Thinking`]: tinyinference_llm::message::ContentBlock::Thinking
+/// [`ModelProfile::thinking_tags`]: tinyinference_llm::model::ModelProfile::thinking_tags
+pub(super) fn split_thinking_tags(
+    response: &mut tinyinference_llm::model::ModelResponse,
+    profile: Option<&tinyinference_llm::model::ModelProfile>,
+) {
+    let Some((open, close)) = profile.and_then(|p| p.thinking_tags.as_ref()) else {
+        return;
+    };
+    if open.is_empty() || close.is_empty() {
+        return;
+    }
+
+    let mut rebuilt = Vec::with_capacity(response.message.content.len());
+    for block in response.message.content.drain(..) {
+        match block {
+            tinyinference_llm::message::ContentBlock::Text(text) => {
+                match split_one(&text, open, close) {
+                    Some((before, thinking, after)) => {
+                        if !before.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Text(before));
+                        }
+                        if !thinking.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Thinking {
+                                text: thinking,
+                                signature: None,
+                            });
+                        }
+                        if !after.is_empty() {
+                            rebuilt.push(tinyinference_llm::message::ContentBlock::Text(after));
+                        }
+                    }
+                    None => rebuilt.push(tinyinference_llm::message::ContentBlock::Text(text)),
+                }
+            }
+            other => rebuilt.push(other),
+        }
+    }
+    response.message.content = rebuilt;
+}
+
+/// Splits `text` on the first `open`/`close` tag pair, returning
+/// `(before, inside, after)` with the tags themselves removed and each
+/// segment trimmed of the whitespace/newlines the tags typically pad. `None`
+/// when the text does not contain a complete `open`...`close` span.
+fn split_one(text: &str, open: &str, close: &str) -> Option<(String, String, String)> {
+    let open_idx = text.find(open)?;
+    let after_open = open_idx + open.len();
+    let close_rel = text[after_open..].find(close)?;
+    let close_idx = after_open + close_rel;
+    let before = text[..open_idx].trim().to_string();
+    let inside = text[after_open..close_idx].trim().to_string();
+    let after = text[close_idx + close.len()..].trim().to_string();
+    Some((before, inside, after))
 }
 /// The innermost model call wrapped by the model-wrap onion.
 ///
@@ -1178,7 +1375,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 if binding.resolved.source == ModelResolutionSource::RequestOverride
                     && binding.resolved.name == requested =>
             {
-                tinyagents_tracing::debug!(
+                tracing::debug!(
                     call_id = %self.call_id.as_str(),
                     from = %self.resolved.name,
                     to = %binding.resolved.name,
@@ -1187,7 +1384,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 Ok(binding)
             }
             _ => {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     call_id = %self.call_id.as_str(),
                     requested = %requested,
                     resolved = %self.resolved.name,
@@ -1246,12 +1443,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx> for ToolCall
                 settings.resolve(self.dispatch.tool().timeout_policy(&call.arguments))
             });
             let timeout_result = super::tools::timeout_result(&call, timeout);
-            let future = async {
-                self.dispatch
-                    .execute(state, call.arguments, self.options, ctx)
-                    .await
-                    .map_err(super::tools::map_tool_dispatch_error)
-            };
+            let future = super::tools::execute_tool_recovering_model_retry(self.dispatch.execute(
+                state,
+                CallId::new(call.id),
+                call.arguments,
+                self.options,
+                ctx,
+            ));
             match timeout.and_then(|resolved| resolved.deadline) {
                 Some(deadline) => match tokio::time::timeout(deadline, future).await {
                     Ok(result) => result,

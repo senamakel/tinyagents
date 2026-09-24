@@ -14,19 +14,15 @@
 //! streaming/events ([`stream`]), run-status snapshots ([`status`]), graph
 //! export/visualization ([`export`]), dependency-DAG validation ([`dag`]),
 //! subgraph embedding ([`subgraph`]), and
-//! per-thread productivity primitives — a durable goal ([`goals`]) and a kanban
-//! task board ([`todos`], with its claim/heartbeat run log and dispatch policy)
-//! — exposed as harness tools.
+//! per-thread productivity primitives — a durable goal ([`goals`]) and a todo
+//! checklist ([`todos`]) — exposed as harness tools.
 //!
 //! Each concern lives in its own submodule with `types.rs` (definitions),
 //! `mod.rs` (implementations), and `test.rs` (unit tests).
 
-#![cfg_attr(
-    not(feature = "tracing"),
-    allow(dead_code, unused_imports, unused_variables)
-)]
-
+pub mod agent_loop;
 pub mod builder;
+pub mod cache;
 pub mod channel;
 pub mod checkpoint;
 pub mod command;
@@ -52,22 +48,28 @@ pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 // --- Durable execution model ---
 pub use builder::{
-    END, ForkId, GraphBuilder, GraphDefaults, NodeContext, NodeFuture, NodeHandler, Route,
-    RouterFn, START,
+    END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext, NodeFuture,
+    NodeHandler, NodePolicy, Route, RouterFn, START,
 };
+#[cfg(feature = "sqlite")]
+pub use cache::SqliteTaskCache;
+pub use cache::{InMemoryTaskCache, TaskCache, TaskCacheKey};
 pub use channel::{
-    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, Delta, Ephemeral,
-    LastValue, Messages, NamedBarrier, Topic, Untracked,
+    Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
+    Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
 #[cfg(feature = "sqlite")]
 pub use checkpoint::SqliteCheckpointer;
 pub use checkpoint::{
-    BarrierArrivals, Checkpoint, CheckpointConfig, CheckpointMetadata, CheckpointSource,
-    CheckpointTuple, Checkpointer, DurabilityMode, FileCheckpointer, InMemoryCheckpointer,
-    PendingActivation, PendingWrite,
+    BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
+    CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
+    FileCheckpointer, InMemoryCheckpointer, PendingActivation, PendingWrite,
 };
 pub use command::{Command, Interrupt, NodeResult, RouteTarget, Send};
-pub use compiled::{CompiledGraph, GraphExecution, GraphInput, ResumeTarget, StateSnapshot};
+pub use compiled::{
+    CompiledGraph, DrainHandle, DrainSignal, GraphExecution, GraphInput, ResumeTarget, RunOptions,
+    StateSnapshot,
+};
 pub use dag::{DagIssue, DagNode};
 pub use delegation::{
     CURRENT_SCHEMA_VERSION as DELEGATION_SCHEMA_VERSION, DelegationConfig, DelegationOutcome,
@@ -111,7 +113,10 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
-pub use stream::{CollectingSink, GraphEvent, GraphEventSink, NoopSink, StreamMode};
+pub use stream::{
+    CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
+    StreamProjection, project_graph_event,
+};
 pub use subagent_node::{
     AgentInvocation, AgentInvocationBinding, AgentInvoker, InputMapper, OutputMapper,
     SubAgentBudget, SubAgentInput, SubAgentNode, SubAgentOutput, SubAgentPolicy, subagent_node,
@@ -122,16 +127,8 @@ pub use testkit::{
     assert_graph, failing_node, fanout_node, interrupting_node, noop_node, run_recorded,
     scripted_route_node, scripted_update_node, subagent_fake_node, subgraph_test_node,
 };
-pub use todos::dispatch::{
-    ActiveRun, ActiveRunRegistry, PollCadence, TaskPromptTools, build_progress_instruction,
-    build_task_prompt, card_urgency, has_card_in_progress, pick_next_card, requires_plan_approval,
-};
-pub use todos::runs::store as task_run_store;
-pub use todos::runs::{
-    ReclaimDetail, ReclaimResult, RunLimits, RunOutcome, TaskRun, staleness_reason,
-};
 pub use todos::store as todo_store;
 pub use todos::{
-    CardPatch, TaskApprovalMode, TaskBoard, TaskBoardCard, TaskCardStatus, TodoTool, TodosSnapshot,
-    normalise_board, parse_status, register_todo_tools, render_markdown, todo_tools,
+    TodoItem, TodoList, TodoStatus, TodoTool, TodosSnapshot, normalise_list, parse_status,
+    register_todo_tools, render_markdown, todo_tools,
 };

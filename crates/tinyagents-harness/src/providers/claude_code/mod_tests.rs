@@ -195,3 +195,76 @@ fn request_messages_include_tool_and_schema_instructions() {
     assert!(system.contains("Tool Use Protocol"));
     assert!(system.contains("JSON Schema"));
 }
+
+#[test]
+fn request_rendering_preserves_text_adjacent_to_typed_images() {
+    use tinyinference_llm::message::{ImageRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Text("before ".into()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,QUJD".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Text(" after".into()),
+        ],
+    })]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content[0]["text"], "before ");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[2]["text"], " after");
+}
+
+#[test]
+fn request_rendering_keeps_private_image_marker_text_literal() {
+    let request = ModelRequest::new(vec![Message::user(
+        "literal [OH_IMAGE:data:image/png;base64,QUJD]",
+    )]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["text"], "literal ");
+    assert_eq!(content[1]["text"], "[OH_IMAGE:data:image/png;base64,QUJD]");
+}
+
+#[test]
+fn request_rendering_preserves_unclosed_private_image_marker_text() {
+    let text = "literal [OH_IMAGE:data:image/png;base64,QUJD";
+    let request = ModelRequest::new(vec![Message::user(text)]);
+    let row: serde_json::Value =
+        serde_json::from_slice(&render_request_stdin(&request, true)).expect("stream-json row");
+    let content = row["message"]["content"]
+        .as_array()
+        .expect("content blocks");
+
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["text"], text);
+}
+
+#[test]
+fn request_messages_filter_host_custom_records() {
+    let request = ModelRequest::new(vec![
+        Message::user("hello"),
+        Message::Custom(tinyinference_llm::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: serde_json::json!({"summary": "host-only"}),
+            display: Some("host-only".into()),
+        }),
+    ]);
+
+    let messages = request_messages(&request);
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].content, "hello");
+}

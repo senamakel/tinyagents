@@ -119,7 +119,7 @@ pub(super) fn map_agent_team_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Resu
 pub(super) fn get_agent_run_inner(conn: &Connection, id: &str) -> Result<Option<AgentRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, parent_run_id, parent_thread_id, agent_id, status,
-                prompt_ref, worker_thread_id, task_board_id, task_card_id,
+                prompt_ref, worker_thread_id,
                 checkpoint_path, checkpoint_json, summary, error, metadata_json,
                 started_at, updated_at, completed_at
          FROM agent_runs WHERE id = ?1",
@@ -163,8 +163,8 @@ pub(super) fn map_agent_run_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<AgentRun> {
     let id: String = row.get(0)?;
-    let checkpoint_json: Option<String> = row.get(11)?;
-    let metadata_json: String = row.get(14)?;
+    let checkpoint_json: Option<String> = row.get(9)?;
+    let metadata_json: String = row.get(12)?;
     Ok(AgentRun {
         id: id.clone(),
         kind: AgentRunKind::parse(&row.get::<_, String>(1)?),
@@ -174,17 +174,15 @@ pub(super) fn map_agent_run_row(
         status: AgentRunStatus::parse(&row.get::<_, String>(5)?),
         prompt_ref: row.get(6)?,
         worker_thread_id: row.get(7)?,
-        task_board_id: row.get(8)?,
-        task_card_id: row.get(9)?,
-        checkpoint_path: row.get(10)?,
+        checkpoint_path: row.get(8)?,
         checkpoint: parse_json_opt(checkpoint_json),
-        summary: row.get(12)?,
-        error: row.get(13)?,
+        summary: row.get(10)?,
+        error: row.get(11)?,
         metadata: parse_json(metadata_json),
         telemetry: get_optional_run_telemetry(conn, &id)?,
-        started_at: parse_rfc3339(&row.get::<_, String>(15)?)?,
-        updated_at: parse_rfc3339(&row.get::<_, String>(16)?)?,
-        completed_at: parse_rfc3339_opt(row.get(17)?)?,
+        started_at: parse_rfc3339(&row.get::<_, String>(13)?)?,
+        updated_at: parse_rfc3339(&row.get::<_, String>(14)?)?,
+        completed_at: parse_rfc3339_opt(row.get(15)?)?,
     })
 }
 

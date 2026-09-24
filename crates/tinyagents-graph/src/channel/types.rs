@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::Result;
@@ -54,6 +55,18 @@ pub trait Channel: Send + Sync {
     /// of cloning the entire accumulated value on every merge, which was
     /// O(existing) allocation per write.
     fn merge(&self, current: Option<Value>, incoming: Value) -> Result<Value>;
+
+    /// The channel's construction config, serialized so [`ChannelSet`] can
+    /// round-trip `{ kind, config, value }` through a durable checkpointer
+    /// without knowing the concrete channel type. Paired with
+    /// `channel_from_config` on decode. Channels with no configuration
+    /// (the default) serialize `Value::Null`; [`Barrier`]/[`NamedBarrier`]
+    /// carry their `expected` set, and [`BinaryAggregate`] carries the
+    /// registered reducer name (see [`BinaryAggregate::named`] and
+    /// [`crate::channel::ReducerRegistry`]).
+    fn config(&self) -> Value {
+        Value::Null
+    }
 
     /// Whether more than one concurrent branch may write this channel within a
     /// single superstep. Aggregates (append/fold/accumulate/barrier) return
@@ -163,6 +176,14 @@ pub struct NamedBarrier {
 #[derive(Clone)]
 pub struct BinaryAggregate {
     pub(crate) fold: std::sync::Arc<dyn Fn(Value, Value) -> Result<Value> + Send + Sync>,
+    /// The reducer's registered name (see [`BinaryAggregate::named`]), when
+    /// it was constructed from the [`crate::channel::ReducerRegistry`].
+    /// `None` for a channel built from a bare closure via
+    /// [`BinaryAggregate::new`]/[`BinaryAggregate::from_reducer`] — such a
+    /// channel merges correctly at runtime but cannot round-trip through a
+    /// durable checkpointer (its [`Channel::config`] carries no reducer name
+    /// to decode from).
+    pub(crate) reducer_name: Option<String>,
 }
 
 impl std::fmt::Debug for BinaryAggregate {
@@ -183,6 +204,10 @@ impl std::fmt::Debug for BinaryAggregate {
 pub struct ChannelSet {
     pub(crate) channels: HashMap<String, Box<dyn Channel>>,
     pub(crate) values: HashMap<String, Value>,
+    /// Delta-tracked channels registered via [`ChannelSet::with_delta`]:
+    /// name -> how often (in writes to that channel) a full-value snapshot
+    /// marker is additionally recorded alongside the per-write delta.
+    pub(crate) delta_channels: HashMap<String, u32>,
 }
 
 impl Clone for ChannelSet {
@@ -194,6 +219,7 @@ impl Clone for ChannelSet {
                 .map(|(k, v)| (k.clone(), v.clone_box()))
                 .collect(),
             values: self.values.clone(),
+            delta_channels: self.delta_channels.clone(),
         }
     }
 }
@@ -212,15 +238,48 @@ impl std::fmt::Debug for ChannelSet {
     }
 }
 
-/// A batch of `(channel_name, value)` writes returned by a node.
+/// One write within a [`ChannelUpdate`]: an ordinary reducer-merged write, or
+/// an [`Overwrite`](ChannelWrite::Overwrite) that bypasses the channel's
+/// merge rule entirely and replaces the value outright.
 ///
-/// Build one with [`ChannelUpdate::new`] and chain [`ChannelUpdate::set`]. Tag
-/// it with [`ChannelUpdate::at_step`] (passing `ctx.step`) to opt into
-/// same-step concurrent-write conflict detection and ephemeral clearing — see
-/// the module docs and [`ChannelState`].
+/// `Overwrite` is what lets an append-style ([`Topic`], a delta-tracked
+/// channel) reset its baseline: the replaced value becomes what subsequent
+/// merges build on, and — for a channel registered with
+/// [`ChannelSet::with_delta`] — it also rebases that channel's accumulated
+/// delta history (see [`ChannelState::step_deltas`]).
+#[derive(Clone, Debug)]
+pub enum ChannelWrite {
+    /// Folds `Value` into the channel's current value via its merge rule.
+    Merge(Value),
+    /// Replaces the channel's current value with `Value`, bypassing the
+    /// merge rule.
+    Overwrite(Value),
+}
+
+impl ChannelWrite {
+    /// The raw value carried by either variant.
+    pub fn value(&self) -> &Value {
+        match self {
+            ChannelWrite::Merge(v) | ChannelWrite::Overwrite(v) => v,
+        }
+    }
+
+    /// Whether this write is an [`Overwrite`](ChannelWrite::Overwrite).
+    pub fn is_overwrite(&self) -> bool {
+        matches!(self, ChannelWrite::Overwrite(_))
+    }
+}
+
+/// A batch of `(channel_name, write)` writes returned by a node.
+///
+/// Build one with [`ChannelUpdate::new`] and chain [`ChannelUpdate::set`] (an
+/// ordinary merged write) or [`ChannelUpdate::overwrite`] (bypasses the merge
+/// rule). Tag it with [`ChannelUpdate::at_step`] (passing `ctx.step`) to opt
+/// into same-step concurrent-write conflict detection and ephemeral clearing
+/// — see the module docs and [`ChannelState`].
 #[derive(Clone, Debug, Default)]
 pub struct ChannelUpdate {
-    pub(crate) writes: Vec<(String, Value)>,
+    pub(crate) writes: Vec<(String, ChannelWrite)>,
     pub(crate) step: Option<usize>,
 }
 
@@ -236,13 +295,31 @@ pub struct ChannelUpdate {
 /// The reducer's `&self` receiver is unused — the merge rules travel inside the
 /// running state's [`ChannelSet`] — so any `ChannelState` value (for example
 /// [`ChannelState::default`]) can be passed to `set_reducer`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChannelState {
     pub(crate) set: ChannelSet,
     /// The step number of the writes currently accumulated in `step_writes`;
     /// `0` before the first stamped update is seen.
+    #[serde(default)]
     pub(crate) current_step: usize,
     /// Per-channel write counts within `current_step`, used to detect
     /// concurrent writes to non-aggregate channels.
+    #[serde(default)]
     pub(crate) step_writes: HashMap<String, usize>,
+    /// Cumulative per-channel version counter, bumped once per distinct
+    /// channel name touched by each folded [`ChannelUpdate`] (I5/R3: see
+    /// `docs/modules/graph/state-channels.md`'s "channel versions" section).
+    /// Persisted on [`crate::checkpoint::Checkpoint::channel_versions`] at
+    /// every boundary so a resumed run's node-visible versions stay
+    /// continuous across a restart.
+    #[serde(default)]
+    pub(crate) channel_versions: BTreeMap<String, u64>,
+    /// This step's accumulated raw write values for every channel
+    /// registered via [`ChannelSet::with_delta`], reset whenever the
+    /// stamped step advances (mirrors `step_writes`). Read by the
+    /// checkpoint-construction call sites (`compiled::boundary`,
+    /// `compiled::state_api`) into
+    /// [`crate::checkpoint::Checkpoint::channel_deltas`].
+    #[serde(default)]
+    pub(crate) step_deltas: BTreeMap<String, Vec<Value>>,
 }

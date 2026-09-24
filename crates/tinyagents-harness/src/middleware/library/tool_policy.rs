@@ -20,8 +20,13 @@ impl ToolAllowlistMiddleware {
     }
 
     /// Returns `true` if `name` is on the allowlist.
+    ///
+    /// Delegates to [`crate::tool::toolset::tool_name_allowed`] — the exact
+    /// membership test [`crate::tool::toolset::FilteredToolSet::allowing`]
+    /// uses — so this middleware and its `ToolSet` counterpart cannot drift
+    /// (`docs/runtime-comparison/pydantic-ai.md` §4).
     pub fn allows(&self, name: &str) -> bool {
-        self.allowed.contains(name)
+        crate::tool::toolset::tool_name_allowed(&self.allowed, name)
     }
 }
 
@@ -37,7 +42,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolAllowl
         _state: &State,
         call: &mut ToolCall,
     ) -> Result<()> {
-        if !self.allowed.contains(&call.name) {
+        if !self.allows(&call.name) {
             return Err(TinyAgentsError::Validation(format!(
                 "tool `{}` is not on the allowlist",
                 call.name
@@ -66,6 +71,7 @@ impl ToolPolicyMiddleware {
             require_approval: false,
             approved: std::collections::HashSet::new(),
             enforce_result_bytes: false,
+            exempt_discovery_bridge: false,
         }
     }
 
@@ -86,7 +92,25 @@ impl ToolPolicyMiddleware {
             require_approval: false,
             approved: std::collections::HashSet::new(),
             enforce_result_bytes: false,
+            exempt_discovery_bridge: false,
         }
+    }
+
+    /// Exempts the intrinsic `tool_search`/`tool_call` discovery-bridge names
+    /// from classification/side-effect checks whenever `policies` has no
+    /// entry for them. See the field doc on
+    /// [`ToolPolicyMiddleware::exempt_discovery_bridge`] for why this is
+    /// opt-in rather than automatic under [`strict`](Self::strict): it is
+    /// only safe when `policies` is a complete registry snapshot (typically
+    /// [`ToolRegistry::policies`][crate::tool::ToolRegistry::policies]), so
+    /// that "no entry for this name" reliably means "not a registered tool."
+    /// A host-registered tool under either reserved name still wins — the
+    /// intrinsic bridge only fills a name nobody registered — and is
+    /// evaluated by its own policy entry as normal, whether or not this is
+    /// enabled.
+    pub fn exempt_discovery_bridge(mut self, exempt: bool) -> Self {
+        self.exempt_discovery_bridge = exempt;
+        self
     }
 
     /// Requires every tool to carry a classified policy (fail closed on
@@ -141,19 +165,22 @@ impl ToolPolicyMiddleware {
     fn evaluate(&self, name: &str) -> std::result::Result<(), String> {
         // The intrinsic `tool_search`/`tool_call` discovery bridge is never a
         // registered tool (see `crate::tool::discover`), so it never has a
-        // policy entry. Under `strict()` that would make `require_classification`
-        // reject it here and `before_model` strip both bridge schemas from
-        // every request, making every deferred tool undiscoverable in a
-        // fail-closed deployment. It is safe to exempt unconditionally: the
-        // bridge itself has no side effects (search only reads the run's
-        // catalogue), and a `tool_call` payload is unwrapped to the real tool
-        // name/arguments *before* `before_tool` runs, so the real call is
-        // still evaluated against its own policy at execution time. A host
-        // that registers its own tool under either name still wins (the
-        // bridge only fills a name nobody registered), and that registration
-        // is evaluated normally since it hits the `self.policies.get` lookup
-        // below like any other name.
-        if !self.policies.contains_key(name)
+        // policy entry. Exempting it here is opt-in
+        // (`exempt_discovery_bridge`), not automatic even under `strict()`:
+        // unconditionally treating every policy-less tool sharing these two
+        // magic names as the safe intrinsic bridge would let a real,
+        // side-effecting host tool bypass `strict()`'s fail-closed checks
+        // whenever the caller's `policies` snapshot is incomplete or stale.
+        // When enabled, this is still safe: the bridge itself has no side
+        // effects (search only reads the run's catalogue), and a `tool_call`
+        // payload is unwrapped to the real tool name/arguments *before*
+        // `before_tool` runs, so the real call is still evaluated against its
+        // own policy at execution time. A host that registers its own tool
+        // under either name still wins (the bridge only fills a name nobody
+        // registered), and that registration is evaluated normally since it
+        // hits the `self.policies.get` lookup below like any other name.
+        if self.exempt_discovery_bridge
+            && !self.policies.contains_key(name)
             && (name == crate::tool::discover::TOOL_SEARCH_NAME
                 || name == crate::tool::discover::TOOL_CALL_NAME)
         {
@@ -349,7 +376,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         _state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        request.tools.retain(|schema| (self.predicate)(schema));
+        // Delegates to `PreparedToolSet`'s retain helper — see
+        // `crate::tool::toolset::retain_matching_schemas`'s doc comment for
+        // why this is shared rather than a second `retain` implementation.
+        crate::tool::toolset::retain_matching_schemas(&mut request.tools, self.predicate.as_ref());
         Ok(())
     }
 }
@@ -461,6 +491,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         if !excluded.is_empty() {
             ctx.emit(AgentEvent::ToolsFiltered {
                 by: self.label.to_string(),
+                explanations: excluded
+                    .iter()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            crate::tool::ToolExposureExplanation::FilteredOut,
+                        )
+                    })
+                    .collect(),
                 excluded,
                 remaining: request.tools.len(),
             });
@@ -479,6 +518,7 @@ impl HumanApprovalMiddleware {
             label: "human_approval",
             flagged: flagged.into_iter().map(Into::into).collect(),
             approve: None,
+            outcome: None,
         }
     }
 
@@ -487,6 +527,50 @@ impl HumanApprovalMiddleware {
     pub fn with_approval(mut self, approve: ApprovalFn) -> Self {
         self.approve = Some(approve);
         self
+    }
+
+    /// Attaches a callback that decides [`ApprovalOutcome::Allow`],
+    /// [`ApprovalOutcome::Deny`], or [`ApprovalOutcome::Defer`] for each
+    /// flagged call (A2). Takes precedence over [`Self::with_approval`].
+    pub fn with_approval_outcome(mut self, outcome: ApprovalOutcomeFn) -> Self {
+        self.outcome = Some(outcome);
+        self
+    }
+
+    /// Resolves one flagged call to a control outcome, or a signal error the
+    /// tool-admission path turns into a deferral / a denial answer.
+    ///
+    /// A call the resume path already approved is always allowed, so the
+    /// same gate cannot defer it a second time.
+    fn decide<Ctx>(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> Result<MiddlewareControl> {
+        if !self.flagged.contains(&call.name) || ctx.is_call_approved(&call.id) {
+            return Ok(MiddlewareControl::Continue);
+        }
+        if let Some(outcome) = &self.outcome {
+            return match outcome(call) {
+                ApprovalOutcome::Allow => Ok(MiddlewareControl::Continue),
+                ApprovalOutcome::Deny(message) => Err(TinyAgentsError::ToolFailed(message)),
+                ApprovalOutcome::Defer => Err(TinyAgentsError::ApprovalRequired {
+                    metadata: serde_json::json!({
+                        "gate": self.label,
+                        "tool": call.name,
+                    }),
+                }),
+            };
+        }
+        let approved = self
+            .approve
+            .as_ref()
+            .map(|approve| approve(call))
+            .unwrap_or(false);
+        if approved {
+            Ok(MiddlewareControl::Continue)
+        } else {
+            Ok(MiddlewareControl::Interrupt {
+                node: "tool".to_string(),
+                message: format!("tool `{}` requires human approval", call.name),
+            })
+        }
     }
 }
 
@@ -498,23 +582,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for HumanAppro
 
     async fn before_tool(
         &self,
-        _ctx: &mut RunContext<Ctx>,
+        ctx: &mut RunContext<Ctx>,
         _state: &State,
         call: &mut ToolCall,
     ) -> Result<()> {
-        if self.flagged.contains(&call.name) {
-            let approved = self
-                .approve
-                .as_ref()
-                .map(|approve| approve(call))
-                .unwrap_or(false);
-            if !approved {
-                return Err(TinyAgentsError::Interrupted {
-                    node: "tool".to_string(),
-                    message: format!("tool `{}` requires human approval", call.name),
-                });
+        match self.decide(ctx, call)? {
+            MiddlewareControl::Interrupt { node, message } => {
+                Err(TinyAgentsError::Interrupted { node, message })
             }
+            _ => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Control-outcome override (A1): a flagged, unapproved call requests
+    /// [`MiddlewareControl::Interrupt`] instead of erroring the run out
+    /// directly. The agent loop drains the request at its next safe
+    /// checkpoint — the same place any other interrupt is honored — and
+    /// surfaces the identical [`TinyAgentsError::Interrupted`], so callers
+    /// driving the harness through the ordinary loop see no behavior change;
+    /// what changes is that the interrupt is now expressed in the shared
+    /// control vocabulary a durable HITL host can also inspect via
+    /// [`RunContext::take_control`][crate::context::RunContext::take_control]
+    /// before it is drained, rather than only as a thrown error.
+    ///
+    /// With an [`ApprovalOutcomeFn`] installed (A2), `Deny` and `Defer` are
+    /// returned as the `ToolFailed` / `ApprovalRequired` signals that tool
+    /// admission answers or defers without failing the run.
+    async fn before_tool_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        call: &mut ToolCall,
+    ) -> Result<MiddlewareControl> {
+        self.decide(ctx, call)
     }
 }

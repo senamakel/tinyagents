@@ -4,6 +4,21 @@ use super::*;
 use tinyinference_llm::message::{ContentBlock, ImageRef, Message};
 use tinyinference_llm::model::ModelResponse;
 
+#[test]
+fn bare_tool_call_accepts_relaxed_json_in_a_fence() {
+    let call =
+        parse_bare_tool_call("```json\n{'name':'search','parameters':{'query':'rust'}}\n```")
+            .expect("a fenced relaxed JSON tool call");
+
+    assert_eq!(call.name, "search");
+    assert_eq!(call.arguments, serde_json::json!({"query": "rust"}));
+}
+
+#[test]
+fn bare_tool_call_does_not_consume_prose() {
+    assert!(parse_bare_tool_call("Try this: {\"name\":\"search\"}").is_none());
+}
+
 fn schema(name: &str) -> ToolSchema {
     ToolSchema {
         name: name.to_string(),
@@ -676,4 +691,3 @@ fn bare_object_recovery_also_mints_unique_ids() {
     let second_id = &second.message.tool_calls[0].id;
     assert_ne!(first_id, second_id);
 }
-

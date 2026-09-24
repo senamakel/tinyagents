@@ -23,6 +23,8 @@ fn provider_error(message: &str, retry_after_ms: Option<u64>) -> TinyAgentsError
         retryable: true,
         retry_after_ms,
         raw: None,
+        partial_message: None,
+        stop_reason: None,
     }))
 }
 

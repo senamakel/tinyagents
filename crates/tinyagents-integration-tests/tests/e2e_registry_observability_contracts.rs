@@ -118,7 +118,7 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
     let id = ComponentId::new("researcher");
     assert_eq!(id.as_str(), "researcher");
     assert_eq!(id.to_string(), "researcher");
-    assert_eq!(ComponentKind::ALL.len(), 11);
+    assert_eq!(ComponentKind::ALL.len(), 12);
     assert_eq!(ComponentKind::Agent.as_str(), "agent");
     assert_eq!(ComponentKind::TaskStore.as_str(), "task_store");
     assert_eq!(ComponentKind::Tool.to_string(), "tool");
@@ -167,6 +167,7 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
             duration_ms: None,
             output_bytes: None,
             error: None,
+            metadata: None,
         },
         AgentEvent::StateUpdate,
         AgentEvent::MiddlewareStarted { name: "mw".into() },
@@ -294,6 +295,7 @@ async fn event_sinks_journals_and_status_stores_preserve_run_lineage() {
         duration_ms: None,
         output_bytes: None,
         error: None,
+        metadata: None,
     });
     assert_eq!(journal.len(), 2);
     assert_eq!(journal.replay_from(1)[0].event.kind(), "tool.completed");

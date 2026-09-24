@@ -1,7 +1,7 @@
 //! Built-in middleware library.
 //!
 //! This module collects the ready-to-use middleware that ship with the harness.
-//! They are split across two extension surfaces from
+//! They use the model-wrap and lifecycle extension surfaces from
 //! [`crate::middleware`]:
 //!
 //! - **Resilience (wrap)** — [`RetryMiddleware`], [`TimeoutMiddleware`],
@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use crate::context::{RunConfig, RunContext};
+use crate::context::{MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::AgentEvent;
 use crate::ids::CallId;

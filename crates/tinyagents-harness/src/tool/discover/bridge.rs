@@ -11,10 +11,10 @@
 
 use serde_json::{Value, json};
 use tinyinference_llm::tool::{ToolFormat, ToolSchema};
-use tinytools::ToolResult;
+use tinytools::{RankContext, ToolResult};
 
 use super::manifest::render_manifest;
-use super::types::{DeferredCatalog, ToolDiscoveryPolicy};
+use super::types::{DeferredCatalog, RankedSearch, ToolDiscoveryPolicy};
 
 /// Name of the intrinsic search bridge.
 pub const TOOL_SEARCH_NAME: &str = "tool_search";
@@ -96,26 +96,42 @@ fn tool_call_schema() -> ToolSchema {
     }
 }
 
-/// Answers a `tool_search` call against the run's catalogue, returning the
-/// result to hand the model and how many tools it named.
-#[must_use]
-pub fn answer_tool_search(
+/// What a `tool_search` produced: the result to hand the model plus the
+/// facts the loop reports in its `ToolSearched` event.
+#[derive(Debug)]
+pub struct SearchAnswer {
+    /// The tool result the model sees.
+    pub result: ToolResult,
+    /// How many tools it named.
+    pub matched: usize,
+    /// Which ranker's answer was served, and how it went. `None` when the
+    /// query was rejected before ranking.
+    pub ranking: Option<RankedSearch>,
+}
+
+/// Answers a `tool_search` call against the run's catalogue.
+///
+/// Ranks as `policy` says — the host ranker when one is active, BM25
+/// otherwise or on failure — and returns the full schema of every hit so
+/// the model can call it.
+pub async fn answer_tool_search(
     catalog: &DeferredCatalog,
     policy: &ToolDiscoveryPolicy,
     arguments: &Value,
-) -> (ToolResult, usize) {
+) -> SearchAnswer {
     let query = arguments
         .get("query")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
     if query.is_empty() {
-        return (
-            ToolResult::error(format!(
+        return SearchAnswer {
+            result: ToolResult::error(format!(
                 "`{TOOL_SEARCH_NAME}` needs a `query` describing what you want to do."
             )),
-            0,
-        );
+            matched: 0,
+            ranking: None,
+        };
     }
     let (default_limit, max_limit) = policy.effective_limits();
     let limit = arguments
@@ -125,16 +141,24 @@ pub fn answer_tool_search(
             usize::try_from(n).unwrap_or(usize::MAX).clamp(1, max_limit)
         });
 
-    let matches = catalog.search(query, limit);
+    let ranking = catalog
+        .rank(policy, query, &RankContext::empty(), limit)
+        .await;
+    let matches: Vec<&ToolSchema> = ranking
+        .names
+        .iter()
+        .filter_map(|name| catalog.get(name))
+        .collect();
     if matches.is_empty() {
-        return (
-            ToolResult::success(format!(
+        return SearchAnswer {
+            result: ToolResult::success(format!(
                 "No deferred tool matches \"{query}\". {} tool(s) are searchable; everything \
                  else you can use is already in your tool list.",
                 catalog.len()
             )),
-            0,
-        );
+            matched: 0,
+            ranking: Some(ranking),
+        };
     }
     let payload: Vec<Value> = matches
         .iter()
@@ -148,13 +172,14 @@ pub fn answer_tool_search(
         .collect();
     let rendered = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "[]".to_string());
     let matched = payload.len();
-    (
-        ToolResult::success(format!(
+    SearchAnswer {
+        result: ToolResult::success(format!(
             "{matched} match(es). Invoke one with `{TOOL_CALL_NAME}` {{\"name\", \"arguments\"}} \
              or by its own name, using the parameters shown.\n{rendered}"
         )),
         matched,
-    )
+        ranking: Some(ranking),
+    }
 }
 
 /// Unwraps a `tool_call` payload into the real `(name, arguments)` pair.

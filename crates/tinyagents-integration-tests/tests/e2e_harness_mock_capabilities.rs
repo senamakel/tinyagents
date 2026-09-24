@@ -13,9 +13,10 @@ use tinyagents_harness::cache::{InMemoryResponseCache, PROMPT_CACHE_KEY_OPTION, 
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::{LoggingMiddleware, MicrocompactMiddleware, Middleware};
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyagents_harness::subagent::ChildDataPolicy;
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel};
-use tinyagents_harness::{SubAgent, SubAgentSession, SubAgentTool};
+use tinyagents_orchestration::subagent::{
+    ChildDataPolicy, SubAgent, SubAgentSession, SubAgentTool,
+};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
@@ -28,6 +29,7 @@ fn tool_turn(calls: Vec<ToolCall>) -> ModelResponse {
             content: Vec::new(),
             tool_calls: calls,
             usage: Some(Usage::new(8, 3)),
+            origin: None,
         },
         usage: Some(Usage::new(8, 3)),
         finish_reason: Some("tool_calls".into()),
@@ -47,6 +49,7 @@ fn text_turn(text: impl Into<String>) -> ModelResponse {
             content: vec![ContentBlock::Text(text.into())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(5, 2)),
+            origin: None,
         },
         usage: Some(Usage::new(5, 2)),
         finish_reason: Some("stop".into()),

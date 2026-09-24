@@ -3,6 +3,7 @@
 //! Consolidated here per AGENTS.md: one `test.rs` per module directory.
 
 use super::ops::*;
+use super::tool_effects::*;
 use super::types::*;
 use chrono::Utc;
 use serde_json::json;
@@ -213,30 +214,27 @@ fn lifecycle_fences_an_old_driver_and_lease_renewal_keeps_takeover_out() {
         workspace,
         "workflow-lifecycle-fence",
         "first",
-        chrono::Duration::milliseconds(300),
+        chrono::Duration::seconds(3),
     )
     .unwrap()
     {
         WorkflowLeaseClaim::Acquired(run) => run,
         other => panic!("expected first lease, got {other:?}"),
     };
-    std::thread::sleep(std::time::Duration::from_millis(30));
     assert!(
-        renew_workflow_run_lease(
-            workspace,
-            &first.id,
-            "first",
-            chrono::Duration::milliseconds(500),
-        )
-        .unwrap()
+        renew_workflow_run_lease(workspace, &first.id, "first", chrono::Duration::seconds(10),)
+            .unwrap()
     );
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Cross the original expiry. The renewed lease remains live for nearly
+    // seven seconds, leaving scheduling headroom while proving renewal fenced
+    // out another driver after the first lease would have lapsed.
+    std::thread::sleep(std::time::Duration::from_millis(3100));
     assert!(matches!(
         try_claim_workflow_run(
             workspace,
             &first.id,
             "second",
-            chrono::Duration::milliseconds(500),
+            chrono::Duration::seconds(10),
         )
         .unwrap(),
         WorkflowLeaseClaim::Busy(_)
@@ -494,8 +492,6 @@ fn agent_run_append_list_get_and_events_are_ordered() {
             status: AgentRunStatus::Running,
             prompt_ref: Some("worker-1:user:seed".into()),
             worker_thread_id: Some("worker-1".into()),
-            task_board_id: None,
-            task_card_id: None,
             checkpoint_path: None,
             checkpoint: None,
             summary: None,
@@ -570,8 +566,6 @@ fn transition_sets_status_and_clears_error_and_completed_at() {
             status: AgentRunStatus::Failed,
             prompt_ref: None,
             worker_thread_id: None,
-            task_board_id: None,
-            task_card_id: None,
             checkpoint_path: None,
             checkpoint: None,
             summary: None,
@@ -884,8 +878,6 @@ fn seed_run(workspace_dir: &Path, id: &str, status: AgentRunStatus) {
             status,
             prompt_ref: None,
             worker_thread_id: None,
-            task_board_id: None,
-            task_card_id: None,
             checkpoint_path: None,
             checkpoint: None,
             summary: None,
@@ -927,4 +919,189 @@ fn interrupt_orphaned_runs_settles_only_non_terminal_inflight_rows() {
 
     // Idempotent: a second sweep finds nothing left to settle.
     assert_eq!(interrupt_orphaned_agent_runs(workspace_dir).unwrap(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Tool-effect ledger (B5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn record_tool_started_writes_a_started_row() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+
+    let row = record_tool_started(
+        workspace_dir,
+        ToolEffectStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: Some("key-1".into()),
+            effect_summary: Some("send to a@example.com".into()),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(row.run_id, "run-1");
+    assert_eq!(row.call_id, "call-1");
+    assert_eq!(row.tool, "send_email");
+    assert_eq!(row.status, ToolEffectStatus::Started);
+    assert_eq!(row.idempotency_key.as_deref(), Some("key-1"));
+    assert!(row.settled_at.is_none());
+}
+
+#[test]
+fn settle_tool_effect_transitions_status_and_stamps_settled_at() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+    record_tool_started(
+        workspace_dir,
+        ToolEffectStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: None,
+            effect_summary: None,
+        },
+    )
+    .unwrap();
+
+    let settled = settle_tool_effect(
+        workspace_dir,
+        ToolEffectSettle {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            status: ToolEffectStatus::Completed,
+            effect_summary: Some("sent, id abc123".into()),
+        },
+    )
+    .unwrap()
+    .expect("row exists");
+
+    assert_eq!(settled.status, ToolEffectStatus::Completed);
+    assert_eq!(settled.effect_summary.as_deref(), Some("sent, id abc123"));
+    assert!(settled.settled_at.is_some());
+}
+
+#[test]
+fn settle_tool_effect_without_a_prior_start_still_inserts_a_row() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+
+    let settled = settle_tool_effect(
+        workspace_dir,
+        ToolEffectSettle {
+            run_id: "run-1".into(),
+            call_id: "call-never-started".into(),
+            status: ToolEffectStatus::Failed,
+            effect_summary: None,
+        },
+    )
+    .unwrap()
+    .expect("row is inserted even without a prior `started`");
+    assert_eq!(settled.status, ToolEffectStatus::Failed);
+}
+
+#[test]
+fn list_unresolved_tool_effects_returns_only_started_rows_for_the_run() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+
+    for call_id in ["call-open", "call-done", "call-other-run"] {
+        record_tool_started(
+            workspace_dir,
+            ToolEffectStart {
+                run_id: if call_id == "call-other-run" {
+                    "run-2".into()
+                } else {
+                    "run-1".into()
+                },
+                call_id: call_id.into(),
+                tool: "some_tool".into(),
+                idempotency_key: None,
+                effect_summary: None,
+            },
+        )
+        .unwrap();
+    }
+    settle_tool_effect(
+        workspace_dir,
+        ToolEffectSettle {
+            run_id: "run-1".into(),
+            call_id: "call-done".into(),
+            status: ToolEffectStatus::Completed,
+            effect_summary: None,
+        },
+    )
+    .unwrap();
+
+    let unresolved = list_unresolved_tool_effects(workspace_dir, "run-1").unwrap();
+    assert_eq!(unresolved.len(), 1);
+    assert_eq!(unresolved[0].call_id, "call-open");
+}
+
+#[test]
+fn mark_interrupted_settles_a_started_row_as_interrupted() {
+    let dir = TempDir::new().unwrap();
+    let workspace_dir = test_workspace(&dir);
+    record_tool_started(
+        workspace_dir,
+        ToolEffectStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: None,
+            effect_summary: None,
+        },
+    )
+    .unwrap();
+
+    let row = mark_interrupted(workspace_dir, "run-1", "call-1")
+        .unwrap()
+        .expect("row exists");
+    assert_eq!(row.status, ToolEffectStatus::Interrupted);
+    assert!(
+        list_unresolved_tool_effects(workspace_dir, "run-1")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn run_ledger_tool_effects_implements_the_harness_ledger_trait() {
+    use tinyagents_harness::tool::{
+        ToolEffectLedger, ToolEffectSettle as HarnessSettle, ToolEffectStart as HarnessStart,
+        ToolEffectStatus as HarnessStatus,
+    };
+
+    let dir = TempDir::new().unwrap();
+    let ledger = RunLedgerToolEffects::new(dir.path().to_path_buf());
+
+    ledger
+        .started(HarnessStart {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            tool: "send_email".into(),
+            idempotency_key: "key-1".into(),
+            effect_summary: None,
+        })
+        .await
+        .unwrap();
+
+    let unresolved = ledger.unresolved("run-1").await.unwrap();
+    assert_eq!(unresolved.len(), 1);
+    assert_eq!(unresolved[0].call_id, "call-1");
+    assert_eq!(unresolved[0].status, HarnessStatus::Started);
+
+    ledger
+        .settled(HarnessSettle {
+            run_id: "run-1".into(),
+            call_id: "call-1".into(),
+            status: HarnessStatus::Completed,
+            effect_summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert!(ledger.unresolved("run-1").await.unwrap().is_empty());
 }

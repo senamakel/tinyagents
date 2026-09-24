@@ -11,14 +11,21 @@
 //!    after [`super::SchemaCleanr`] has inlined refs they are dead weight);
 //! 2. strip `description` from every property nested below the top level;
 //! 3. strip `description` from top-level properties too;
-//! 4. drop the definition tables outright, rewriting any surviving `$ref` to
-//!    an open object;
+//! 4. drop the definition tables outright, leaving any surviving `$ref`
+//!    unconstrained (`{}`) rather than guessing a type — see
+//!    [`drop_definitions`];
 //! 5. collapse objects nested deeper than [`COLLAPSE_DEPTH`] to
 //!    `{"type": "object"}`;
-//! 6. drop `anyOf` / `oneOf` / `allOf` compositions.
+//! 6. drop `anyOf` / `oneOf` / `allOf` compositions, leaving an unconstrained
+//!    `{}` when nothing else describes the shape — see [`drop_compositions`].
 //!
-//! Each rung keeps the top-level argument surface (property names, types,
-//! `required`) intact, which is what a model needs to produce a valid call.
+//! Every rung keeps the top-level argument *surface* — which property names
+//! exist and which are `required` — intact, which is what a model needs to
+//! know it can/must supply an argument at all. Rungs 4 and 6 can still widen
+//! (never narrow) a top-level property's own *type*: a `$ref` or composition
+//! that could not be preserved becomes unconstrained rather than a guessed
+//! `object`, so the model is never told a stricter type than the schema
+//! actually promises.
 
 use serde_json::{Map, Value, json};
 use tinyinference_llm::tool::ToolSchema;
@@ -79,7 +86,7 @@ pub fn compact_tool_schema(schema: &ToolSchema, compaction: &SchemaCompaction) -
         Some(max) => {
             let compacted = compact_parameters(schema.parameters.clone(), max);
             if serialized_len(&compacted) > max {
-                tinyagents_tracing::warn!(
+                tracing::warn!(
                     "[tool::schema] `{}`'s parameters still exceed the {max}-byte compaction \
                      budget after the full ladder; advertising an open object schema instead of \
                      sending an over-budget request",

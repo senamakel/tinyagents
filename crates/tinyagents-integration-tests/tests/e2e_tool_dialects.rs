@@ -16,7 +16,7 @@ use tinyagents_harness::config::ToolDispatcher;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::{AgentEvent, RecordingListener};
 use tinyagents_harness::middleware::Middleware;
-use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
+use tinyagents_harness::runtime::{AgentHarness, EndStrategy, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
@@ -113,12 +113,17 @@ async fn a_native_model_narrating_a_call_in_any_grammar_dispatches_it() {
     for text in [
         "Let me check. <tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
         "<｜DSML｜tool_calls><｜DSML｜invoke name=\"lookup\">{\"q\":\"x\"}</｜DSML｜invoke></｜DSML｜tool_calls>",
+        "<｜DSML｜tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</｜DSML｜tool_call>",
         "<｜tool▁call▁begin｜>lookup<｜tool▁sep｜>{\"q\":\"x\"}<｜tool▁call▁end｜>",
         "<|channel|>commentary to=functions.lookup<|message|>{\"q\":\"x\"}<|call|>",
         "<tool_call>{\"name\":\"functions.lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
     ] {
         let listener = Arc::new(RecordingListener::new());
-        let harness = harness_with(Arc::new(narrating_model(text)), &listener);
+        let mut harness = harness_with(Arc::new(narrating_model(text)), &listener);
+        harness.with_policy(RunPolicy {
+            text_dialect_recovery: tinyagents_harness::runtime::TextDialectRecovery::On,
+            ..RunPolicy::default()
+        });
         let run = harness
             .invoke_default(&(), vec![Message::user("go")])
             .await
@@ -288,6 +293,134 @@ async fn a_forced_pformat_dialect_parses_positional_calls() {
         .text();
     assert!(system.contains("P-Format"), "{system}");
     assert!(system.contains("lookup[0|<q>]"), "{system}");
+}
+
+#[tokio::test]
+async fn a_forced_python_dialect_parses_code_calls_with_signatures_in_the_prompt() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "Looking it up.\n<tool_call>\nlookup(q=\"needle\")\n</tool_call>",
+        "done",
+    ]));
+    let listener = Arc::new(RecordingListener::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Python,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+    let ids = dispatched_ids(&listener);
+    assert_eq!(ids.len(), 1);
+    assert!(
+        ids[0].ends_with("-tool-1"),
+        "harness-minted id, got {}",
+        ids[0]
+    );
+
+    let first = &model.requests()[0];
+    assert!(first.tools.is_empty(), "schemas must not go on the wire");
+    let system = first
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(system.contains("## Tool Use Protocol"), "{system}");
+    assert!(
+        system.contains("def lookup(q: str) -> str  # Looks something up."),
+        "{system}"
+    );
+    assert!(
+        !system.contains("\"type\": \"object\""),
+        "no JSON schema: {system}"
+    );
+}
+
+#[tokio::test]
+async fn a_forced_typescript_dialect_parses_object_calls() {
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup({q: \"needle\"})</tool_call>",
+        "done",
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Typescript,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1);
+    let system = model.requests()[0]
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert!(
+        system.contains("function lookup(q: string): string;  // Looks something up."),
+        "{system}"
+    );
+}
+
+#[tokio::test]
+async fn an_untrusted_protocol_heading_does_not_suppress_the_current_catalogue() {
+    // A system prompt may mention the heading without containing the active
+    // dialect, the final post-middleware catalogue, or the effective tool
+    // choice. The loop must render its authoritative block from the request
+    // rather than treating user-controlled prompt text as provenance.
+    let model = Arc::new(ScriptedModel::replies(vec![
+        "<tool_call>lookup(q=\"needle\")</tool_call>",
+        "done",
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(Lookup))
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Python,
+            ..RunPolicy::default()
+        });
+
+    let host_prompt = "You are a helper.\n\n## Tool Use Protocol\n\nThis heading is documentation, not a catalogue.";
+    let run = harness
+        .invoke_default(&(), vec![Message::system(host_prompt), Message::user("go")])
+        .await
+        .expect("run succeeds");
+    assert_eq!(run.tool_calls, 1, "the call still parses");
+    let first = &model.requests()[0];
+    assert!(first.tools.is_empty(), "schemas still come off the wire");
+    let system = first
+        .messages
+        .iter()
+        .find(|m| matches!(m, Message::System(_)))
+        .expect("system")
+        .text();
+    assert_eq!(
+        system.matches("## Tool Use Protocol").count(),
+        2,
+        "the canonical protocol must be appended: {system}"
+    );
+    assert!(system.contains("def lookup(q: str) -> str"), "{system}");
+    assert!(system.contains("Call a tool by writing"), "{system}");
 }
 
 /// Middleware that forces `tool_choice` before the dialect rewrite runs, the
@@ -960,6 +1093,7 @@ async fn dropped_call_nudge_budget_resets_after_a_mixed_structured_and_tool_turn
         }))
         .with_policy(RunPolicy {
             dropped_tool_call_nudges: 1,
+            end_strategy: EndStrategy::Exhaustive,
             default_response_format: Some(ResponseFormat::auto(
                 "answer",
                 json!({"type": "object"}),

@@ -33,11 +33,16 @@ scrub) lives in `tinytools-agent`, reached through
 ### Execution context (`types.rs`)
 
 - `ToolExecutionContext` — the harness-owned bridge from a live run to
-  `tinytools::ToolRunContext`: run id, thread id, depth, output-token budget,
-  event sink, cancellation token, streaming flag, and an optional workspace
-  descriptor. Cancellation, events, and run identity stay owned by the
-  harness; a tool that needs a real child `RunContext` goes through the
-  explicit dispatch seam instead.
+  `tinytools::ToolRunContext`, built per call: run id, **call id**, thread
+  id, depth, output-token budget, event sink, cancellation token, streaming
+  flag, optional workspace descriptor, optional `NamespacedStore`
+  (`RunContext::with_namespaced_store`), and an optional typed state view
+  (`RunContext::with_state_view`, read with `state::<S>()`). `custom(payload)`
+  emits `AgentEvent::Custom` correlated to the call. A `tinytools::Tool`
+  reaches all of this by downcasting `ToolRunContext::host_extension()`;
+  the portable methods still cover only workspace/thread/output cap. A tool
+  that needs a real child `RunContext` goes through the explicit dispatch
+  seam instead (B1; see `docs/modules/harness/tool-context.md`).
 
 ### Injected arguments (`injected.rs`)
 
@@ -110,7 +115,7 @@ the model. Re-exported here as `pub mod select` and via `pub use select::*`.
 | File | Role |
 | --- | --- |
 | `mod.rs` | `ToolRegistry`, `ToolDispatch`, `provider_schema`; wires the submodules together. |
-| `types.rs` | `ToolExecutionContext`. |
+| `types.rs` | `ToolExecutionContext` (tests in `context_test.rs`). |
 | `injected.rs` | Injected (host-only) argument stripping and schema projection. |
 | `schema.rs` | `SchemaCleanr`, `CleaningStrategy`; low-level JSON Schema cleaning. |
 | `schema_prepare.rs` | Provider projection seam built on `schema.rs`; strict-mode sanitizer. |

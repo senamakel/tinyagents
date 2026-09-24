@@ -23,8 +23,9 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use crate::cache::CacheLayoutEvent;
-use crate::context::RunContext;
+use crate::context::{MiddlewareControl, RunContext};
 use crate::error::{Result, TinyAgentsError};
+use crate::events::HarnessRunStatus;
 use crate::ids::{CallId, RunId};
 use crate::summarization::{SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy};
 use tinyinference_llm::model::{ModelDelta, ModelRequest, ModelResponse};
@@ -91,6 +92,10 @@ pub struct AgentRun {
     pub final_response: Option<ModelResponse>,
     /// Parsed structured output, when the run requested a structured format.
     pub structured: Option<serde_json::Value>,
+    /// Which schema variant matched, when [`Self::structured`] was extracted
+    /// under [`crate::structured::StructuredStrategy::ToolCallUnion`] (A6).
+    /// `None` for every other strategy, and whenever `structured` is `None`.
+    pub structured_variant: Option<String>,
     /// Cumulative token usage across every model call in the run.
     pub usage: UsageTotals,
     /// Number of model calls dispatched during the run.
@@ -118,6 +123,42 @@ pub struct AgentRun {
     /// lifts it and a fresh invocation continues from
     /// [`AgentRun::messages`].
     pub paused: Option<crate::steering::PauseState>,
+    /// Set when the run stopped because one or more tool calls were
+    /// **deferred** (A2): they need a human approval or host-side execution
+    /// before the loop can continue. Like [`Self::paused`], this is not a
+    /// completion — there is no `final_response`, and
+    /// [`HarnessRunStatus`][crate::events::HarnessRunStatus] reports the run
+    /// `Interrupted`. Persist [`Self::messages`] together with this value,
+    /// resolve it into a [`crate::tool::DeferredToolResults`], and resume
+    /// with [`crate::runtime::AgentHarness::resume_deferred`].
+    pub deferred: Option<crate::tool::DeferredToolRequests>,
+    /// Messages the host pushed onto the run queue's `Collect` lane (A4),
+    /// drained once when the run ends — on every exit path, including
+    /// errors. They are delivered here for the host to act on and are
+    /// **never** appended to the transcript or sent to the model. Empty when
+    /// the run had no queue.
+    pub collected: Vec<tinyinference_llm::message::Message>,
+    /// Host-only metadata tools attached to their results
+    /// (`tinytools::ToolResult::metadata`, B2), one entry per answered call
+    /// that carried any, in fold order. Kept beside [`Self::executed_tools`]
+    /// rather than inside it so the name list stays a plain `Vec<String>`.
+    /// The same value rides the call's
+    /// [`AgentEvent::ToolCompleted`][crate::events::AgentEvent::ToolCompleted];
+    /// neither copy is ever rendered into [`Self::messages`].
+    pub tool_metadata: Vec<ToolResultMetadata>,
+}
+
+/// Host-only metadata one tool call returned, as recorded on
+/// [`AgentRun::tool_metadata`] (B2).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolResultMetadata {
+    /// The call that produced it — matches the transcript row and the
+    /// `ToolCompleted` event.
+    pub call_id: CallId,
+    /// The tool the call named (after any unknown-tool rewrite).
+    pub tool_name: String,
+    /// The metadata verbatim; never shown to the model.
+    pub metadata: serde_json::Value,
 }
 
 // ── Middleware trait ──────────────────────────────────────────────────────────
@@ -244,6 +285,115 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
     async fn on_error(&self, _ctx: &mut RunContext<Ctx>, _error: &TinyAgentsError) -> Result<()> {
         Ok(())
     }
+
+    // ── Control-outcome hooks ────────────────────────────────────────────
+    //
+    // Each hook above has a `_control`-suffixed counterpart the
+    // [`MiddlewareStack`] actually drives. The default implementation below
+    // calls the plain hook and returns [`MiddlewareControl::Continue`], so
+    // every existing `Middleware` impl that only overrides the plain hooks
+    // keeps compiling and behaving exactly as before (A1's source-compat
+    // shim). Override a `_control` hook directly (instead of, not in
+    // addition to, the plain one) when the outcome needs to steer the loop —
+    // stop, jump, interrupt, or queue a state update. See
+    // `docs/modules/harness/middleware.md` for the precedence rule the stack
+    // applies across a phase's hooks and the checkpoints the loop honors a
+    // returned control at.
+
+    /// Control-outcome counterpart of [`Self::before_agent`].
+    async fn before_agent_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+    ) -> Result<MiddlewareControl> {
+        self.before_agent(ctx, state).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::after_agent`].
+    async fn after_agent_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        run: &mut AgentRun,
+    ) -> Result<MiddlewareControl> {
+        self.after_agent(ctx, state, run).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::before_model`].
+    async fn before_model_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: &mut ModelRequest,
+    ) -> Result<MiddlewareControl> {
+        self.before_model(ctx, state, request).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::after_model`].
+    async fn after_model_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        response: &mut ModelResponse,
+    ) -> Result<MiddlewareControl> {
+        self.after_model(ctx, state, response).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::before_tool`].
+    async fn before_tool_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        call: &mut ToolCall,
+    ) -> Result<MiddlewareControl> {
+        self.before_tool(ctx, state, call).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Control-outcome counterpart of [`Self::after_tool`].
+    async fn after_tool_control(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        invocation: &ToolInvocationIdentity,
+        result: &mut ToolResult,
+    ) -> Result<MiddlewareControl> {
+        self.after_tool(ctx, state, invocation, result).await?;
+        Ok(MiddlewareControl::Continue)
+    }
+
+    /// Whether this middleware still runs (for observation) in a phase where
+    /// an earlier middleware already produced a winning control outcome.
+    ///
+    /// The stack applies the *first* non-[`MiddlewareControl::Continue`]
+    /// outcome in a phase and, by default, skips every hook after it — an
+    /// early-exit tool guard or a budget stop should not pay for hooks whose
+    /// work is now moot. A middleware that must still observe every call
+    /// regardless (a usage accountant, an audit log) overrides this to
+    /// `true`; its own control outcome is then ignored; only the first
+    /// winning one is ever applied. See `docs/modules/harness/middleware.md`.
+    fn is_observer(&self) -> bool {
+        false
+    }
+
+    /// Whether the loop should stop after the turn currently completing,
+    /// evaluated once at the turn boundary (after tool execution, before the
+    /// loop would otherwise continue to the next model call).
+    ///
+    /// Defaults to `false`. A middleware that returns `true` here has the
+    /// same effect as requesting
+    /// [`MiddlewareControl::JumpTo`]`(`[`crate::context::LoopTarget::End`]`)`
+    /// from `after_tool_control`, but expresses "stop once this turn settles"
+    /// without needing to compute that decision inside `after_tool_control`
+    /// itself (useful when the decision depends on the whole turn's tool
+    /// results, not just one call).
+    fn should_stop_after_turn(&self, _ctx: &RunContext<Ctx>, _run: &AgentRun) -> bool {
+        false
+    }
 }
 
 // ── Wrap (around-call) middleware ─────────────────────────────────────────────
@@ -255,10 +405,50 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
 /// captures (the run context, application state, and the base handler).
 pub type BoxModelFuture<'a> = Pin<Box<dyn Future<Output = Result<ModelResponse>> + Send + 'a>>;
 
+/// A pinned future that drives one complete agent run.
+pub type BoxAgentFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+/// Mutable input to one complete agent run.
+///
+/// Around-agent middleware owns this value, so it may rewrite the initial
+/// transcript or select the streaming path before forwarding it.
+#[derive(Clone, Debug)]
+pub struct AgentRequest {
+    /// Initial conversation transcript.
+    pub input: Vec<tinyinference_llm::message::Message>,
+    /// Whether provider calls should use their streaming path.
+    pub streaming: bool,
+}
+
+impl AgentRequest {
+    /// Creates a complete-run request.
+    pub fn new(input: Vec<tinyinference_llm::message::Message>, streaming: bool) -> Self {
+        Self { input, streaming }
+    }
+}
+
 /// A pinned, boxed future producing a [`ToolResult`].
 ///
 /// The tool-wrap counterpart of [`BoxModelFuture`].
 pub type BoxToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolResult>> + Send + 'a>>;
+
+/// The innermost agent loop wrapped by [`AgentMiddleware`].
+///
+/// The mutable run is deliberately visible at this boundary. An outer host
+/// middleware can therefore persist a partial transcript or release a
+/// run-scoped resource after `next` returns an error, not only after a clean
+/// completion.
+pub trait AgentBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
+    /// Drives the agent loop with the possibly rewritten input.
+    fn call<'a>(
+        &'a self,
+        ctx: &'a mut RunContext<Ctx>,
+        state: &'a State,
+        request: AgentRequest,
+        run: &'a mut AgentRun,
+        status: &'a mut HarnessRunStatus,
+    ) -> BoxAgentFuture<'a>;
+}
 
 /// The innermost model call wrapped by the [`ModelMiddleware`] onion.
 ///
@@ -308,18 +498,47 @@ pub trait ToolBaseCall<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
 /// `next` rather than by distinct enum variants; the enum only needs to carry
 /// the resolved response. It is `#[non_exhaustive]` so future control variants
 /// can be added without breaking callers.
+// `Response(ModelResponse)` is large relative to `Command`'s payload; boxing
+// it would ripple through every construction/destructure site across the
+// crate (including the `From<ModelResponse>` impl below and every wrap
+// middleware) for a value that lives only as long as one model call, so the
+// size skew is accepted here rather than threaded through as indirection.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[allow(clippy::large_enum_variant)]
 pub enum MiddlewareModelOutcome {
     /// The response to use as the result of the wrapped model call.
     Response(ModelResponse),
+    /// Short-circuit with a [`MiddlewareControl`] instead of a response — for
+    /// example a wrap middleware that decides, before ever calling `next`,
+    /// that the run should stop or jump. There is no response to hand back in
+    /// this case, so callers that need one (see [`Self::into_response`]) get
+    /// an empty placeholder; the control itself is recovered separately, via
+    /// [`Self::into_response_with_control`], and applied through the same
+    /// [`RunContext::request_control`][crate::context::RunContext::request_control]
+    /// path a lifecycle hook's control-outcome return uses.
+    Command {
+        /// The control outcome to apply.
+        control: MiddlewareControl,
+    },
 }
 
 impl MiddlewareModelOutcome {
-    /// Unwraps the contained [`ModelResponse`].
+    /// Unwraps the contained [`ModelResponse`], or an empty placeholder for
+    /// [`Self::Command`] (see that variant's docs — prefer
+    /// [`Self::into_response_with_control`] when a `Command` must not be
+    /// silently discarded).
     pub fn into_response(self) -> ModelResponse {
+        self.into_response_with_control().0
+    }
+
+    /// Splits this outcome into a [`ModelResponse`] (a placeholder for
+    /// [`Self::Command`]) and the [`MiddlewareControl`] to apply, when this
+    /// was a `Command` outcome.
+    pub fn into_response_with_control(self) -> (ModelResponse, Option<MiddlewareControl>) {
         match self {
-            Self::Response(response) => response,
+            Self::Response(response) => (response, None),
+            Self::Command { control } => (ModelResponse::assistant(String::new()), Some(control)),
         }
     }
 }
@@ -340,13 +559,30 @@ impl From<ModelResponse> for MiddlewareModelOutcome {
 pub enum MiddlewareToolOutcome {
     /// The result to use as the result of the wrapped tool call.
     Result(ToolResult),
+    /// Short-circuit with a [`MiddlewareControl`] instead of a result. The
+    /// tool-wrap counterpart of [`MiddlewareModelOutcome::Command`]; see its
+    /// docs for the placeholder-result and control-recovery contract.
+    Command {
+        /// The control outcome to apply.
+        control: MiddlewareControl,
+    },
 }
 
 impl MiddlewareToolOutcome {
-    /// Unwraps the contained [`ToolResult`].
+    /// Unwraps the contained [`ToolResult`], or an empty error placeholder for
+    /// [`Self::Command`] (prefer [`Self::into_result_with_control`] when a
+    /// `Command` must not be silently discarded).
     pub fn into_result(self) -> ToolResult {
+        self.into_result_with_control().0
+    }
+
+    /// Splits this outcome into a [`ToolResult`] (a placeholder for
+    /// [`Self::Command`]) and the [`MiddlewareControl`] to apply, when this
+    /// was a `Command` outcome.
+    pub fn into_result_with_control(self) -> (ToolResult, Option<MiddlewareControl>) {
         match self {
-            Self::Result(result) => result,
+            Self::Result(result) => (result, None),
+            Self::Command { control } => (ToolResult::success(String::new()), Some(control)),
         }
     }
 }
@@ -368,6 +604,13 @@ impl From<ToolResult> for MiddlewareToolOutcome {
 pub struct ModelHandler<'a, State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) remaining: &'a [Arc<dyn ModelMiddleware<State, Ctx>>],
     pub(crate) base: &'a dyn ModelBaseCall<State, Ctx>,
+}
+
+/// A handle to the remainder of the around-agent middleware onion.
+pub struct AgentHandler<'a, State: Send + Sync, Ctx: Send + Sync> {
+    pub(crate) remaining: &'a [Arc<dyn AgentMiddleware<State, Ctx>>],
+    pub(crate) base: &'a dyn AgentBaseCall<State, Ctx>,
+    pub(crate) status: &'a mut HarnessRunStatus,
 }
 
 /// A handle to the remainder of the tool-wrap onion: the inner wrap middleware
@@ -398,6 +641,21 @@ pub trait ModelMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Syn
     /// A short, stable label used in
     /// `MiddlewareStarted`/`MiddlewareCompleted` events.
     fn name(&self) -> &str;
+
+    /// Whether this middleware already retries the model call itself (as
+    /// [`crate::middleware::library::RetryMiddleware`] does).
+    ///
+    /// [`MiddlewareStack::has_retry_override`] uses this to tell the loop's
+    /// base call to skip its own [`crate::runtime::RunPolicy::retry`] loop
+    /// when one is registered — otherwise the two retry layers compose
+    /// multiplicatively (`mw.max_attempts × policy.retry.max_attempts ×
+    /// |fallback|` provider calls for one logical failure) instead of
+    /// replacing each other. See I-7; full unification into one engine is a
+    /// later phase. Defaults to `false` so an ordinary middleware is
+    /// unaffected.
+    fn overrides_retry(&self) -> bool {
+        false
+    }
 
     /// Wraps the inner model pipeline. Call `next.run(ctx, state, request)` to
     /// proceed (zero or more times), or return a [`MiddlewareModelOutcome`]
@@ -433,6 +691,28 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
     ) -> Result<MiddlewareToolOutcome>;
 }
 
+/// Around-call middleware for a complete agent run.
+///
+/// This is the host-policy extension point. It can load memory and prepend it
+/// to `input`, prepare a workspace in `ctx`, short-circuit a run, and perform
+/// cleanup or persistence after `next` returns. Unlike paired lifecycle hooks,
+/// code after `next.run(..).await` also executes when the inner loop fails.
+#[async_trait]
+pub trait AgentMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
+    /// A short, stable label used in middleware lifecycle events.
+    fn name(&self) -> &str;
+
+    /// Wraps the complete agent loop.
+    async fn wrap_agent(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: AgentRequest,
+        run: &mut AgentRun,
+        next: AgentHandler<'_, State, Ctx>,
+    ) -> Result<()>;
+}
+
 // ── MiddlewareStack ───────────────────────────────────────────────────────────
 
 /// An ordered collection of [`Middleware`] composed with onion semantics.
@@ -444,11 +724,8 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
 /// hook that returns `Err` short-circuits the stack: every middleware's
 /// [`Middleware::on_error`] is invoked, then the original error is returned.
 ///
-/// In addition to those lifecycle hooks, the stack holds two ordered lists of
-/// **wrap** (around-call) middleware — [`ModelMiddleware`] and
-/// [`ToolMiddleware`] — composed by [`MiddlewareStack::run_wrapped_model`] and
-/// [`MiddlewareStack::run_wrapped_tool`] as a nested onion whose innermost layer
-/// is the real model/tool call.
+/// In addition to those lifecycle hooks, the stack holds ordered lists of
+/// **wrap** middleware for complete agent runs, model calls, and tool calls.
 ///
 /// # Example
 ///
@@ -462,6 +739,7 @@ pub trait ToolMiddleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync
 /// ```
 pub struct MiddlewareStack<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) middlewares: Vec<Arc<dyn Middleware<State, Ctx>>>,
+    pub(crate) agent_middlewares: Vec<Arc<dyn AgentMiddleware<State, Ctx>>>,
     pub(crate) model_middlewares: Vec<Arc<dyn ModelMiddleware<State, Ctx>>>,
     pub(crate) tool_middlewares: Vec<Arc<dyn ToolMiddleware<State, Ctx>>>,
 }
@@ -552,6 +830,15 @@ pub enum CompressionFailurePolicy {
     PassThrough,
 }
 
+/// The type of a `before_compaction` hook, consulted before every compaction
+/// [`ContextCompressionMiddleware`] runs. Named to keep the struct field's
+/// type simple (`clippy::type_complexity`).
+pub type BeforeCompactionHook = std::sync::Arc<
+    dyn Fn(&crate::summarization::CompactionContext) -> crate::summarization::CompactionDecision
+        + Send
+        + Sync,
+>;
+
 /// Middleware that summarizes/compresses the request transcript, but **only**
 /// when it nears the model's context window.
 ///
@@ -588,6 +875,25 @@ pub struct ContextCompressionMiddleware {
     pub(crate) max_records: usize,
     /// Recovery behaviour when [`Summarizer::summarize`] returns `Err`.
     pub(crate) on_failure: CompressionFailurePolicy,
+    /// The most recently produced compaction summary text, threaded into the
+    /// next compaction's [`crate::summarization::SummaryRequest::previous_summary`]
+    /// so an iterative [`Summarizer`] refines rather than restarts. `None`
+    /// until the first compaction on this middleware instance.
+    pub(crate) last_summary: Mutex<Option<String>>,
+    /// Token budget above which a single "turn" of messages handed to the
+    /// summarizer is itself split into two halves and merged (see
+    /// [`crate::summarization::summarize_with_split`]). `None` disables
+    /// splitting — the whole `to_summarize` slice is always summarized in one
+    /// call, matching the middleware's original behaviour.
+    pub(crate) max_turn_tokens: Option<u64>,
+    /// Classifies a model-call error as a provider context-window overflow,
+    /// consulted by [`ModelMiddleware::wrap_model`] for the
+    /// overflow → compact → retry recovery path.
+    pub(crate) overflow_classifier: crate::summarization::OverflowClassifier,
+    /// Optional hook consulted before every compaction (proactive or
+    /// overflow-triggered) that can decline it or substitute a summary. See
+    /// [`crate::summarization::CompactionDecision`].
+    pub(crate) before_compaction: Option<BeforeCompactionHook>,
 }
 
 // ── MicrocompactMiddleware ────────────────────────────────────────────────────

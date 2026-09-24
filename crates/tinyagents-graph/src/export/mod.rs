@@ -442,7 +442,11 @@ impl<State, Update> CompiledGraph<State, Update> {
         let edges = self
             .edges
             .iter()
-            .map(|(from, to)| (from.to_string(), to.to_string()))
+            .flat_map(|(from, targets)| {
+                targets
+                    .iter()
+                    .map(move |to| (from.to_string(), to.to_string()))
+            })
             .collect();
         let conditional = self
             .branches
@@ -497,7 +501,11 @@ impl<State, Update> GraphBuilder<State, Update> {
         let edges = self
             .edges
             .iter()
-            .map(|(from, to)| (from.to_string(), to.to_string()))
+            .flat_map(|(from, targets)| {
+                targets
+                    .iter()
+                    .map(move |to| (from.to_string(), to.to_string()))
+            })
             .collect();
         let conditional = self
             .branches

@@ -35,9 +35,9 @@ question by existing.
   necessarily available where these are applied) for memory injected into a
   turn.
 - [`ToolDispatcher`] — enum of tool-call encoding strategies (`Auto`,
-  `Native`, `Xml`, `Pformat`); modelled as an enum rather than a free-form
-  string so an unrecognised mode is a mapping error at the boundary, not a
-  silent fallthrough in the turn loop.
+  `Native`, `Xml`, `Pformat`, `Python`, `Typescript`); modelled as an enum
+  rather than a free-form string so an unrecognised mode is a mapping error at
+  the boundary, not a silent fallthrough in the turn loop.
 - [`RequiredOutput`] — a structured-output contract asserting the model's
   reply carries a particular JSON block; a blank `block_key` makes the
   contract inert by design, so it is a safe zero-value default.

@@ -14,22 +14,55 @@
 //! `crate::context` directly. Implementations and tests live in the
 //! sibling `mod.rs` and `test.rs`.
 
-use std::any::Any;
-
 use serde::{Deserialize, Serialize};
 
 use crate::cancel::CancellationToken;
 use crate::events::EventSink;
-use crate::ids::{RunId, ThreadId};
+use crate::ids::{CallId, RunId, ThreadId};
 use crate::limits::LimitTracker;
 use crate::steering::SteeringHandle;
 use crate::store::StoreRegistry;
 
-/// One-shot observer invoked with the exact accumulated run when a driver
-/// completes or is dropped. Kept crate-private: it is runtime lifecycle glue,
-/// not a host policy extension point.
+/// One-shot observer invoked with a cheap summary of the accumulated run when
+/// a driver completes or is dropped. Kept crate-private: it is runtime
+/// lifecycle glue, not a host policy extension point.
+///
+/// Takes [`TerminalRunSummary`], not the full [`crate::middleware::AgentRun`]
+/// (M-6): every installed observer only ever reads the final text, usage, and
+/// executed-tool names, never the full transcript, and the observer needs an
+/// *owned* value (the hosted path moves it into a spawned task that can
+/// outlive the caller's stack frame) — so `&AgentRun` will not do either. The
+/// summary is `Clone` and carries none of `AgentRun::messages`, which can be
+/// the largest field by far on a long-running conversation.
 pub(crate) type TerminalObserver =
-    Box<dyn FnOnce(crate::middleware::AgentRun, bool, Option<String>) + Send + Sync + 'static>;
+    Box<dyn FnOnce(TerminalRunSummary, bool, Option<String>) + Send + Sync + 'static>;
+
+/// Cheap, owned summary of an [`crate::middleware::AgentRun`] for
+/// [`TerminalObserver`] — see that type's docs for why this exists instead of
+/// the full run.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TerminalRunSummary {
+    /// The final response text, if the run produced one. Mirrors
+    /// [`crate::middleware::AgentRun::text`].
+    pub(crate) text: Option<String>,
+    /// Cumulative token usage across the run. `Copy`, so cloning this summary
+    /// is not where any cost lives.
+    pub(crate) usage: tinyinference_llm::usage::UsageTotals,
+    /// Names of calls that reached a tool executor, in execution order.
+    /// Mirrors [`crate::middleware::AgentRun::executed_tools`].
+    pub(crate) executed_tools: Vec<String>,
+}
+
+impl TerminalRunSummary {
+    /// Builds a summary from a live run without cloning its transcript.
+    pub(crate) fn from_run(run: &crate::middleware::AgentRun) -> Self {
+        Self {
+            text: run.text(),
+            usage: run.usage,
+            executed_tools: run.executed_tools.clone(),
+        }
+    }
+}
 
 /// The immutable ancestry of a run in a recursive harness invocation tree.
 ///
@@ -134,6 +167,76 @@ pub struct RunConfig {
     pub lineage: RunLineage,
 }
 
+/// Where [`MiddlewareControl::JumpTo`] sends the agent loop next.
+///
+/// Modelled on LangChain's `jump_to: "model" | "tools" | "end"`. See
+/// `docs/modules/harness/middleware.md` for exactly how each target is
+/// realized against the loop's checkpoint structure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopTarget {
+    /// Skip any remaining tool execution for this turn and go straight to the
+    /// next model call.
+    Model,
+    /// Proceed to (or continue) tool execution for this turn. A no-op when the
+    /// turn has no tool calls to run — there is nothing to jump to.
+    Tools,
+    /// Stop the loop now, finishing the run with the transcript as it stands.
+    End,
+}
+
+/// A typed hook that mutates application state, carried by
+/// [`MiddlewareControl::UpdateState`].
+///
+/// `State` is type-erased on construction (`RunContext` is not generic over
+/// it) and recovered by [`Self::apply`] via a runtime check. Built with
+/// [`StateUpdate::new`], which captures an `Fn(&mut State)` closure in an
+/// `Arc` so [`MiddlewareControl`] (and therefore `StateUpdate`) stays
+/// [`Clone`] — required because [`RunContext::request_control`] may compare
+/// and replace a pending request.
+///
+/// The agent loop only ever sees `state: &State` (a shared reference), so it
+/// cannot apply this itself. [`RunContext::take_state_updates`] queues every
+/// requested update instead; a host that owns `&mut State` between runs (or
+/// between turns, via its own checkpoint) drains and applies them. See
+/// `docs/modules/harness/middleware.md` for the full contract.
+/// The type-erased closure a [`StateUpdate`] wraps.
+type ErasedStateUpdateFn = std::sync::Arc<dyn Fn(&mut dyn std::any::Any) + Send + Sync>;
+
+#[derive(Clone)]
+pub struct StateUpdate {
+    apply: ErasedStateUpdateFn,
+}
+
+impl StateUpdate {
+    /// Captures `f` as a state update for the concrete application state type
+    /// `S`. Applying the update against any other type is a documented no-op
+    /// (see [`Self::apply`]).
+    pub fn new<S: 'static>(f: impl Fn(&mut S) + Send + Sync + 'static) -> Self {
+        Self {
+            apply: std::sync::Arc::new(move |state: &mut dyn std::any::Any| {
+                if let Some(state) = state.downcast_mut::<S>() {
+                    f(state);
+                }
+            }),
+        }
+    }
+
+    /// Applies this update to `state` when `state`'s concrete type matches the
+    /// type this update was constructed for. A mismatched type is a silent
+    /// no-op: the update was requested by middleware generic over a different
+    /// `State`, which a host wiring several harnesses together can otherwise
+    /// hit legitimately.
+    pub fn apply<S: 'static>(&self, state: &mut S) {
+        (self.apply)(state as &mut dyn std::any::Any);
+    }
+}
+
+impl std::fmt::Debug for StateUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StateUpdate(..)")
+    }
+}
+
 /// A structured control outcome a middleware (or any step) can request on the
 /// [`RunContext`] to steer the agent loop from outside its `Result<()>` return
 /// channel.
@@ -144,8 +247,28 @@ pub struct RunConfig {
 /// "stop after an early-exit tool" or "pause on budget" no longer need a
 /// bespoke side channel. Requests are visible via
 /// [`RunContext::take_control`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// A [`Middleware`][crate::middleware::Middleware] hook may also *return* one
+/// of these directly from its `_control`-suffixed variant (for example
+/// [`before_model_control`][crate::middleware::Middleware::before_model_control]);
+/// the [`MiddlewareStack`][crate::middleware::MiddlewareStack] resolves a
+/// non-[`Continue`](Self::Continue) return into exactly the same
+/// [`RunContext::request_control`] call a hook could have made explicitly —
+/// returning control is sugar over the side channel, not a second mechanism.
+#[derive(Clone, Debug)]
 pub enum MiddlewareControl {
+    /// No control requested. The default a `_control` hook returns when it has
+    /// nothing to say; never itself installed as a pending request (see
+    /// [`RunContext::request_control`]).
+    Continue,
+    /// Route the loop to `target` at the next safe checkpoint. See
+    /// [`LoopTarget`] for what each target does.
+    JumpTo(LoopTarget),
+    /// Queue a typed state mutation for the host to apply. The loop itself
+    /// only ever holds `&State`, so this is queued on
+    /// [`RunContext::take_state_updates`] rather than applied in place; see
+    /// [`StateUpdate`].
+    UpdateState(StateUpdate),
     /// Stop the loop now and use this text as the final assistant response.
     StopWithFinal(String),
     /// Pause the run at the next safe checkpoint, surfacing
@@ -163,6 +286,11 @@ impl MiddlewareControl {
     /// A stable label for this control outcome, used in audit events.
     pub fn kind(&self) -> &'static str {
         match self {
+            MiddlewareControl::Continue => "continue",
+            MiddlewareControl::JumpTo(LoopTarget::Model) => "jump_to:model",
+            MiddlewareControl::JumpTo(LoopTarget::Tools) => "jump_to:tools",
+            MiddlewareControl::JumpTo(LoopTarget::End) => "jump_to:end",
+            MiddlewareControl::UpdateState(_) => "update_state",
             MiddlewareControl::StopWithFinal(_) => "stop_with_final",
             MiddlewareControl::Interrupt { .. } => "interrupt",
         }
@@ -173,10 +301,19 @@ impl MiddlewareControl {
     /// [`StopWithFinal`](Self::StopWithFinal) because pausing to preserve state
     /// for a later resume is stronger than terminating with a final answer, so
     /// a pause request is never silently downgraded to a stop.
+    /// [`Continue`](Self::Continue) is the lowest rank: it carries no
+    /// instruction and is never itself installed as a pending request (see
+    /// [`RunContext::request_control`]). [`UpdateState`](Self::UpdateState)
+    /// and [`JumpTo`](Self::JumpTo) sit below the two run-ending outcomes so a
+    /// state patch or a soft reroute never displaces a stop or an interrupt
+    /// that a later hook in the same phase also requested.
     pub fn precedence(&self) -> u8 {
         match self {
-            MiddlewareControl::StopWithFinal(_) => 1,
-            MiddlewareControl::Interrupt { .. } => 2,
+            MiddlewareControl::Continue => 0,
+            MiddlewareControl::UpdateState(_) => 1,
+            MiddlewareControl::JumpTo(_) => 2,
+            MiddlewareControl::StopWithFinal(_) => 3,
+            MiddlewareControl::Interrupt { .. } => 4,
         }
     }
 }
@@ -208,6 +345,26 @@ pub struct RunContext<Ctx = ()> {
     pub data: Ctx,
     /// Registry of named long-term stores.
     pub stores: StoreRegistry,
+    /// Optional hierarchical long-term store handed to every tool this run
+    /// invokes as
+    /// [`ToolExecutionContext::store`][crate::tool::ToolExecutionContext::store]
+    /// (B1). Distinct from [`Self::stores`], the flat named registry: this
+    /// is the one [`NamespacedStore`][crate::store::namespaced::NamespacedStore]
+    /// a tool may read and write directly — memories, scratch state, a
+    /// per-user cache — without the harness minting a name for it. `None`
+    /// means tools get no store. Attach one with
+    /// [`RunContext::with_namespaced_store`]; shared with child contexts
+    /// exactly like `stores`.
+    pub namespaced_store: Option<std::sync::Arc<dyn crate::store::namespaced::NamespacedStore>>,
+    /// Optional type-erased, read-only view of the application state handed
+    /// to every tool this run invokes, recovered by
+    /// [`ToolExecutionContext::state`][crate::tool::ToolExecutionContext::state]
+    /// (B1). Erased because `RunContext` is not generic over `State` and the
+    /// agent loop only ever holds a borrowed `&State` it cannot lend to a
+    /// concurrent tool future; the host attaches an owned `Arc<S>` snapshot
+    /// with [`RunContext::with_state_view`] instead. Shared with child
+    /// contexts, which run against the same application state.
+    pub state_view: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
     /// Event fan-out bus for observability.
     pub events: EventSink,
     /// Live limit tracker derived from `config`.
@@ -220,6 +377,15 @@ pub struct RunContext<Ctx = ()> {
     /// model call via
     /// [`crate::steering::apply_pending_steering`].
     pub steering: Option<SteeringHandle>,
+    /// Optional multi-lane message queue the agent loop drains at its turn
+    /// boundaries (A4): `Steer` after each tool batch and at a natural
+    /// finish, `Followup` at a natural finish only, `Collect` once at run
+    /// end onto [`crate::middleware::AgentRun::collected`]. `None` means the
+    /// loop consumes no queued messages. Attach one with
+    /// [`RunContext::with_run_queue`]; never inherited by a child context,
+    /// because a queue has no per-run addressing and a child draining its
+    /// parent's queue would steal the parent's messages.
+    pub run_queue: Option<crate::run_queue::RunQueueHandle>,
     /// Cooperative cancellation token for this run.
     ///
     /// Defaults to a fresh, never-cancelled [`CancellationToken`], so a run is
@@ -235,13 +401,21 @@ pub struct RunContext<Ctx = ()> {
     /// loop (stop with a final response, or interrupt). Drained by the agent
     /// loop at its safe checkpoints via [`RunContext::take_control`].
     pub control: std::sync::Arc<std::sync::Mutex<Option<MiddlewareControl>>>,
-    /// The isolated workspace/sandbox descriptor threaded into every
+    /// Queued [`StateUpdate`]s a middleware or tool requested via
+    /// [`MiddlewareControl::UpdateState`], drained by a host through
+    /// [`RunContext::take_state_updates`]. See that method's docs for why the
+    /// loop cannot apply these itself.
+    pub(crate) state_updates: std::sync::Arc<std::sync::Mutex<Vec<StateUpdate>>>,
+    /// Queued raw JSON state updates a tool requested via
+    /// [`tinytools::ToolControl::state_update`]. See
+    /// [`RunContext::push_tool_state_update`].
+    pub(crate) tool_state_updates: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    /// An optional host-supplied workspace/sandbox descriptor threaded into every
     /// [`ToolExecutionContext`][crate::tool::ToolExecutionContext] this
     /// run creates, so tools discover their allowed root from context rather
-    /// than an application global. Populated by
-    /// [`RunContext::with_workspace`] or by preparing a
-    /// [`WorkspaceIsolation`][crate::workspace::WorkspaceIsolation]
-    /// provider; `None` means no workspace policy is in effect.
+    /// than an application global. A host can populate it directly with
+    /// [`RunContext::with_workspace`] or from around-agent middleware; `None`
+    /// means no workspace policy is in effect.
     pub workspace: Option<tinytools::WorkspaceDescriptor>,
     /// Whether the middleware stack already fanned `on_error` out to every
     /// middleware for the error currently unwinding this run. The stack sets it
@@ -264,8 +438,82 @@ pub struct RunContext<Ctx = ()> {
     /// is deliberately not serializable or public: it keeps a hosted parent
     /// from accidentally delegating through a child's unrelated (or absent)
     /// capability bundle.
-    pub(crate) host_authority: Option<std::sync::Arc<dyn Any + Send + Sync>>,
+    ///
+    /// Erased through [`crate::runtime::ErasedHostAuthority`] rather than
+    /// `dyn Any`: the generic explicit-model loop must stay callable with a
+    /// borrowed (non-`'static`) `State`/`Ctx`, and `Any::downcast_ref`
+    /// requires `'static` at the *read* site, which such a caller can never
+    /// prove. The custom trait instead exposes a type-name check that needs
+    /// no `'static` bound on either side; see
+    /// [`crate::runtime::host_invocation_binding`] for how the read side
+    /// uses it to fail closed on a mismatch.
+    pub(crate) host_authority: Option<std::sync::Arc<dyn crate::runtime::ErasedHostAuthority>>,
     /// Runtime-owned terminal lifecycle callback, consumed exactly once by the
     /// agent-loop guard even when the driving future is cancelled or dropped.
     pub(crate) terminal_observer: Option<TerminalObserver>,
+    /// The [`CallId`] the agent loop minted for the model call currently in
+    /// flight through the model-wrap middleware onion, mirroring
+    /// [`crate::events::HarnessRunStatus::active_model_call`].
+    ///
+    /// Set by the loop immediately before invoking
+    /// [`crate::middleware::MiddlewareStack::run_wrapped_model`] and cleared
+    /// right after, so a `ModelMiddleware` such as
+    /// [`crate::middleware::library::RetryMiddleware`] can correlate its own
+    /// `RetryScheduled` events with the same call id the loop uses, instead of
+    /// deriving an uncorrelated one from `ctx.run_id()` alone (see I-7).
+    /// `None` outside that window, and always `None` for a caller that never
+    /// goes through the agent loop.
+    pub active_model_call: Option<CallId>,
+    /// Resolutions for the deferred tool calls left pending on the transcript
+    /// this run is resuming (A2). Taken by the agent loop before its first
+    /// model call and applied to the unanswered tool calls on the last
+    /// assistant row; see
+    /// [`crate::runtime::AgentHarness::resume_deferred`]. Never inherited by
+    /// a child context.
+    pub(crate) deferred_results: Option<crate::tool::DeferredToolResults>,
+    /// Tool-call ids a human approved on resume (A2). Admission skips the
+    /// deferral checks for these, and a `before_tool` hook's
+    /// `ApprovalRequired` is ignored for them, so an approved call cannot be
+    /// deferred a second time by the same gate. Read with
+    /// [`RunContext::is_call_approved`].
+    pub(crate) approved_calls: std::collections::HashSet<String>,
+    /// Monotonic, per-context (not process-global) counter handed out by
+    /// [`RunContext::next_child_ordinal`], used to derive deterministic child
+    /// run ids (e.g. [`crate::subagent::SubAgent`]'s `{name}-d{depth}-{parent
+    /// run id}-{ordinal}`) instead of a process-global sequence (M-2). Starts
+    /// at `0` for every freshly constructed context — including a child
+    /// context, which gets its own fresh counter rather than inheriting the
+    /// parent's — so two processes that call the same parent context's child
+    /// spawner in the same order derive identical ordinals, and therefore
+    /// identical child run ids.
+    pub(crate) child_ordinal: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Durable tool-effect ledger for this run, when a host wants crash-safe
+    /// bookkeeping of tool-call side effects (B5). `None` (the default) means
+    /// no ledger writes happen and [`tinytools::ToolPolicy`]'s
+    /// `runtime.replay` declaration has nothing to guard resume against — the
+    /// agent loop behaves exactly as it did before this existed. Attach one
+    /// with [`RunContext::with_tool_effect_ledger`]; a child context inherits
+    /// its parent's ledger, matching how `stores`/`events` propagate.
+    pub tool_effect_ledger: Option<std::sync::Arc<dyn crate::tool::ToolEffectLedger>>,
+    /// How the agent loop reacts when a `started` write to
+    /// [`Self::tool_effect_ledger`] itself fails, before the tool call it was
+    /// about to journal has executed. See
+    /// [`crate::tool::LedgerFailure`] for the two modes; defaults to
+    /// [`crate::tool::LedgerFailure::Abort`].
+    pub tool_effect_ledger_failure: crate::tool::LedgerFailure,
+    /// Durable sink for [`crate::summarization::CompactionRecord`]s this run
+    /// produces, when a host wants every compaction persisted somewhere
+    /// durable rather than only kept in
+    /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
+    /// in-process buffer.
+    ///
+    /// `None` (the default) means compaction runs exactly as it did before
+    /// this existed — no persistence side effect. Attach one with
+    /// [`RunContext::with_compaction_sink`]; a child context inherits its
+    /// parent's sink, matching how `stores`/`events`/`tool_effect_ledger`
+    /// propagate. `tinyagents-harness` cannot depend on
+    /// `tinyagents-session` (the dependency runs the other way), so this is
+    /// a trait object rather than a concrete `Arc<EntryTree>` — see
+    /// [`crate::summarization::CompactionSink`]'s docs.
+    pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
 }

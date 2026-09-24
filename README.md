@@ -27,7 +27,7 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
 
 - **`tinyagents-harness`** — provider-neutral model calls, typed tools,
   middleware, structured output, streaming, usage/cost accounting, retries,
-  caching, memory, and a Claude Code CLI model adapter with stream-json,
+  caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
   `tools`, `multimodal`, `tracing`.
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
@@ -38,11 +38,16 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   agents, graphs, and routers), plus an offline model price/capability catalog.
 - **`tinyagents-session`** — a SQLite-backed store for session history,
   messages, tool calls, cost, and run lineage.
+- **`tinyagents-definition`** — the host-owned agent definition vocabulary:
+  identity, description, declared model/tools/delegates, and a read-only
+  catalogue seam. Authorization, prompt construction, and execution stay with
+  the host and harness.
 - **`tinyagents-runtime`** — host-neutral stateful turns over the harness and
   append-only transcript seam; hosts retain policy, prompt composition,
   authorization, and durable-dialect conversion.
-- **`tinyagents-tracing`** — the `tracing` macros the other crates gate behind
-  their `tracing` feature. Compiled out by default.
+- **`tinyagents-orchestration`** — host-neutral composition of durable
+  multi-agent work (teams and workflows) over the graph, harness, and session
+  layers; depends one-way on those crates and stays host-free.
 - **`tinyagents-integration-tests`** — cross-crate tests and the runnable
   examples referenced below (not published, workspace-internal).
 
@@ -138,11 +143,22 @@ inside a larger one.
 
 `tinyagents-harness` runs the model/tool agent loop: provider-neutral model
 calls, typed tool definitions, middleware, structured output, streaming,
-usage and cost accounting, retries and limits, response caching, memory, and
-a testkit for exercising the loop without a live provider. An agent can be
-wrapped as a tool and handed to another agent (`SubAgent` /
-`SubAgentSession` / `SubAgentTool`), which is how multi-agent orchestration
-is composed — plain function composition, not a distinct execution mode.
+usage and cost accounting, retries and limits, response caching, and a testkit
+for exercising the loop without a live provider. Memory, workspace lifecycle,
+authorization, and persistence policy stay in the host and can wrap a complete
+run with `AgentMiddleware`.
+
+## Subagent orchestration
+
+`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a
+typed parent-context dispatcher: it starts a child in the background and
+returns a stable job id immediately. `SubAgentJobsTool` queries job
+status/results and `SubAgentMessageTool` sends messages to a live job;
+hosts register these control tools over the same explicitly shared
+`SubAgentJobRegistry`. `SubAgentSession` covers retained post-completion
+conversations, while `SubagentDriver` coordinates durable lifecycle
+preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
+are intentionally outside this focused crate.
 
 ## Session runtime
 
@@ -184,7 +200,7 @@ All live in
 - **`agent_loop_tools`** — the agent/tool loop the harness runs.
 - **`orchestrator_subagents`** — an orchestrator agent that resolves and calls
   sub-agents by name from the registry.
-- **`goals_and_todos`** — a durable goal driving a task-board kanban on one
+- **`goals_and_todos`** — a durable goal driving a todo checklist on one
   thread.
 - **`openai_chat`**, **`openai_tools`**, **`openai_structured`**,
   **`openai_graph_agent`** — provider-backed chat, tool calling, structured

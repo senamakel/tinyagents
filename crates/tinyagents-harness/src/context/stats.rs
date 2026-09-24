@@ -20,6 +20,8 @@ pub struct ContextStatistics {
     pub text_chars: usize,
     /// Image blocks across every role.
     pub images: usize,
+    /// Audio, video, and document blocks across every role.
+    pub media: usize,
     /// Tool calls requested by assistant messages.
     pub tool_calls: usize,
     /// Tool result messages.
@@ -36,7 +38,7 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
     };
     let mut requested = std::collections::HashSet::new();
     for message in messages {
-        let content = match message {
+        let content: &[ContentBlock] = match message {
             Message::System(message) => &message.content,
             Message::User(message) => &message.content,
             Message::Assistant(message) => {
@@ -51,6 +53,8 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                 }
                 &message.content
             }
+            // Host-side out-of-band record; carries no content blocks.
+            Message::Custom(_) => &[],
         };
         for block in content {
             match block {
@@ -61,6 +65,9 @@ pub fn context_statistics(messages: &[Message]) -> ContextStatistics {
                     stats.text_chars += value.to_string().chars().count();
                 }
                 ContentBlock::Image(_) => stats.images += 1,
+                ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => {
+                    stats.media += 1;
+                }
                 ContentBlock::RedactedThinking { .. } => {}
             }
         }
@@ -77,11 +84,13 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
     messages
         .iter()
         .map(|message| {
-            let content = match message {
+            let content: &[ContentBlock] = match message {
                 Message::System(message) => &message.content,
                 Message::User(message) => &message.content,
                 Message::Assistant(message) => &message.content,
                 Message::Tool(message) => &message.content,
+                // Host-side out-of-band record; carries no content blocks.
+                Message::Custom(_) => &[],
             };
             let mut visible = content
                 .iter()

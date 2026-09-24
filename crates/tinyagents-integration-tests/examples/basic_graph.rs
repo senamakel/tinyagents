@@ -9,7 +9,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run --example basic_graph
+//! cargo run -p tinyagents-integration-tests --example basic_graph
 //! ```
 
 use tinyagents_graph::END;
@@ -75,6 +75,7 @@ async fn main() -> Result<()> {
             Message::User(_) => "user",
             Message::Assistant(_) => "assistant",
             Message::Tool(_) => "tool",
+            Message::Custom(_) => "custom",
         };
         println!("{role}: {}", message.text());
     }

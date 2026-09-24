@@ -121,6 +121,7 @@ fn tool_call(id: &str, name: &str, arguments: Value) -> ModelResponse {
             content: Vec::new(),
             tool_calls: vec![ToolCall::new(id, name, arguments)],
             usage: Some(Usage::new(1, 1)),
+            origin: None,
         },
         usage: Some(Usage::new(1, 1)),
         finish_reason: Some("tool_calls".to_string()),
@@ -140,6 +141,7 @@ fn text(body: &str) -> ModelResponse {
             content: vec![ContentBlock::Text(body.to_string())],
             tool_calls: Vec::new(),
             usage: Some(Usage::new(1, 1)),
+            origin: None,
         },
         usage: Some(Usage::new(1, 1)),
         finish_reason: Some("stop".to_string()),
@@ -242,7 +244,17 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
         }))
         .push_middleware(Arc::new(BeforeToolSpy {
             seen: before_tool.clone(),
-        }));
+        }))
+        .with_policy(RunPolicy {
+            // `ToolSearched.query` follows the same `capture.tool_io` gate as
+            // a normal tool call's arguments; enable it so this test's
+            // assertion on the recorded query is meaningful.
+            capture: tinyagents_harness::runtime::PayloadCapture {
+                tool_io: true,
+                ..Default::default()
+            },
+            ..RunPolicy::default()
+        });
 
     let run = harness
         .invoke_default(&(), vec![Message::user("what is ACME trading at?")])
@@ -303,7 +315,10 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
     let events: Vec<AgentEvent> = listener.events().into_iter().map(|r| r.event).collect();
     assert!(events.iter().any(|event| matches!(
         event,
-        AgentEvent::ToolsAdvertised { direct: 3, deferred: 1, schema_bytes } if *schema_bytes > 0
+        // `direct` counts only the `read_file` Direct-exposure tool: the two
+        // intrinsic bridge schemas are implied by `deferred: 1`, not
+        // double-counted into `direct` (see `ToolsAdvertised`'s doc comment).
+        AgentEvent::ToolsAdvertised { direct: 1, deferred: 1, schema_bytes } if *schema_bytes > 0
     )));
     assert!(events.iter().any(|event| matches!(
         event,
@@ -378,6 +393,53 @@ async fn no_deferred_tools_means_no_bridge() {
         .await
         .expect("run succeeds");
     assert_eq!(tool_names(&model.tools_seen()[0]), vec!["read_file"]);
+}
+
+/// Regression: `ToolSearched.query` used to be recorded verbatim regardless
+/// of `RunPolicy::capture.tool_io`, so a run left at the payload-free default
+/// still journaled/exported the model's raw search text — the same privacy
+/// class as a normal tool call's arguments, which *do* honor that gate. With
+/// the default (disabled) capture policy the query must come through empty.
+#[tokio::test]
+async fn tool_searched_query_is_payload_free_by_default() {
+    let listener = Arc::new(RecordingListener::new());
+    let deferred = ExposedTool::new("stock_quote", "Quote.", ToolExposure::Deferred);
+    let model = RecordingModel::new(vec![
+        tool_call(
+            "c1",
+            TOOL_SEARCH_NAME,
+            json!({"query": "sensitive tenant text"}),
+        ),
+        text("done"),
+    ]);
+
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(deferred)
+        .push_middleware(Arc::new(CaptureMiddleware {
+            listener: listener.clone(),
+        }));
+    // No `RunPolicy` override: default `capture.tool_io` is `false`.
+
+    harness
+        .invoke_default(&(), vec![Message::user("hi")])
+        .await
+        .expect("run succeeds");
+
+    let events: Vec<AgentEvent> = listener.events().into_iter().map(|r| r.event).collect();
+    let searched = events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::ToolSearched { query, .. } => Some(query.clone()),
+            _ => None,
+        })
+        .expect("a ToolSearched event was emitted");
+    assert_eq!(
+        searched, "",
+        "the query must not be captured under the payload-free default policy"
+    );
 }
 
 #[tokio::test]

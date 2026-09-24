@@ -241,6 +241,26 @@ Listener delivery is best-effort by default. If a deployment requires durable
 delivery, the listener should read from the event journal and acknowledge
 offsets outside the graph executor.
 
+### Implementation status (runtime-comparison Phase 3, C3/G-M7)
+
+`GraphEventJournal`/`GraphObservation`/`JournalGraphSink` already exist as
+described above (offset-addressable, best-effort delivery). Two additions
+this phase:
+
+- **`JournalGraphSink::dropped()`** (G-M7) exposes the count of observations
+  dropped because the background drain's bounded queue was full when they
+  were submitted — the lossy-under-load behavior was already real (`emit`
+  never blocks the executor on I/O) but previously had no way to detect it
+  happened. A non-zero value means the journal for that run is an
+  incomplete record; size the drain capacity for the workload, or poll this
+  counter and alert, rather than assume completeness.
+- **`GraphEventSink::emit` now takes a `GraphEventEnvelope`**, not a bare
+  `GraphEvent` — see `docs/modules/graph/streaming.md`'s "Implementation
+  status" for `run_id`/`task_id`/`ns`/`seq`. `JournalGraphSink` unwraps the
+  envelope's `event` for its own `GraphObservation` (which keeps its own
+  independent `run_id`/`namespace`/`offset`, configured at sink construction)
+  and forwards the whole envelope to any configured `inner` live sink.
+
 ## Observability Cache
 
 Some observability projections are expensive or repetitive to compute. The graph

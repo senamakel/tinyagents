@@ -22,7 +22,7 @@ pub fn read_transcript_legacy_md(path: &Path) -> Result<SessionTranscript> {
     let messages = parse_legacy_messages(&raw)
         .with_context(|| format!("parse legacy transcript messages in {}", path.display()))?;
 
-    log::debug!(
+    tracing::debug!(
         "[transcript] loaded {} messages (legacy md) from {}",
         messages.len(),
         path.display()
@@ -57,6 +57,8 @@ fn parse_legacy_meta(raw: &str) -> Result<TranscriptMeta> {
     };
 
     Ok(TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
         agent_name: get("agent").unwrap_or_else(|| "unknown".into()),
         dispatcher: get("dispatcher").unwrap_or_else(|| "native".into()),
         agent_id: None,

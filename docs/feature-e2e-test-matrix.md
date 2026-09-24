@@ -2,7 +2,8 @@
 
 This matrix maps user-facing TinyAgents features to their integration coverage.
 It was audited against the public exports in every workspace package and the
-tests in `crates/tinyagents-integration-tests/tests/`. A feature is marked
+tests in `crates/tinyagents-integration-tests/tests/` and the owning package's
+`tests/` directory. A feature is marked
 **covered** only when an external-crate test exercises the public API; unit
 tests remain valuable but do not close an E2E gap.
 
@@ -11,12 +12,11 @@ tests remain valuable but do not close an E2E gap.
 | Surface | Existing integration coverage | Status |
 | --- | --- | --- |
 | Graph construction, routing, fan-out, checkpoints, interrupts, export, streaming, subgraphs, parallelism | `graph_durable.rs`, `e2e_complex_graph.rs`, `e2e_durable_interrupt.rs`, `e2e_graph_export.rs`, `feature_graph_{routing,fanout,parallel,streaming}.rs` | Covered |
-| Graph goals, todo board, task dispatch, subagents, observability | `e2e_graph_{goals,todos,task_dispatch,subagent_node}.rs`, `e2e_observability.rs` | Covered; delegation durability remains unit-only |
-| Harness loop, tools, structured output, middleware, retry, cache, streams, subagents, hosted execution | `harness_agent_loop.rs`, `feature_harness_*`, `e2e_{middleware,streaming_cancel,tool_policy,subagents}.rs`, `wave2_*` | Covered; optional features remain gaps |
-| Language parsing, compilation, resolution, binding, RAG | `language_pipeline.rs`, `e2e_language_contracts.rs`, `e2e_rag_pipeline.rs`, `feature_language_*` | Covered; extended grammar is parser/compiler-only |
+| Graph goals, todo board, task dispatch, subagents, observability | integration tests plus `crates/tinyagents-orchestration/tests/e2e_graph_subagent_node.rs` | Covered; delegation durability remains unit-only |
+| Harness loop, tools, structured output, middleware, retry, cache, streams, hosted execution | `harness_agent_loop.rs`, `feature_harness_*`, `e2e_{middleware,streaming_cancel,tool_policy}.rs`, `wave2_*` | Covered; optional features remain gaps |
 | Registry catalog, capability binding, diagnostics, observability | `e2e_registry_binding.rs`, `e2e_registry_observability_contracts.rs`, `feature_registry_{catalog,diagnostics}.rs` | Covered; router-to-runtime fallback is a gap |
 | Session records, retention, search, lifecycle, transcripts | `e2e_session_lifecycle.rs`, `feature_session_retention.rs`, `feature_session_transcript.rs`, persistence contracts | Covered; run-ledger workflows remain gaps |
-| Orchestration workflow and teams | `e2e_orchestration_workflow.rs`, `e2e_orchestration_teams.rs` | Happy paths covered; workflow recovery remains a gap |
+| Subagent orchestration | `crates/tinyagents-orchestration/tests/e2e_*subagent*.rs` and `hosted_subagents.rs` | Direct invocation, tools, reuse, limits, graph nodes, and hosted orchestration covered |
 
 ## Prioritized execution backlog
 
@@ -24,7 +24,6 @@ tests remain valuable but do not close an E2E gap.
 
 | Feature | Evidence of gap | Test to add |
 | --- | --- | --- |
-| Durable orchestration teams | `e2e_orchestration_teams.rs` | Covers a dependency chain, claim/complete evidence, direct and broadcast messages, shutdown claim release, durable reload, and lifecycle events. |
 | Hosted harness invocation | `feature_harness_hosted_invocation.rs` | Covers composed/screened input, host observer attribution, and public streamed failure sanitization. |
 | Session transcript persistence | `feature_session_transcript.rs` | Covers append, compaction, interrupted partials, replay/display projections, Markdown, thread summaries, and `FileTranscriptHistory` reopen. |
 | Registry runtime router | `ModelRouter`/`WorkloadRoute` only have crate-local tests | `feature_registry_router.rs`: route default and capability-gated workloads into harness model selection and verify primary failure falls back to the configured alternate. |
@@ -34,7 +33,6 @@ tests remain valuable but do not close an E2E gap.
 
 | Feature | Test to add |
 | --- | --- |
-| Workflow cancellation, lease recovery, concurrency cap | Extend `e2e_orchestration_workflow.rs` with a blocking registered child, cancellation/resume, competing drivers, and a multi-agent capped phase. |
 | Durable reviewed delegation | `e2e_graph_delegation.rs` with `FileCheckpointer`, approval interrupt/resume, revision, and denial. |
 | Typed graph channels/barriers | `e2e_graph_channels.rs` for aggregate, barrier, ephemeral, conflict, events, and checkpoints. |
 | Workspace dispatch claims | A mixed tool-side-effect batch proving permitted parallelism, writer serialization, and unsafe-path rejection. |
@@ -61,8 +59,8 @@ tests remain valuable but do not close an E2E gap.
 `multimodal` are compiled and unit-tested in CI but need the P2 behavioral
 integration tests above. `tracing` is compiled under all-features; adding
 behavioral tracing tests is lower priority because instrumentation is opt-in.
-The integration crate should forward `tinyagents-orchestration/tracing` when a
-new orchestration tracing scenario is added.
+The orchestration crate forwards harness tracing for subagent-specific tracing
+scenarios.
 
 ## Test design rules
 

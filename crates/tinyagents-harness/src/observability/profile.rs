@@ -176,27 +176,28 @@ fn current_rss_bytes() -> Option<u64> {
     None
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn cpu_time_us() -> Option<(u64, u64)> {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
-    // SAFETY: `getrusage` initializes the provided `rusage` on success and we
-    // only call `assume_init` after checking its zero return code.
-    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
-        return None;
-    }
-    // SAFETY: established by the successful `getrusage` call above.
-    let usage = unsafe { usage.assume_init() };
-    Some((timeval_us(usage.ru_utime), timeval_us(usage.ru_stime)))
+    static CLOCK_TICKS_PER_SECOND: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let fields: Vec<_> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    let user_ticks = fields.get(11)?.parse::<u64>().ok()?;
+    let system_ticks = fields.get(12)?.parse::<u64>().ok()?;
+    let ticks_per_second = *CLOCK_TICKS_PER_SECOND.get_or_init(|| {
+        std::process::Command::new("getconf")
+            .arg("CLK_TCK")
+            .output()
+            .ok()
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(100)
+    });
+    let to_micros = |ticks: u64| ticks.saturating_mul(1_000_000) / ticks_per_second;
+    Some((to_micros(user_ticks), to_micros(system_ticks)))
 }
 
-#[cfg(unix)]
-fn timeval_us(value: libc::timeval) -> u64 {
-    let seconds = u64::try_from(value.tv_sec).unwrap_or(0);
-    let micros = u64::try_from(value.tv_usec).unwrap_or(0);
-    seconds.saturating_mul(1_000_000).saturating_add(micros)
-}
-
-#[cfg(not(unix))]
+#[cfg(not(target_os = "linux"))]
 fn cpu_time_us() -> Option<(u64, u64)> {
     None
 }
