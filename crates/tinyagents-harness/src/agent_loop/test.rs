@@ -5389,6 +5389,88 @@ async fn tool_completed_event_carries_outcome() {
     assert_eq!(output_bytes, Some(6), "\"kaboom\".len() == 6");
 }
 
+#[tokio::test]
+async fn tool_started_event_carries_input_when_capture_enabled() {
+    use crate::events::RecordingListener;
+    use crate::runtime::PayloadCapture;
+
+    // Hosts render a tool call's arguments as soon as it starts, not only on
+    // completion, so `ToolStarted` must carry the same captured input the
+    // policy already puts on `ToolCompleted`.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("c1", "echo", json!({ "q": "weather" })),
+            text_response("done", 1, 1),
+        ])),
+    );
+    harness.register_tool(Arc::new(FakeTool::new("echo", "ok")));
+    harness.with_policy(RunPolicy {
+        capture: PayloadCapture::all(),
+        ..RunPolicy::default()
+    });
+
+    let recorder = Arc::new(RecordingListener::new());
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-ts"), ());
+    ctx.events.subscribe(recorder.clone());
+    harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let input = recorder
+        .events()
+        .into_iter()
+        .find_map(|record| match record.event {
+            AgentEvent::ToolStarted {
+                tool_name, input, ..
+            } if tool_name == "echo" => Some(input),
+            _ => None,
+        })
+        .expect("a ToolStarted event for `echo`");
+
+    assert_eq!(input, Some(json!({ "q": "weather" })));
+}
+
+#[tokio::test]
+async fn tool_started_event_has_no_input_when_capture_disabled() {
+    use crate::events::RecordingListener;
+
+    // Default policy is payload-free: `ToolStarted.input` stays `None` so no
+    // tool argument is captured unless the host opts in.
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            tool_call_response("c1", "echo", json!({ "q": "weather" })),
+            text_response("done", 1, 1),
+        ])),
+    );
+    harness.register_tool(Arc::new(FakeTool::new("echo", "ok")));
+
+    let recorder = Arc::new(RecordingListener::new());
+    let ctx: RunContext<()> = RunContext::new(RunConfig::new("run-ts-off"), ());
+    ctx.events.subscribe(recorder.clone());
+    harness
+        .invoke_in_context(&(), ctx, vec![Message::user("go")])
+        .await
+        .expect("run succeeds");
+
+    let input = recorder
+        .events()
+        .into_iter()
+        .find_map(|record| match record.event {
+            AgentEvent::ToolStarted {
+                tool_name, input, ..
+            } if tool_name == "echo" => Some(input),
+            _ => None,
+        })
+        .expect("a ToolStarted event for `echo`");
+
+    assert_eq!(input, None);
+}
+
 // ── `ModelResponse::continue_turn` ───────────────────────────────────────────
 
 /// A tool-less response that keeps the floor by carrying `nudge`.
