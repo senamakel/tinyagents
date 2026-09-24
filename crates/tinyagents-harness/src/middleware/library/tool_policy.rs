@@ -617,3 +617,108 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for HumanAppro
         self.decide(ctx, call)
     }
 }
+
+// ── PlanModeMiddleware ─────────────────────────────────────────────────────────
+
+impl PlanModeMiddleware {
+    /// Creates a plan-mode middleware driven by `mode`, classifying tools
+    /// from `policies`. The allowlist starts empty; widen it with
+    /// [`Self::allow`].
+    pub fn new(mode: RunModeHandle, policies: std::collections::HashMap<String, ToolPolicy>) -> Self {
+        Self {
+            label: "plan_mode",
+            mode,
+            policies,
+            allow: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Adds tools that stay exposed and executable in [`RunMode::Plan`]
+    /// regardless of their declared side effects — read-only tools and
+    /// plan-mode-specific tools such as a plan-exit or review-request tool.
+    pub fn allow(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.allow.extend(names.into_iter().map(Into::into));
+        self
+    }
+
+    /// Returns `true` when `name` declares a side effect (or has no declared
+    /// policy at all — see the fail-closed note on [`PlanModeMiddleware`]).
+    fn is_side_effecting(&self, name: &str) -> bool {
+        let Some(policy) = self.policies.get(name) else {
+            return true;
+        };
+        let s = &policy.side_effects;
+        s.writes_files
+            || s.network
+            || s.installs_dependencies
+            || s.destructive
+            || s.external_service
+            || s.payment
+    }
+
+    /// Returns `true` when `name` may be exposed/executed under
+    /// [`RunMode::Plan`]: allowlisted, or classified with no side effects.
+    fn allowed_in_plan_mode(&self, name: &str) -> bool {
+        self.allow.contains(name) || !self.is_side_effecting(name)
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for PlanModeMiddleware {
+    fn name(&self) -> &str {
+        self.label
+    }
+
+    async fn before_model(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        request: &mut ModelRequest,
+    ) -> Result<()> {
+        if self.mode.get() != RunMode::Plan {
+            return Ok(());
+        }
+        let mut excluded = Vec::new();
+        request.tools.retain(|schema| {
+            let keep = self.allowed_in_plan_mode(&schema.name);
+            if !keep {
+                excluded.push(schema.name.clone());
+            }
+            keep
+        });
+        // Auditable, mirroring `ContextualToolSelectionMiddleware`: a UI or
+        // log can see exactly which tools plan mode withheld and why.
+        if !excluded.is_empty() {
+            ctx.emit(AgentEvent::ToolsFiltered {
+                by: self.label.to_string(),
+                explanations: excluded
+                    .iter()
+                    .map(|name| {
+                        (
+                            name.clone(),
+                            crate::tool::ToolExposureExplanation::FilteredOut,
+                        )
+                    })
+                    .collect(),
+                excluded,
+                remaining: request.tools.len(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn before_tool(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        call: &mut ToolCall,
+    ) -> Result<()> {
+        if self.mode.get() != RunMode::Plan || self.allowed_in_plan_mode(&call.name) {
+            return Ok(());
+        }
+        Err(TinyAgentsError::Validation(format!(
+            "tool `{}` is side-effecting and unavailable in plan mode",
+            call.name
+        )))
+    }
+}
