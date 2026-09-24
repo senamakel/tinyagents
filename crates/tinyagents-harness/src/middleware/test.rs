@@ -1302,6 +1302,36 @@ async fn prompt_cache_guard_detects_custom_dynamic_prompt_rewrite() {
 }
 
 #[tokio::test]
+async fn prompt_cache_guard_accepts_a_custom_layout_tail_append() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("tenant-prompt", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("builder-value".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("stable"),
+        user("question"),
+        Message::assistant("answer"),
+    ])
+    .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert!(mw.layout_events().is_empty());
+}
+
+#[tokio::test]
 async fn prompt_cache_guard_uses_full_request_when_boundary_is_unknown() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new());
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();

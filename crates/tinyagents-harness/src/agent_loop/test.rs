@@ -7036,6 +7036,24 @@ fn fingerprint_without_declared_segments_still_hashes_a_new_system_message() {
     assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
 }
 
+#[test]
+fn grouped_system_segment_cannot_masquerade_as_one_canonical_message() {
+    let mut builder = crate::prompt::PromptBuilder::new();
+    builder.push_system(
+        "system",
+        vec![Message::system("first"), Message::system("second")],
+    );
+    let mut before = builder.build(vec![Message::user("question")]);
+    assert_ne!(before.cache_segments[0].id, "system");
+
+    let mut after = before.clone();
+    after.messages[1] = Message::system("changed second");
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
 /// A text-dialect run that starts with *no* leading system message declares
 /// only the `tools` segment (`PromptBuilder` has no system prefix to name
 /// yet). The dialect then synthesizes exactly one new leading system message

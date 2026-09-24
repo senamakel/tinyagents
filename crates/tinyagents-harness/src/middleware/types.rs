@@ -983,8 +983,8 @@ pub struct PromptCacheGuardMiddleware {
     /// transcripts and reports an invalidation that never happened. Rewriting
     /// the non-cacheable history within a run also leaves a canonical stable
     /// prefix intact, so the guard ignores it while adopting the new layout.
-    /// Layouts with no mapped message boundary retain conservative
-    /// full-request comparison. A single
+    /// Layouts with no mapped message boundary compare the full message
+    /// stream under the byte-prefix rule. A single
     /// guard instance is routinely shared across runs — a sub-agent's
     /// middleware stack is built once and its agent invoked many times — so
     /// this is the common case, not an edge case. It went unnoticed while

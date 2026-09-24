@@ -2688,7 +2688,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
 
     let mut by_thread = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(RoleCodec))
-        .session(locator, session_ref, thread_meta)
+        .session(locator.clone(), session_ref.clone(), thread_meta.clone())
         .build()
         .unwrap();
     let resumed = by_thread
@@ -2698,6 +2698,26 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert!(resumed.loaded);
     assert_eq!(by_thread.prefix_snapshot().messages().len(), 2);
     assert_eq!(resumed.history[2].text(), "changing history summary");
+
+    let mut replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(locator.clone(), session_ref.clone(), thread_meta.clone())
+        .build()
+        .unwrap();
+    let resumed = replacement
+        .resume(&session_turn_options(ResumeMode::Session, "thread-prefix"))
+        .await
+        .unwrap();
+    assert_eq!(replacement.prefix_snapshot().messages().len(), 1);
+    assert_eq!(
+        resumed
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["replacement", "changing history summary", "later"]
+    );
 
     // If a custom locator can read a compacted head but not its sealed root,
     // no number of leading System rows can be proven to be frozen instructions.

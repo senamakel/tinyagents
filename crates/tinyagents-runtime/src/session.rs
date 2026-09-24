@@ -199,18 +199,21 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let mut decoded = codec.decode_history(&transcript)?;
         // A compacted head can start with a System summary immediately after
         // the original frozen prompt. Its role does not make it prefix
-        // material: adopting all leading System rows would freeze a changing
-        // summary on resume and re-roll the provider's prefix cache. An
-        // in-process prefix is authoritative; after a restart, read the
-        // original sealed generation for the prefix boundary. Legacy single-
-        // generation transcripts keep the leading-System fallback.
+        // material. Determine how many *stored* rows to strip independently
+        // of any current replacement prefix: a shorter replacement must not
+        // leave an old instruction behind as conversational history. Once this
+        // session has committed a turn, its prefix is already the persisted
+        // boundary; on a cold resume, read the sealed first generation.
         let leading_len = decoded
             .iter()
             .take_while(|message| matches!(message, Message::System(_)))
             .count();
-        let mut frozen_len = self.prefix.messages().len();
-        if frozen_len == 0 {
-            frozen_len = leading_len;
+        let mut stored_len = if self.committed_turns > 0 {
+            self.prefix.messages().len()
+        } else {
+            leading_len
+        };
+        if self.committed_turns == 0 {
             let bound_session = session_binding.as_ref().or(target.session.as_ref());
             if let Some(head) = bound_session
                 .map(|session| target.locator.head_generation(session))
@@ -221,12 +224,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 // rows were frozen instructions. Until the sealed root proves
                 // that boundary, keep them as history rather than freezing a
                 // changing summary into the prompt.
-                frozen_len = 0;
+                stored_len = 0;
                 if let Some(read) = target.locator.read_session_transcript(&root) {
                     match read.read_session() {
                         Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
                             Ok(root_messages) => {
-                                frozen_len = root_messages
+                                stored_len = root_messages
                                     .iter()
                                     .take_while(|message| matches!(message, Message::System(_)))
                                     .count();
@@ -255,11 +258,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 }
             }
         }
-        let prefix_len = frozen_len.min(leading_len);
-        if self.prefix.messages().is_empty() && prefix_len != 0 {
-            self.prefix = PrefixSnapshot::new(decoded[..prefix_len].to_vec());
+        let stored_len = stored_len.min(leading_len);
+        if self.prefix.messages().is_empty() && stored_len != 0 {
+            self.prefix = PrefixSnapshot::new(decoded[..stored_len].to_vec());
         }
-        decoded.drain(..prefix_len);
+        decoded.drain(..stored_len);
         let history = self.with_prefix(decoded);
         self.history = history.clone();
         // Every turn already on disk counts as committed: the prefix those

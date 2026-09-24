@@ -779,9 +779,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for PromptCach
             && prev_run == &run_id
         {
             // Only an explicit canonical layout maps segment ids to message
-            // boundaries. Every other request is compared conservatively over
-            // its whole message stream, matching dispatch's full-request
-            // fallback and catching same-id edits when no fingerprint exists.
+            // boundaries. Every other request checks the whole message stream
+            // with the byte-prefix rule: a rewritten message invalidates it,
+            // while a pure tail append can still reuse the earlier KV prefix.
             let full_request_fallback =
                 !prev.canonical_message_boundary || !layout.canonical_message_boundary;
             let changed = if full_request_fallback {

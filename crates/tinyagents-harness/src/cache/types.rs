@@ -230,8 +230,9 @@ pub(crate) struct LruResponseMap {
 /// **text** of a stable segment, which is precisely the failure this type
 /// exists to catch: the ids match while the provider's cached bytes are gone.
 /// Direct callers should set `prompt_fingerprint` when they declare cacheable
-/// message segments. Without it, the guard compares the full message stream
-/// because roles alone cannot identify cacheable content boundaries.
+/// message segments. Without it, the guard checks byte-prefix preservation
+/// across the full message stream because roles alone cannot identify
+/// cacheable content boundaries.
 ///
 /// # Provider KV-cache stability rules
 /// - Never insert timestamps, run ids, or dynamic retrieval output into the
