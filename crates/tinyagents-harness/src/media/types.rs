@@ -1,6 +1,6 @@
 //! Shared configuration for the media generation tools.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
