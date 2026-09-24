@@ -162,13 +162,38 @@ fn root_transcripts_for_thread_in_dir(raw_dir: &Path, thread_id: &str) -> (Vec<P
         }
     }
 
-    // Path is the tiebreak so the order stays total and deterministic when two
-    // transcripts share a `created` stamp.
-    matches.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    // A compaction generation inherits its predecessor's `meta.created`
+    // (`begin_generation` seeds from the live meta), so `created` alone ties a
+    // whole chain. The generation number breaks that tie before the path does:
+    // by path, `X.g1.jsonl` sorts *before* `X.jsonl` (`g` < `j`) and `.g10`
+    // before `.g2`, which made the newest-wins lookups resolve a sealed
+    // generation instead of the head. Path stays the final tiebreak so the
+    // order is total and deterministic.
+    matches.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| path_generation(&left.1).cmp(&path_generation(&right.1)))
+            .then_with(|| left.1.cmp(&right.1))
+    });
     (
         matches.into_iter().map(|(_, path)| path).collect(),
         any_unreadable,
     )
+}
+
+/// The compaction generation a transcript path encodes: `n` for a
+/// `{stem}.g{n}.jsonl` successor, `0` otherwise.
+///
+/// Unambiguous because [`super::session::session_stem`] never lets a `.`
+/// through inside a component and appends a digest to every component, so a
+/// trailing `.g{digits}` can only be the generation suffix it writes.
+pub(crate) fn path_generation(path: &Path) -> u32 {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.rsplit_once(".g"))
+        .filter(|(_, digits)| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|(_, digits)| digits.parse().ok())
+        .unwrap_or(0)
 }
 
 /// Summed token/cost usage for `thread_id` across its root transcripts, or

@@ -639,3 +639,128 @@ fn write_transcript_if_absent_publishes_once_and_never_overwrites() {
         "first writer"
     );
 }
+
+/// Every model call of a multi-step turn is stamped with its own iteration,
+/// not only the final answer that carries the turn's usage. Without it a
+/// reader cannot tell which call a tool-calling row (or its reasoning)
+/// belonged to.
+#[test]
+fn a_turn_stamps_iteration_and_ts_on_every_step_it_appends() {
+    let dir = tempdir().unwrap();
+    let path = resolve_keyed_transcript_path(dir.path(), "steps").unwrap();
+    let first = vec![
+        TranscriptMessage::new("user", "earlier"),
+        TranscriptMessage::assistant("earlier answer"),
+    ];
+    append_transcript_turn(&path, &[], &first, &meta(), None, Some("request-a")).unwrap();
+    let mut prior = read_transcript(&path).unwrap().messages;
+    // The replayed prefix is exactly what the runtime diffs against.
+    let mut next = prior.clone();
+    next.push(TranscriptMessage::new("user", "do it"));
+    next.push(TranscriptMessage::assistant(
+        r#"{"content":"step one","tool_calls":[{"id":"c1","name":"t","arguments":"{}"}]}"#,
+    ));
+    next.push(TranscriptMessage::new("tool", "r1"));
+    next.push(TranscriptMessage::assistant(
+        r#"{"content":"","tool_calls":[{"id":"c2","name":"t","arguments":"{}"}]}"#,
+    ));
+    next.push(TranscriptMessage::new("tool", "r2"));
+    next.push(TranscriptMessage::assistant("done"));
+    let usage = TurnUsage {
+        provider: "provider".into(),
+        model: "model".into(),
+        usage: MessageUsage {
+            input: 1,
+            output: 1,
+            cached_input: 0,
+            context_window: 0,
+            cost_usd: 0.0,
+        },
+        ts: "2026-01-01T00:00:09Z".into(),
+        reasoning_content: None,
+        tool_calls: Vec::new(),
+        iteration: 3,
+    };
+    append_transcript_turn(
+        &path,
+        &prior,
+        &next,
+        &meta(),
+        Some(&usage),
+        Some("request-b"),
+    )
+    .unwrap();
+    prior.clear();
+
+    let display = read_transcript_display(&path).unwrap();
+    let stamps: Vec<(String, Option<u32>, Option<String>)> = display
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            DisplayRecord::Message(m) if m.message.role == "assistant" => Some((
+                m.message.content.chars().take(16).collect(),
+                m.iteration,
+                m.ts.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    let ts = Some("2026-01-01T00:00:09Z".to_string());
+    assert_eq!(
+        stamps,
+        vec![
+            // An earlier turn written without usage stays unstamped.
+            ("earlier answer".to_string(), None, None),
+            (r#"{"content":"step"#.to_string(), Some(1), ts.clone()),
+            (r#"{"content":"","t"#.to_string(), Some(2), ts.clone()),
+            ("done".to_string(), Some(3), ts),
+        ]
+    );
+    // Only the final row is a usage record: the step stamps must not
+    // fabricate usage on the intermediate rows.
+    let with_usage = display
+        .records
+        .iter()
+        .filter(|record| matches!(record, DisplayRecord::Message(m) if m.turn_usage.is_some()))
+        .count();
+    assert_eq!(with_usage, 1);
+}
+
+/// A compaction successor inherits its predecessor's `created`, so the thread
+/// scan has to order a generation chain by generation — by path alone
+/// `X.g1` sorts before `X` and `X.g10` before `X.g2`, and the newest-wins
+/// lookup resolved a sealed generation.
+#[test]
+fn thread_scan_orders_a_generation_chain_by_generation() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-gen", "orchestrator");
+    let mut seed = meta();
+    seed.thread_id = Some("thread-gen".into());
+    locator
+        .open_session(&session, seed.clone())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "g0"))
+        .unwrap();
+    let mut head = session.clone();
+    for n in 1..=10 {
+        let (successor, handle) = locator.begin_generation(&head, seed.clone()).unwrap();
+        handle
+            .append(TranscriptMessage::new("user", format!("g{n}")))
+            .unwrap();
+        head = successor;
+    }
+
+    let roots = find_root_transcripts_for_thread(dir.path(), "thread-gen");
+    let generations: Vec<u32> = roots
+        .iter()
+        .map(|path| super::thread_lookup::path_generation(path))
+        .collect();
+    assert_eq!(generations, (0..=10).collect::<Vec<_>>());
+    let newest = find_root_transcript_for_thread(dir.path(), "thread-gen").unwrap();
+    assert_eq!(
+        read_transcript(&newest).unwrap().messages[0].content,
+        "g10",
+        "newest-wins resolves the head generation"
+    );
+}
