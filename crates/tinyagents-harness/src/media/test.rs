@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use tinyinference_image::{MediaReference, MockImageGenerator};
-use tinyinference_llm::message::{AssistantMessage, Message};
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
@@ -16,7 +16,7 @@ use tinyinference_video::{
 };
 use tinytools::{Tool, ToolCallOptions, ToolRunContext, ToolTimeout, WorkspaceDescriptor};
 
-use super::{GenerateImageTool, GenerateVideoTool, MediaOutput};
+use super::{GENERATE_VIDEO_TOOL_NAME, GenerateImageTool, GenerateVideoTool, MediaOutput};
 use crate::context::RunConfig;
 use crate::runtime::AgentHarness;
 use crate::tool::ToolTimeoutSettings;
@@ -395,7 +395,13 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
 
 fn text_response(text: &str) -> ModelResponse {
     ModelResponse {
-        message: AssistantMessage::text(text),
+        message: AssistantMessage {
+            id: None,
+            content: vec![ContentBlock::Text(text.to_owned())],
+            tool_calls: Vec::new(),
+            usage: Some(Usage::new(1, 1)),
+            origin: None,
+        },
         usage: Some(Usage::new(1, 1)),
         finish_reason: Some("stop".to_owned()),
         raw: None,
