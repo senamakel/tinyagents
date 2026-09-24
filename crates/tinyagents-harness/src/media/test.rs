@@ -112,10 +112,12 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
     let request = generator.requests().pop().unwrap();
+    // Canonicalize the expected path to match what the reference function returns
+    let canonical_ref = art_dir.join("ref.png").canonicalize().unwrap();
     assert_eq!(
         request.references,
         vec![
-            MediaReference::Path(art_dir.join("ref.png")),
+            MediaReference::Path(canonical_ref),
             MediaReference::Url("https://x.test/r.png".into()),
         ]
     );
