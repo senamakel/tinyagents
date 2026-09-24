@@ -80,12 +80,6 @@ were all merged into `runtime-comparison`.
   the same phase node bodies without a checkpointer so it can be a drop-in
   `LoopDriver`. `compile_loop`/`LoopIter` are the real `CompiledGraph` path
   and have interrupt → checkpoint → resume tests (`loop_as_graph.rs`).
-- **`channels` in `.rag` remain inert**: `build_graph` now lowers joins,
-  `join_sources`, per-node `timeout`/`retry` (independently per node, via
-  `NodePolicy`), validated `sends`/route tables, and exports
-  `options`/`metadata`; `channel <name> <reducer>` is still parsed but not
-  applied because generic `State` gives no reducer binding point —
-  documented in `docs/modules/expressive-language/implementation-status.md`.
 - **Lease renewal loop**: exists at the orchestration layer only.
   `WorkflowEngine` has a real heartbeat that renews a short lease while a
   child run is in flight (`crates/tinyagents-orchestration/src/workflow/
@@ -135,7 +129,7 @@ against wrong assumptions.
 | Delete `tinyagents-tracing`; depend on `tracing` directly; remove the three crate-level `allow(dead_code, …)`; fix what they were hiding (`StreamMode`, `WRITES_IDX_*`, `command_nodes`) | M | W-I5, G-I11 |
 | Gate live tests with `#[ignore = "network"]` + one `tests/common/live.rs` helper; run them in an explicit `TINYAGENTS_LIVE=1` job | S | W-I10 |
 | Feature-gate `claude-code` (subprocess driver + uuid/tempfile/wait-timeout/dirs) and `langfuse` (reqwest); rename `tools` → `builtin-tools` | S | H-M11, W-M10 |
-| Docs truth pass: mark `sdk-gaps/tools.md` §2 implemented and `sdk-gaps/streaming.md` §3 partial; rewrite `audit.md` OpenAI entry; fix the concurrency, `max_concurrency`, `UnknownToolPolicy` default and `on_tool_delta` claims in `docs/modules/harness/`; split `harness/README.md` (547 lines); add `docs/modules/registry/implementation-status.md`; mark `interrupts.md` / `subgraphs.md` / `checkpointing.md` / `execution.md` unimplemented items as target; fix the unparseable `.rag` README example; list `definition` and `orchestration` crates in `README.md` / `docs/spec/README.md` / `CLAUDE.md` | M | H §1 table, G §1, W-I13, W-M3, W §4 |
+| Docs truth pass: mark `sdk-gaps/tools.md` §2 implemented and `sdk-gaps/streaming.md` §3 partial; rewrite `audit.md` OpenAI entry; fix the concurrency, `max_concurrency`, `UnknownToolPolicy` default and `on_tool_delta` claims in `docs/modules/harness/`; split `harness/README.md` (547 lines); add `docs/modules/registry/implementation-status.md`; mark `interrupts.md` / `subgraphs.md` / `checkpointing.md` / `execution.md` unimplemented items as target; list `definition` and `orchestration` crates in `README.md` / `docs/spec/README.md` / `CLAUDE.md` | M | H §1 table, G §1, W-I13, W §4 |
 | `pub use tinyinference_llm; pub use tinytools;` from harness and fix the README dependency snippet | S | W-I4 |
 | Fix example headers (`cargo run -p tinyagents-integration-tests --example …`) | S | W-M14 |
 
@@ -174,15 +168,12 @@ against wrong assumptions.
 | `add_edge` fan-out or duplicate error; typed `Route` labels | S | G-I10, G-M8 |
 | Executor tests behind `FileCheckpointer` / `SqliteCheckpointer` across a fresh process nonce | S | G §4 |
 
-### 1c. Language / registry
+### 1c. Registry
 
 | Item | Effort | Refs |
 |---|---|---|
-| `build_graph`: fail with `Compile` on any populated blueprint field it ignores, and say so in `implementation-status.md` (full lowering is Phase 5) | S | W-I2, G-M9 |
 | Deterministic default model in `to_model_registry()` (explicit default or insertion order) | S | W-I3 |
-| Language errors carry spans: `compile`/`bind` return `Vec<Diagnostic>` (`Serialize`), single facade, one binding gate | M | W-I6, W-I7 |
 | Registry: `set_metadata` / `remove`, `impl DefinitionRegistry for CapabilityRegistry`, carry the definition-lookup error | S | W-I8, W-I9 |
-| Language minor batch: duplicate item diagnostics, one list-separator rule, `router` item, `Blueprint` serde defaults + `schema_version`, boolean literal | S each | W-M1…M9 |
 
 ## Phase 2: loop control and human-in-the-loop (3–4 weeks)
 
@@ -233,7 +224,6 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | Tool-effect ledger keyed by `CallId` with `ToolReplay::{Never, Safe}` on `ToolSchema`/policy; `list_unresolved_tool_effects(run_id)` | M | B5 | OpenHuman marks its tools' replay class |
 | Agent loop as a `CompiledGraph` (`plan → model → tools → settle` nodes) so checkpoints, interrupts and time travel apply to the loop; `AgentHarness::iter()` | L | A5 | `agent_graph.rs` collapses onto the SDK graph |
 | `sanitize_history()` helper; `Message::Custom` | S | E4, E5 | web_chat sanitises via the SDK |
-| Full `.rag` lowering in `build_graph`: channels, joins, sends, route tables, timeout/retry/interrupt policies | L | W-I2 | — |
 
 ## Phase 6: tool ecosystem (2–3 weeks)
 
@@ -242,7 +232,7 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | `ToolSet<State,Ctx>` trait with `Combined`, `Filtered`, `Prefixed`, `Renamed`, `Prepared`, `ApprovalRequired`, `External`; `ToolRegistry` becomes one `ToolSet`; per-tool `prepare` | M | B3 | `agent/tool_policy.rs` and `tinyagents/middleware` tool filtering shrink to predicates |
 | `tinytools-mcp` crate (stdio / HTTP / SSE, prefixes, `process_tool_call`, sampling, elicitation, config loading) implementing `ToolSet` | L | B4 | `mcp/` keeps server config, auth and UI; evaluate reusing its transport |
 | Transcript-carried `SystemMessage{sections, tools_added, tools_removed}`, `replay_system_state`, `declare_tool_changes` before `ModelStarted`, `ModelProfile.mid_conversation_system_messages` | M | B6 | tool loadout changes stop busting the cache |
-| `Capability{instructions, tools, middleware, model_defaults, exposure}` bundle in `tinyagents-registry`, referenced by `.rag` and `AgentDefinition`, `defer_loading` | M | G3 | `skills/` discovery produces `Capability` values |
+| `Capability{instructions, tools, middleware, model_defaults, exposure}` bundle in `tinyagents-registry`, referenced by `AgentDefinition`, `defer_loading` | M | G3 | `skills/` discovery produces `Capability` values |
 | Provider-executed tool parts in `ContentBlock` | S | B7 | — |
 
 ## Phase 7: models, providers, evals (2–3 weeks)

@@ -377,6 +377,10 @@ mod tool_tests {
             "the model advances after bookkeeping: {description}"
         );
         assert!(
+            description.contains("unless this update completes the final item"),
+            "a terminal completion does not require a nonexistent next step: {description}"
+        );
+        assert!(
             description.contains("next model turn"),
             "sequential providers may advance on their next turn: {description}"
         );

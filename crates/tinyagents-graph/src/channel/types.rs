@@ -59,7 +59,7 @@ pub trait Channel: Send + Sync {
     /// The channel's construction config, serialized so [`ChannelSet`] can
     /// round-trip `{ kind, config, value }` through a durable checkpointer
     /// without knowing the concrete channel type. Paired with
-    /// [`channel_from_config`] on decode. Channels with no configuration
+    /// `channel_from_config` on decode. Channels with no configuration
     /// (the default) serialize `Value::Null`; [`Barrier`]/[`NamedBarrier`]
     /// carry their `expected` set, and [`BinaryAggregate`] carries the
     /// registered reducer name (see [`BinaryAggregate::named`] and

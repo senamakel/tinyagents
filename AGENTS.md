@@ -34,7 +34,7 @@ in `crates/tinyagents-orchestration/tests/`. Runnable usage examples are in
 Design notes and module-level specifications live
 in `docs/`, with `docs/spec/README.md` as the top-level architecture
 reference and `docs/modules/` holding per-surface design docs (`graph/`,
-`harness/`, `registry/`, `expressive-language/`). A `wiki/`
+`harness/`, `registry/`). A `wiki/`
 git submodule holds the published GitHub wiki pages; do not edit it as part
 of unrelated work, and commit its pointer update separately when it does
 change.

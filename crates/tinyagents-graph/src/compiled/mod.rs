@@ -47,7 +47,7 @@
 //!   forward across however many times this step interrupts/fails and gets
 //!   resumed/retried; only once every branch of the step has completed does
 //!   the executor route them all together, in one call, against one
-//!   committed state — see [`boundary::CompiledGraph::advance`]'s
+//!   committed state — see `boundary::CompiledGraph::advance`'s
 //!   `carried_completed` handling. One caveat: a deferred branch's routing
 //!   is re-resolved via static/conditional edges only (an explicit
 //!   `Command::goto` it returned is not itself persisted across the

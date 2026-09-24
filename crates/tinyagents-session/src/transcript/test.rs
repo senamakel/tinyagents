@@ -444,6 +444,15 @@ fn opening_a_generation_that_already_exists_is_refused() {
 /// `path_lock` both handles' first `append_turn_with_partial` would
 /// otherwise race on the writer's create-fresh branch and whichever `fs::write`
 /// lands last would silently discard the other's retained set.
+///
+/// The threads rendezvous twice, and the second rendezvous is load-bearing.
+/// `begin_generation` refuses to open a successor that already exists, so with
+/// only the pre-`begin_generation` barrier a thread that got all the way
+/// through its append before the other called `begin_generation` would make
+/// that call fail on the existence check — a race in the test itself rather
+/// than the contention it means to exercise. Holding both threads until each
+/// owns its handle puts the contention where this test is aiming it: on the
+/// two first appends.
 #[test]
 fn concurrent_begin_generation_handles_for_one_session_never_lose_either_append() {
     let dir = tempdir().unwrap();
@@ -466,6 +475,8 @@ fn concurrent_begin_generation_handles_for_one_session_never_lose_either_append(
     let left = std::thread::spawn(move || {
         left_barrier.wait();
         let (_, handle) = left_locator.begin_generation(&left_root, meta()).unwrap();
+        // Both handles exist before either append starts.
+        left_barrier.wait();
         handle
             .append(TranscriptMessage::new("user", "from left"))
             .unwrap();
@@ -477,6 +488,8 @@ fn concurrent_begin_generation_handles_for_one_session_never_lose_either_append(
     let right = std::thread::spawn(move || {
         right_barrier.wait();
         let (_, handle) = right_locator.begin_generation(&right_root, meta()).unwrap();
+        // Both handles exist before either append starts.
+        right_barrier.wait();
         handle
             .append(TranscriptMessage::new("user", "from right"))
             .unwrap();
