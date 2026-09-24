@@ -207,10 +207,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .iter()
             .take_while(|message| matches!(message, Message::System(_)))
             .count();
-        if self.prefix.messages().is_empty() {
-            if leading_len != 0 {
-                self.prefix = PrefixSnapshot::new(decoded[..leading_len].to_vec());
-            }
+        if self.prefix.messages().is_empty() && leading_len != 0 {
+            self.prefix = PrefixSnapshot::new(decoded[..leading_len].to_vec());
         }
         decoded.drain(..leading_len);
         let history = self.with_prefix(decoded);
