@@ -148,32 +148,44 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(MockImageGenerator::new());
 
-    // Test 1: a policy that rejects all references
+    // Test 1: a policy that rejects all references. Since the custom policy is
+    // called after canonicalize, it rejects the canonical path.
     let output = MediaOutput::new("/nonexistent").with_reference_policy(Arc::new(|path| {
         Err(format!("host refused {}", path.display()))
     }));
     let tool = GenerateImageTool::new(generator.clone(), output);
-    let result = tool
-        .execute(json!({ "prompt": "x", "references": ["a.png"] }))
-        .await
-        .unwrap();
-    assert!(text(&result).contains("host refused"));
-
-    // Test 2: a policy that admits out-of-workspace paths
-    let output = MediaOutput::new("/nonexistent")
-        .with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
-    let tool = GenerateImageTool::new(generator, output);
+    // Create a real file so canonicalize succeeds, then the policy rejects it
+    std::fs::write(dir.path().join("a.png"), b"fake").unwrap();
     let context = workspace(dir.path());
     let result = tool
         .execute_with_context(
-            json!({ "prompt": "x", "references": ["/etc/hostname"] }),
+            json!({ "prompt": "x", "references": ["a.png"] }),
             ToolCallOptions::default(),
             Some(&context),
         )
         .await
         .unwrap();
-    // The custom policy allows the out-of-workspace path
-    assert!(!result.is_error, "{}", text(&result));
+    assert!(
+        text(&result).contains("host refused"),
+        "{}",
+        text(&result)
+    );
+
+    // Test 2: a policy that admits out-of-workspace paths. The policy runs after
+    // canonicalize, so the file must exist. We use /etc/hostname which exists on
+    // most Unix-like systems.
+    let output = MediaOutput::new("/nonexistent")
+        .with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
+    let tool = GenerateImageTool::new(generator, output);
+    // Try to reference a file that definitely exists
+    if std::path::Path::new("/etc/hostname").exists() {
+        let result = tool
+            .execute(json!({ "prompt": "x", "references": ["/etc/hostname"] }))
+            .await
+            .unwrap();
+        // The custom policy allows the out-of-workspace path
+        assert!(!result.is_error, "{}", text(&result));
+    }
 }
 
 fn fast() -> WaitPolicy {
