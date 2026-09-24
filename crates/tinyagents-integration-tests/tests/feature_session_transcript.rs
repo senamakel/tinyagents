@@ -22,6 +22,7 @@ fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptM
         created: "2026-09-19T10:00:00Z".into(),
         updated: format!("2026-09-19T10:00:0{turn_count}Z"),
         turn_count,
+        prefix_message_count: None,
         input_tokens,
         output_tokens,
         cached_input_tokens: 3,

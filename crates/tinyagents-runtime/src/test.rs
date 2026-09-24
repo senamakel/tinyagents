@@ -99,6 +99,7 @@ fn meta() -> TranscriptMeta {
         created: "then".into(),
         updated: "then".into(),
         turn_count: 0,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -2780,6 +2781,54 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         Err(RuntimeError::Persistence(_))
     ));
 
+    // A successor that committed a replacement prefix records its own exact
+    // boundary. A later cold resume must use that generation's count rather
+    // than compare its rows with generation zero's different prompt.
+    let recorded_dir = tempfile::tempdir().unwrap();
+    let recorded_ref = SessionRef::scoped("recorded-prefix", "agent-id");
+    let recorded_locator = Arc::new(FileTranscriptLocator::new(recorded_dir.path()));
+    let sealed = recorded_locator
+        .open_session(&recorded_ref, meta())
+        .unwrap();
+    sealed
+        .append(TranscriptMessage::new("system", "old stable"))
+        .unwrap();
+    sealed
+        .append(TranscriptMessage::new("system", "old context"))
+        .unwrap();
+    let mut successor_meta = meta();
+    successor_meta.prefix_message_count = Some(1);
+    let (_, successor) = recorded_locator
+        .begin_generation(&recorded_ref, successor_meta)
+        .unwrap();
+    for (role, content) in [
+        ("system", "replacement"),
+        ("system", "changing history summary"),
+        ("user", "later"),
+    ] {
+        successor
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let mut recorded = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(recorded_locator, recorded_ref, meta())
+        .build()
+        .unwrap();
+    let resumed = recorded
+        .resume(&session_turn_options(
+            ResumeMode::Session,
+            "recorded-prefix",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded.prefix_snapshot().messages()[0].text(),
+        "replacement"
+    );
+    assert_eq!(recorded.prefix_snapshot().messages().len(), 1);
+    assert_eq!(resumed.history[1].text(), "changing history summary");
+
     // If a custom locator can read a compacted head but not its sealed root,
     // no number of leading System rows can be proven to be frozen instructions.
     let orphan_head = SessionRef::scoped("orphan", "agent-id").next_generation();
@@ -3252,6 +3301,7 @@ async fn each_turn_records_the_tools_it_was_sent_with() {
 
     let path = recorded_tools_path(directory.path());
     let transcript = read_transcript(&path).unwrap();
+    assert_eq!(transcript.meta.prefix_message_count, Some(0));
     let stored = ToolSnapshot::from_json(transcript.tools.as_ref().unwrap()).unwrap();
     assert_eq!(tool_names(&stored), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);

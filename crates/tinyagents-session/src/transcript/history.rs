@@ -648,6 +648,7 @@ fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
         created: String::new(),
         updated: String::new(),
         turn_count: 0,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

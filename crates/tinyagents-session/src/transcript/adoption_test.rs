@@ -19,6 +19,7 @@ fn legacy_meta(created: &str, updated: &str, thread_id: &str) -> TranscriptMeta 
         created: created.into(),
         updated: updated.into(),
         turn_count: 1,
+        prefix_message_count: None,
         input_tokens: 10,
         output_tokens: 5,
         cached_input_tokens: 2,

@@ -260,6 +260,7 @@ fn contract_meta() -> TranscriptMeta {
         created: "2026-01-01T00:00:00Z".to_string(),
         updated: "2026-01-01T00:00:00Z".to_string(),
         turn_count: 0,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

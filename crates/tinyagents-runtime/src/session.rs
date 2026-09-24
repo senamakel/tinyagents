@@ -218,12 +218,13 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .filter(|bound| bound.path() == read.path())
             .and(self.persisted_prefix_len);
-        let mut stored_len = cached_boundary.unwrap_or(leading_len);
+        let recorded_boundary = transcript.meta.prefix_message_count;
+        let mut stored_len = recorded_boundary.or(cached_boundary).unwrap_or(leading_len);
         let compacted_head = session_binding
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
-        if cached_boundary.is_none() && compacted_head {
+        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
@@ -802,6 +803,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             None => self.transcript.as_deref().expect("bound above"),
         };
         meta.turn_count += 1;
+        meta.prefix_message_count = Some(self.prefix.messages().len());
         meta.updated = chrono::Utc::now().to_rfc3339();
         // Record every ordinary turn's declarations. Comparing against this
         // session's cached snapshot is unsafe when another live Session has
