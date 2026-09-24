@@ -324,6 +324,7 @@ fn make_trajectory() -> Vec<AgentEvent> {
         AgentEvent::ToolStarted {
             call_id: CallId::new("t1"),
             tool_name: "search".into(),
+            input: None,
         },
         AgentEvent::ToolCompleted {
             call_id: CallId::new("t1"),
@@ -380,6 +381,7 @@ fn trajectory_tool_call_count() {
     events.push(AgentEvent::ToolStarted {
         call_id: CallId::new("t2"),
         tool_name: "search".into(),
+        input: None,
     });
     let traj = Trajectory::from_events(events);
     assert_eq!(traj.tool_call_count("search"), 2);
