@@ -98,7 +98,12 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
     }
 
     fn messages(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
-        Ok(self.state.lock().unwrap_or_else(|e| e.into_inner()).messages.clone())
+        Ok(self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .messages
+            .clone())
     }
 
     fn append(&self, message: TranscriptMessage) -> anyhow::Result<()> {
@@ -112,7 +117,10 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
     }
 
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
-        self.state.lock().unwrap_or_else(|e| e.into_inner()).messages = messages.to_vec();
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .messages = messages.to_vec();
         self.mark_written();
         Ok(())
     }
