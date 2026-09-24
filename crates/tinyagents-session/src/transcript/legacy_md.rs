@@ -28,7 +28,11 @@ pub fn read_transcript_legacy_md(path: &Path) -> Result<SessionTranscript> {
         path.display()
     );
 
-    Ok(SessionTranscript { meta, messages })
+    Ok(SessionTranscript {
+        meta,
+        messages,
+        tools: None,
+    })
 }
 
 const LEGACY_MSG_OPEN_PREFIX: &str = "<!--MSG role=\"";
