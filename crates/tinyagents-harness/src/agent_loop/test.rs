@@ -6945,6 +6945,49 @@ fn stripped_tools_segment_still_counts_as_the_harness_layout() {
     assert_ne!(custom.prompt_fingerprint, turn_one.prompt_fingerprint);
 }
 
+#[test]
+fn compaction_summary_keeps_declared_system_prefix_cache_key() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let segments = vec![
+        PromptSegment {
+            id: "system".into(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "system.1".into(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+    ];
+    let mut before = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::user("first"),
+    ]);
+    before.cache_segments = segments.clone();
+    before.prompt_fingerprint = Some("pre-dispatch annotation".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::system("changing history summary"),
+        Message::user("later"),
+    ]);
+    after.cache_segments = segments;
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_eq!(before.cache_segments, after.cache_segments);
+    assert_eq!(before.prompt_fingerprint, after.prompt_fingerprint);
+    assert_eq!(
+        crate::cache::prompt_cache_key(&before),
+        crate::cache::prompt_cache_key(&after)
+    );
+}
+
 /// A text-dialect run that starts with *no* leading system message declares
 /// only the `tools` segment (`PromptBuilder` has no system prefix to name
 /// yet). The dialect then synthesizes exactly one new leading system message

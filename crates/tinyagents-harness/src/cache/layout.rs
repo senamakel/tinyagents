@@ -9,7 +9,50 @@ use serde_json::Value;
 use super::hash::fnv1a_hex;
 use super::types::{CacheLayoutEvent, PromptCacheLayout};
 use tinyinference_llm::cache::CachePolicy;
-use tinyinference_llm::model::ModelRequest;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
+
+/// Number of messages named by an explicit canonical system-prefix layout.
+/// Extra leading System messages may be volatile summaries; their role alone
+/// cannot add them to the declared cacheable prefix.
+pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize> {
+    if request.prompt_fingerprint.is_none() {
+        return None;
+    }
+    let count = request
+        .cache_segments
+        .iter()
+        .take_while(|segment| segment.role == SegmentRole::System)
+        .count();
+    let leading_system = request
+        .messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    if count == 0 || count > leading_system {
+        return None;
+    }
+    let canonical_head = (0..count).all(|index| {
+        request.cache_segments[index]
+            == PromptSegment {
+                id: crate::prompt::system_segment_id(index),
+                role: SegmentRole::System,
+                cacheable: true,
+            }
+    });
+    let canonical_tools = PromptSegment {
+        id: "tools".into(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    };
+    let tail = &request.cache_segments[count..];
+    let canonical_tail = if request.tools.is_empty() {
+        tail.is_empty() || tail == [canonical_tools]
+    } else {
+        tail == [canonical_tools]
+    };
+    (canonical_head && canonical_tail).then_some(count)
+}
 
 impl PromptCacheLayout {
     /// Builds a [`PromptCacheLayout`] from `request`.
@@ -62,6 +105,14 @@ impl PromptCacheLayout {
         // Message roles cannot supply a fallback boundary: a compaction
         // summary is also a System message immediately after the stable tiers.
         material.push_str(request.prompt_fingerprint.as_deref().unwrap_or(""));
+        let declared_system_count = declared_system_prefix_len(request);
+        if let Some(count) = declared_system_count {
+            // The annotation may predate a middleware rewrite. Hash the actual
+            // declared messages so a changed leading instruction is detected
+            // without treating a later System summary as stable content.
+            material
+                .push_str(&serde_json::to_string(&request.messages[..count]).unwrap_or_default());
+        }
         material.push('\u{2}');
         // Tool declarations sit inside the stable prefix on every provider that
         // caches prompts, so a schema edit invalidates it.
@@ -77,6 +128,8 @@ impl PromptCacheLayout {
                     fnv1a_hex(serde_json::to_vec(message).unwrap_or_default().as_slice())
                 })
                 .collect(),
+            explicit_fingerprint: request.prompt_fingerprint.is_some(),
+            canonical_message_boundary: declared_system_count.is_some(),
         }
     }
 

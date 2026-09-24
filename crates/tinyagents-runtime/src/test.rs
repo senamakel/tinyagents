@@ -2615,6 +2615,72 @@ async fn a_restart_after_a_compaction_resumes_the_head_generation() {
     );
 }
 
+#[tokio::test]
+async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
+    struct RoleCodec;
+    impl TranscriptCodec for RoleCodec {
+        fn decode_history(
+            &self,
+            transcript: &SessionTranscript,
+        ) -> Result<Vec<Message>, RuntimeError> {
+            Ok(transcript
+                .messages
+                .iter()
+                .map(|row| match row.role.as_str() {
+                    "system" => Message::system(&row.content),
+                    "assistant" => Message::assistant(&row.content),
+                    _ => Message::user(&row.content),
+                })
+                .collect())
+        }
+
+        fn reconcile(
+            &self,
+            prior: &[TranscriptMessage],
+            previous: &[Message],
+            next: &[Message],
+            options: &TranscriptTurnOptions,
+        ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
+            Codec::default().reconcile(prior, previous, next, options)
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-prefix", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let root = locator.open_session(&session_ref, meta()).unwrap();
+    for (role, content) in [
+        ("system", "stable"),
+        ("system", "context"),
+        ("user", "first"),
+    ] {
+        root.append(TranscriptMessage::new(role, content)).unwrap();
+    }
+    let (_, head) = locator.begin_generation(&session_ref, meta()).unwrap();
+    for (role, content) in [
+        ("system", "stable"),
+        ("system", "context"),
+        ("system", "changing history summary"),
+        ("user", "later"),
+    ] {
+        head.append(TranscriptMessage::new(role, content)).unwrap();
+    }
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(locator, session_ref, meta())
+        .build()
+        .unwrap();
+    let resumed = session
+        .resume(&session_turn_options(ResumeMode::Session, "thread-prefix"))
+        .await
+        .unwrap();
+
+    assert!(resumed.loaded);
+    assert_eq!(session.prefix_snapshot().messages().len(), 2);
+    assert_eq!(resumed.history[2].text(), "changing history summary");
+}
+
 /// A session-bound target's write destination is always its own session
 /// file — construction and `rebind_session` keep `target.session`/`stem` in
 /// lockstep, regardless of resume mode. `ResumeMode::Thread` can legitimately

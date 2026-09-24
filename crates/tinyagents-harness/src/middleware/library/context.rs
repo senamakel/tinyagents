@@ -778,7 +778,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for PromptCach
         if let Some((prev_run, prev)) = previous.as_ref()
             && prev_run == &run_id
         {
-            if !prev.has_same_stable_prefix_as(&layout) {
+            // Custom layouts with an explicit fingerprint have no mapped
+            // message boundaries. Dispatch conservatively hashes their whole
+            // request, so the guard must also treat a rewritten history as a
+            // cache-key change. Canonical layouts compare only named stable
+            // messages; requests without an annotation cannot claim a message
+            // edit is a stable-prefix edit.
+            let custom_full_request = prev.explicit_fingerprint
+                && layout.explicit_fingerprint
+                && (!prev.canonical_message_boundary || !layout.canonical_message_boundary);
+            let changed = if custom_full_request {
+                !prev.is_prefix_stable_against(&layout)
+            } else {
+                !prev.has_same_stable_prefix_as(&layout)
+            };
+            if changed {
                 tracing::debug!(
                     "[cache] prompt_cache_guard: stable prefix changed run={run_id} \
                      before={} after={}",

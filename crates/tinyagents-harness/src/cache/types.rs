@@ -248,6 +248,10 @@ pub struct PromptCacheLayout {
     /// Per-message digests in transcript order, used to decide whether one
     /// layout's message stream is a pure tail-extension of another's.
     pub(crate) message_digests: Vec<String>,
+    /// Whether the request supplied an annotation for cacheable message bytes.
+    pub(crate) explicit_fingerprint: bool,
+    /// Whether canonical segment ids identify exact leading message boundaries.
+    pub(crate) canonical_message_boundary: bool,
 }
 
 // ── CacheLayoutEvent ──────────────────────────────────────────────────────────

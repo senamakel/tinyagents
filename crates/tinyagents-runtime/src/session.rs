@@ -197,20 +197,58 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
         let mut decoded = codec.decode_history(&transcript)?;
-        // The transcript already holds the prefix it was sent with as its
-        // leading system rows. They are legacy prefix material rather than
-        // conversational history: a session built without a prefix adopts
-        // them, while a session with a current prefix must discard them
-        // before combining the resumed history. Keeping them in the latter
-        // case would replay stale instructions alongside the current prompt.
+        // A compacted head can start with a System summary immediately after
+        // the original frozen prompt. Its role does not make it prefix
+        // material: adopting all leading System rows would freeze a changing
+        // summary on resume and re-roll the provider's prefix cache. An
+        // in-process prefix is authoritative; after a restart, read the
+        // original sealed generation for the prefix boundary. Legacy single-
+        // generation transcripts keep the leading-System fallback.
         let leading_len = decoded
             .iter()
             .take_while(|message| matches!(message, Message::System(_)))
             .count();
-        if self.prefix.messages().is_empty() && leading_len != 0 {
-            self.prefix = PrefixSnapshot::new(decoded[..leading_len].to_vec());
+        let mut frozen_len = self.prefix.messages().len();
+        if frozen_len == 0 {
+            frozen_len = leading_len;
+            if let Some(head) = session_binding
+                .as_ref()
+                .filter(|session| session.generation > 0)
+            {
+                let root = head.first_generation();
+                if let Some(read) = target.locator.read_session_transcript(&root) {
+                    match read.read_session() {
+                        Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
+                            Ok(root_messages) => {
+                                frozen_len = root_messages
+                                    .iter()
+                                    .take_while(|message| matches!(message, Message::System(_)))
+                                    .count();
+                            }
+                            Err(error) => tracing::warn!(
+                                session = %root.session_id(),
+                                %error,
+                                "[session] could not decode sealed prefix; using head boundary"
+                            ),
+                        },
+                        Ok(None) => tracing::warn!(
+                            session = %root.session_id(),
+                            "[session] sealed prefix missing; using head boundary"
+                        ),
+                        Err(error) => tracing::warn!(
+                            session = %root.session_id(),
+                            %error,
+                            "[session] could not read sealed prefix; using head boundary"
+                        ),
+                    }
+                }
+            }
         }
-        decoded.drain(..leading_len);
+        let prefix_len = frozen_len.min(leading_len);
+        if self.prefix.messages().is_empty() && prefix_len != 0 {
+            self.prefix = PrefixSnapshot::new(decoded[..prefix_len].to_vec());
+        }
+        decoded.drain(..prefix_len);
         let history = self.with_prefix(decoded);
         self.history = history.clone();
         // Every turn already on disk counts as committed: the prefix those

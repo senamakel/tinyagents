@@ -114,8 +114,10 @@ built-in catalog:
 - `PromptCacheGuardMiddleware` — computes the request's
   `cache::PromptCacheLayout` in `before_model` and records a
   `CacheLayoutEvent` whenever the cacheable segment ids or content change from
-  the previous call. A trimmed or compacted history can lose its cached tail
-  while retaining the stable prefix, so it does not raise this event.
+  the previous call. For canonical declared layouts, a trimmed or compacted
+  history can lose its cached tail while retaining the stable prefix, so it
+  does not raise this event. Custom layouts with an explicit fingerprint keep
+  conservative full-request comparison.
 - `UsageAccountingMiddleware` — folds each `response.usage` into a running
   `UsageTotals` in `after_model`, readable via `.totals()`.
 

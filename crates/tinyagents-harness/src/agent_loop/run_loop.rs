@@ -2032,11 +2032,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 /// middleware layer has delegated to the innermost call. Rebuilding that
 /// annotation there keeps cache routing tied to the bytes sent to the provider.
 pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
-    let system_end = request
+    let leading_system_end = request
         .messages
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
+    // An explicit canonical layout names the cacheable system messages. A
+    // compaction summary can be another leading System message without being
+    // part of that frozen prefix; promoting it here re-rolls the provider's
+    // prompt_cache_key on every compaction. With no explicit boundary, keep
+    // the existing conservative leading-System behavior.
+    let system_end =
+        crate::cache::declared_system_prefix_len(request).unwrap_or(leading_system_end);
     let mut expected_layout = (0..system_end)
         .map(|index| PromptSegment {
             id: crate::prompt::system_segment_id(index),
