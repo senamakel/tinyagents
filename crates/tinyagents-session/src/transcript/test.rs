@@ -389,6 +389,164 @@ fn a_compaction_seals_a_generation_and_leaves_it_untouched() {
     );
 }
 
+/// A fork for edit/regenerate must give the same untouched-sealed-file
+/// guarantee a compaction gives, and the chain must walk both generations.
+#[test]
+fn truncate_into_next_generation_seals_the_head_byte_identical_and_chain_walks_both() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    let first = locator.open_session(&session, meta()).unwrap();
+    for turn in ["one", "two", "three", "four"] {
+        first.append(TranscriptMessage::new("user", turn)).unwrap();
+    }
+    let sealed_path = first.path().to_path_buf();
+    let sealed_bytes = std::fs::read(&sealed_path).unwrap();
+
+    let (successor, handle, truncated) = locator
+        .truncate_into_next_generation(&session, TruncateCut::BeforeIndex(2), meta())
+        .unwrap();
+
+    assert_eq!(successor.generation, 1);
+    assert_eq!(
+        std::fs::read(&sealed_path).unwrap(),
+        sealed_bytes,
+        "the sealed head must be byte-identical afterwards"
+    );
+    assert_ne!(handle.path(), sealed_path);
+
+    // The new head carries only the retained prefix.
+    let contents: Vec<_> = truncated.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["one", "two"]);
+    assert_eq!(handle.messages().unwrap().len(), 2);
+
+    // Parent recorded exactly as `begin_generation` records it.
+    let successor_meta = handle.read_session().unwrap().unwrap().meta;
+    assert_eq!(
+        successor_meta.parent_session_id.as_deref(),
+        Some(session_stem(&session).as_str())
+    );
+
+    // Both generations are reachable by walking the chain — nothing is lost.
+    let chain = locator.session_chain(&session);
+    assert_eq!(chain.len(), 2);
+    assert_eq!(chain[0], session);
+    assert_eq!(chain[1], successor);
+    assert_eq!(locator.head_generation(&session), successor);
+}
+
+#[test]
+fn truncate_into_next_generation_by_message_id_cuts_at_that_message() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    let first = locator.open_session(&session, meta()).unwrap();
+    let mut keep_a = TranscriptMessage::new("user", "keep-a");
+    keep_a.id = Some("m1".into());
+    let mut cut_here = TranscriptMessage::new("assistant", "cut-here");
+    cut_here.id = Some("m2".into());
+    let mut dropped = TranscriptMessage::new("user", "dropped");
+    dropped.id = Some("m3".into());
+    for message in [keep_a, cut_here, dropped] {
+        first.append(message).unwrap();
+    }
+
+    let (_, handle, truncated) = locator
+        .truncate_into_next_generation(
+            &session,
+            TruncateCut::BeforeMessageId("m2".into()),
+            meta(),
+        )
+        .unwrap();
+
+    assert_eq!(truncated.len(), 1);
+    assert_eq!(truncated[0].id.as_deref(), Some("m1"));
+    assert_eq!(handle.messages().unwrap().len(), 1);
+}
+
+#[test]
+fn truncate_into_next_generation_by_unknown_message_id_fails() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+    locator
+        .open_session(&session, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "one"))
+        .unwrap();
+
+    let err = locator.truncate_into_next_generation(
+        &session,
+        TruncateCut::BeforeMessageId("nonexistent".into()),
+        meta(),
+    );
+    assert!(
+        err.is_err(),
+        "an unresolvable id must fail rather than silently keep everything"
+    );
+}
+
+#[test]
+fn truncate_into_next_generation_last_assistant_turn_drops_only_the_trailing_answer() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    let first = locator.open_session(&session, meta()).unwrap();
+    for (role, content) in [
+        ("user", "first question"),
+        ("assistant", "first answer"),
+        ("user", "second question"),
+        ("assistant", "second answer, to regenerate"),
+    ] {
+        first.append(TranscriptMessage::new(role, content)).unwrap();
+    }
+
+    let (_, handle, truncated) = locator
+        .truncate_into_next_generation(&session, TruncateCut::LastAssistantTurn, meta())
+        .unwrap();
+
+    let contents: Vec<_> = truncated.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(
+        contents,
+        vec!["first question", "first answer", "second question"]
+    );
+    assert_eq!(handle.messages().unwrap().len(), 3);
+}
+
+#[test]
+fn truncate_into_next_generation_operates_on_the_current_head_not_the_root() {
+    // A fork after an earlier compaction must truncate the head generation's
+    // messages, not the sealed root's.
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+
+    locator
+        .open_session(&session, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "root-only"))
+        .unwrap();
+    let (compacted, compacted_handle) = locator.begin_generation(&session, meta()).unwrap();
+    for turn in ["alpha", "beta", "gamma"] {
+        compacted_handle
+            .append(TranscriptMessage::new("user", turn))
+            .unwrap();
+    }
+
+    let (successor, handle, truncated) = locator
+        .truncate_into_next_generation(&session, TruncateCut::BeforeIndex(1), meta())
+        .unwrap();
+
+    assert_eq!(successor.generation, 2);
+    assert_eq!(successor.parent_session_id(), Some(compacted.session_id()));
+    let contents: Vec<_> = truncated.iter().map(|m| m.content.as_str()).collect();
+    assert_eq!(contents, vec!["alpha"]);
+    assert_eq!(handle.messages().unwrap().len(), 1);
+}
+
 /// After a compaction, a resume must land on the newest generation — the one
 /// the model is actually continuing — not on the sealed original.
 #[test]
