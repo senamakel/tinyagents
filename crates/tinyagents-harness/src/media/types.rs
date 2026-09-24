@@ -89,9 +89,7 @@ impl MediaOutput {
                 // Canonicalize the root if it exists, for accurate symlink-safe
                 // comparison. If the root is a fallback path that doesn't exist,
                 // fall back to a lexical check after canonicalizing the path.
-                let canonical_root = root
-                    .canonicalize()
-                    .unwrap_or_else(|_| root.to_path_buf());
+                let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
                 let admitted = match &self.reference_policy {
                     Some(policy) => policy(&canonical)?,
                     None => confine(&canonical, &canonical_root)?,
