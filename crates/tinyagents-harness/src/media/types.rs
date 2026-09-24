@@ -106,15 +106,11 @@ impl std::fmt::Debug for MediaOutput {
     }
 }
 
-/// Default reference policy: the path must stay inside `root` lexically, with
-/// no `..` components, so a model cannot read and upload arbitrary files.
+/// Default reference policy: the path must stay inside `root` when canonicalized,
+/// so a model cannot read and upload arbitrary files via symlinks.
 fn confine(path: &Path, root: &Path) -> Result<PathBuf, String> {
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(format!(
-            "reference path {} may not contain '..'",
-            path.display()
-        ));
-    }
+    // Both paths are already canonicalized by the caller, so we check the
+    // resolved path against the resolved root.
     if !path.starts_with(root) {
         return Err(format!(
             "reference path {} is outside the workspace; use a URL or a file inside the workspace",
