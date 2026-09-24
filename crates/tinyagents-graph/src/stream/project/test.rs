@@ -74,6 +74,7 @@ fn stream_projection_folds_tool_lifecycle_as_two_entries() {
     projection.fold_agent_event(&AgentEvent::ToolStarted {
         call_id: CallId::from("call-1".to_string()),
         tool_name: "search".into(),
+        input: None,
     });
     projection.fold_agent_event(&AgentEvent::ToolCompleted {
         call_id: CallId::from("call-1".to_string()),
@@ -148,6 +149,7 @@ fn stream_projection_since_replays_only_items_after_the_given_cursor() {
     projection.fold_agent_event(&AgentEvent::ToolStarted {
         call_id: CallId::from("call-1".to_string()),
         tool_name: "search".into(),
+        input: None,
     });
     let cursor_after_first = projection.cursor();
     projection.fold_agent_event(&AgentEvent::ModelDelta {
