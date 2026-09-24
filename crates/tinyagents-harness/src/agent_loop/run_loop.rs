@@ -2045,7 +2045,7 @@ pub(super) fn mark_empty_frozen_prefix(
 ) {
     if frozen_system_prefix_len == Some(0) && request.cache_segments.is_empty() {
         request.cache_segments.push(PromptSegment {
-            id: "volatile-system-history".into(),
+            id: crate::cache::VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
             role: SegmentRole::Volatile,
             cacheable: false,
         });

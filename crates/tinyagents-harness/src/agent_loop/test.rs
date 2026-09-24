@@ -7064,6 +7064,34 @@ fn empty_frozen_prefix_does_not_promote_a_system_summary() {
 }
 
 #[test]
+fn stable_prepend_promotes_the_zero_prefix_marker_without_caching_history() {
+    let build = |summary: &str| {
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.messages.insert(0, Message::system(summary));
+        crate::cache::prepend_system_message(&mut request, "dynamic instruction".into());
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let first = build("summary A");
+    let second = build("summary B");
+    assert_eq!(first.cache_segments.len(), 1);
+    assert_eq!(first.cache_segments[0].id, "system");
+    assert!(first.cache_segments[0].cacheable);
+    assert_eq!(first.messages[0].text(), "dynamic instruction");
+    assert_eq!(first.messages[1].text(), "summary A");
+    assert_eq!(
+        crate::cache::prompt_cache_key(&first),
+        crate::cache::prompt_cache_key(&second)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&first),
+        crate::cache::cache_key(&second)
+    );
+}
+
+#[test]
 fn tools_only_prefix_survives_a_leading_compaction_summary() {
     use tinyinference_llm::model::{PromptSegment, SegmentRole};
     use tinyinference_llm::tool::ToolSchema;

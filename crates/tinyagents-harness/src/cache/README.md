@@ -65,7 +65,9 @@ cheap and deterministic:
   when the harness rebuilds a request on the next invocation; standalone runs
   retain leading-System inference. A recorded zero-prefix session with no tools
   uses a noncacheable marker so its leading System history summary is not
-  silently promoted into a reusable prompt tier.
+  silently promoted into a reusable prompt tier. If a built-in dynamic or
+  structured instruction is later prepended, `prepend_system_message` replaces
+  that marker with one canonical stable tier and leaves the summary in history.
 - [`CacheLayoutEvent`] (`types.rs` + `layout.rs`) — describes a before/after
   layout change; `under_policy` evaluates it against a `CachePolicy` and is
   what makes `CachePolicy::protect_prompt_prefix` load-bearing.

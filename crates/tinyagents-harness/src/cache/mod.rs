@@ -51,7 +51,9 @@ mod singleflight;
 mod sqlite;
 mod types;
 
-pub(crate) use layout::{declared_system_prefix_len, prepend_system_message};
+pub(crate) use layout::{
+    VOLATILE_SYSTEM_HISTORY_SEGMENT_ID, declared_system_prefix_len, prepend_system_message,
+};
 
 pub use key::{
     PROMPT_CACHE_KEY_OPTION, apply_prompt_cache_breakpoints, cache_key, credential_fingerprint,

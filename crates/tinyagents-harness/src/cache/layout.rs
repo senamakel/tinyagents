@@ -12,6 +12,10 @@ use tinyinference_llm::cache::CachePolicy;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
 
+/// Explicitly records that a durable run froze zero messages before a later
+/// middleware can insert a leading System summary.
+pub(crate) const VOLATILE_SYSTEM_HISTORY_SEGMENT_ID: &str = "volatile-system-history";
+
 /// Number of messages named by an explicit canonical system-prefix layout.
 /// Extra leading System messages may be volatile summaries; their role alone
 /// cannot add them to the declared cacheable prefix.
@@ -62,8 +66,28 @@ pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize
 /// system tier from the provider cache key. Dynamic prompts and prompted
 /// structured-output schemas both use this path.
 pub(crate) fn prepend_system_message(request: &mut ModelRequest, text: String) {
+    let zero_prefix_marker = request.cache_segments
+        == [PromptSegment {
+            id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+            role: SegmentRole::Volatile,
+            cacheable: false,
+        }];
     let declared_system_len = declared_system_prefix_len(request);
     request.messages.insert(0, Message::system(text));
+    if zero_prefix_marker {
+        // This new instruction is the first stable tier; the old marker named
+        // only volatile history. Replace it with a canonical declaration and
+        // give the guard a content-derived annotation before dispatch.
+        request.cache_segments = vec![PromptSegment {
+            id: crate::prompt::system_segment_id(0),
+            role: SegmentRole::System,
+            cacheable: true,
+        }];
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_system_messages(&request.messages[..1]);
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+        return;
+    }
     if let Some(count) = declared_system_len {
         let mut suffix = request.cache_segments.split_off(count);
         request.cache_segments = (0..=count)
