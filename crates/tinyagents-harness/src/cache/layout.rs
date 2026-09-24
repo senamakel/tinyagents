@@ -306,7 +306,7 @@ impl PromptCacheLayout {
     /// Returns `true` when the segment identities match but the material they
     /// carry does not — the silent invalidation an id-only comparison missed.
     pub fn is_content_only_change(&self, other: &PromptCacheLayout) -> bool {
-        self.prefix_ids == other.prefix_ids && !self.is_prefix_stable_against(other)
+        self.prefix_ids == other.prefix_ids && !self.has_same_stable_prefix_as(other)
     }
 }
 
@@ -319,7 +319,7 @@ impl CacheLayoutEvent {
     /// [`CachePolicy`].
     pub fn new(before: &PromptCacheLayout, after: &PromptCacheLayout) -> Self {
         Self {
-            changed_prefix: !before.is_prefix_stable_against(after),
+            changed_prefix: !before.has_same_stable_prefix_as(after),
             volatile_only: after.prefix_ids().is_empty(),
             content_only_change: before.is_content_only_change(after),
             violates_policy: false,
