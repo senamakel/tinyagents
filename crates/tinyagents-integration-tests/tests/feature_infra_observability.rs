@@ -77,6 +77,7 @@ fn latency_metrics_correlate_started_and_completed_by_call_id() {
             AgentEvent::ToolStarted {
                 call_id: CallId::new("t1"),
                 tool_name: "search".into(),
+                input: None,
             },
         ),
         obs(
@@ -186,6 +187,7 @@ async fn journal_read_filtered_selects_by_event_kind() {
             AgentEvent::ToolStarted {
                 call_id: CallId::new("t1"),
                 tool_name: "x".into(),
+                input: None,
             },
         ))
         .await
