@@ -19,7 +19,7 @@
 //! `mod.rs`; tests live in `test.rs`. Every public item is re-exported through
 //! `crate::middleware` so callers import from one place.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
