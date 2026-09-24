@@ -58,25 +58,10 @@ impl PromptCacheLayout {
             material.push(if segment.cacheable { '1' } else { '0' });
             material.push('\u{2}');
         }
-        // The builder's fingerprint is authoritative when present. Direct
-        // ModelRequest callers may declare segments without one; still hash
-        // their leading system messages so a same-id prompt edit is visible.
-        let fallback_fingerprint;
-        let prompt_fingerprint = if let Some(fingerprint) = request.prompt_fingerprint.as_deref() {
-            fingerprint
-        } else {
-            let leading_system: Vec<_> = request
-                .messages
-                .iter()
-                .take_while(|message| {
-                    matches!(message, tinyinference_llm::message::Message::System(_))
-                })
-                .collect();
-            fallback_fingerprint =
-                fnv1a_hex(&serde_json::to_vec(&leading_system).unwrap_or_default());
-            &fallback_fingerprint
-        };
-        material.push_str(prompt_fingerprint);
+        // The builder or caller must identify cacheable message content.
+        // Message roles cannot supply a fallback boundary: a compaction
+        // summary is also a System message immediately after the stable tiers.
+        material.push_str(request.prompt_fingerprint.as_deref().unwrap_or(""));
         material.push('\u{2}');
         // Tool declarations sit inside the stable prefix on every provider that
         // caches prompts, so a schema edit invalidates it.

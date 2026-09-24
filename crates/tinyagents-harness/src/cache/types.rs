@@ -229,6 +229,8 @@ pub(crate) struct LruResponseMap {
 /// Comparing ids alone reported "prefix stable" after a middleware rewrote the
 /// **text** of a stable segment, which is precisely the failure this type
 /// exists to catch: the ids match while the provider's cached bytes are gone.
+/// Direct callers must set `prompt_fingerprint` when they declare cacheable
+/// message segments; roles alone cannot identify their content boundaries.
 ///
 /// # Provider KV-cache stability rules
 /// - Never insert timestamps, run ids, or dynamic retrieval output into the

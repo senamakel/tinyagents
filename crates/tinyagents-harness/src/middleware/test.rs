@@ -1220,16 +1220,53 @@ async fn prompt_cache_guard_reports_same_id_stable_content_change() {
 }
 
 #[tokio::test]
-async fn prompt_cache_guard_detects_leading_system_edit_without_a_fingerprint() {
+async fn prompt_cache_guard_does_not_guess_a_compaction_summary_is_stable() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new());
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw.clone());
     let mut c = ctx();
     let segments = vec![segment("system", SegmentRole::System, true)];
-    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("question")])
         .with_cache_segments(segments.clone());
-    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
-        .with_cache_segments(segments);
+    let mut after = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("changing history summary"),
+        user("question"),
+    ])
+    .with_cache_segments(segments);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert!(mw.layout_events().is_empty());
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_tool_schema_change_without_a_fingerprint() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("tools", SegmentRole::Tools, true)];
+    let tool = |description| {
+        tinyinference_llm::tool::ToolSchema::new(
+            "search",
+            description,
+            serde_json::json!({"type": "object"}),
+        )
+    };
+    let mut before = ModelRequest::new(vec![user("question")])
+        .with_cache_segments(segments.clone())
+        .with_tools(vec![tool("search files")]);
+    let mut after = ModelRequest::new(vec![user("question")])
+        .with_cache_segments(segments)
+        .with_tools(vec![tool("search files recursively")]);
 
     stack
         .run_before_model(&mut c, &(), &mut before)
