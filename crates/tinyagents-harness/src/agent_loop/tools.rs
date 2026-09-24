@@ -902,9 +902,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // Captured here (where the call actually starts) so the completed
         // event carries a real start time for duration-aware exporters.
         let started_at_ms = crate::ids::now_ms();
+        // Snapshot the arguments for observability before `call` is moved
+        // into execution, gated by the capture policy. Shared between the
+        // `ToolStarted` event (so a host sees the arguments as soon as the
+        // call starts) and the fold-phase `ToolCompleted` event.
+        let captured_input = self.policy.capture.tool_io.then(|| call.arguments.clone());
         let record = ctx.emit(AgentEvent::ToolStarted {
             call_id: call_id.clone(),
             tool_name: tool_name.clone(),
+            input: captured_input.clone(),
         });
         crate::runtime::emit_host_progress::<State, Ctx>(
             ctx,
@@ -915,9 +921,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
         );
         status.set_last_event(record.id);
-        // Snapshot the arguments for observability before `call` is moved
-        // into execution, gated by the capture policy.
-        let captured_input = self.policy.capture.tool_io.then(|| call.arguments.clone());
         PreparedToolCall {
             call_id,
             tool_name,
