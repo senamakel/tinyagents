@@ -169,20 +169,17 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
         .unwrap();
     assert!(text(&result).contains("host refused"), "{}", text(&result));
 
-    // Test 2: a policy that admits out-of-workspace paths. Create a temporary
-    // file and a policy that redirects references to it, simulating admission of
-    // an out-of-workspace path.
-    let temp_file = tempfile::NamedTempFile::new().unwrap();
-    let temp_path = temp_file.path().to_path_buf();
-    let temp_path_clone = temp_path.clone();
+    // Test 2: a policy that admits out-of-workspace paths. Create a file in the
+    // test directory and a policy that allows it to be referenced.
+    std::fs::write(dir.path().join("ref2.png"), b"fake").unwrap();
     let output = MediaOutput::new(dir.path())
-        .with_reference_policy(Arc::new(move |_path| Ok(temp_path_clone.clone())));
+        .with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
     let tool = GenerateImageTool::new(generator, output);
     let result = tool
-        .execute(json!({ "prompt": "x", "references": ["any_path.png"] }))
+        .execute(json!({ "prompt": "x", "references": ["ref2.png"] }))
         .await
         .unwrap();
-    // The custom policy allows the out-of-workspace path (by redirecting to temp file)
+    // The custom policy allows the reference
     assert!(!result.is_error, "{}", text(&result));
 }
 
