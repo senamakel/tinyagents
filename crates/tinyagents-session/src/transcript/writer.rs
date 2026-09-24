@@ -65,6 +65,17 @@ pub fn write_transcript_if_absent(
     messages: &[TranscriptMessage],
     meta: &TranscriptMeta,
 ) -> Result<bool> {
+    write_transcript_if_absent_with_tools(jsonl_path, messages, meta, None)
+}
+
+/// Like [`write_transcript_if_absent`], additionally preserving the latest
+/// recorded tool declarations when a transcript is migrated into a session.
+pub fn write_transcript_if_absent_with_tools(
+    jsonl_path: &Path,
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+    tools: Option<&serde_json::Value>,
+) -> Result<bool> {
     if let Some(parent) = jsonl_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create transcript dir {}", parent.display()))?;
@@ -74,6 +85,10 @@ pub fn write_transcript_if_absent(
     jsonl_buf.push_str(&meta_line_json(meta)?);
     jsonl_buf.push('\n');
     serialise_message_lines(messages, None, None, &mut jsonl_buf)?;
+    if let Some(tools) = tools {
+        jsonl_buf.push_str(&tools_line_json(tools)?);
+        jsonl_buf.push('\n');
+    }
 
     let published = publish_transcript_if_absent(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("publish transcript {}", jsonl_path.display()))?;
@@ -122,13 +137,14 @@ pub fn append_transcript_turn(
     turn_usage: Option<&TurnUsage>,
     request_id: Option<&str>,
 ) -> Result<()> {
-    append_transcript_turn_with_partial(
+    append_transcript_turn_with_partial_and_tools(
         jsonl_path,
         prev_persisted,
         messages,
         meta,
         turn_usage,
         request_id,
+        None,
         None,
     )
 }
@@ -150,6 +166,30 @@ pub fn append_transcript_turn_with_partial(
     request_id: Option<&str>,
     partial: Option<&TranscriptPartial>,
 ) -> Result<()> {
+    append_transcript_turn_with_partial_and_tools(
+        jsonl_path,
+        prev_persisted,
+        messages,
+        meta,
+        turn_usage,
+        request_id,
+        partial,
+        None,
+    )
+}
+
+/// Appends a turn, optional display partial, and optional tool declarations
+/// from one serialized buffer and one file-write operation.
+pub fn append_transcript_turn_with_partial_and_tools(
+    jsonl_path: &Path,
+    prev_persisted: &[TranscriptMessage],
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+    turn_usage: Option<&TurnUsage>,
+    request_id: Option<&str>,
+    partial: Option<&TranscriptPartial>,
+    tools: Option<&serde_json::Value>,
+) -> Result<()> {
     if let Some(parent) = jsonl_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create transcript dir {}", parent.display()))?;
@@ -164,6 +204,10 @@ pub fn append_transcript_turn_with_partial(
         buf.push('\n');
         serialise_message_lines(messages, turn_usage, request_id, &mut buf)?;
         serialise_interrupted_partial(partial, request_id, &mut buf)?;
+        if let Some(tools) = tools {
+            buf.push_str(&tools_line_json(tools)?);
+            buf.push('\n');
+        }
         fs::write(jsonl_path, buf.as_bytes())
             .with_context(|| format!("create transcript {}", jsonl_path.display()))?;
         tracing::debug!(
@@ -231,6 +275,10 @@ pub fn append_transcript_turn_with_partial(
     buf.push_str(&meta_line_json(meta)?);
     buf.push('\n');
     serialise_interrupted_partial(partial, request_id, &mut buf)?;
+    if let Some(tools) = tools {
+        buf.push_str(&tools_line_json(tools)?);
+        buf.push('\n');
+    }
 
     append_bytes(jsonl_path, buf.as_bytes())?;
     render_md_companion(jsonl_path, messages, meta, turn_usage);
@@ -241,6 +289,11 @@ pub fn append_transcript_turn_with_partial(
 /// session's latest turn was sent with. The file must already exist (its
 /// first line is always `_meta`), so callers append this after the turn.
 pub fn append_tools_record(jsonl_path: &Path, tools: &serde_json::Value) -> Result<()> {
+    anyhow::ensure!(
+        jsonl_path.is_file(),
+        "transcript must exist before appending tool declarations: {}",
+        jsonl_path.display()
+    );
     let mut line = tools_line_json(tools)?;
     line.push('\n');
     append_bytes(jsonl_path, line.as_bytes())?;
@@ -461,7 +514,6 @@ fn publish_transcript_if_absent(path: &Path, contents: &[u8]) -> Result<bool> {
 fn append_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let mut file = fs::OpenOptions::new()
-        .create(true)
         .append(true)
         .open(path)
         .with_context(|| format!("open transcript for append {}", path.display()))?;

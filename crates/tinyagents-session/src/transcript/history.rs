@@ -726,17 +726,16 @@ impl FileTranscriptHistory {
             turn.request_id,
             self.path.display()
         );
-        append_transcript_turn(
+        crate::transcript::append_transcript_turn_with_partial_and_tools(
             &self.path,
             turn.prev,
             turn.next,
             turn.meta,
             turn.turn_usage,
             turn.request_id,
+            None,
+            turn.tools,
         )?;
-        if let Some(tools) = turn.tools {
-            crate::transcript::append_tools_record(&self.path, tools)?;
-        }
         Ok(())
     }
 
@@ -754,7 +753,7 @@ impl FileTranscriptHistory {
             partial.is_some(),
             self.path.display()
         );
-        crate::transcript::append_transcript_turn_with_partial(
+        crate::transcript::append_transcript_turn_with_partial_and_tools(
             &self.path,
             turn.prev,
             turn.next,
@@ -762,10 +761,8 @@ impl FileTranscriptHistory {
             turn.turn_usage,
             turn.request_id,
             partial,
+            turn.tools,
         )?;
-        if let Some(tools) = turn.tools {
-            crate::transcript::append_tools_record(&self.path, tools)?;
-        }
         Ok(())
     }
 

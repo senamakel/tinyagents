@@ -197,7 +197,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .codec
             .as_ref()
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
-        let decoded = codec.decode_history(&transcript)?;
+        let mut decoded = codec.decode_history(&transcript)?;
         // The transcript already holds the prefix it was sent with as its
         // leading system rows. A session built without a prefix of its own
         // adopts those rows, so resuming never has to re-render the prompt
@@ -210,6 +210,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .collect();
             if !leading.is_empty() {
                 self.prefix = PrefixSnapshot::new(leading);
+                decoded.drain(..self.prefix.messages().len());
             }
         }
         let history = self.with_prefix(decoded);
