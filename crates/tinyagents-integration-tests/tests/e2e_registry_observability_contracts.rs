@@ -157,6 +157,7 @@ fn component_metadata_and_event_kinds_are_stable_serializable_contracts() {
         AgentEvent::ToolStarted {
             call_id: CallId::new("tool-1"),
             tool_name: "lookup".into(),
+            input: None,
         },
         AgentEvent::ToolCompleted {
             call_id: CallId::new("tool-1"),
@@ -285,6 +286,7 @@ async fn event_sinks_journals_and_status_stores_preserve_run_lineage() {
     journal.append(AgentEvent::ToolStarted {
         call_id: CallId::new("tool-1"),
         tool_name: "lookup".into(),
+        input: None,
     });
     journal.append(AgentEvent::ToolCompleted {
         call_id: CallId::new("tool-1"),
