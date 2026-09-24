@@ -146,6 +146,9 @@ pub(crate) fn prepend_system_message(request: &mut ModelRequest, text: String) {
         ];
         let mut prompt = crate::prompt::PromptBuilder::new();
         prompt.push_system_messages(&request.messages[..1]);
+        if !request.tools.is_empty() {
+            prompt.push_tools_segment("tools", request.tools.clone());
+        }
         request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
         return;
     }
@@ -159,6 +162,12 @@ pub(crate) fn prepend_system_message(request: &mut ModelRequest, text: String) {
             })
             .collect();
         request.cache_segments.append(&mut suffix);
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_system_messages(&request.messages[..count + 1]);
+        if !request.tools.is_empty() {
+            prompt.push_tools_segment("tools", request.tools.clone());
+        }
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
     }
 }
 

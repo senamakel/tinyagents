@@ -7013,6 +7013,7 @@ fn changing_or_prepending_a_declared_system_message_invalidates_the_prefix() {
 
     let mut prepended = original.clone();
     crate::cache::prepend_system_message(&mut prepended, "new instruction".into());
+    assert_ne!(original.prompt_fingerprint, prepended.prompt_fingerprint);
     super::run_loop::refresh_prompt_cache_fingerprint(&mut prepended);
     assert_ne!(
         crate::cache::prompt_cache_key(&original),
@@ -7207,7 +7208,6 @@ fn zero_prefix_stable_prepend_and_tools_keep_both_segments_in_either_order() {
 
 #[test]
 fn tools_only_prefix_survives_a_leading_compaction_summary() {
-    use tinyinference_llm::model::{PromptSegment, SegmentRole};
     use tinyinference_llm::tool::ToolSchema;
 
     let tool = ToolSchema::new(
@@ -7216,19 +7216,12 @@ fn tools_only_prefix_survives_a_leading_compaction_summary() {
         serde_json::json!({"type": "object"}),
     );
     let mut before = ModelRequest::new(vec![Message::user("first")]).with_tools(vec![tool.clone()]);
-    before.cache_segments = vec![PromptSegment {
-        id: "tools".into(),
-        role: SegmentRole::Tools,
-        cacheable: true,
-    }];
-    before.prompt_fingerprint = Some("declared-tools".into());
-    let mut after = ModelRequest::new(vec![
-        Message::system("changing history summary"),
-        Message::user("later"),
-    ])
-    .with_tools(vec![tool]);
-    after.cache_segments = before.cache_segments.clone();
-    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+    super::run_loop::mark_empty_frozen_prefix(&mut before, Some(0));
+    let mut after = ModelRequest::new(vec![Message::user("later")]).with_tools(vec![tool]);
+    super::run_loop::mark_empty_frozen_prefix(&mut after, Some(0));
+    after
+        .messages
+        .insert(0, Message::system("changing history summary"));
 
     super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
     super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
