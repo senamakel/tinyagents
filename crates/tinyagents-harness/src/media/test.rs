@@ -115,6 +115,9 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
         ]
     );
 
+    // Test that tilde-prefixed references stay within the workspace.
+    // Tilde is not expanded by the reference parser, so it resolves as a literal
+    // subdirectory inside the workspace.
     for escape in ["../secret.png", "/etc/passwd", "~/.ssh/id_rsa"] {
         let result = tool
             .execute_with_context(
@@ -124,13 +127,11 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
             )
             .await
             .unwrap();
-        // `~` is not expanded, so it stays inside the root; the other two are refused.
-        if escape.starts_with('~') {
-            continue;
-        }
+        // All three should be refused: `..` is outside, `/etc/passwd` is outside,
+        // and `~/.ssh/id_rsa` must be inside the workspace (tilde is literal).
         assert!(
             result.is_error,
-            "{escape} must be refused: {}",
+            "{escape} must be refused; the file may not exist yet in the workspace: {}",
             text(&result)
         );
     }
