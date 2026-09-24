@@ -229,8 +229,9 @@ pub(crate) struct LruResponseMap {
 /// Comparing ids alone reported "prefix stable" after a middleware rewrote the
 /// **text** of a stable segment, which is precisely the failure this type
 /// exists to catch: the ids match while the provider's cached bytes are gone.
-/// Direct callers must set `prompt_fingerprint` when they declare cacheable
-/// message segments; roles alone cannot identify their content boundaries.
+/// Direct callers should set `prompt_fingerprint` when they declare cacheable
+/// message segments. Without it, the guard compares the full message stream
+/// because roles alone cannot identify cacheable content boundaries.
 ///
 /// # Provider KV-cache stability rules
 /// - Never insert timestamps, run ids, or dynamic retrieval output into the
@@ -248,8 +249,6 @@ pub struct PromptCacheLayout {
     /// Per-message digests in transcript order, used to decide whether one
     /// layout's message stream is a pure tail-extension of another's.
     pub(crate) message_digests: Vec<String>,
-    /// Whether the request supplied an annotation for cacheable message bytes.
-    pub(crate) explicit_fingerprint: bool,
     /// Whether canonical segment ids identify exact leading message boundaries.
     pub(crate) canonical_message_boundary: bool,
 }

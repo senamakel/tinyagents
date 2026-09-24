@@ -16,9 +16,7 @@ use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
 /// Extra leading System messages may be volatile summaries; their role alone
 /// cannot add them to the declared cacheable prefix.
 pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize> {
-    if request.prompt_fingerprint.is_none() {
-        return None;
-    }
+    request.prompt_fingerprint.as_ref()?;
     let count = request
         .cache_segments
         .iter()
@@ -128,7 +126,6 @@ impl PromptCacheLayout {
                     fnv1a_hex(serde_json::to_vec(message).unwrap_or_default().as_slice())
                 })
                 .collect(),
-            explicit_fingerprint: request.prompt_fingerprint.is_some(),
             canonical_message_boundary: declared_system_count.is_some(),
         }
     }

@@ -1272,7 +1272,7 @@ async fn prompt_cache_guard_detects_custom_dynamic_prompt_rewrite() {
 }
 
 #[tokio::test]
-async fn prompt_cache_guard_does_not_guess_a_compaction_summary_is_stable() {
+async fn prompt_cache_guard_uses_full_request_when_boundary_is_unknown() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new());
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw.clone());
@@ -1296,7 +1296,31 @@ async fn prompt_cache_guard_does_not_guess_a_compaction_summary_is_stable() {
         .await
         .unwrap();
 
-    assert!(mw.layout_events().is_empty());
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_same_id_system_edit_without_a_fingerprint() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+        .with_cache_segments(segments.clone());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
+        .with_cache_segments(segments);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
 }
 
 #[tokio::test]
@@ -1333,7 +1357,7 @@ async fn prompt_cache_guard_detects_tool_schema_change_without_a_fingerprint() {
 }
 
 #[tokio::test]
-async fn prompt_cache_guard_ignores_volatile_segment_changes() {
+async fn prompt_cache_guard_reports_custom_volatile_segment_changes() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new());
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
     stack.push(mw.clone());
@@ -1348,6 +1372,8 @@ async fn prompt_cache_guard_ignores_volatile_segment_changes() {
             segment("system", SegmentRole::System, true),
             segment("turn-2", SegmentRole::Volatile, false),
         ]);
+    before.prompt_fingerprint = Some("stable-system".into());
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
 
     stack
         .run_before_model(&mut c, &(), &mut before)
@@ -1358,7 +1384,9 @@ async fn prompt_cache_guard_ignores_volatile_segment_changes() {
         .await
         .unwrap();
 
-    assert!(mw.layout_events().is_empty());
+    // A noncanonical annotation takes the same full-request fallback as
+    // dispatch, where even volatile segment metadata can change the key.
+    assert_eq!(mw.layout_events().len(), 1);
 }
 
 #[tokio::test]

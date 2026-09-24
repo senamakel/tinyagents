@@ -116,7 +116,7 @@ built-in catalog:
   `CacheLayoutEvent` whenever the cacheable segment ids or content change from
   the previous call. For canonical declared layouts, a trimmed or compacted
   history can lose its cached tail while retaining the stable prefix, so it
-  does not raise this event. Custom layouts with an explicit fingerprint keep
+  does not raise this event. Layouts without a known message boundary keep
   conservative full-request comparison.
 - `UsageAccountingMiddleware` — folds each `response.usage` into a running
   `UsageTotals` in `after_model`, readable via `.totals()`.
