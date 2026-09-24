@@ -7152,8 +7152,19 @@ fn prompted_schema_instruction_preserves_all_original_system_tiers() {
 
     let before = build("second A");
     let after = build("second B");
-    assert_eq!(before.cache_segments.len(), 3);
-    assert_eq!(after.cache_segments.len(), 3);
+    let expected_segments = (0..3)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(before.cache_segments, expected_segments);
+    assert_eq!(after.cache_segments, expected_segments);
+    assert_eq!(before.messages[0].text(), "JSON Schema: fixed");
+    assert_eq!(before.messages[1].text(), "first");
+    assert_eq!(before.messages[2].text(), "second A");
+    assert_eq!(after.messages[2].text(), "second B");
     assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
 }
 

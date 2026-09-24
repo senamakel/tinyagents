@@ -250,9 +250,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .map(|session| target.locator.head_generation(session))
                 .filter(|session| {
                     session.generation > 0
-                        && (session_binding.is_some()
-                            || transcript.meta.session_id.as_deref()
-                                == Some(session.session_id().as_str()))
+                        && transcript.meta.session_id.as_deref()
+                            == Some(session.session_id().as_str())
                 })
             {
                 let root = head.first_generation();
