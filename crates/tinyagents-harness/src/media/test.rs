@@ -316,7 +316,7 @@ async fn malformed_string_options_are_rejected_not_ignored() {
         .execute(json!({ "prompt": "x", "n": "two" }))
         .await
         .unwrap();
-    assert!(result.is_error && text(&result).contains("`n` must be an integer"));
+    assert!(result.is_error && text(&result).contains("`n` must be a non-negative integer"));
     assert!(
         generator.requests().is_empty(),
         "nothing billed on a malformed option"
