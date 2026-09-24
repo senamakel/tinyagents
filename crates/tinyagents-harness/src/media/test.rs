@@ -307,3 +307,37 @@ fn media_errors_map_onto_harness_errors() {
     .into();
     assert!(matches!(timeout, TinyAgentsError::Timeout(ref m) if m.contains("j")));
 }
+
+#[tokio::test]
+async fn malformed_string_options_are_rejected_not_ignored() {
+    let generator = Arc::new(MockImageGenerator::new());
+    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/tmp"));
+    let result = tool
+        .execute(json!({ "prompt": "x", "n": "two" }))
+        .await
+        .unwrap();
+    assert!(result.is_error && text(&result).contains("`n` must be an integer"));
+    assert!(
+        generator.requests().is_empty(),
+        "nothing billed on a malformed option"
+    );
+
+    let video = Arc::new(MockVideoGenerator::new(MockVideoScript::delivers()));
+    let tool =
+        GenerateVideoTool::new(video.clone(), MediaOutput::new("/tmp")).with_wait_policy(fast());
+    let result = tool
+        .execute(json!({ "prompt": "x", "generate_audio": "maybe" }))
+        .await
+        .unwrap();
+    assert!(result.is_error && text(&result).contains("`generate_audio` must be true or false"));
+    assert!(video.requests().is_empty());
+}
+
+#[test]
+fn video_schema_exposes_size() {
+    let tool = GenerateVideoTool::new(
+        Arc::new(MockVideoGenerator::new(MockVideoScript::delivers())),
+        MediaOutput::new("/tmp"),
+    );
+    assert!(tool.parameters_schema()["properties"].get("size").is_some());
+}

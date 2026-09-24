@@ -10,7 +10,9 @@ use tinytools::{
     ToolTimeout,
 };
 
-use super::types::{MediaOutput, arg_bool, arg_i64, arg_list, arg_str, arg_u64};
+use super::types::{
+    MediaOutput, arg_bool, arg_i64, arg_list, arg_str, arg_u64, check_option_types,
+};
 use super::{artifact_stem, media_policy};
 
 /// Default model-visible name.
@@ -92,6 +94,11 @@ impl GenerateVideoTool {
         args: &Value,
         workspace: Option<&std::path::Path>,
     ) -> Result<VideoRequest, String> {
+        check_option_types(
+            args,
+            &["duration", "duration_seconds", "durationSeconds", "seed"],
+            &["generate_audio", "audio"],
+        )?;
         let prompt = arg_str(args, &["prompt"]).map(str::to_owned);
         let mut request = VideoRequest {
             prompt: prompt.clone(),
@@ -232,6 +239,7 @@ impl Tool for GenerateVideoTool {
                 "aspect_ratio": { "type": "string", "description": "e.g. 16:9, 9:16, 1:1, landscape, portrait." },
                 "generate_audio": { "type": ["boolean", "string"], "description": "Add an audio track (boolean or string \"true\"/\"false\"), where supported." },
                 "seed": { "type": ["integer", "string"], "description": "Deterministic seed (integer or numeric string)." },
+                "size": { "type": "string", "description": "Exact pixels such as 1280x720 (interchangeable with resolution + aspect_ratio)." },
                 "first_frame": { "type": "string", "description": "Image to start from: https URL, data: URL or workspace path." },
                 "last_frame": { "type": "string", "description": "Image to end on." },
                 "references": {

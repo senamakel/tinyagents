@@ -134,6 +134,35 @@ pub(crate) fn arg_str<'a>(args: &'a Value, keys: &[&str]) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+/// Rejects a present-but-malformed option instead of silently dropping it.
+///
+/// The schemas accept numeric and boolean options as strings too (models emit
+/// both), so a value such as `"n": "two"` passes schema validation; without
+/// this check it would be ignored and the call would run — and bill — with
+/// the default instead of what was asked.
+pub(crate) fn check_option_types(
+    args: &Value,
+    integers: &[&str],
+    booleans: &[&str],
+) -> Result<(), String> {
+    for key in integers {
+        match args.get(*key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Number(number)) if number.is_i64() || number.is_u64() => {}
+            Some(Value::String(text)) if text.trim().parse::<i64>().is_ok() => {}
+            Some(other) => return Err(format!("`{key}` must be an integer, got {other}")),
+        }
+    }
+    for key in booleans {
+        match args.get(*key) {
+            None | Some(Value::Null) | Some(Value::Bool(_)) => {}
+            Some(Value::String(text)) if text.trim().parse::<bool>().is_ok() => {}
+            Some(other) => return Err(format!("`{key}` must be true or false, got {other}")),
+        }
+    }
+    Ok(())
+}
+
 /// Reads the first present unsigned integer among `keys` (numbers or numeric
 /// strings, since models emit both).
 pub(crate) fn arg_u64(args: &Value, keys: &[&str]) -> Option<u64> {

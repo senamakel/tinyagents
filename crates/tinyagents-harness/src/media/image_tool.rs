@@ -10,7 +10,7 @@ use tinytools::{
     ToolTimeout,
 };
 
-use super::types::{MediaOutput, arg_i64, arg_list, arg_str, arg_u64};
+use super::types::{MediaOutput, arg_i64, arg_list, arg_str, arg_u64, check_option_types};
 use super::{artifact_stem, media_policy};
 
 /// Default model-visible name.
@@ -86,6 +86,9 @@ impl GenerateImageTool {
         let Some(prompt) = arg_str(args, &["prompt"]) else {
             return ToolResult::error("`prompt` is required");
         };
+        if let Err(message) = check_option_types(args, &["n", "count", "seed"], &[]) {
+            return ToolResult::error(message);
+        }
         let mut request = ImageRequest::new(prompt);
         request.model = arg_str(args, &["model"]).map(str::to_owned);
         // Enforce the maximum image count at runtime
