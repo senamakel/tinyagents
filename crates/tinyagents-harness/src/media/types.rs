@@ -215,25 +215,25 @@ impl MediaOutput {
             file.write_all(bytes).map_err(|error| {
                 format!("artifact {} could not be written: {error}", path.display())
             })?;
-            return Ok(path);
+            Ok(path)
         }
         #[cfg(not(unix))]
-        let mut file = File::options()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| {
-                format!(
-                    "artifact {} could not be created safely: {error}",
-                    path.display()
-                )
+        {
+            let mut file = File::options()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|error| {
+                    format!(
+                        "artifact {} could not be created safely: {error}",
+                        path.display()
+                    )
+                })?;
+            file.write_all(bytes).map_err(|error| {
+                format!("artifact {} could not be written: {error}", path.display())
             })?;
-        #[cfg(not(unix))]
-        file.write_all(bytes).map_err(|error| {
-            format!("artifact {} could not be written: {error}", path.display())
-        })?;
-        #[cfg(not(unix))]
-        Ok(path)
+            Ok(path)
+        }
     }
 
     /// Converts a model-supplied reference string into a [`MediaReference`],
