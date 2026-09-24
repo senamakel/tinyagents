@@ -134,6 +134,53 @@ impl<T> RunQueue<T> {
         inner.collects.clear();
         total
     }
+
+    /// Returns a snapshot of every queued item, tagged with its lane, in
+    /// lane/delivery order: [`QueueLane::Steer`], then
+    /// [`QueueLane::Followup`], then [`QueueLane::Collect`], each lane
+    /// preserving its own FIFO order. Non-destructive — the queue is
+    /// unchanged, so a host can inspect pending work (e.g. to render it, or
+    /// to decide whether [`Self::remove_where`] applies) without racing the
+    /// agent loop's own drain.
+    pub async fn snapshot(&self) -> Vec<(QueueLane, T)>
+    where
+        T: Clone,
+    {
+        let inner = self.inner.lock().await;
+        let mut items = Vec::with_capacity(inner.steers.len() + inner.followups.len() + inner.collects.len());
+        items.extend(inner.steers.iter().cloned().map(|item| (QueueLane::Steer, item)));
+        items.extend(
+            inner
+                .followups
+                .iter()
+                .cloned()
+                .map(|item| (QueueLane::Followup, item)),
+        );
+        items.extend(
+            inner
+                .collects
+                .iter()
+                .cloned()
+                .map(|item| (QueueLane::Collect, item)),
+        );
+        items
+    }
+
+    /// Removes every queued item across all lanes for which `pred` returns
+    /// `true`, preserving the relative order of the items that remain in
+    /// each lane. Returns the number of items removed.
+    ///
+    /// Use to retract a specific queued item (e.g. one the host decided not
+    /// to apply after all) without clearing the rest of the queue.
+    pub async fn remove_where(&self, pred: impl Fn(&T) -> bool) -> usize {
+        let mut inner = self.inner.lock().await;
+        let before = inner.steers.len() + inner.followups.len() + inner.collects.len();
+        inner.steers.retain(|item| !pred(item));
+        inner.followups.retain(|item| !pred(item));
+        inner.collects.retain(|item| !pred(item));
+        let after = inner.steers.len() + inner.followups.len() + inner.collects.len();
+        before - after
+    }
 }
 
 impl<T> Default for RunQueue<T> {
