@@ -136,10 +136,7 @@ async fn remove_where_removes_matching_items_across_every_lane() {
     assert_eq!(removed, 2);
     assert_eq!(
         queue.snapshot().await,
-        vec![
-            (QueueLane::Steer, "keep"),
-            (QueueLane::Collect, "keep"),
-        ]
+        vec![(QueueLane::Steer, "keep"), (QueueLane::Collect, "keep"),]
     );
 }
 

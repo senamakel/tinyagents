@@ -147,8 +147,15 @@ impl<T> RunQueue<T> {
         T: Clone,
     {
         let inner = self.inner.lock().await;
-        let mut items = Vec::with_capacity(inner.steers.len() + inner.followups.len() + inner.collects.len());
-        items.extend(inner.steers.iter().cloned().map(|item| (QueueLane::Steer, item)));
+        let mut items =
+            Vec::with_capacity(inner.steers.len() + inner.followups.len() + inner.collects.len());
+        items.extend(
+            inner
+                .steers
+                .iter()
+                .cloned()
+                .map(|item| (QueueLane::Steer, item)),
+        );
         items.extend(
             inner
                 .followups
