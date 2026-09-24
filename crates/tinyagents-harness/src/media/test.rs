@@ -172,8 +172,8 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
     // Test 2: a policy that admits out-of-workspace paths. Create a file in the
     // test directory and a policy that allows it to be referenced.
     std::fs::write(dir.path().join("ref2.png"), b"fake").unwrap();
-    let output = MediaOutput::new(dir.path())
-        .with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
+    let output =
+        MediaOutput::new(dir.path()).with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
     let tool = GenerateImageTool::new(generator, output);
     let result = tool
         .execute(json!({ "prompt": "x", "references": ["ref2.png"] }))
