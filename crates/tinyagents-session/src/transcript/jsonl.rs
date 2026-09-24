@@ -293,6 +293,7 @@ pub(super) fn serialise_message_lines(
     buf: &mut String,
 ) -> Result<()> {
     let last_assistant_idx = messages.iter().rposition(|m| m.role == "assistant");
+    let turn_stamps = turn_step_stamps(messages, last_assistant_idx, last_assistant_turn_usage);
     for (i, msg) in messages.iter().enumerate() {
         let turn_usage = if Some(i) == last_assistant_idx {
             last_assistant_turn_usage
@@ -301,13 +302,63 @@ pub(super) fn serialise_message_lines(
         } else {
             msg.turn_usage.clone()
         };
-        let line = build_message_line(msg, turn_usage.as_ref(), request_id, false);
+        let mut line = build_message_line(msg, turn_usage.as_ref(), request_id, false);
+        if let Some((iteration, ts)) = turn_stamps.get(&i) {
+            line.iteration = line.iteration.or(Some(*iteration));
+            if line.ts.is_none() && !ts.is_empty() {
+                line.ts = Some(ts.clone());
+            }
+        }
         let line_json =
             serde_json::to_string(&line).with_context(|| format!("serialise message line {i}"))?;
         buf.push_str(&line_json);
         buf.push('\n');
     }
     Ok(())
+}
+
+/// Per-step `(iteration, ts)` stamps for the intermediate assistant rows of the
+/// turn being written.
+///
+/// A turn's [`TurnUsage`] lands on its final assistant row only, so without
+/// this every earlier step of a multi-step turn (the tool-calling rows) was
+/// written with no `iteration` and no `ts`, and a reader could not tell which
+/// model call a row — or the reasoning on it — belonged to. The turn's own
+/// rows are the fresh (not replayed, `preserve_request_id == false`) assistant
+/// rows after the last `user` row; they are the turn's model calls in order,
+/// the last being call `turn_usage.iteration`. Earlier rows count back from
+/// it (never below 1). `ts` is the turn's commit stamp: the only clock the
+/// writer has, but enough to place the row in time.
+///
+/// Empty when there is no turn usage, the usage records no iteration, or the
+/// final assistant row is not itself one of the turn's fresh rows. The final
+/// row is excluded: it already carries both through its usage.
+fn turn_step_stamps(
+    messages: &[TranscriptMessage],
+    last_assistant_idx: Option<usize>,
+    turn_usage: Option<&TurnUsage>,
+) -> HashMap<usize, (u32, String)> {
+    let mut stamps = HashMap::new();
+    let (Some(last), Some(usage)) = (last_assistant_idx, turn_usage) else {
+        return stamps;
+    };
+    if usage.iteration == 0 || messages[last].preserve_request_id {
+        return stamps;
+    }
+    let turn_start = messages[..last]
+        .iter()
+        .rposition(|m| m.role == "user")
+        .map_or(0, |idx| idx + 1);
+    let steps: Vec<usize> = (turn_start..last)
+        .filter(|&i| messages[i].role == "assistant" && !messages[i].preserve_request_id)
+        .collect();
+    let total = steps.len() as u32;
+    for (k, idx) in steps.into_iter().enumerate() {
+        let back = total - k as u32;
+        let iteration = usage.iteration.saturating_sub(back).max(1);
+        stamps.insert(idx, (iteration, usage.ts.clone()));
+    }
+    stamps
 }
 
 /// Convert a parsed `MetaPayload` into the public [`TranscriptMeta`].
