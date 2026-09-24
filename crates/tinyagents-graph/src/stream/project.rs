@@ -185,7 +185,9 @@ impl StreamProjection {
                     },
                 });
             }
-            AgentEvent::ToolStarted { call_id, tool_name } => {
+            AgentEvent::ToolStarted {
+                call_id, tool_name, ..
+            } => {
                 self.push_tool_call(call_id.clone(), tool_name.clone(), ToolCallPhase::Started);
             }
             AgentEvent::ToolCompleted {
