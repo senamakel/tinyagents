@@ -40,7 +40,7 @@ const MAX_GENERATIONS: u32 = 4096;
 
 /// One turn's worth of transcript write, borrowed.
 ///
-/// The fields mirror [`append_transcript_turn`]'s argument list one-for-one and
+/// The fields mirror the transcript writer's turn-append argument list one-for-one and
 /// in order, so [`TranscriptHistory::append_turn`]'s forwarding is visually
 /// checkable against the format's own signature. Nothing is transformed on the
 /// way through; that is the entire correctness claim of this seam and
@@ -802,7 +802,7 @@ impl FileTranscriptHistory {
 }
 
 impl TranscriptHistory for FileTranscriptHistory {
-    /// Pure forwarder: every argument reaches [`append_transcript_turn`]
+    /// Pure forwarder: every argument reaches the transcript writer's turn append
     /// untouched, so the bytes this writes are identical to what the free
     /// function would have written at the call site.
     ///

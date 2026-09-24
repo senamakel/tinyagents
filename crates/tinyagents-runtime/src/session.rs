@@ -220,16 +220,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // or the one that wrote it.
         self.committed_turns = self.committed_turns.max(transcript.meta.turn_count);
         self.recorded_tools_json = transcript.tools.clone();
-        self.recorded_tools = match transcript.tools.as_ref() {
-            Some(value) => match ToolSnapshot::from_json(value) {
-                Ok(tools) => Some(tools),
-                Err(error) => {
-                    tracing::warn!("[session] ignoring unreadable recorded tools: {error}");
-                    None
-                }
-            },
-            None => None,
-        };
+        self.recorded_tools = Self::decode_recorded_tools(transcript.tools.as_ref());
         tracing::debug!(
             "[session] resumed history={} committed_turns={} recorded_tools={}",
             history.len(),
@@ -315,7 +306,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
             match destination {
                 Some(destination_transcript) => {
-                    self.recorded_tools_json = destination_transcript.tools;
+                    self.recorded_tools_json = destination_transcript.tools.clone();
+                    self.recorded_tools = Self::decode_recorded_tools(destination_transcript.tools.as_ref());
                     self.persisted = destination_transcript.messages;
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
@@ -329,6 +321,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // whatever session this target now names (`resume`'s
                     // own head-resolution above may have rebound it).
                     self.recorded_tools_json = None;
+                    self.recorded_tools = None;
                     self.persisted = Vec::new();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = pre_scan_meta;
@@ -543,6 +536,16 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             );
         }
         Ok(merged)
+    }
+
+    fn decode_recorded_tools(value: Option<&serde_json::Value>) -> Option<ToolSnapshot> {
+        value.and_then(|value| match ToolSnapshot::from_json(value) {
+            Ok(tools) => Some(tools),
+            Err(error) => {
+                tracing::warn!("[session] ignoring unreadable recorded tools: {error}");
+                None
+            }
+        })
     }
 
     fn apply_resume_preparation(
