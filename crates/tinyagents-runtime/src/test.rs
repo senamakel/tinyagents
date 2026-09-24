@@ -3118,10 +3118,9 @@ async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation(
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // Return a reduced history so persistence opens a successor generation.
-    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
-        Message::user("x"),
-        Message::assistant("compacted"),
-    ]))]));
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "compacted",
+    )]))]));
     let (hook, _) = hook(vec![TurnPreparation {
         tools: Some(ToolSnapshot::default()),
         exact_tools: true,
