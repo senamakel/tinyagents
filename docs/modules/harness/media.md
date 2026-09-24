@@ -67,6 +67,9 @@ The tools are built so that cannot happen quietly:
 
 ## Local references
 
-Reference paths are resolved against the run's workspace root. Without a host
-policy they must stay inside it (no `..`, no absolute paths elsewhere), so a
-model cannot read an arbitrary file and upload it to a third party.
+Reference paths are canonicalized and resolved against the run's workspace root.
+Without a host policy they must stay inside it (no `..`, no absolute paths
+elsewhere, and no symlinks pointing outside it), so a model cannot read an
+arbitrary file and upload it to a third party. A custom
+`MediaOutput::with_reference_policy` can override this to permit out-of-workspace
+references when the host policy allows.
