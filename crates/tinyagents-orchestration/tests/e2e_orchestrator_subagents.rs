@@ -182,6 +182,7 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
             sink.emit(AgentEvent::ToolStarted {
                 call_id: CallId::new(call_id.clone()),
                 tool_name: name.clone(),
+                input: None,
             });
             let parent = RunContext::new(RunConfig::new(format!("dispatch-{i}")), ());
             let result = dispatch
