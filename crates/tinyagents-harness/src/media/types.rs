@@ -159,18 +159,20 @@ impl MediaOutput {
         }
         #[cfg(unix)]
         let handle = {
-            use std::os::unix::fs::OpenOptionsExt;
+            use rustix::fs::{Mode, OFlags, open};
 
-            let mut options = File::options();
-            options
-                .read(true)
-                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
-            options.open(&canonical_dir).map_err(|error| {
+            let handle = open(
+                &canonical_dir,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| {
                 format!(
                     "artifact directory {} could not be opened safely: {error}",
                     canonical_dir.display()
                 )
-            })?
+            })?;
+            File::from(handle)
         };
         Ok(ArtifactDirectory {
             path: canonical_dir,
@@ -192,33 +194,24 @@ impl MediaOutput {
         let path = dir.path.join(&filename);
         #[cfg(unix)]
         {
-            use std::ffi::CString;
-            use std::os::fd::{AsRawFd, FromRawFd};
+            use rustix::fs::{Mode, OFlags, openat};
 
-            let filename = CString::new(filename).expect("artifact filenames contain no NUL bytes");
             // `openat` writes relative to the verified directory handle, so an
             // attacker cannot redirect this write by replacing an ancestor.
-            let fd = unsafe {
-                libc::openat(
-                    dir.handle.as_raw_fd(),
-                    filename.as_ptr(),
-                    libc::O_WRONLY
-                        | libc::O_CREAT
-                        | libc::O_EXCL
-                        | libc::O_NOFOLLOW
-                        | libc::O_CLOEXEC,
-                    0o666,
+            let file = openat(
+                &dir.handle,
+                &filename,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH,
+            )
+            .map(File::from)
+            .map_err(|error| {
+                format!(
+                    "artifact {} could not be created safely: {error}",
+                    path.display()
                 )
-            };
-            if fd < 0 {
-                return Err(format!(
-                    "artifact {} could not be created safely: {}",
-                    path.display(),
-                    std::io::Error::last_os_error()
-                ));
-            }
-            // SAFETY: `openat` returned a new owned descriptor above.
-            let mut file = unsafe { File::from_raw_fd(fd) };
+            })?;
+            let mut file = file;
             file.write_all(bytes).map_err(|error| {
                 format!("artifact {} could not be written: {error}", path.display())
             })?;
