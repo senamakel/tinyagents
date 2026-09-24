@@ -362,7 +362,7 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
     assert_eq!(request.duration_s, Some(5), "legacy durationSeconds alias");
     assert_eq!(request.generate_audio, Some(true));
     assert!(request.first_frame.is_some());
-    assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Unbounded);
+    assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Millis(5_000));
 }
 
 #[tokio::test]

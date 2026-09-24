@@ -47,7 +47,7 @@ impl GenerateVideoTool {
             description: "Generate a short video clip from a text prompt, optionally starting \
                           from (or ending on) an image, and save it into the workspace. Takes \
                           minutes. Billed per call: if a job times out, call again with \
-                          `resume_job_id` instead of submitting a new one."
+                          `resume_job_id` and the original `model` instead of submitting a new one."
                 .to_owned(),
             permission: PermissionLevel::Write,
             category: ToolCategory::System,
@@ -341,10 +341,8 @@ impl Tool for GenerateVideoTool {
         true
     }
 
-    /// The job loop enforces its own [`WaitPolicy`] deadline, so the harness
-    /// must not cut the call short.
     fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
-        ToolTimeout::Unbounded
+        ToolTimeout::Millis(u64::try_from(self.wait.timeout.as_millis()).unwrap_or(u64::MAX))
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
