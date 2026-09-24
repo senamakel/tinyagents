@@ -31,11 +31,17 @@ use crate::transcript::{
 ///   after `append_turn` always equals `turn.next` either way.
 pub struct InMemoryTranscriptHistory {
     path: PathBuf,
-    meta: Mutex<TranscriptMeta>,
-    messages: Mutex<Vec<TranscriptMessage>>,
-    tools: Mutex<Option<serde_json::Value>>,
-    /// `None` until the first write, mirroring a file that does not exist yet.
-    written: Mutex<bool>,
+    state: Mutex<InMemoryTranscriptState>,
+}
+
+/// The complete logical transcript state. Keeping it behind one mutex makes a
+/// turn update observable as one transition, just like the file backend.
+struct InMemoryTranscriptState {
+    meta: TranscriptMeta,
+    messages: Vec<TranscriptMessage>,
+    tools: Option<serde_json::Value>,
+    /// `false` until the first write, mirroring a file that does not exist yet.
+    written: bool,
 }
 
 impl InMemoryTranscriptHistory {
@@ -45,15 +51,17 @@ impl InMemoryTranscriptHistory {
     pub fn new(label: impl Into<String>, seed_meta: TranscriptMeta) -> Self {
         Self {
             path: PathBuf::from(format!("memory://{}", label.into())),
-            meta: Mutex::new(seed_meta),
-            messages: Mutex::new(Vec::new()),
-            tools: Mutex::new(None),
-            written: Mutex::new(false),
+            state: Mutex::new(InMemoryTranscriptState {
+                meta: seed_meta,
+                messages: Vec::new(),
+                tools: None,
+                written: false,
+            }),
         }
     }
 
     fn mark_written(&self) {
-        *self.written.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).written = true;
     }
 }
 
@@ -63,63 +71,58 @@ impl TranscriptRead for InMemoryTranscriptHistory {
     }
 
     fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>> {
-        if !*self.written.lock().unwrap_or_else(|e| e.into_inner()) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.written {
             return Ok(None);
         }
         Ok(Some(SessionTranscript {
-            meta: self.meta.lock().unwrap_or_else(|e| e.into_inner()).clone(),
-            messages: self
-                .messages
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone(),
-            tools: self.tools.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            meta: state.meta.clone(),
+            messages: state.messages.clone(),
+            tools: state.tools.clone(),
         }))
     }
 }
 
 impl TranscriptHistory for InMemoryTranscriptHistory {
     fn append_turn(&self, turn: TranscriptTurn<'_>) -> anyhow::Result<()> {
-        *self.messages.lock().unwrap_or_else(|e| e.into_inner()) = turn.next.to_vec();
-        *self.meta.lock().unwrap_or_else(|e| e.into_inner()) = turn.meta.clone();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.messages = turn.next.to_vec();
+        state.meta = turn.meta.clone();
+        // `None` means this logical turn does not replace the last durable
+        // snapshot, matching the file writer which emits no tools record.
         if let Some(tools) = turn.tools {
-            *self.tools.lock().unwrap_or_else(|e| e.into_inner()) = Some(tools.clone());
+            state.tools = Some(tools.clone());
         }
-        self.mark_written();
+        state.written = true;
         Ok(())
     }
 
     fn messages(&self) -> anyhow::Result<Vec<TranscriptMessage>> {
-        Ok(self
-            .messages
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone())
+        Ok(self.state.lock().unwrap_or_else(|e| e.into_inner()).messages.clone())
     }
 
     fn append(&self, message: TranscriptMessage) -> anyhow::Result<()> {
-        self.messages
+        self.state
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .messages
             .push(message);
         self.mark_written();
         Ok(())
     }
 
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
-        *self.messages.lock().unwrap_or_else(|e| e.into_inner()) = messages.to_vec();
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).messages = messages.to_vec();
         self.mark_written();
         Ok(())
     }
 
     fn clear(&self) -> anyhow::Result<()> {
-        if !*self.written.lock().unwrap_or_else(|e| e.into_inner()) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.written {
             return Ok(());
         }
-        self.messages
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        state.messages.clear();
         Ok(())
     }
 }
