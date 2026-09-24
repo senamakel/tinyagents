@@ -664,15 +664,17 @@ fn a_turn_and_its_tools_are_serialized_in_one_append_buffer() {
     let path = dir.path().join("agent.jsonl");
     let rows = vec![TranscriptMessage::new("user", "hi")];
 
-    append_transcript_turn_with_partial_and_tools(
+    writer::append_transcript_turn_with_extras(
         &path,
         &[],
         &rows,
         &meta(),
         None,
         Some("r1"),
-        None,
-        Some(&serde_json::json!([{"name": "search"}])),
+        writer::AppendTranscriptExtras {
+            partial: None,
+            tools: Some(&serde_json::json!([{"name": "search"}])),
+        },
     )
     .unwrap();
 

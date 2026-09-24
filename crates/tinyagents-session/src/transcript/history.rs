@@ -726,15 +726,17 @@ impl FileTranscriptHistory {
             turn.request_id,
             self.path.display()
         );
-        crate::transcript::append_transcript_turn_with_partial_and_tools(
+        crate::transcript::writer::append_transcript_turn_with_extras(
             &self.path,
             turn.prev,
             turn.next,
             turn.meta,
             turn.turn_usage,
             turn.request_id,
-            None,
-            turn.tools,
+            crate::transcript::writer::AppendTranscriptExtras {
+                partial: None,
+                tools: turn.tools,
+            },
         )?;
         Ok(())
     }
@@ -753,15 +755,17 @@ impl FileTranscriptHistory {
             partial.is_some(),
             self.path.display()
         );
-        crate::transcript::append_transcript_turn_with_partial_and_tools(
+        crate::transcript::writer::append_transcript_turn_with_extras(
             &self.path,
             turn.prev,
             turn.next,
             turn.meta,
             turn.turn_usage,
             turn.request_id,
-            partial,
-            turn.tools,
+            crate::transcript::writer::AppendTranscriptExtras {
+                partial,
+                tools: turn.tools,
+            },
         )?;
         Ok(())
     }

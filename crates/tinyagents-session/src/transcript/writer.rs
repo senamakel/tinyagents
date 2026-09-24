@@ -137,15 +137,17 @@ pub fn append_transcript_turn(
     turn_usage: Option<&TurnUsage>,
     request_id: Option<&str>,
 ) -> Result<()> {
-    append_transcript_turn_with_partial_and_tools(
+    append_transcript_turn_with_extras(
         jsonl_path,
         prev_persisted,
         messages,
         meta,
         turn_usage,
         request_id,
-        None,
-        None,
+        AppendTranscriptExtras {
+            partial: None,
+            tools: None,
+        },
     )
 }
 
@@ -166,30 +168,38 @@ pub fn append_transcript_turn_with_partial(
     request_id: Option<&str>,
     partial: Option<&TranscriptPartial>,
 ) -> Result<()> {
-    append_transcript_turn_with_partial_and_tools(
+    append_transcript_turn_with_extras(
         jsonl_path,
         prev_persisted,
         messages,
         meta,
         turn_usage,
         request_id,
-        partial,
-        None,
+        AppendTranscriptExtras {
+            partial,
+            tools: None,
+        },
     )
+}
+
+/// Optional turn records serialized alongside a turn's logical delta.
+pub(crate) struct AppendTranscriptExtras<'a> {
+    pub partial: Option<&'a TranscriptPartial>,
+    pub tools: Option<&'a serde_json::Value>,
 }
 
 /// Appends a turn, optional display partial, and optional tool declarations
 /// from one serialized buffer and one file-write operation.
-pub fn append_transcript_turn_with_partial_and_tools(
+pub(crate) fn append_transcript_turn_with_extras(
     jsonl_path: &Path,
     prev_persisted: &[TranscriptMessage],
     messages: &[TranscriptMessage],
     meta: &TranscriptMeta,
     turn_usage: Option<&TurnUsage>,
     request_id: Option<&str>,
-    partial: Option<&TranscriptPartial>,
-    tools: Option<&serde_json::Value>,
+    extras: AppendTranscriptExtras<'_>,
 ) -> Result<()> {
+    let AppendTranscriptExtras { partial, tools } = extras;
     if let Some(parent) = jsonl_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create transcript dir {}", parent.display()))?;
