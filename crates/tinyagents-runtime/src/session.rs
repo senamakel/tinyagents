@@ -307,7 +307,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             match destination {
                 Some(destination_transcript) => {
                     self.recorded_tools_json = destination_transcript.tools.clone();
-                    self.recorded_tools = Self::decode_recorded_tools(destination_transcript.tools.as_ref());
+                    self.recorded_tools =
+                        Self::decode_recorded_tools(destination_transcript.tools.as_ref());
                     self.persisted = destination_transcript.messages;
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;

@@ -2995,6 +2995,63 @@ async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
 }
 
 #[tokio::test]
+async fn thread_resume_restores_tools_from_its_write_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-tools", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let destination = directory
+        .path()
+        .join("session_raw")
+        .join(format!("{}.jsonl", session_stem(&session_ref)));
+
+    locator
+        .open_session(&session_ref, meta())
+        .unwrap()
+        .append(TranscriptMessage::new("user", "destination"))
+        .unwrap();
+    tinyagents_session::transcript::append_tools_record(&destination, &two_tools().to_json())
+        .unwrap();
+
+    let mut scanned_meta = meta();
+    scanned_meta.thread_id = Some("thread-tools".into());
+    scanned_meta.created = "zzz-scanned-created".into();
+    tinyagents_session::transcript::write_transcript(
+        &directory.path().join("session_raw/scanned.jsonl"),
+        &[TranscriptMessage::new("user", "scanned")],
+        &scanned_meta,
+        None,
+    )
+    .unwrap();
+
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("scanned"),
+        Message::assistant("reply"),
+    ]))]));
+    let (hook, _) = hook(vec![TurnPreparation::with_tools(tools("alpha"))]);
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(hook)
+        .retain_recorded_tools(true)
+        .session(locator, session_ref, meta())
+        .build()
+        .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("scanned")),
+            session_turn_options(ResumeMode::Thread, "thread-tools"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tool_names(&driver.requests.lock().unwrap()[0].tools),
+        vec!["alpha", "beta"],
+        "retention must use the bound destination's snapshot, not the scanned source's"
+    );
+}
+
+#[tokio::test]
 async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
     let directory = tempfile::tempdir().unwrap();
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
