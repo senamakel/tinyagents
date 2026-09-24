@@ -197,6 +197,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        if let Some(selected) = session_binding.as_ref() {
+            let expected = selected.session_id();
+            if transcript
+                .meta
+                .session_id
+                .as_deref()
+                .is_some_and(|actual| actual != expected)
+            {
+                return Err(RuntimeError::Persistence(
+                    "exact session read returned a different transcript identity".into(),
+                ));
+            }
+        }
         let codec = self
             .codec
             .as_ref()

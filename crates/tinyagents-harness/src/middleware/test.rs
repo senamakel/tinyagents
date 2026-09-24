@@ -1303,8 +1303,15 @@ async fn dynamic_prompt_preserves_the_original_declared_system_tier() {
         .await
         .unwrap();
 
-    assert_eq!(before.cache_segments.len(), 2);
-    assert_eq!(after.cache_segments.len(), 2);
+    let expected_segments = vec![
+        segment("system", SegmentRole::System, true),
+        segment("system.1", SegmentRole::System, true),
+    ];
+    assert_eq!(before.cache_segments, expected_segments);
+    assert_eq!(after.cache_segments, expected_segments);
+    assert_eq!(before.messages[0].text(), "dynamic");
+    assert_eq!(before.messages[1].text(), "original A");
+    assert_eq!(after.messages[1].text(), "original B");
     assert_eq!(guard.layout_events().len(), 1);
 }
 

@@ -2685,6 +2685,15 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
 
     assert!(resumed.loaded);
     assert_eq!(session.prefix_snapshot().messages().len(), 2);
+    assert_eq!(
+        session
+            .prefix_snapshot()
+            .messages()
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["stable", "context"]
+    );
     assert_eq!(resumed.history[2].text(), "changing history summary");
 
     let mut by_thread = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
@@ -2698,6 +2707,15 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         .unwrap();
     assert!(resumed.loaded);
     assert_eq!(by_thread.prefix_snapshot().messages().len(), 2);
+    assert_eq!(
+        by_thread
+            .prefix_snapshot()
+            .messages()
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["stable", "context"]
+    );
     assert_eq!(resumed.history[2].text(), "changing history summary");
 
     let mut replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
@@ -2900,6 +2918,31 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert!(matches!(
         scanned_replacement
             .resume(&session_turn_options(ResumeMode::Thread, "destination"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+
+    let expected_ref = SessionRef::scoped("expected", "agent-id").next_generation();
+    let mut wrong_meta = meta();
+    wrong_meta.session_id = Some("a-different-session".into());
+    let (wrong_locator, _) = self::locator(Some(SessionTranscript {
+        meta: wrong_meta,
+        messages: vec![TranscriptMessage::new("system", "wrong instruction")],
+        tools: None,
+    }));
+    wrong_locator
+        .known_sessions
+        .lock()
+        .unwrap()
+        .push(expected_ref.clone());
+    let mut wrong_identity = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(wrong_locator, expected_ref, meta())
+        .build()
+        .unwrap();
+    assert!(matches!(
+        wrong_identity
+            .resume(&session_turn_options(ResumeMode::Session, "expected"))
             .await,
         Err(RuntimeError::Persistence(_))
     ));
