@@ -98,7 +98,9 @@ impl AgentLatencyMetrics {
                         });
                     }
                 }
-                AgentEvent::ToolStarted { call_id, tool_name } => {
+                AgentEvent::ToolStarted {
+                    call_id, tool_name, ..
+                } => {
                     tool_starts.insert(call_id.clone(), (tool_name.clone(), obs.ts_ms));
                 }
                 AgentEvent::ToolCompleted { call_id, .. } => {
