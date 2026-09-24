@@ -211,11 +211,17 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let mut frozen_len = self.prefix.messages().len();
         if frozen_len == 0 {
             frozen_len = leading_len;
-            if let Some(head) = session_binding
-                .as_ref()
+            let bound_session = session_binding.as_ref().or(target.session.as_ref());
+            if let Some(head) = bound_session
+                .map(|session| target.locator.head_generation(session))
                 .filter(|session| session.generation > 0)
             {
                 let root = head.first_generation();
+                // The head cannot establish how many of its leading System
+                // rows were frozen instructions. Until the sealed root proves
+                // that boundary, keep them as history rather than freezing a
+                // changing summary into the prompt.
+                frozen_len = 0;
                 if let Some(read) = target.locator.read_session_transcript(&root) {
                     match read.read_session() {
                         Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
@@ -228,19 +234,24 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                             Err(error) => tracing::warn!(
                                 session = %root.session_id(),
                                 %error,
-                                "[session] could not decode sealed prefix; using head boundary"
+                                "[session] could not decode sealed prefix; leaving head system rows unfrozen"
                             ),
                         },
                         Ok(None) => tracing::warn!(
                             session = %root.session_id(),
-                            "[session] sealed prefix missing; using head boundary"
+                            "[session] sealed prefix missing; leaving head system rows unfrozen"
                         ),
                         Err(error) => tracing::warn!(
                             session = %root.session_id(),
                             %error,
-                            "[session] could not read sealed prefix; using head boundary"
+                            "[session] could not read sealed prefix; leaving head system rows unfrozen"
                         ),
                     }
+                } else {
+                    tracing::warn!(
+                        session = %root.session_id(),
+                        "[session] sealed prefix unavailable; leaving head system rows unfrozen"
+                    );
                 }
             }
         }

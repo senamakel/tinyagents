@@ -1246,6 +1246,36 @@ async fn prompt_cache_guard_detects_rewritten_system_with_stale_annotation() {
 }
 
 #[tokio::test]
+async fn prompt_cache_guard_detects_a_new_leading_system_message() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("builder-value".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("new instruction"),
+        Message::system("stable"),
+        user("question"),
+    ])
+    .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
 async fn prompt_cache_guard_detects_custom_dynamic_prompt_rewrite() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new());
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();

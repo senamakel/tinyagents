@@ -6988,6 +6988,54 @@ fn compaction_summary_keeps_declared_system_prefix_cache_key() {
     );
 }
 
+#[test]
+fn tools_only_prefix_survives_a_leading_compaction_summary() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new(
+        "lookup",
+        "look up facts",
+        serde_json::json!({"type": "object"}),
+    );
+    let mut before = ModelRequest::new(vec![Message::user("first")]).with_tools(vec![tool.clone()]);
+    before.cache_segments = vec![PromptSegment {
+        id: "tools".into(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    }];
+    before.prompt_fingerprint = Some("declared-tools".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("changing history summary"),
+        Message::user("later"),
+    ])
+    .with_tools(vec![tool]);
+    after.cache_segments = before.cache_segments.clone();
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_eq!(before.cache_segments, after.cache_segments);
+    assert_eq!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
+#[test]
+fn fingerprint_without_declared_segments_still_hashes_a_new_system_message() {
+    let mut before = ModelRequest::new(vec![Message::user("first")]);
+    before.prompt_fingerprint = Some("stale".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("new instruction"),
+        Message::user("later"),
+    ]);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
 /// A text-dialect run that starts with *no* leading system message declares
 /// only the `tools` segment (`PromptBuilder` has no system prefix to name
 /// yet). The dialect then synthesizes exactly one new leading system message

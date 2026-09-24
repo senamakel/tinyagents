@@ -2648,7 +2648,11 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-prefix", "agent-id");
     let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
-    let root = locator.open_session(&session_ref, meta()).unwrap();
+    let mut thread_meta = meta();
+    thread_meta.thread_id = Some("thread-prefix".into());
+    let root = locator
+        .open_session(&session_ref, thread_meta.clone())
+        .unwrap();
     for (role, content) in [
         ("system", "stable"),
         ("system", "context"),
@@ -2656,7 +2660,9 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     ] {
         root.append(TranscriptMessage::new(role, content)).unwrap();
     }
-    let (_, head) = locator.begin_generation(&session_ref, meta()).unwrap();
+    let (_, head) = locator
+        .begin_generation(&session_ref, thread_meta.clone())
+        .unwrap();
     for (role, content) in [
         ("system", "stable"),
         ("system", "context"),
@@ -2668,7 +2674,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(RoleCodec))
-        .session(locator, session_ref, meta())
+        .session(locator.clone(), session_ref.clone(), thread_meta.clone())
         .build()
         .unwrap();
     let resumed = session
@@ -2679,6 +2685,49 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert!(resumed.loaded);
     assert_eq!(session.prefix_snapshot().messages().len(), 2);
     assert_eq!(resumed.history[2].text(), "changing history summary");
+
+    let mut by_thread = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(locator, session_ref, thread_meta)
+        .build()
+        .unwrap();
+    let resumed = by_thread
+        .resume(&session_turn_options(ResumeMode::Thread, "thread-prefix"))
+        .await
+        .unwrap();
+    assert!(resumed.loaded);
+    assert_eq!(by_thread.prefix_snapshot().messages().len(), 2);
+    assert_eq!(resumed.history[2].text(), "changing history summary");
+
+    // If a custom locator can read a compacted head but not its sealed root,
+    // no number of leading System rows can be proven to be frozen instructions.
+    let orphan_head = SessionRef::scoped("orphan", "agent-id").next_generation();
+    let (mock_locator, _) = self::locator(Some(SessionTranscript {
+        meta: meta(),
+        messages: vec![
+            TranscriptMessage::new("system", "stable"),
+            TranscriptMessage::new("system", "changing history summary"),
+            TranscriptMessage::new("user", "later"),
+        ],
+        tools: None,
+    }));
+    mock_locator
+        .known_sessions
+        .lock()
+        .unwrap()
+        .push(orphan_head.clone());
+    let mut missing_root = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(mock_locator, orphan_head, meta())
+        .build()
+        .unwrap();
+    let resumed = missing_root
+        .resume(&session_turn_options(ResumeMode::Session, "orphan"))
+        .await
+        .unwrap();
+    assert!(resumed.loaded);
+    assert!(missing_root.prefix_snapshot().messages().is_empty());
+    assert_eq!(resumed.history[0].text(), "stable");
 }
 
 /// A session-bound target's write destination is always its own session

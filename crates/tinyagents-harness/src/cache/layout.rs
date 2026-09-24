@@ -17,6 +17,9 @@ use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
 /// cannot add them to the declared cacheable prefix.
 pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize> {
     request.prompt_fingerprint.as_ref()?;
+    if request.cache_segments.is_empty() {
+        return None;
+    }
     let count = request
         .cache_segments
         .iter()
@@ -27,7 +30,7 @@ pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
-    if count == 0 || count > leading_system {
+    if count > leading_system {
         return None;
     }
     let canonical_head = (0..count).all(|index| {
@@ -44,6 +47,9 @@ pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize
         cacheable: true,
     };
     let tail = &request.cache_segments[count..];
+    if count == 0 && tail != [canonical_tools.clone()] {
+        return None;
+    }
     let canonical_tail = if request.tools.is_empty() {
         tail.is_empty() || tail == [canonical_tools]
     } else {
@@ -146,9 +152,22 @@ impl PromptCacheLayout {
 
     /// Whether the declared cacheable segments still have the same identity
     /// and content. History compaction may invalidate the cached tail without
-    /// changing this reusable leading prefix.
+    /// changing this reusable leading prefix. With no mapped message boundary,
+    /// compare the whole request history conservatively instead.
     pub fn has_same_stable_prefix_as(&self, other: &PromptCacheLayout) -> bool {
-        self.prefix_ids == other.prefix_ids && self.fingerprint == other.fingerprint
+        self.prefix_ids == other.prefix_ids
+            && self.fingerprint == other.fingerprint
+            && (self.canonical_message_boundary && other.canonical_message_boundary
+                || self.has_compatible_message_history(other))
+    }
+
+    fn has_compatible_message_history(&self, other: &PromptCacheLayout) -> bool {
+        let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {
+            (&self.message_digests, &other.message_digests)
+        } else {
+            (&other.message_digests, &self.message_digests)
+        };
+        longer.starts_with(shorter.as_slice())
     }
 
     /// Returns `true` when the provider's KV-cache prefix survives the move
@@ -168,12 +187,7 @@ impl PromptCacheLayout {
         if !self.has_same_stable_prefix_as(other) {
             return false;
         }
-        let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {
-            (&self.message_digests, &other.message_digests)
-        } else {
-            (&other.message_digests, &self.message_digests)
-        };
-        longer.starts_with(shorter.as_slice())
+        self.has_compatible_message_history(other)
     }
 
     /// Returns `true` when the segment identities match but the material they

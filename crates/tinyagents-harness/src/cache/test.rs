@@ -212,6 +212,25 @@ fn prompt_cache_layout_detects_changed_prefix() {
 }
 
 #[test]
+fn unannotated_stable_prefix_comparison_is_conservative() {
+    let segment = PromptSegment {
+        id: "system".into(),
+        role: SegmentRole::System,
+        cacheable: true,
+    };
+    let before = PromptCacheLayout::from_request(
+        &ModelRequest::new(vec![Message::system("prompt A"), Message::user("question")])
+            .with_cache_segments(vec![segment.clone()]),
+    );
+    let after = PromptCacheLayout::from_request(
+        &ModelRequest::new(vec![Message::system("prompt B"), Message::user("question")])
+            .with_cache_segments(vec![segment]),
+    );
+
+    assert!(!before.has_same_stable_prefix_as(&after));
+}
+
+#[test]
 fn cache_layout_event_volatile_only_when_no_cacheable_segments() {
     let req_a = ModelRequest::new(vec![]).with_cache_segments(vec![PromptSegment {
         id: "sys".into(),
