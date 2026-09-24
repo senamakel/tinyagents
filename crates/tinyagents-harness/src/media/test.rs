@@ -167,11 +167,7 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
         )
         .await
         .unwrap();
-    assert!(
-        text(&result).contains("host refused"),
-        "{}",
-        text(&result)
-    );
+    assert!(text(&result).contains("host refused"), "{}", text(&result));
 
     // Test 2: a policy that admits out-of-workspace paths. The policy runs after
     // canonicalize, so the file must exist. We use /etc/hostname which exists on
