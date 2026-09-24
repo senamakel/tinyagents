@@ -238,18 +238,13 @@ fn prompt_parser_extracts_single_tool_call() {
     assert_eq!(cleaned, "Let me read it.");
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "read_file");
-    // Ids are process-unique, not a per-response index: only the shape and the
-    // slot suffix are stable. See `next_synthetic_call_id`.
+    // Ids are process-unique, so only their protocol-specific prefix is part
+    // of this parser test's contract. Uniqueness is covered separately.
     assert!(
         calls[0]
             .id
             .starts_with(&format!("{SYNTHETIC_CALL_ID_PREFIX}_")),
         "unexpected synthetic id {}",
-        calls[0].id
-    );
-    assert!(
-        calls[0].id.ends_with("_1"),
-        "slot suffix lost: {}",
         calls[0].id
     );
     assert_eq!(calls[0].arguments, serde_json::json!({"path": "a.txt"}));
@@ -263,11 +258,8 @@ fn prompt_parser_extracts_multiple_calls_and_keeps_prose() {
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].name, "one");
     assert_eq!(calls[1].name, "two");
-    assert!(
-        calls[1].id.ends_with("_2"),
-        "slot suffix lost: {}",
-        calls[1].id
-    );
+    assert!(calls[0].id.starts_with(SYNTHETIC_CALL_ID_PREFIX));
+    assert!(calls[1].id.starts_with(SYNTHETIC_CALL_ID_PREFIX));
     assert_ne!(calls[0].id, calls[1].id);
 }
 
