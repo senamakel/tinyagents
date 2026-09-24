@@ -2718,6 +2718,67 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
             .collect::<Vec<_>>(),
         ["replacement", "changing history summary", "later"]
     );
+    let resumed_again = replacement
+        .resume(&session_turn_options(ResumeMode::Session, "thread-prefix"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed_again
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["replacement", "changing history summary", "later"]
+    );
+
+    let altered_dir = tempfile::tempdir().unwrap();
+    let altered_ref = SessionRef::scoped("altered-prefix", "agent-id");
+    let altered_locator = Arc::new(FileTranscriptLocator::new(altered_dir.path()));
+    let sealed = altered_locator.open_session(&altered_ref, meta()).unwrap();
+    for (role, content) in [
+        ("system", "old stable"),
+        ("system", "old context"),
+        ("user", "first"),
+    ] {
+        sealed
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let (_, altered_head) = altered_locator
+        .begin_generation(&altered_ref, meta())
+        .unwrap();
+    for (role, content) in [
+        ("system", "replacement"),
+        ("system", "changing history summary"),
+        ("user", "later"),
+    ] {
+        altered_head
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let mut no_replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(altered_locator.clone(), altered_ref.clone(), meta())
+        .build()
+        .unwrap();
+    let resumed = no_replacement
+        .resume(&session_turn_options(ResumeMode::Session, "altered-prefix"))
+        .await
+        .unwrap();
+    assert!(no_replacement.prefix_snapshot().messages().is_empty());
+    assert_eq!(resumed.history[0].text(), "replacement");
+    let mut conflicting_replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(altered_locator, altered_ref, meta())
+        .build()
+        .unwrap();
+    assert!(matches!(
+        conflicting_replacement
+            .resume(&session_turn_options(ResumeMode::Session, "altered-prefix"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
 
     // If a custom locator can read a compacted head but not its sealed root,
     // no number of leading System rows can be proven to be frozen instructions.

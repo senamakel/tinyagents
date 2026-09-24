@@ -25,6 +25,10 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     target: Option<TranscriptTarget>,
     transcript: Option<Arc<dyn TranscriptHistory>>,
     committed_turns: usize,
+    /// Number of leading rows in the currently bound durable transcript that
+    /// belong to its stored prefix. This can differ from a replacement
+    /// `self.prefix` and must survive repeated resume calls before a commit.
+    persisted_prefix_len: Option<usize>,
     /// Tool declarations this session last sent, restored from the transcript
     /// on resume and updated after every recorded turn.
     recorded_tools: Option<ToolSnapshot>,
@@ -54,6 +58,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             target,
             transcript: None,
             committed_turns: 0,
+            persisted_prefix_len: None,
             recorded_tools: None,
             recorded_tools_json: None,
             retain_recorded_tools: false,
@@ -208,16 +213,17 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .iter()
             .take_while(|message| matches!(message, Message::System(_)))
             .count();
-        let mut stored_len = if self.committed_turns > 0 {
-            self.prefix.messages().len()
-        } else {
-            leading_len
-        };
+        let cached_boundary = self
+            .transcript
+            .as_ref()
+            .filter(|bound| bound.path() == read.path())
+            .and(self.persisted_prefix_len);
+        let mut stored_len = cached_boundary.unwrap_or(leading_len);
         let compacted_head = session_binding
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
-        if self.committed_turns == 0 && compacted_head {
+        if cached_boundary.is_none() && compacted_head {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
@@ -239,11 +245,24 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     match read.read_session() {
                         Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
                             Ok(root_messages) => {
-                                stored_len = root_messages
+                                let root_prefix = root_messages
                                     .iter()
                                     .take_while(|message| matches!(message, Message::System(_)))
-                                    .count();
-                                boundary_resolved = true;
+                                    .collect::<Vec<_>>();
+                                if decoded.len() >= root_prefix.len()
+                                    && root_prefix
+                                        .iter()
+                                        .zip(decoded.iter())
+                                        .all(|(root, head)| *root == head)
+                                {
+                                    stored_len = root_prefix.len();
+                                    boundary_resolved = true;
+                                } else {
+                                    tracing::warn!(
+                                        session = %root.session_id(),
+                                        "[session] sealed prefix differs from compacted head; leaving system rows unfrozen"
+                                    );
+                                }
                             }
                             Err(error) => tracing::warn!(
                                 session = %root.session_id(),
@@ -281,6 +300,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             }
         }
         let stored_len = stored_len.min(leading_len);
+        self.persisted_prefix_len = Some(stored_len);
         if self.prefix.messages().is_empty() && stored_len != 0 {
             self.prefix = PrefixSnapshot::new(decoded[..stored_len].to_vec());
         }
@@ -821,6 +841,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             self.transcript = Some(handle);
         }
         target.meta = meta;
+        self.persisted_prefix_len = Some(self.prefix.messages().len());
         let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,
