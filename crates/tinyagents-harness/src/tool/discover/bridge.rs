@@ -188,7 +188,8 @@ pub async fn answer_tool_search(
     SearchAnswer {
         result: ToolResult::success(format!(
             "{matched} match(es). Invoke one with `{TOOL_CALL_NAME}` {{\"name\", \"arguments\"}} \
-             or by its own name, using the parameters shown.\n{rendered}"
+             (`arguments` as a JSON object string) or by its own name, using the parameters \
+             shown.\n{rendered}"
         )),
         matched,
         ranking: Some(ranking),
