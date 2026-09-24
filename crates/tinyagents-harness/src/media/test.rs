@@ -93,6 +93,11 @@ async fn image_tool_requires_a_prompt() {
 #[tokio::test]
 async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
     let dir = tempfile::tempdir().unwrap();
+    // Create the referenced file so canonicalize succeeds
+    let art_dir = dir.path().join("art");
+    std::fs::create_dir(&art_dir).unwrap();
+    std::fs::write(art_dir.join("ref.png"), b"fake image").unwrap();
+
     let generator = Arc::new(MockImageGenerator::new());
     let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"));
     let context = workspace(dir.path());
@@ -110,7 +115,7 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
     assert_eq!(
         request.references,
         vec![
-            MediaReference::Path(dir.path().join("art/ref.png")),
+            MediaReference::Path(art_dir.join("ref.png")),
             MediaReference::Url("https://x.test/r.png".into()),
         ]
     );
@@ -128,10 +133,11 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
             .await
             .unwrap();
         // All three should be refused: `..` is outside, `/etc/passwd` is outside,
-        // and `~/.ssh/id_rsa` must be inside the workspace (tilde is literal).
+        // and `~/.ssh/id_rsa` must be inside the workspace (tilde is literal, so it
+        // would be <workspace>/~/.ssh/id_rsa, which also doesn't exist).
         assert!(
             result.is_error,
-            "{escape} must be refused; the file may not exist yet in the workspace: {}",
+            "{escape} must be refused: {}",
             text(&result)
         );
     }
