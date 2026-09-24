@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::middleware::{AgentRun, HookCounts, LoggingMiddleware, UsageAccountingMiddleware};
+use tinyinference_llm::model::{PromptSegment, SegmentRole};
 use tinyinference_llm::usage::UsageTotals;
 use tinytools::ToolContent;
 
@@ -99,7 +100,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         request: &mut ModelRequest,
     ) -> Result<()> {
         if let Some(text) = (self.prompt)(state, &ctx.config) {
+            let declared_system_len = crate::cache::declared_system_prefix_len(request);
             request.messages.insert(0, Message::system(text));
+            if let Some(count) = declared_system_len {
+                // A prepended instruction shifts every frozen tier. Extend
+                // the explicit one-message-per-segment declaration before the
+                // guard compares it; a trailing System compaction summary
+                // still stays outside the declared prefix.
+                let mut suffix = request.cache_segments.split_off(count);
+                request.cache_segments = (0..=count)
+                    .map(|index| PromptSegment {
+                        id: crate::prompt::system_segment_id(index),
+                        role: SegmentRole::System,
+                        cacheable: true,
+                    })
+                    .collect();
+                request.cache_segments.append(&mut suffix);
+            }
         }
         Ok(())
     }
