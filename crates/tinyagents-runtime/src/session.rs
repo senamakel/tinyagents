@@ -213,18 +213,28 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         } else {
             leading_len
         };
-        if self.committed_turns == 0 {
+        let compacted_head = session_binding
+            .as_ref()
+            .is_some_and(|session| session.generation > 0)
+            || transcript.meta.parent_session_id.is_some();
+        if self.committed_turns == 0 && compacted_head {
+            // Without the sealed root there is no safe boundary in a head
+            // containing a System summary. If a replacement prefix was
+            // supplied, fail rather than replaying unverifiable old System
+            // instructions beside it.
+            stored_len = 0;
+            let mut boundary_resolved = false;
             let bound_session = session_binding.as_ref().or(target.session.as_ref());
             if let Some(head) = bound_session
                 .map(|session| target.locator.head_generation(session))
-                .filter(|session| session.generation > 0)
+                .filter(|session| {
+                    session.generation > 0
+                        && (session_binding.is_some()
+                            || transcript.meta.session_id.as_deref()
+                                == Some(session.session_id().as_str()))
+                })
             {
                 let root = head.first_generation();
-                // The head cannot establish how many of its leading System
-                // rows were frozen instructions. Until the sealed root proves
-                // that boundary, keep them as history rather than freezing a
-                // changing summary into the prompt.
-                stored_len = 0;
                 if let Some(read) = target.locator.read_session_transcript(&root) {
                     match read.read_session() {
                         Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
@@ -233,6 +243,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                                     .iter()
                                     .take_while(|message| matches!(message, Message::System(_)))
                                     .count();
+                                boundary_resolved = true;
                             }
                             Err(error) => tracing::warn!(
                                 session = %root.session_id(),
@@ -256,6 +267,17 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         "[session] sealed prefix unavailable; leaving head system rows unfrozen"
                     );
                 }
+            } else {
+                tracing::warn!(
+                    scanned_session = ?transcript.meta.session_id,
+                    "[session] scanned compacted head differs from bound session; leaving system rows unfrozen"
+                );
+            }
+            if !boundary_resolved && !self.prefix.messages().is_empty() {
+                return Err(RuntimeError::Persistence(
+                    "cannot apply a replacement prompt without the scanned transcript's sealed prefix"
+                        .into(),
+                ));
             }
         }
         let stored_len = stored_len.min(leading_len);

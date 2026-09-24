@@ -2738,7 +2738,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         .push(orphan_head.clone());
     let mut missing_root = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(RoleCodec))
-        .session(mock_locator, orphan_head, meta())
+        .session(mock_locator.clone(), orphan_head.clone(), meta())
         .build()
         .unwrap();
     let resumed = missing_root
@@ -2748,6 +2748,51 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert!(resumed.loaded);
     assert!(missing_root.prefix_snapshot().messages().is_empty());
     assert_eq!(resumed.history[0].text(), "stable");
+
+    let mut replacement_without_root = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(mock_locator, orphan_head, meta())
+        .build()
+        .unwrap();
+    assert!(matches!(
+        replacement_without_root
+            .resume(&session_turn_options(ResumeMode::Session, "orphan"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+
+    // A Thread scan may select a different compacted conversation than the
+    // session-bound write destination. Its metadata cannot borrow the bound
+    // session's prefix length, especially under a replacement prompt.
+    let mut scanned_meta = meta();
+    scanned_meta.session_id = Some("another-session.g1".into());
+    scanned_meta.parent_session_id = Some("another-session".into());
+    let (scanned_locator, _) = self::locator(Some(SessionTranscript {
+        meta: scanned_meta,
+        messages: vec![
+            TranscriptMessage::new("system", "other instruction"),
+            TranscriptMessage::new("system", "other summary"),
+            TranscriptMessage::new("user", "later"),
+        ],
+        tools: None,
+    }));
+    let mut scanned_replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(
+            scanned_locator,
+            SessionRef::scoped("destination", "agent-id"),
+            meta(),
+        )
+        .build()
+        .unwrap();
+    assert!(matches!(
+        scanned_replacement
+            .resume(&session_turn_options(ResumeMode::Thread, "destination"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
 }
 
 /// A session-bound target's write destination is always its own session
