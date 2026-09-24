@@ -1427,7 +1427,7 @@ async fn prompt_cache_guard_reports_custom_volatile_segment_changes() {
             segment("system", SegmentRole::System, true),
             segment("turn-1", SegmentRole::Volatile, false),
         ]);
-    let mut after = ModelRequest::new(vec![Message::system("stable"), user("second")])
+    let mut after = ModelRequest::new(vec![Message::system("stable"), user("first")])
         .with_cache_segments(vec![
             segment("system", SegmentRole::System, true),
             segment("turn-2", SegmentRole::Volatile, false),

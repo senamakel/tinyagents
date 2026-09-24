@@ -82,15 +82,16 @@ impl PromptCacheLayout {
     /// [`super::cache_key`]. Call it once per middleware pass, not per message.
     pub fn from_request(request: &ModelRequest) -> Self {
         let prefix_ids: Vec<String> = request.cacheable_prefix_ids();
+        let declared_system_count = declared_system_prefix_len(request);
 
-        // Segment identity *and* role/cacheability, so a role flip or a
-        // cacheable-flag flip on an otherwise identically named segment is not
-        // mistaken for "unchanged".
+        // Canonical layouts may vary noncacheable metadata without changing
+        // their stable prefix. Custom layouts dispatch with a whole-request
+        // digest, so retain every segment there, including volatile metadata.
         let mut material = String::new();
         for segment in request
             .cache_segments
             .iter()
-            .filter(|segment| segment.cacheable)
+            .filter(|segment| declared_system_count.is_none() || segment.cacheable)
         {
             material.push_str(&segment.id);
             material.push('\u{1}');
@@ -109,7 +110,6 @@ impl PromptCacheLayout {
         // Message roles cannot supply a fallback boundary: a compaction
         // summary is also a System message immediately after the stable tiers.
         material.push_str(request.prompt_fingerprint.as_deref().unwrap_or(""));
-        let declared_system_count = declared_system_prefix_len(request);
         if let Some(count) = declared_system_count {
             // The annotation may predate a middleware rewrite. Hash the actual
             // declared messages so a changed leading instruction is detected
