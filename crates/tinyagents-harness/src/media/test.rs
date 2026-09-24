@@ -139,16 +139,36 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
 
 #[tokio::test]
 async fn a_host_reference_policy_replaces_the_default_confinement() {
+    let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(MockImageGenerator::new());
+
+    // Test 1: a policy that rejects all references
     let output = MediaOutput::new("/nonexistent").with_reference_policy(Arc::new(|path| {
         Err(format!("host refused {}", path.display()))
     }));
-    let tool = GenerateImageTool::new(generator, output);
+    let tool = GenerateImageTool::new(generator.clone(), output);
     let result = tool
         .execute(json!({ "prompt": "x", "references": ["a.png"] }))
         .await
         .unwrap();
     assert!(text(&result).contains("host refused"));
+
+    // Test 2: a policy that admits out-of-workspace paths
+    let output = MediaOutput::new("/nonexistent").with_reference_policy(Arc::new(|path| {
+        Ok(path.to_path_buf())
+    }));
+    let tool = GenerateImageTool::new(generator, output);
+    let context = workspace(dir.path());
+    let result = tool
+        .execute_with_context(
+            json!({ "prompt": "x", "references": ["/etc/hostname"] }),
+            ToolCallOptions::default(),
+            Some(&context),
+        )
+        .await
+        .unwrap();
+    // The custom policy allows the out-of-workspace path
+    assert!(!result.is_error, "{}", text(&result));
 }
 
 fn fast() -> WaitPolicy {
