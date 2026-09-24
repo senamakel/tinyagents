@@ -132,6 +132,7 @@ fn agent_latency_metrics_include_model_tool_and_run_elapsed() {
             AgentEvent::ToolStarted {
                 call_id: tool_id.clone(),
                 tool_name: "lookup".to_string(),
+                input: None,
             },
         ),
         obs(

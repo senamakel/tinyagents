@@ -236,6 +236,7 @@ mod project {
         let event = AgentEvent::ToolStarted {
             call_id: CallId::new("c9"),
             tool_name: "search".into(),
+            input: None,
         };
         let chunk = project_event(&event).expect("must project");
         assert_eq!(chunk.mode(), StreamMode::Debug);

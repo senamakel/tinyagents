@@ -362,6 +362,113 @@ pub trait TranscriptLocator: Send + Sync {
         let handle = self.open_session(&successor, meta)?;
         Ok((successor, handle))
     }
+
+    /// Forks `session`'s head generation for edit or regenerate, without
+    /// erasing history.
+    ///
+    /// This is [`Self::begin_generation`]'s compaction move, aimed at a
+    /// different caller: instead of a summarizer replacing old turns with a
+    /// digest, a host wants to edit a past message or regenerate the last
+    /// answer. Both need the exact same guarantee compaction already
+    /// provides — the current generation is sealed **untouched** on disk
+    /// (nothing is written to it; that is the whole point of never rewriting
+    /// a sealed file) and the next generation records it as parent — so this
+    /// is built on the same primitive rather than a second, parallel one.
+    ///
+    /// Reads the current [`Self::head_generation`]'s messages, resolves
+    /// `cut` against them, seals that head and opens its successor via
+    /// [`Self::begin_generation`], and writes the retained prefix into the
+    /// successor with [`TranscriptHistory::replace`] — the identical call a
+    /// compaction makes to persist its own replacement set. Because the
+    /// successor's parent is the sealed head exactly as `begin_generation`
+    /// records it, [`Self::session_chain`] walks both generations, so the
+    /// full pre-truncation history stays recoverable even though the model
+    /// now reads only the truncated head.
+    ///
+    /// Returns the new generation's [`SessionRef`], its bound handle (already
+    /// carrying the truncated messages), and the truncated messages
+    /// themselves for the caller's own use (e.g. re-driving the model on the
+    /// retained context).
+    ///
+    /// Fails if `session` has no transcript yet, or if `cut` is
+    /// [`TruncateCut::BeforeMessageId`] naming an id absent from the head
+    /// generation — silently falling back to some other cut point would risk
+    /// truncating the wrong turn.
+    fn truncate_into_next_generation(
+        &self,
+        session: &SessionRef,
+        cut: TruncateCut,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<(
+        SessionRef,
+        Arc<dyn TranscriptHistory>,
+        Vec<TranscriptMessage>,
+    )> {
+        let head = self.head_generation(session);
+        let head_read = self.read_session_transcript(&head).ok_or_else(|| {
+            anyhow::anyhow!(
+                "session {} has no transcript to truncate",
+                head.session_id()
+            )
+        })?;
+        let transcript = head_read.read_session()?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "session {} has no transcript to truncate",
+                head.session_id()
+            )
+        })?;
+        let keep = cut.resolve(&transcript.messages)?;
+        let truncated = transcript.messages[..keep].to_vec();
+
+        let (successor, handle) = self.begin_generation(&head, seed)?;
+        // Same call a compaction makes to persist its own replacement set —
+        // see `a_compaction_seals_a_generation_and_leaves_it_untouched`.
+        handle.replace(&truncated)?;
+        Ok((successor, handle, truncated))
+    }
+}
+
+/// Where to cut a session's head-generation messages when forking it with
+/// [`TranscriptLocator::truncate_into_next_generation`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TruncateCut {
+    /// Keep messages `[0, index)`; drop the message at `index` and everything
+    /// after it. Clamped to the message count, so an out-of-range index keeps
+    /// every message.
+    BeforeIndex(usize),
+    /// Keep everything before the message carrying this id. The id must name
+    /// a message in the head generation — [`TranscriptMessage::id`] is only
+    /// ever set by a host that assigns stable ids, so this is the most
+    /// robust key to cut on when the caller has one; unlike an index, it
+    /// cannot point at the wrong turn after an earlier truncation shifted
+    /// everything else.
+    BeforeMessageId(String),
+    /// Drop the trailing assistant turn: everything strictly after the last
+    /// `role == "user"` message, matching the `role == "assistant"` cutpoint
+    /// convention already used across this crate's writer (e.g.
+    /// `writer::append_transcript_turn`'s `last_assistant_idx`). Used for
+    /// "regenerate the last answer." When there is no user message at all,
+    /// every message is dropped.
+    LastAssistantTurn,
+}
+
+impl TruncateCut {
+    /// Resolves this cut to a keep-count (`messages[..keep]` survives)
+    /// against the head generation's `messages`.
+    fn resolve(&self, messages: &[TranscriptMessage]) -> anyhow::Result<usize> {
+        match self {
+            TruncateCut::BeforeIndex(index) => Ok((*index).min(messages.len())),
+            TruncateCut::BeforeMessageId(id) => messages
+                .iter()
+                .position(|message| message.id.as_deref() == Some(id.as_str()))
+                .ok_or_else(|| anyhow::anyhow!("no message with id `{id}` in the head generation")),
+            TruncateCut::LastAssistantTurn => Ok(messages
+                .iter()
+                .rposition(|message| message.role == "user")
+                .map(|index| index + 1)
+                .unwrap_or(0)),
+        }
+    }
 }
 
 /// The default [`TranscriptLocator`]: real files under

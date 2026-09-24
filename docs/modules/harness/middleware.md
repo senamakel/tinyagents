@@ -294,6 +294,57 @@ Exposure only changes what the model *sees*; pair it with
 [tool policy enforcement](#tool-policy-enforcement) or `ToolAllowlistMiddleware`
 so a model that calls a hidden tool is still stopped at execution.
 
+## Plan mode
+
+`PlanModeMiddleware` (built with `plan_mode_middleware`) is a ready-made
+combination of the two mechanisms above, gated by a live, host-settable
+`RunMode`: `Build` (the default) leaves every tool exposed and executable;
+`Plan` hides every side-effecting tool from the model at `before_model` (the
+same `AgentEvent::ToolsFiltered` auditing `ContextualToolSelectionMiddleware`
+emits) and denies it at `before_tool` (the same `ToolPolicy`/`ToolSideEffects`
+classification `ToolPolicyMiddleware::deny_side_effects` enforces) — except for
+tools on the middleware's own allowlist, which a host uses to keep read-only
+tools and plan-mode-specific tools (e.g. `plan_exit`, `request_plan_review`,
+`todo`) available while planning.
+
+A tool counts as side-effecting when its policy declares any of
+`writes_files`, `network`, `installs_dependencies`, `destructive`,
+`external_service`, or `payment` — or when `policies` has no entry for it at
+all: an unclassified tool is assumed capable of side effects until it is
+either classified read-only or added to the allowlist.
+
+`RunModeHandle` is `Clone` and cheap to share: a host keeps one clone to flip
+modes (a UI toggle, a `plan_exit` tool call, a slash command) while the
+middleware holds another to read it. `set` takes effect on the very next tool
+exposure or execution check, so a host can switch modes mid-run, between
+turns, without restarting it.
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use tinyagents_harness::middleware::{plan_mode_middleware, MiddlewareStack, RunMode, RunModeHandle};
+use tinytools::{ToolPolicy, ToolSideEffects};
+
+let mut policies = HashMap::new();
+policies.insert("read_file".to_string(), ToolPolicy::read_only());
+policies.insert(
+    "write_file".to_string(),
+    ToolPolicy::classified().with_side_effects(ToolSideEffects {
+        writes_files: true,
+        ..ToolSideEffects::default()
+    }),
+);
+
+let mode = RunModeHandle::new(RunMode::Plan);
+let mw = plan_mode_middleware(mode.clone(), policies).allow(["plan_exit"]);
+
+let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+stack.push(Arc::new(mw));
+// While `mode.get() == RunMode::Plan`: `write_file` is hidden and denied,
+// `read_file` and `plan_exit` stay available. `mode.set(RunMode::Build)`
+// lifts the restriction on the very next check.
+```
+
 ## Middleware control (A1)
 
 Any middleware (or step) can steer the loop out-of-band via

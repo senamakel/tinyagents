@@ -93,3 +93,74 @@ async fn take_all_drains_the_whole_lane() {
     );
     assert_eq!(queue.status().await.followups, 0);
 }
+
+#[tokio::test]
+async fn snapshot_returns_every_item_in_lane_and_fifo_order_without_draining() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Steer, "steer-1").await;
+    queue.push(QueueLane::Followup, "followup-1").await;
+    queue.push(QueueLane::Steer, "steer-2").await;
+    queue.push(QueueLane::Collect, "collect-1").await;
+    queue.push(QueueLane::Followup, "followup-2").await;
+
+    assert_eq!(
+        queue.snapshot().await,
+        vec![
+            (QueueLane::Steer, "steer-1"),
+            (QueueLane::Steer, "steer-2"),
+            (QueueLane::Followup, "followup-1"),
+            (QueueLane::Followup, "followup-2"),
+            (QueueLane::Collect, "collect-1"),
+        ]
+    );
+    // Non-destructive: the queue is unchanged.
+    assert_eq!(queue.status().await.total, 5);
+}
+
+#[tokio::test]
+async fn snapshot_of_an_empty_queue_is_empty() {
+    let queue = RunQueue::<String>::new();
+    assert_eq!(queue.snapshot().await, Vec::new());
+}
+
+#[tokio::test]
+async fn remove_where_removes_matching_items_across_every_lane() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Steer, "keep").await;
+    queue.push(QueueLane::Steer, "drop").await;
+    queue.push(QueueLane::Followup, "drop").await;
+    queue.push(QueueLane::Collect, "keep").await;
+
+    let removed = queue.remove_where(|item| *item == "drop").await;
+
+    assert_eq!(removed, 2);
+    assert_eq!(
+        queue.snapshot().await,
+        vec![(QueueLane::Steer, "keep"), (QueueLane::Collect, "keep"),]
+    );
+}
+
+#[tokio::test]
+async fn remove_where_preserves_relative_order_of_survivors() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Steer, 1).await;
+    queue.push(QueueLane::Steer, 2).await;
+    queue.push(QueueLane::Steer, 3).await;
+
+    let removed = queue.remove_where(|item| *item == 2).await;
+
+    assert_eq!(removed, 1);
+    assert_eq!(queue.drain(QueueLane::Steer).await, vec![1, 3]);
+}
+
+#[tokio::test]
+async fn remove_where_with_no_match_removes_nothing() {
+    let queue = RunQueue::new();
+    queue.push(QueueLane::Steer, "a").await;
+    queue.push(QueueLane::Followup, "b").await;
+
+    let removed = queue.remove_where(|item| *item == "nonexistent").await;
+
+    assert_eq!(removed, 0);
+    assert_eq!(queue.status().await.total, 2);
+}

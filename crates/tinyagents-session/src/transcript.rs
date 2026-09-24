@@ -124,7 +124,7 @@ mod writer;
 pub use adoption::{SessionAdoption, adopt_legacy_session_transcripts};
 pub use history::{
     FileTranscriptHistory, FileTranscriptLocator, TranscriptHistory, TranscriptLocator,
-    TranscriptPartial, TranscriptRead, TranscriptTurn,
+    TranscriptPartial, TranscriptRead, TranscriptTurn, TruncateCut,
 };
 pub use legacy_md::read_transcript_legacy_md;
 pub use migration::{TranscriptLayoutMigration, migrate_layout_if_needed};

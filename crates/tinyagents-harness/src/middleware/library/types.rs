@@ -19,7 +19,7 @@
 //! `mod.rs`; tests live in `test.rs`. Every public item is re-exported through
 //! `crate::middleware` so callers import from one place.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -617,4 +617,108 @@ pub struct TraceCounts {
     pub delta: usize,
     /// Number of `on_error` invocations.
     pub error: usize,
+}
+
+// ── PlanModeMiddleware ─────────────────────────────────────────────────────────
+
+/// A per-run mode gating side-effecting tools, toggled by the host without
+/// restarting the run.
+///
+/// `Build` (the default) leaves tool exposure and execution unrestricted.
+/// `Plan` hides every side-effecting tool from the model
+/// ([`PlanModeMiddleware`]'s `before_model`, the same auditable
+/// `AgentEvent::ToolsFiltered` mechanism [`ContextualToolSelectionMiddleware`]
+/// uses) and denies it at execution (`before_tool`, the same
+/// [`ToolPolicy`]/[`ToolSideEffects`] classification
+/// [`ToolPolicyMiddleware::deny_side_effects`] enforces) — except for tools on
+/// the middleware's allowlist, which stay available in either mode so a host
+/// can keep read-only tools and a handful of plan-mode-specific tools (e.g.
+/// `plan_exit`, `request_plan_review`, `todo`) reachable while planning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RunMode {
+    /// Every registered tool may be exposed and executed. The default.
+    #[default]
+    Build,
+    /// Only allowlisted and side-effect-free tools may be exposed or executed.
+    Plan,
+}
+
+/// A shared, host-settable handle to the current [`RunMode`] for a run.
+///
+/// Cloning shares the same underlying state: a host can hold one clone to
+/// flip modes (e.g. from a UI toggle or a `plan_exit` tool call) while
+/// [`PlanModeMiddleware`] holds another to read it. [`Self::set`] takes
+/// effect on the very next tool exposure or execution check — no run restart
+/// is required, so a host can switch modes mid-run, between turns.
+#[derive(Debug, Clone)]
+pub struct RunModeHandle(pub(crate) Arc<std::sync::atomic::AtomicU8>);
+
+impl RunModeHandle {
+    /// Creates a handle starting in `mode`.
+    pub fn new(mode: RunMode) -> Self {
+        Self(Arc::new(std::sync::atomic::AtomicU8::new(Self::encode(
+            mode,
+        ))))
+    }
+
+    /// Returns the current mode.
+    pub fn get(&self) -> RunMode {
+        Self::decode(self.0.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// Sets the current mode.
+    pub fn set(&self, mode: RunMode) {
+        self.0
+            .store(Self::encode(mode), std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn encode(mode: RunMode) -> u8 {
+        match mode {
+            RunMode::Build => 0,
+            RunMode::Plan => 1,
+        }
+    }
+
+    fn decode(value: u8) -> RunMode {
+        match value {
+            1 => RunMode::Plan,
+            _ => RunMode::Build,
+        }
+    }
+}
+
+impl Default for RunModeHandle {
+    fn default() -> Self {
+        Self::new(RunMode::default())
+    }
+}
+
+/// Lifecycle middleware that enforces [`RunMode::Plan`] by hiding and denying
+/// side-effecting tools, driven by a live [`RunModeHandle`].
+///
+/// Build with [`plan_mode_middleware`] or [`PlanModeMiddleware::new`], then
+/// widen the plan-mode allowlist with [`PlanModeMiddleware::allow`]. A tool is
+/// treated as side-effecting when its [`ToolPolicy::side_effects`] declares
+/// any of `writes_files`, `network`, `installs_dependencies`, `destructive`,
+/// `external_service`, or `payment` — or when `policies` has no entry for it
+/// at all (fail-closed: an unclassified tool is assumed capable of side
+/// effects until proven otherwise).
+pub struct PlanModeMiddleware {
+    pub(crate) label: &'static str,
+    pub(crate) mode: RunModeHandle,
+    pub(crate) policies: std::collections::HashMap<String, ToolPolicy>,
+    pub(crate) allow: HashSet<String>,
+}
+
+/// Creates a [`PlanModeMiddleware`] driven by `mode`, classifying tools from
+/// `policies` (typically [`ToolRegistry::policies`][crate::tool::ToolRegistry::policies]).
+///
+/// Equivalent to [`PlanModeMiddleware::new`]; provided as a free function so a
+/// host can wire plan mode into a [`MiddlewareStack`][crate::middleware::MiddlewareStack]
+/// with one call.
+pub fn plan_mode_middleware(
+    mode: RunModeHandle,
+    policies: std::collections::HashMap<String, ToolPolicy>,
+) -> PlanModeMiddleware {
+    PlanModeMiddleware::new(mode, policies)
 }
