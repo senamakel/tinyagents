@@ -341,3 +341,49 @@ fn video_schema_exposes_size() {
     );
     assert!(tool.parameters_schema()["properties"].get("size").is_some());
 }
+
+#[tokio::test]
+async fn negative_counts_are_rejected_but_negative_seeds_are_not() {
+    let generator = Arc::new(MockImageGenerator::new());
+    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/tmp"));
+    let result = tool
+        .execute(json!({ "prompt": "x", "n": -1 }))
+        .await
+        .unwrap();
+    assert!(result.is_error && text(&result).contains("non-negative"));
+    let result = tool
+        .execute(json!({ "prompt": "x", "count": "-1" }))
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert!(generator.requests().is_empty());
+
+    let dir = tempfile::tempdir().unwrap();
+    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new(dir.path()));
+    let result = tool
+        .execute(json!({ "prompt": "x", "seed": -7 }))
+        .await
+        .unwrap();
+    assert!(!result.is_error, "{}", text(&result));
+    assert_eq!(generator.requests().pop().unwrap().seed, Some(-7));
+}
+
+#[test]
+fn schemas_advertise_a_single_reference_string() {
+    let image = GenerateImageTool::new(
+        Arc::new(MockImageGenerator::new()),
+        MediaOutput::new("/tmp"),
+    );
+    assert_eq!(
+        image.parameters_schema()["properties"]["references"]["type"],
+        json!(["array", "string"])
+    );
+    let video = GenerateVideoTool::new(
+        Arc::new(MockVideoGenerator::new(MockVideoScript::delivers())),
+        MediaOutput::new("/tmp"),
+    );
+    assert_eq!(
+        video.parameters_schema()["properties"]["references"]["type"],
+        json!(["array", "string"])
+    );
+}

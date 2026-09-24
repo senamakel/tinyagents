@@ -86,7 +86,7 @@ impl GenerateImageTool {
         let Some(prompt) = arg_str(args, &["prompt"]) else {
             return ToolResult::error("`prompt` is required");
         };
-        if let Err(message) = check_option_types(args, &["n", "count", "seed"], &[]) {
+        if let Err(message) = check_option_types(args, &["n", "count"], &["seed"], &[]) {
             return ToolResult::error(message);
         }
         let mut request = ImageRequest::new(prompt);
@@ -238,7 +238,7 @@ impl Tool for GenerateImageTool {
                 "background": { "type": "string", "enum": ["auto", "transparent", "opaque"] },
                 "seed": { "type": ["integer", "string"], "description": "Deterministic seed, integer or numeric string, where supported." },
                 "references": {
-                    "type": "array",
+                    "type": ["array", "string"],
                     "items": { "type": "string" },
                     "description": "Reference images: https URLs, data: URLs, or workspace file paths."
                 }

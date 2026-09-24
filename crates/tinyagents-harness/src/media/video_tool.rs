@@ -96,7 +96,8 @@ impl GenerateVideoTool {
     ) -> Result<VideoRequest, String> {
         check_option_types(
             args,
-            &["duration", "duration_seconds", "durationSeconds", "seed"],
+            &["duration", "duration_seconds", "durationSeconds"],
+            &["seed"],
             &["generate_audio", "audio"],
         )?;
         let prompt = arg_str(args, &["prompt"]).map(str::to_owned);
@@ -243,7 +244,7 @@ impl Tool for GenerateVideoTool {
                 "first_frame": { "type": "string", "description": "Image to start from: https URL, data: URL or workspace path." },
                 "last_frame": { "type": "string", "description": "Image to end on." },
                 "references": {
-                    "type": "array",
+                    "type": ["array", "string"],
                     "items": { "type": "string" },
                     "description": "Reference images/clips guiding subject or style."
                 },

@@ -142,10 +142,23 @@ pub(crate) fn arg_str<'a>(args: &'a Value, keys: &[&str]) -> Option<&'a str> {
 /// the default instead of what was asked.
 pub(crate) fn check_option_types(
     args: &Value,
-    integers: &[&str],
+    unsigned: &[&str],
+    signed: &[&str],
     booleans: &[&str],
 ) -> Result<(), String> {
-    for key in integers {
+    for key in unsigned {
+        match args.get(*key) {
+            None | Some(Value::Null) => {}
+            Some(Value::Number(number)) if number.is_u64() => {}
+            Some(Value::String(text)) if text.trim().parse::<u64>().is_ok() => {}
+            Some(other) => {
+                return Err(format!(
+                    "`{key}` must be a non-negative integer, got {other}"
+                ));
+            }
+        }
+    }
+    for key in signed {
         match args.get(*key) {
             None | Some(Value::Null) => {}
             Some(Value::Number(number)) if number.is_i64() || number.is_u64() => {}
