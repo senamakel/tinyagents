@@ -656,9 +656,9 @@ pub struct RunModeHandle(pub(crate) Arc<std::sync::atomic::AtomicU8>);
 impl RunModeHandle {
     /// Creates a handle starting in `mode`.
     pub fn new(mode: RunMode) -> Self {
-        Self(Arc::new(std::sync::atomic::AtomicU8::new(
-            Self::encode(mode),
-        )))
+        Self(Arc::new(std::sync::atomic::AtomicU8::new(Self::encode(
+            mode,
+        ))))
     }
 
     /// Returns the current mode.

@@ -624,7 +624,10 @@ impl PlanModeMiddleware {
     /// Creates a plan-mode middleware driven by `mode`, classifying tools
     /// from `policies`. The allowlist starts empty; widen it with
     /// [`Self::allow`].
-    pub fn new(mode: RunModeHandle, policies: std::collections::HashMap<String, ToolPolicy>) -> Self {
+    pub fn new(
+        mode: RunModeHandle,
+        policies: std::collections::HashMap<String, ToolPolicy>,
+    ) -> Self {
         Self {
             label: "plan_mode",
             mode,
