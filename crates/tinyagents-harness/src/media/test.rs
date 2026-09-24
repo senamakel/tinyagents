@@ -175,7 +175,7 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
     let temp_file = tempfile::NamedTempFile::new().unwrap();
     let temp_path = temp_file.path().to_path_buf();
     let temp_path_clone = temp_path.clone();
-    let output = MediaOutput::new(&dir)
+    let output = MediaOutput::new(dir.path())
         .with_reference_policy(Arc::new(move |_path| Ok(temp_path_clone.clone())));
     let tool = GenerateImageTool::new(generator, output);
     let result = tool
