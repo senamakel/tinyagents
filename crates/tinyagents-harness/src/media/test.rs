@@ -154,9 +154,8 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
     assert!(text(&result).contains("host refused"));
 
     // Test 2: a policy that admits out-of-workspace paths
-    let output = MediaOutput::new("/nonexistent").with_reference_policy(Arc::new(|path| {
-        Ok(path.to_path_buf())
-    }));
+    let output = MediaOutput::new("/nonexistent")
+        .with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
     let tool = GenerateImageTool::new(generator, output);
     let context = workspace(dir.path());
     let result = tool
