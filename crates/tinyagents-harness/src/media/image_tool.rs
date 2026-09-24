@@ -88,7 +88,16 @@ impl GenerateImageTool {
         };
         let mut request = ImageRequest::new(prompt);
         request.model = arg_str(args, &["model"]).map(str::to_owned);
-        request.n = arg_u64(args, &["n", "count"]).and_then(|n| u32::try_from(n).ok());
+        // Enforce the maximum image count at runtime
+        if let Some(n) = arg_u64(args, &["n", "count"]) {
+            if n > u64::from(MAX_IMAGES_PER_REQUEST) {
+                return ToolResult::error(format!(
+                    "image count {} exceeds maximum of {}",
+                    n, MAX_IMAGES_PER_REQUEST
+                ));
+            }
+            request.n = u32::try_from(n).ok();
+        }
         request.size = arg_str(args, &["size"]).map(str::to_owned);
         request.resolution = arg_str(args, &["resolution"]).map(str::to_owned);
         request.aspect_ratio = arg_str(args, &["aspect_ratio", "aspectRatio"]).map(str::to_owned);
