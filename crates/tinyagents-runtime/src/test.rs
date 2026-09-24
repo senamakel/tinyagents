@@ -3112,6 +3112,49 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
 }
 
 #[tokio::test]
+async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    one_file_turn(locator.clone(), two_tools(), true, 0).await;
+
+    // Return a reduced history so persistence opens a successor generation.
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("x"),
+        Message::assistant("compacted"),
+    ]))]));
+    let (hook, _) = hook(vec![TurnPreparation {
+        tools: Some(ToolSnapshot::default()),
+        exact_tools: true,
+        ..TurnPreparation::default()
+    }]);
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .hooks(hook)
+        .retain_recorded_tools(true)
+        .session(locator, recorded_tools_session(), meta())
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("x")),
+            session_turn_options(ResumeMode::Session, "thread-tools"),
+        )
+        .await
+        .unwrap();
+
+    let head = std::fs::read_dir(directory.path().join("session_raw"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().contains(".g1.jsonl"))
+        .expect("compaction successor must exist");
+    let stored = read_transcript(&head).unwrap().tools.unwrap();
+    assert_eq!(
+        tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
+        vec!["alpha", "beta"]
+    );
+}
+
+#[tokio::test]
 async fn resume_adopts_the_stored_prefix_and_its_committed_turns() {
     let (locator, _) = locator(Some(SessionTranscript {
         tools: None,

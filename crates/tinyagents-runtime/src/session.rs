@@ -714,9 +714,16 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // in the file being written — always for a fresh generation, whose
         // file starts with none.
         let tools_json = tools.map(ToolSnapshot::to_json);
-        let tools_record = tools_json.as_ref().filter(|json| {
-            pending_generation.is_some() || self.recorded_tools_json.as_ref() != Some(*json)
-        });
+        let tools_record = if pending_generation.is_some() {
+            // Exact-tool turns deliberately do not replace the durable tool
+            // list. A successor generation is a fresh file, though, so it
+            // must carry that list forward or a later resume would lose it.
+            tools_json.as_ref().or(self.recorded_tools_json.as_ref())
+        } else {
+            tools_json
+                .as_ref()
+                .filter(|json| self.recorded_tools_json.as_ref() != Some(*json))
+        };
         meta.thread_id = thread_id.map(str::to_owned).or(meta.thread_id);
         transcript
             .append_turn_with_partial(
