@@ -399,7 +399,11 @@ pub trait TranscriptLocator: Send + Sync {
         session: &SessionRef,
         cut: TruncateCut,
         seed: TranscriptMeta,
-    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>, Vec<TranscriptMessage>)> {
+    ) -> anyhow::Result<(
+        SessionRef,
+        Arc<dyn TranscriptHistory>,
+        Vec<TranscriptMessage>,
+    )> {
         let head = self.head_generation(session);
         let head_read = self.read_session_transcript(&head).ok_or_else(|| {
             anyhow::anyhow!(
@@ -457,9 +461,7 @@ impl TruncateCut {
             TruncateCut::BeforeMessageId(id) => messages
                 .iter()
                 .position(|message| message.id.as_deref() == Some(id.as_str()))
-                .ok_or_else(|| {
-                    anyhow::anyhow!("no message with id `{id}` in the head generation")
-                }),
+                .ok_or_else(|| anyhow::anyhow!("no message with id `{id}` in the head generation")),
             TruncateCut::LastAssistantTurn => Ok(messages
                 .iter()
                 .rposition(|message| message.role == "user")

@@ -454,11 +454,7 @@ fn truncate_into_next_generation_by_message_id_cuts_at_that_message() {
     }
 
     let (_, handle, truncated) = locator
-        .truncate_into_next_generation(
-            &session,
-            TruncateCut::BeforeMessageId("m2".into()),
-            meta(),
-        )
+        .truncate_into_next_generation(&session, TruncateCut::BeforeMessageId("m2".into()), meta())
         .unwrap();
 
     assert_eq!(truncated.len(), 1);
