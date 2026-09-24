@@ -119,6 +119,7 @@ pub fn adopt_legacy_session_transcripts(
     meta.parent_session_id = session.parent_session_id();
     meta.thread_id = Some(thread_id.to_string());
     meta.turn_count = 0;
+    meta.prefix_message_count = None;
     meta.input_tokens = 0;
     meta.output_tokens = 0;
     meta.cached_input_tokens = 0;
@@ -162,6 +163,12 @@ pub fn adopt_legacy_session_transcripts(
             continue;
         }
 
+        if messages.is_empty() && !transcript.messages.is_empty() {
+            // The folded transcript starts with this source's messages. A
+            // later source may have its own prompt, but its boundary is not
+            // the prefix of the combined conversation.
+            meta.prefix_message_count = transcript.meta.prefix_message_count;
+        }
         messages.extend(transcript.messages);
         if transcript.tools.is_some() {
             tools = transcript.tools;

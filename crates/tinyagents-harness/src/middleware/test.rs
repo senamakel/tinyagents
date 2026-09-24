@@ -1400,6 +1400,29 @@ async fn prompt_cache_guard_uses_full_request_when_boundary_is_unknown() {
 }
 
 #[tokio::test]
+async fn prompt_cache_guard_checks_history_without_declared_segments() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")]);
+    before.prompt_fingerprint = Some("stale-builder-value".into());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")]);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
 async fn prompt_cache_guard_detects_same_id_system_edit_without_a_fingerprint() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new());
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();

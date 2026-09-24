@@ -52,6 +52,12 @@ cheap and deterministic:
   ordered cacheable prefix plus a content-aware fingerprint and per-message
   digest chain, so a middleware that rewrites a stable segment's *text* is
   caught, not just one that reorders segment ids.
+- A middleware that prepends a System instruction to a request with an explicit
+  canonical cache layout must extend and renumber its `cache_segments` (or clear
+  the annotation to take the conservative full-request path). The built-in
+  dynamic-prompt and prompted structured-output paths share
+  `prepend_system_message` for this. Segment ids alone cannot distinguish a
+  prepended instruction from a later volatile System history summary.
 - [`CacheLayoutEvent`] (`types.rs` + `layout.rs`) — describes a before/after
   layout change; `under_policy` evaluates it against a `CachePolicy` and is
   what makes `CachePolicy::protect_prompt_prefix` load-bearing.
