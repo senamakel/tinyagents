@@ -1185,6 +1185,13 @@ async fn prompt_cache_guard_ignores_trimmed_history_when_stable_prefix_is_unchan
         .await
         .unwrap();
 
+    let before_layout = crate::cache::PromptCacheLayout::from_request(&before);
+    let after_layout = crate::cache::PromptCacheLayout::from_request(&after);
+    assert_eq!(before.messages[0].text(), "same prompt");
+    assert_eq!(after.messages[0], before.messages[0]);
+    assert_eq!(before_layout.prefix_ids(), &["system"]);
+    assert_eq!(after_layout.prefix_ids(), before_layout.prefix_ids());
+    assert_eq!(after_layout.fingerprint(), before_layout.fingerprint());
     assert!(
         mw.layout_events().is_empty(),
         "history compaction retains the stable prefix"

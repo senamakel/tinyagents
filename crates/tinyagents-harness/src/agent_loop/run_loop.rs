@@ -565,6 +565,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 prompt.push_tools_segment("tools", tool_schemas.clone());
             }
             let mut request = prompt.build(messages[system_end..].to_vec());
+            mark_empty_frozen_prefix(&mut request, ctx.frozen_system_prefix_len);
             // Provider adapters that maintain an external conversation (for
             // example Claude Code's resumable CLI session) need the caller's
             // logical thread id, not a hash of prompt text. Carry the harness
@@ -2031,6 +2032,29 @@ pub(super) fn cacheable_system_prefix_end(
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
     frozen_system_prefix_len.map_or(leading_system, |count| count.min(leading_system))
+}
+
+/// Prevent the dispatch refresh from inferring a newly leading System
+/// summary as stable when a session explicitly froze zero messages. An empty
+/// annotation means "infer from roles" to the harness, so retain an explicit
+/// noncacheable marker only in this zero-prefix, no-tools case.
+pub(super) fn mark_empty_frozen_prefix(
+    request: &mut ModelRequest,
+    frozen_system_prefix_len: Option<usize>,
+) {
+    if frozen_system_prefix_len == Some(0)
+        && request.cache_segments.is_empty()
+        && request
+            .messages
+            .first()
+            .is_some_and(|message| matches!(message, Message::System(_)))
+    {
+        request.cache_segments.push(PromptSegment {
+            id: "volatile-system-history".into(),
+            role: SegmentRole::Volatile,
+            cacheable: false,
+        });
+    }
 }
 
 /// Refreshes the harness-owned stable-prefix annotation at model-call dispatch.
