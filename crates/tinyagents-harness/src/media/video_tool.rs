@@ -101,11 +101,16 @@ impl GenerateVideoTool {
             &["generate_audio", "audio"],
         )?;
         let prompt = arg_str(args, &["prompt"]).map(str::to_owned);
+        let duration_s = match arg_u64(args, &["duration", "duration_seconds", "durationSeconds"]) {
+            Some(duration) => Some(u32::try_from(duration).map_err(|_| {
+                format!("`duration` must not exceed {}", u32::MAX)
+            })?),
+            None => None,
+        };
         let mut request = VideoRequest {
             prompt: prompt.clone(),
             model: arg_str(args, &["model"]).map(str::to_owned),
-            duration_s: arg_u64(args, &["duration", "duration_seconds", "durationSeconds"])
-                .and_then(|d| u32::try_from(d).ok()),
+            duration_s,
             resolution: arg_str(args, &["resolution"]).map(str::to_owned),
             aspect_ratio: arg_str(args, &["aspect_ratio", "aspectRatio"]).map(str::to_owned),
             size: arg_str(args, &["size"]).map(str::to_owned),
@@ -136,6 +141,10 @@ impl GenerateVideoTool {
 
     async fn run(&self, args: &Value, context: Option<&dyn ToolRunContext>) -> ToolResult {
         let workspace = context.and_then(ToolRunContext::workspace_root);
+        let dir = match self.output.dir(workspace) {
+            Ok(dir) => dir,
+            Err(message) => return ToolResult::error(message),
+        };
         let outcome = if let Some(job_id) = arg_str(args, &["resume_job_id"]) {
             let model = arg_str(args, &["model"]).unwrap_or(self.generator.default_model());
             tracing::info!(tool = %self.name, job_id, "[media] resuming video job");
@@ -162,8 +171,14 @@ impl GenerateVideoTool {
                 return ToolResult::error(format!("Video generation failed: {error}"));
             }
         };
+        if response.videos.is_empty() {
+            return ToolResult::error(format!(
+                "Video job {} succeeded and was billed, but returned no videos. \
+                 Do not generate again; report this error to the user.",
+                response.job_id
+            ));
+        }
 
-        let dir = self.output.dir(workspace);
         let stem = artifact_stem("video");
         let mut artifacts = Vec::with_capacity(response.videos.len());
         let mut lines = vec![format!(
@@ -241,12 +256,12 @@ impl Tool for GenerateVideoTool {
                 "generate_audio": { "type": ["boolean", "string"], "description": "Add an audio track (boolean or string \"true\"/\"false\"), where supported." },
                 "seed": { "type": ["integer", "string"], "description": "Deterministic seed (integer or numeric string)." },
                 "size": { "type": "string", "description": "Exact pixels such as 1280x720 (interchangeable with resolution + aspect_ratio)." },
-                "first_frame": { "type": "string", "description": "Image to start from: https URL, data: URL or workspace path." },
-                "last_frame": { "type": "string", "description": "Image to end on." },
+                "first_frame": { "type": "string", "description": "Image to start from: https URL, data: URL or workspace path. Local paths are canonicalized and must remain inside the workspace, including after symlink resolution." },
+                "last_frame": { "type": "string", "description": "Image to end on; local paths follow the first_frame workspace policy." },
                 "references": {
                     "type": ["array", "string"],
                     "items": { "type": "string" },
-                    "description": "Reference images/clips guiding subject or style."
+                    "description": "Reference images/clips guiding subject or style. Local paths are canonicalized and must remain inside the workspace, including after symlink resolution."
                 },
                 "resume_job_id": { "type": "string", "description": "Collect an earlier job that timed out, without paying again." }
             }

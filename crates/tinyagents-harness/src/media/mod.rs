@@ -10,7 +10,7 @@
 //! and whether a local reference file may leave the machine.
 //!
 //! Both tools report a billed non-delivery as an error that says not to call
-//! again, and every error after a billed submit carries the job id, so a model
+//! again. Video failures name the job id when it can be resumed, so a model
 //! does not loop on a paid failure.
 
 mod image_tool;

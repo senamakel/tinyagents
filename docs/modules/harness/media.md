@@ -54,13 +54,12 @@ let tool = GenerateImageTool::new(Arc::new(proxied), MediaOutput::new(fallback_r
 Generation is billed on submit, and a model that retries a failure pays again.
 The tools are built so that cannot happen quietly:
 
-- A generator returns delivered media or an error — never an empty success.
-  An accepted request that yields nothing is `NoMedia`, whose message says not
-  to retry.
+- The tools reject an empty successful image or video response as a billed
+  non-delivery and tell the model not to retry.
 - A video job whose status reads `completed` before its outputs exist keeps
   polling instead of failing.
-- Every error after a billed submit names the job id. A timed-out video job can
-  be collected with `resume_job_id` without a new submit.
+- A timed-out video job names its id and can be collected with `resume_job_id`
+  without a new submit. Image-generation errors cannot be resumed.
 - Tool policy declares `payment`, `network`, `external_service` and
   `writes_files`, and `idempotent: false`, so hosts never replay a call after a
   crash.

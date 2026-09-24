@@ -122,6 +122,10 @@ impl GenerateImageTool {
                 Err(message) => return ToolResult::error(message),
             }
         }
+        let dir = match self.output.dir(workspace) {
+            Ok(dir) => dir,
+            Err(message) => return ToolResult::error(message),
+        };
 
         let model_label = request
             .model
@@ -152,7 +156,6 @@ impl GenerateImageTool {
             );
         }
 
-        let dir = self.output.dir(workspace);
         let stem = artifact_stem("image");
         let mut artifacts = Vec::with_capacity(response.images.len());
         let mut lines = vec![format!(
@@ -162,14 +165,19 @@ impl GenerateImageTool {
         )];
         for (index, image) in response.images.iter().enumerate() {
             // Preserve the generated image format in the artifact extension
-            let ext = image
-                .media_type
-                .split('/')
-                .nth(1)
-                .unwrap_or("png")
-                .split('+')
-                .next()
-                .unwrap_or("png");
+            let ext = match image.media_type.split(';').next().map(str::trim) {
+                Some("image/png") => "png",
+                Some("image/jpeg") | Some("image/jpg") => "jpeg",
+                Some("image/webp") => "webp",
+                Some("image/gif") => "gif",
+                other => {
+                    return ToolResult::error(format!(
+                        "Image generation succeeded and was billed, but image {index} had unsupported media type {}. \
+                         Do not generate again; report this to the user.",
+                        other.unwrap_or("<empty>")
+                    ));
+                }
+            };
             match image.persist(&dir, &format!("{stem}-{index}"), ext).await {
                 Ok(path) => {
                     lines.push(format!("- {}", path.display()));
@@ -240,7 +248,7 @@ impl Tool for GenerateImageTool {
                 "references": {
                     "type": ["array", "string"],
                     "items": { "type": "string" },
-                    "description": "Reference images: https URLs, data: URLs, or workspace file paths."
+                    "description": "Reference images: https URLs, data: URLs, or workspace file paths. Local paths are canonicalized and must remain inside the workspace, including after symlink resolution."
                 }
             },
             "required": ["prompt"]

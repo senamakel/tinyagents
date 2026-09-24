@@ -1,6 +1,6 @@
 //! Shared configuration for the media generation tools.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -57,8 +57,15 @@ impl MediaOutput {
     }
 
     /// The artifact directory for this call.
-    pub(crate) fn dir(&self, workspace: Option<&Path>) -> PathBuf {
-        self.root(workspace).join(&self.subdir)
+    pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<PathBuf, String> {
+        let subdir = Path::new(&self.subdir);
+        if subdir.components().any(|component| !matches!(component, Component::Normal(_))) {
+            return Err(format!(
+                "artifact subdirectory `{}` must be a relative path below the output root",
+                self.subdir
+            ));
+        }
+        Ok(self.root(workspace).join(subdir))
     }
 
     /// Converts a model-supplied reference string into a [`MediaReference`],
@@ -161,7 +168,7 @@ pub(crate) fn check_option_types(
     for key in signed {
         match args.get(*key) {
             None | Some(Value::Null) => {}
-            Some(Value::Number(number)) if number.is_i64() || number.is_u64() => {}
+            Some(Value::Number(number)) if number.is_i64() => {}
             Some(Value::String(text)) if text.trim().parse::<i64>().is_ok() => {}
             Some(other) => return Err(format!("`{key}` must be an integer, got {other}")),
         }
