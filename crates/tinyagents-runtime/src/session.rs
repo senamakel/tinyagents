@@ -422,6 +422,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.recorded_tools_json = destination_transcript.tools.clone();
                     self.recorded_tools =
                         Self::decode_recorded_tools(destination_transcript.tools.as_ref());
+                    self.persisted_prefix_len = destination_transcript.meta.prefix_message_count;
                     self.persisted = destination_transcript.messages;
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
@@ -436,6 +437,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // own head-resolution above may have rebound it).
                     self.recorded_tools_json = None;
                     self.recorded_tools = None;
+                    self.persisted_prefix_len = None;
                     self.persisted = Vec::new();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = pre_scan_meta;

@@ -14,7 +14,8 @@ use tinyagents_harness::{
 use tinyagents_session::transcript::{
     DisplayRecord, FileTranscriptLocator, SessionRef, SessionTranscript, TranscriptHistory,
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
-    TurnUsage, read_transcript, read_transcript_display, session_stem,
+    TurnUsage, read_transcript, read_transcript_display, resolve_keyed_transcript_path,
+    session_stem, write_transcript,
 };
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
@@ -2882,6 +2883,71 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         "stable example"
     );
     assert_eq!(resumed.history[2].text(), "latest turn");
+
+    // A Thread scan can read a different file from the session-bound write
+    // destination. Rebinding to that destination must replace the cached
+    // stored-boundary count as well as its raw rows.
+    let rebound_dir = tempfile::tempdir().unwrap();
+    let destination_ref = SessionRef::scoped("destination-prefix", "agent-id");
+    let rebound_locator = Arc::new(FileTranscriptLocator::new(rebound_dir.path()));
+    let mut destination_meta = meta();
+    destination_meta.thread_id = Some("shared-prefix-thread".into());
+    destination_meta.created = "2026-01-01T00:00:00Z".into();
+    destination_meta.prefix_message_count = Some(2);
+    let destination = rebound_locator
+        .open_session(&destination_ref, destination_meta)
+        .unwrap();
+    for (role, content) in [
+        ("system", "old stable"),
+        ("system", "old context"),
+        ("user", "destination turn"),
+    ] {
+        destination
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let scanned_path = resolve_keyed_transcript_path(rebound_dir.path(), "2000_other").unwrap();
+    let mut scanned_meta = meta();
+    scanned_meta.thread_id = Some("shared-prefix-thread".into());
+    scanned_meta.created = "2026-02-01T00:00:00Z".into();
+    scanned_meta.prefix_message_count = Some(1);
+    write_transcript(
+        &scanned_path,
+        &[
+            TranscriptMessage::new("system", "scanned stable"),
+            TranscriptMessage::new("user", "scanned turn"),
+        ],
+        &scanned_meta,
+        None,
+    )
+    .unwrap();
+    let mut rebound = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(rebound_locator, destination_ref, meta())
+        .build()
+        .unwrap();
+    rebound
+        .resume(&session_turn_options(
+            ResumeMode::Thread,
+            "shared-prefix-thread",
+        ))
+        .await
+        .unwrap();
+    let resumed = rebound
+        .resume(&session_turn_options(
+            ResumeMode::Session,
+            "shared-prefix-thread",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["scanned stable", "destination turn"]
+    );
 
     // If a custom locator can read a compacted head but not its sealed root,
     // no number of leading System rows can be proven to be frozen instructions.
