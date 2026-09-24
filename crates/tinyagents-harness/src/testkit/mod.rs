@@ -642,6 +642,7 @@ impl Trajectory {
     ///     AgentEvent::ToolStarted {
     ///         call_id: CallId::new("c1"),
     ///         tool_name: "search".into(),
+    ///         input: None,
     ///     },
     /// ];
     /// Trajectory::from_events(events).assert_tool_called("search");
