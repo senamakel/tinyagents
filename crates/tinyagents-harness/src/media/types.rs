@@ -76,7 +76,9 @@ impl MediaOutput {
                 } else {
                     root.join(path)
                 };
-                // Canonicalize the path to resolve symlinks before checking confinement
+                // Canonicalize the path to resolve symlinks before checking confinement.
+                // This prevents symlink attacks where a symlink inside the workspace
+                // points to a location outside it.
                 let canonical = joined.canonicalize().map_err(|e| {
                     format!(
                         "reference path {} could not be resolved: {}",
@@ -84,9 +86,17 @@ impl MediaOutput {
                         e
                     )
                 })?;
+                // Canonicalize the root for the same reason.
+                let canonical_root = root.canonicalize().map_err(|e| {
+                    format!(
+                        "workspace root {} could not be resolved: {}",
+                        root.display(),
+                        e
+                    )
+                })?;
                 let admitted = match &self.reference_policy {
                     Some(policy) => policy(&canonical)?,
-                    None => confine(&canonical, root)?,
+                    None => confine(&canonical, &canonical_root)?,
                 };
                 Ok(MediaReference::Path(admitted))
             }
