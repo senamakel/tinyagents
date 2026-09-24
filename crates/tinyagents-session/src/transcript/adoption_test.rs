@@ -131,7 +131,7 @@ fn adoption_preserves_the_newest_legacy_tool_snapshot() {
     let thread = "thread-tools";
     write_legacy(dir.path(), "1000_a", "2026-01-01T00:00:00Z", "one", thread);
     write_legacy(dir.path(), "2000_a", "2026-01-02T00:00:00Z", "two", thread);
-    let newer = dir.path().join("2000_a.jsonl");
+    let newer = resolve_keyed_transcript_path(dir.path(), "2000_a").unwrap();
     append_tools_record(&newer, &serde_json::json!([{"name": "newer"}])).unwrap();
 
     let session = SessionRef::scoped(thread, "orchestrator");

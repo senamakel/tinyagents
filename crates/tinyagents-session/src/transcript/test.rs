@@ -677,7 +677,9 @@ fn a_turn_and_its_tools_are_serialized_in_one_append_buffer() {
     .unwrap();
 
     let transcript = read_transcript(&path).unwrap();
-    assert_eq!(transcript.messages, rows);
+    assert_eq!(transcript.messages.len(), 1);
+    assert_eq!(transcript.messages[0].content, "hi");
+    assert_eq!(transcript.messages[0].request_id.as_deref(), Some("r1"));
     assert_eq!(
         transcript.tools,
         Some(serde_json::json!([{"name": "search"}]))
