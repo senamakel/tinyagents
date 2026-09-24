@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
-use tinyinference_image::{MediaReference, MockImageGenerator};
+use tinyinference_image::{GeneratedMedia, MediaReference, MockImageGenerator};
 use tinyinference_video::{
     JobState, MediaModel, MockVideoGenerator, MockVideoScript, VideoGenerator, VideoJob,
     VideoJobStatus, VideoRequest, VideoResponse, WaitPolicy,
@@ -72,6 +72,56 @@ impl VideoGenerator for EmptyVideoGenerator {
             job_id: "empty-job".into(),
             model: self.default_model().into(),
             videos: Vec::new(),
+            cost_usd: Some(0.0),
+        })
+    }
+}
+
+/// Returns a non-MP4 delivery to ensure artifact suffixes match provider data.
+struct WebmVideoGenerator;
+
+#[async_trait::async_trait]
+impl VideoGenerator for WebmVideoGenerator {
+    fn name(&self) -> &str {
+        "webm"
+    }
+
+    fn default_model(&self) -> &str {
+        "webm/video"
+    }
+
+    async fn submit(&self, _: VideoRequest) -> tinyinference_video::Result<VideoJob> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn poll(&self, _: &str) -> tinyinference_video::Result<VideoJobStatus> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn content(
+        &self,
+        _: &str,
+        _: usize,
+    ) -> tinyinference_video::Result<tinyinference_video::GeneratedMedia> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn list_models(&self) -> tinyinference_video::Result<Vec<MediaModel>> {
+        unreachable!("generate is overridden")
+    }
+
+    async fn generate(
+        &self,
+        _: VideoRequest,
+        _: &WaitPolicy,
+    ) -> tinyinference_video::Result<VideoResponse> {
+        Ok(VideoResponse {
+            job_id: "webm-job".into(),
+            model: self.default_model().into(),
+            videos: vec![GeneratedMedia::new(
+                "video/webm; codecs=vp9",
+                b"webm".as_slice(),
+            )],
             cost_usd: Some(0.0),
         })
     }
@@ -313,6 +363,23 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
     assert_eq!(request.generate_audio, Some(true));
     assert!(request.first_frame.is_some());
     assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Unbounded);
+}
+
+#[tokio::test]
+async fn video_tool_preserves_delivered_media_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = GenerateVideoTool::new(Arc::new(WebmVideoGenerator), MediaOutput::new(dir.path()));
+    let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
+
+    assert!(!result.is_error, "{}", text(&result));
+    let saved: Vec<_> = std::fs::read_dir(dir.path().join("generated-media"))
+        .unwrap()
+        .collect();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        saved[0].as_ref().unwrap().path().extension().unwrap(),
+        "webm"
+    );
 }
 
 /// Regression (R2): a timed-out job names its id and points at resume instead

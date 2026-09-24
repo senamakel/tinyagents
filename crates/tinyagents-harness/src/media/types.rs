@@ -162,7 +162,9 @@ impl MediaOutput {
             use std::os::unix::fs::OpenOptionsExt;
 
             let mut options = File::options();
-            options.read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+            options
+                .read(true)
+                .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
             options.open(&canonical_dir).map_err(|error| {
                 format!(
                     "artifact directory {} could not be opened safely: {error}",
@@ -200,7 +202,11 @@ impl MediaOutput {
                 libc::openat(
                     dir.handle.as_raw_fd(),
                     filename.as_ptr(),
-                    libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    libc::O_WRONLY
+                        | libc::O_CREAT
+                        | libc::O_EXCL
+                        | libc::O_NOFOLLOW
+                        | libc::O_CLOEXEC,
                     0o666,
                 )
             };
@@ -219,12 +225,16 @@ impl MediaOutput {
             return Ok(path);
         }
         #[cfg(not(unix))]
-        let mut file = File::options().write(true).create_new(true).open(&path).map_err(|error| {
-            format!(
-                "artifact {} could not be created safely: {error}",
-                path.display()
-            )
-        })?;
+        let mut file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| {
+                format!(
+                    "artifact {} could not be created safely: {error}",
+                    path.display()
+                )
+            })?;
         #[cfg(not(unix))]
         file.write_all(bytes).map_err(|error| {
             format!("artifact {} could not be written: {error}", path.display())

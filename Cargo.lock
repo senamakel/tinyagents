@@ -1499,6 +1499,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures",
+ "libc",
  "regex",
  "reqwest",
  "rusqlite",
