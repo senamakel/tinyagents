@@ -237,13 +237,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
+        let mut boundary_resolved = true;
         if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
             // instructions beside it.
             stored_len = 0;
-            let mut boundary_resolved = false;
+            boundary_resolved = false;
             let bound_session = session_binding.as_ref().or(target.session.as_ref());
             if let Some(head) = bound_session
                 .map(|session| target.locator.head_generation(session))
@@ -321,7 +322,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         } else {
             stored_len.min(leading_len)
         };
-        self.persisted_prefix_len = Some(stored_len);
+        self.persisted_prefix_len = boundary_resolved.then_some(stored_len);
         if self.prefix.messages().is_empty() && stored_len != 0 {
             self.prefix = PrefixSnapshot::new(decoded[..stored_len].to_vec());
         }

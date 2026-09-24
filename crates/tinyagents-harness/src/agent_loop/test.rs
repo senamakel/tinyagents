@@ -6986,6 +6986,11 @@ fn compaction_summary_keeps_declared_system_prefix_cache_key() {
         crate::cache::prompt_cache_key(&before),
         crate::cache::prompt_cache_key(&after)
     );
+    assert_ne!(
+        crate::cache::cache_key(&before),
+        crate::cache::cache_key(&after),
+        "the local response cache must still distinguish the changed history"
+    );
 }
 
 #[test]
@@ -7024,6 +7029,11 @@ fn rebuilt_session_request_keeps_the_summary_after_frozen_system_tiers() {
     assert_eq!(
         crate::cache::prompt_cache_key(&previous),
         crate::cache::prompt_cache_key(&request)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&previous),
+        crate::cache::cache_key(&request),
+        "a stable provider route must not merge distinct response-cache entries"
     );
 }
 

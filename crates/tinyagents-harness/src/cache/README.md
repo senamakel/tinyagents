@@ -44,7 +44,10 @@ cheap and deterministic:
   identity string without ever hashing or logging a raw credential.
 - [`PROMPT_CACHE_KEY_OPTION`], [`prompt_cache_key`],
   [`apply_prompt_cache_breakpoints`] — derive and inject a provider-side
-  `prompt_cache_key` routing hint from the request's stable prefix.
+  `prompt_cache_key` routing hint from the request's stable prefix. This is not
+  the local response-cache identity: [`cache_key`] still hashes the changing
+  conversation history, so two turns with one stable provider route cannot
+  return the same cached answer by mistake.
 
 ### Prompt-cache layout protection
 
