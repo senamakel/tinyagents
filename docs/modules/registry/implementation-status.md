@@ -10,11 +10,11 @@ three as a proposal for where the module is headed.
 
 - **`CapabilityRegistry<State = ()>`** (`capability/types.rs`) — the
   name-addressable capability catalog. Partitioned by `ComponentKind` into
-  models (`Arc<dyn ChatModel<State>>`), tools (`Arc<dyn Tool>`), graph
-  blueprints (`Blueprint`), and declarative agent definitions
-  (`AgentDefinition`); routers and reducers are name-only descriptors for now.
+  models (`Arc<dyn ChatModel<State>>`), tools (`Arc<dyn Tool>`), and
+  declarative agent definitions (`AgentDefinition`); routers and reducers are
+  name-only descriptors for now.
   Tracks presence/discovery metadata per `(kind, name)` and an alias map per
-  `(kind, alias)`. This is the type `.rag` sources bind against.
+  `(kind, alias)`.
 - **`ModelCatalog`** (`catalog.rs`) — a deterministic, offline snapshot of
   provider model prices (including `ModelPricing::tiers` context-size-tiered
   rates), context windows, modalities, and capability flags, embedded at
@@ -136,14 +136,9 @@ of adding a `Ctx` parameter to the whole registry for one feature; see
 erasure mechanics.
 
 `Capability::from_spec(serde_json::Value)` builds a bundle from data (no
-toolset/middleware — those are still wired programmatically), which is what
-a `.rag` `capability "name"` node item resolves against
-(`crates/tinyagents-language/src/{ast,parser,compiler,resolver}.rs`,
-`AstNode::capability: Option<String>`); `CapabilityResolver`/`Resolver` gate
-it the same way they gate `tool`/`model`/`subgraph` references — unconditional
-membership in the host-registered capability allowlist
-(`capability_resolver.rs`'s `capability_allowed`, consulted from both
-`CapabilityResolver::bind_blueprint` and `Resolver::resolve_blueprint`).
+toolset/middleware — those are still wired programmatically). Hosts choose
+which JSON-declared capabilities to install and retain control of the
+available tool, model, and subagent handles.
 
 On the harness side, `AgentHarness::with_capability(capability)` installs a
 bundle: its middleware is appended in installation order, its model defaults
@@ -161,6 +156,6 @@ reshaping the next request.
 
 `design.md`/`events.md`/`operations.md` were written as a forward-looking
 specification before implementation started; the capability catalog, model
-catalog, router, and diagnostics shipped first because they are the pieces
-`.rag` compilation and harness model resolution depend on today. The
+catalog, router, and diagnostics shipped first because they support harness
+model resolution today. The
 event/lifecycle/listener layer is still design-stage work.

@@ -1188,6 +1188,7 @@ async fn assert_rebound_host_resolution_stops(
     );
     tokio::pin!(invocation);
     tokio::select! {
+        biased;
         _ = started.notified() => {
             if let Some(token) = token {
                 token.cancel();

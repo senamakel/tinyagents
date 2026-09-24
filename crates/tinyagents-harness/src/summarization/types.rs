@@ -523,8 +523,8 @@ pub struct CompactionRecord {
     pub summary: String,
     /// Index, into the non-system message slice compaction operated over, of
     /// the first message that survives verbatim (everything before it was
-    /// folded into [`Self::summary`]). Matches [`CutPoint::index`] when the
-    /// record was produced from a [`CutPoint`].
+    /// folded into [`Self::summary`]). Matches [`crate::summarization::CutPoint::index`] when the
+    /// record was produced from a [`crate::summarization::CutPoint`].
     pub first_kept_index: usize,
     /// Estimated total tokens of the transcript immediately before
     /// compaction.

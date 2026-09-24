@@ -113,6 +113,7 @@ async fn a_native_model_narrating_a_call_in_any_grammar_dispatches_it() {
     for text in [
         "Let me check. <tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",
         "<｜DSML｜tool_calls><｜DSML｜invoke name=\"lookup\">{\"q\":\"x\"}</｜DSML｜invoke></｜DSML｜tool_calls>",
+        "<｜DSML｜tool_call>{\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"}}</｜DSML｜tool_call>",
         "<｜tool▁call▁begin｜>lookup<｜tool▁sep｜>{\"q\":\"x\"}<｜tool▁call▁end｜>",
         "<|channel|>commentary to=functions.lookup<|message|>{\"q\":\"x\"}<|call|>",
         "<tool_call>{\"name\":\"functions.lookup\",\"arguments\":{\"q\":\"x\"}}</tool_call>",

@@ -63,7 +63,7 @@ pub struct RunLimits {
     /// Maximum sub-agent / recursion depth allowed for the run tree rooted at
     /// this run. A top-level run is depth `0`; each nested child run increments
     /// the depth. A sub-agent invocation whose child depth would exceed this cap
-    /// fails fast (see [`crate::subagent`]). Defaults to
+    /// fails fast (see the `tinyagents-orchestration` sub-agent invoker). Defaults to
     /// [`RunLimits::DEFAULT_MAX_DEPTH`].
     pub max_depth: usize,
     /// What the run should do when a call cap is reached. Defaults to

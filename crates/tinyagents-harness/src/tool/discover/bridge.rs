@@ -70,13 +70,25 @@ fn tool_search_schema(catalog: &DeferredCatalog, policy: &ToolDiscoveryPolicy) -
     }
 }
 
+/// `arguments` is declared as a **JSON-encoded string**, not an object.
+///
+/// Its shape depends on whichever tool the search returned, so as an object it
+/// could only be declared open-ended (`{"type": "object"}` with no
+/// `properties`). Providers that constrain decoding to the schema read that as
+/// "no keys allowed": OpenRouter's Sail Research route for DeepSeek V4 Flash
+/// answered every `tool_call` with `{}`, dropping `name` as well. Marking the
+/// object open (`additionalProperties: true`) fixes that route, but the strict
+/// sanitizer rewrites it to `false` and the conservative and Gemini
+/// projections strip it, so the failure returns on those routes. A string
+/// survives every projection. [`unwrap_tool_call`] still accepts an object
+/// from models that send one anyway.
 fn tool_call_schema() -> ToolSchema {
     ToolSchema {
         name: TOOL_CALL_NAME.to_string(),
         description: format!(
             "Invoke a tool found with `{TOOL_SEARCH_NAME}`. `name` is the tool's name \
-             and `arguments` is its argument object, matching the schema the search \
-             returned."
+             and `arguments` is its argument object encoded as a JSON string, matching \
+             the schema the search returned."
         ),
         parameters: json!({
             "type": "object",
@@ -86,8 +98,9 @@ fn tool_call_schema() -> ToolSchema {
                     "description": "Exact name of the tool to invoke."
                 },
                 "arguments": {
-                    "type": "object",
-                    "description": "Arguments for that tool, per its schema."
+                    "type": "string",
+                    "description": "That tool's arguments as a JSON object string, per its \
+                                    schema, e.g. \"{\\\"path\\\":\\\"a.pdf\\\"}\". Use \"{}\" for none."
                 }
             },
             "required": ["name", "arguments"]
@@ -175,7 +188,8 @@ pub async fn answer_tool_search(
     SearchAnswer {
         result: ToolResult::success(format!(
             "{matched} match(es). Invoke one with `{TOOL_CALL_NAME}` {{\"name\", \"arguments\"}} \
-             or by its own name, using the parameters shown.\n{rendered}"
+             (`arguments` as a JSON object string) or by its own name, using the parameters \
+             shown.\n{rendered}"
         )),
         matched,
         ranking: Some(ranking),
@@ -185,8 +199,10 @@ pub async fn answer_tool_search(
 /// Unwraps a `tool_call` payload into the real `(name, arguments)` pair.
 ///
 /// Returns the message to answer the model with when the payload is
-/// malformed. `arguments` defaults to an empty object when omitted so a
-/// zero-argument tool is callable without ceremony.
+/// malformed. `arguments` is advertised as a JSON string (see
+/// [`tool_call_schema`]) but an object is accepted too, and it defaults to an
+/// empty object when omitted so a zero-argument tool is callable without
+/// ceremony.
 pub fn unwrap_tool_call(arguments: &Value) -> Result<(String, Value), String> {
     let name = arguments
         .get("name")
