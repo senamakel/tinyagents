@@ -1147,6 +1147,31 @@ async fn empty_response_retry_ignores_a_blank_cached_before_opt_in() {
 }
 
 #[tokio::test]
+async fn truncated_empty_retry_does_not_replay_a_cached_blank() {
+    use crate::cache::InMemoryResponseCache;
+
+    let model = Arc::new(crate::testkit::ScriptedModel::new(vec![
+        truncated_empty_response(2048),
+        text_response("recovered", 4, 3),
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
+
+    let ctx = RunContext::new(
+        RunConfig::new("truncated-empty-cache").with_max_turn_output_tokens(2048),
+        (),
+    );
+    let run = harness
+        .invoke_in_context(&(), ctx, vec![Message::user("hi")])
+        .await
+        .expect("length-truncated empty completion should reach the provider again");
+    assert_eq!(run.text(), Some("recovered".to_string()));
+    assert_eq!(model.requests().len(), 2);
+    assert_eq!(model.requests()[1].max_tokens, Some(4096));
+}
+
+#[tokio::test]
 async fn truncated_empty_response_retries_then_succeeds() {
     // A local reasoning model burns its whole token budget on the hidden
     // reasoning channel and returns finish_reason="length" with empty content.

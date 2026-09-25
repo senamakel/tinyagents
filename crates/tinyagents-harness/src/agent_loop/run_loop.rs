@@ -1111,6 +1111,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 shape: super::dialect::CallShape {
                     streaming,
                     recovery: recovery.clone(),
+                    retry_empty_final: self.policy.empty_response_retries > 0
+                        && structured_plan.is_none()
+                        && run.structured.is_none(),
                 },
             };
             // Snapshot the request messages for observability before `request`
