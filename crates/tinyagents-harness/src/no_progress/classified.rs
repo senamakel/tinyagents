@@ -37,8 +37,9 @@ pub struct ClassifiedFailureTracker {
 }
 
 impl ClassifiedFailureTracker {
-    /// `recovery_budget` is the number of further failed attempts permitted
-    /// after the first failure. Zero stops on the first observation.
+    /// `recovery_budget` is the number of retry calls allowed after the first
+    /// failure. A budget of one permits one retry and halts if that retry also
+    /// fails; zero stops on the first observation.
     pub fn record(&self, key: &ClassifiedFailure, recovery_budget: usize) -> NoProgress {
         let mut counts = self.counts.lock().unwrap();
         let attempts = counts.entry(key.clone()).or_default();

@@ -35,6 +35,9 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
   keyed by class, operation, and resource or permission scope. `record` accepts
   a class-specific recovery budget; `clear` removes one group only after an
   observation shows its blocker changed. Intervening tool calls leave it intact.
+  Hold one tracker per turn, or call `reset()` at a new turn boundary. A
+  `NoProgress::Halt` verdict does not reset classified counts: retrying the same
+  unchanged blocker in a resumed turn would halt again.
 - [`ToolAttempt`] — one observed outcome, built with `success`/`failure` plus
   the `hard_reject()`/`recoverable_miss()` modifiers.
 - [`NoProgress`] — the verdict enum: `Continue`, `Nudge(String)`,
