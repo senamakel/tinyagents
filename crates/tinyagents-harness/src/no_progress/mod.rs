@@ -60,9 +60,11 @@
 //! and [`NoProgress::as_str`] exist so step 4 needs no enum match, and
 //! `as_str()` gives a stable telemetry label.
 
+mod classified;
 mod successful_repeat;
 mod types;
 
+pub use classified::{ClassifiedFailure, ClassifiedFailureTracker};
 pub use successful_repeat::{DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD};
 use types::LadderState;
 pub use types::{
