@@ -198,7 +198,15 @@ pub async fn execute_tool_batch<State: Send + Sync, Ctx: Send + Sync>(
     let messages_before = messages.len();
     let executed_before = run.executed_tools.len();
     harness
-        .execute_tools(state, ctx, run, status, messages, tool_calls)
+        .execute_tools_with_promotions(
+            state,
+            ctx,
+            run,
+            status,
+            messages,
+            tool_calls,
+            &mut std::collections::BTreeSet::new(),
+        )
         .await?;
     Ok(ToolBatchOutcome {
         results: messages[messages_before..].to_vec(),

@@ -77,16 +77,14 @@ ranker invented never reaches the model. The catalogue is what the ranker
 sees; the model's `query` is the only intent, with an empty `RankContext` —
 the model already distilled the turn into it.
 
-### Why a bridge and not hydration
+### Search and typed promotion
 
-OpenClaw appends a revealed schema to the request's `tools` for the rest of the
-run. That is simpler for the model but every reveal changes the `tools` array —
-and Anthropic caches *tools → system → messages* as one prefix, OpenAI's
-`prompt_cache_key` likewise hashes the tools. A run with `protect_prompt_prefix`
-would lose its cache on every discovery. With the bridge the `tools` array is
-byte-identical for the whole run (asserted by
-`tests/tool_deferral.rs`); a reveal costs one tool result. Hermes and Codex
-made the same trade.
+The bridge keeps the first request small. After `tool_search`, each matched
+tool's schema is added to subsequent provider requests so the model can call
+it with typed arguments. The harness records the added declarations as a
+transcript tool-change patch; resume restores only tools still admitted by
+the current host allow-list. A new match changes the provider's tools prefix
+once. Later requests keep that prefix until another tool is discovered.
 
 ### What the bridge does not cover
 
@@ -188,8 +186,8 @@ text. The native path is unaffected.
 `tests/live_tool_deferral.rs` runs the same task against a real model twice
 over a 41-tool registry — all `Direct`, then the 40-tool long tail `Deferred`
 — and requires both runs to reach `stock_quote`, the deferred run to spend
-fewer prompt tokens on its first call, and its `tools` array to be
-byte-identical throughout. Measured over OpenRouter (2026-09-19):
+fewer prompt tokens on its first call, and a searched `stock_quote` to gain
+a typed declaration. The earlier baseline measured over OpenRouter (2026-09-19):
 
 | model                       | first-call prompt tokens | total prompt tokens | route  |
 |-----------------------------|--------------------------|---------------------|--------|
@@ -200,8 +198,11 @@ byte-identical throughout. Measured over OpenRouter (2026-09-19):
 Schema bytes on the wire went from 24,725 (41 tools) to 3,791 (3 tools + a
 40-entry manifest). "Route" is how the model reached the tool: through
 `tool_search`, or straight off the manifest via `tool_call` (Haiku read the
-name in the description and skipped the search). The extra model call the
-deferred run spends is already paid for on the first turn.
+name in the description and skipped the search). A 2026-09-25 live run of
+`openai/gpt-4.1-mini` after typed promotion used 3,814 → 904 first-call
+tokens and 7,692 → 3,594 total tokens. The separate live promotion case
+searched, received a typed `stock_quote` declaration, and invoked it with
+an integer `options.limit` in three model calls.
 
 ```text
 TOOL_DEFERRAL_LIVE=1 cargo test -p tinyagents-integration-tests \

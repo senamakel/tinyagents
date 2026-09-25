@@ -1,11 +1,10 @@
 //! End-to-end coverage for deferred tool discovery in the agent loop.
 //!
-//! A `Deferred` tool must never appear in a request's `tools` array; instead
+//! A `Deferred` tool stays out of the initial request's `tools` array; then
 //! the loop advertises the `tool_search` / `tool_call` bridge, answers
 //! `tool_search` from its own catalogue, unwraps `tool_call` to the real tool
-//! before admission, and keeps the `tools` array byte-identical across every
-//! model call of the run — including after a search → call round-trip — so
-//! a provider prompt cache is never invalidated by discovery.
+//! before admission, and promotes a search match's typed declaration on the
+//! next request. The transcript records the promotion for resumed runs.
 
 use std::sync::{Arc, Mutex};
 
@@ -205,7 +204,7 @@ fn tool_names(tools_json: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn deferred_tool_is_found_called_and_never_on_the_wire() {
+async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
     let listener = Arc::new(RecordingListener::new());
     let before_tool = Arc::new(Mutex::new(Vec::new()));
     let deferred = ExposedTool::new(
@@ -262,22 +261,50 @@ async fn deferred_tool_is_found_called_and_never_on_the_wire() {
         .expect("run succeeds");
     assert_eq!(run.text(), Some("done".to_string()));
 
-    // The wire carries the direct tool plus the two bridge tools, in a
-    // deterministic order, and is byte-identical on every model call.
+    // The first request stays small. Search promotes the matched typed schema
+    // on the next request, and that declaration remains stable thereafter.
     let seen = model.tools_seen();
     assert_eq!(seen.len(), 5);
-    assert!(
-        seen.iter().all(|tools| tools == &seen[0]),
-        "tools array drifted: {seen:#?}"
-    );
     assert_eq!(
         tool_names(&seen[0]),
         vec!["read_file", TOOL_SEARCH_NAME, TOOL_CALL_NAME]
     );
+    assert!(seen[1..].iter().all(|tools| tools == &seen[1]));
+    assert_eq!(
+        tool_names(&seen[1]),
+        vec!["read_file", "stock_quote", TOOL_SEARCH_NAME, TOOL_CALL_NAME]
+    );
+    let promoted: Vec<Value> = serde_json::from_str(&seen[1]).unwrap();
+    let stock = promoted
+        .iter()
+        .find(|tool| tool["name"] == "stock_quote")
+        .unwrap();
+    assert_eq!(
+        stock["parameters"]["properties"]["symbol"]["type"],
+        "string"
+    );
+    assert_eq!(stock["parameters"]["required"], json!(["symbol"]));
     assert!(!seen[0].contains("Fetch the latest price for a ticker symbol."));
     // The manifest names the deferred tool without its schema.
     assert!(seen[0].contains("- stock_quote: Fetch the latest price for a ticker symbol"));
     assert!(!seen[0].contains("internal_step"));
+
+    let (_, recorded) = tinyinference_llm::message::replay_system_state(&run.messages);
+    assert!(recorded.iter().any(|tool| tool.name == "stock_quote"));
+    let resumed_model = RecordingModel::new(vec![text("resumed")]);
+    let mut resumed_harness: AgentHarness<()> = AgentHarness::new();
+    resumed_harness
+        .register_model("mock", resumed_model.clone())
+        .set_default_model("mock")
+        .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
+        .register_tool(deferred.clone());
+    let mut resumed_messages = run.messages.clone();
+    resumed_messages.push(Message::user("quote another stock"));
+    resumed_harness
+        .invoke_default(&(), resumed_messages)
+        .await
+        .unwrap();
+    assert!(tool_names(&resumed_model.tools_seen()[0]).contains(&"stock_quote".to_string()));
 
     // Both the bridged and the direct-by-name call reached the real tool.
     let calls = deferred.calls.lock().unwrap().clone();
