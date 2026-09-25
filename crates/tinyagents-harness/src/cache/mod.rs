@@ -51,6 +51,11 @@ mod singleflight;
 mod sqlite;
 mod types;
 
+pub(crate) use layout::{
+    VOLATILE_SYSTEM_HISTORY_SEGMENT_ID, declared_system_prefix_len, prepend_system_message,
+    promote_tools_after_zero_prefix_marker,
+};
+
 pub use key::{
     PROMPT_CACHE_KEY_OPTION, apply_prompt_cache_breakpoints, cache_key, credential_fingerprint,
     model_cache_identity, prompt_cache_key, scoped_cache_key,

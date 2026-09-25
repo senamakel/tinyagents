@@ -31,7 +31,9 @@ Re-exported from `transcript::` (see `../transcript.rs`); reachable as
   message and tool-call shapes. Deliberately not an inference message: this
   is an on-disk compatibility boundary, and hosts convert at their own edge.
 - `TranscriptMeta` / `SessionTranscript` — the `_meta` header and the parsed
-  model-context transcript (`meta` + exact message array).
+  model-context transcript (`meta` + exact message array). The optional
+  `_meta.prefix_message_count` records how many leading messages were frozen
+  prompt tiers in this generation; older files omit it.
 - `MessageUsage` / `TurnUsage` — per-turn usage and provenance attached to
   the last assistant message of a turn.
 - `DisplayMessage` / `CompactionMarker` / `DisplayRecord` /

@@ -558,16 +558,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // an explicit stable prefix, and the system instructions plus the
             // name-sorted tool schemas are stable for this whole run.
             status.mark_running(HarnessPhase::BuildingRequest);
-            let system_end = messages
-                .iter()
-                .take_while(|message| matches!(message, Message::System(_)))
-                .count();
+            let system_end = cacheable_system_prefix_end(messages, ctx.frozen_system_prefix_len);
             let mut prompt = crate::prompt::PromptBuilder::new();
             prompt.push_system_messages(&messages[..system_end]);
             if !tool_schemas.is_empty() {
                 prompt.push_tools_segment("tools", tool_schemas.clone());
             }
             let mut request = prompt.build(messages[system_end..].to_vec());
+            mark_empty_frozen_prefix(&mut request, ctx.frozen_system_prefix_len);
             // Provider adapters that maintain an external conversation (for
             // example Claude Code's resumable CLI session) need the caller's
             // logical thread id, not a hash of prompt text. Carry the harness
@@ -761,11 +759,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             crate::structured::default_prompted_template().to_string()
                         });
                         let schema_text = serde_json::to_string_pretty(&schema).unwrap_or_default();
-                        request.messages.insert(
-                            0,
-                            Message::system(format!(
-                                "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
-                            )),
+                        crate::cache::prepend_system_message(
+                            &mut request,
+                            format!("{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"),
                         );
                         Some((StructuredStrategy::Prompted { template }, name, schema))
                     }
@@ -872,11 +868,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                 });
                                 let schema_text =
                                     serde_json::to_string_pretty(&schema).unwrap_or_default();
-                                request.messages.insert(
-                                    0,
-                                    Message::system(format!(
+                                crate::cache::prepend_system_message(
+                                    &mut request,
+                                    format!(
                                         "{instructions}\n\nJSON Schema for `{name}`:\n{schema_text}"
-                                    )),
+                                    ),
                                 );
                             }
                             // `for_profile` never returns `ToolCallUnion`;
@@ -2024,6 +2020,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     }
 }
 
+/// Use the frozen boundary supplied by a durable session when rebuilding a
+/// model request on the next harness invocation. A later System summary is
+/// model-visible history, not another stable prompt tier.
+pub(super) fn cacheable_system_prefix_end(
+    messages: &[Message],
+    frozen_system_prefix_len: Option<usize>,
+) -> usize {
+    let leading_system = messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    frozen_system_prefix_len.map_or(leading_system, |count| count.min(leading_system))
+}
+
+/// Prevent the dispatch refresh from inferring a newly leading System
+/// summary as stable when a session explicitly froze zero messages. An empty
+/// annotation means "infer from roles" to the harness, so retain an explicit
+/// noncacheable marker in this zero-prefix, no-tools case even if the summary
+/// has not been inserted by a later middleware yet.
+pub(super) fn mark_empty_frozen_prefix(
+    request: &mut ModelRequest,
+    frozen_system_prefix_len: Option<usize>,
+) {
+    if frozen_system_prefix_len == Some(0) && request.cache_segments.is_empty() {
+        request.cache_segments.push(PromptSegment {
+            id: crate::cache::VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+            role: SegmentRole::Volatile,
+            cacheable: false,
+        });
+    }
+}
+
 /// Refreshes the harness-owned stable-prefix annotation at model-call dispatch.
 ///
 /// Lifecycle and wrap middleware may add or rewrite leading system messages.
@@ -2032,11 +2060,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 /// middleware layer has delegated to the innermost call. Rebuilding that
 /// annotation there keeps cache routing tied to the bytes sent to the provider.
 pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
-    let system_end = request
+    crate::cache::promote_tools_after_zero_prefix_marker(request);
+    let leading_system_end = request
         .messages
         .iter()
         .take_while(|message| matches!(message, Message::System(_)))
         .count();
+    // An explicit canonical layout names the cacheable system messages. A
+    // compaction summary can be another leading System message without being
+    // part of that frozen prefix; promoting it here re-rolls the provider's
+    // prompt_cache_key on every compaction. With no explicit boundary, keep
+    // the existing conservative leading-System behavior.
+    let system_end =
+        crate::cache::declared_system_prefix_len(request).unwrap_or(leading_system_end);
     let mut expected_layout = (0..system_end)
         .map(|index| PromptSegment {
             id: crate::prompt::system_segment_id(index),

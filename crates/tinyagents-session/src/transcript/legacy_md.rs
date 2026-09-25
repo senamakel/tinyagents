@@ -72,6 +72,7 @@ fn parse_legacy_meta(raw: &str) -> Result<TranscriptMeta> {
         created: get("created").unwrap_or_default(),
         updated: get("updated").unwrap_or_default(),
         turn_count: get("turn_count").and_then(|s| s.parse().ok()).unwrap_or(0),
+        prefix_message_count: None,
         input_tokens: get("input_tokens")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
