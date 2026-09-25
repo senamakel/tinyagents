@@ -81,6 +81,12 @@ pub enum TinyAgentsError {
     #[error("model error: {0}")]
     Model(String),
 
+    /// Visible model output became repetitive process narration during a
+    /// stream. The stream is dropped immediately; retrying the same request
+    /// would reproduce the stall, so this failure is terminal.
+    #[error("streamed response stalled on repeated narration")]
+    GenerationStalled,
+
     /// A model provider call failed with the full structured detail preserved
     /// — HTTP status, provider error code, and whether retrying the same
     /// request may succeed — instead of flattened into a display string.

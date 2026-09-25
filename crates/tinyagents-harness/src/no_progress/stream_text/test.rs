@@ -106,3 +106,13 @@ fn markdown_list_markers_do_not_hide_narration() {
         .collect::<String>();
     assert!(detector.observe(&list));
 }
+
+#[test]
+fn ordinary_capability_sentences_do_not_count_as_process_narration() {
+    let mut detector = StreamTextStallDetector::default();
+    for i in 0..12 {
+        assert!(!detector.observe(&format!(
+            "I can explain the typed decision result in useful detail number {i}. "
+        )));
+    }
+}

@@ -96,7 +96,7 @@ impl StreamTextStallDetector {
 fn is_process_start(start: &str) -> bool {
     matches!(
         start,
-        "let me" | "i will" | "i need" | "i should" | "i can" | "ill now"
+        "let me" | "i will" | "i need" | "i should" | "ill now"
     )
 }
 

@@ -3338,6 +3338,34 @@ async fn invoke_streaming_fires_on_model_delta_per_delta_and_accumulates() {
 }
 
 #[tokio::test]
+async fn streamed_repetitive_narration_stops_the_live_model_call() {
+    use crate::testkit::StreamingMock;
+
+    let repeated = (0..12)
+        .map(|i| {
+            format!("Let me inspect source {i} carefully before I answer the user's question. ")
+        })
+        .collect::<String>();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "stream",
+        Arc::new(StreamingMock::from_text_chunks([repeated])),
+    );
+
+    let error = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("stalled-stream"),
+            vec![Message::user("Find information about Jev")],
+        )
+        .await
+        .expect_err("repetitive streamed narration must stop the run");
+    assert!(matches!(&error, TinyAgentsError::GenerationStalled));
+    assert!(!crate::retry::is_retryable(&error));
+}
+
+#[tokio::test]
 async fn streaming_delta_transform_controls_final_run_and_cached_response() {
     use crate::cache::InMemoryResponseCache;
     use crate::testkit::StreamingMock;
