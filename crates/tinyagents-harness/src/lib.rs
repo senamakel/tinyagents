@@ -125,9 +125,9 @@ pub use error::{Result, TinyAgentsError};
 pub use ids::*;
 pub use model_registry::{ModelRegistry, ModelSelection, ResolvedModelBinding};
 pub use no_progress::{
-    DEFAULT_IDENTICAL_HALT_THRESHOLD, DEFAULT_REPEAT_CALL_THRESHOLD,
-    DEFAULT_REPEAT_OUTPUT_THRESHOLD, NoProgress, NoProgressTracker, SuccessfulRepeat,
-    SuccessfulRepeatTracker, ToolAttempt,
+    ClassifiedFailure, ClassifiedFailureTracker, DEFAULT_IDENTICAL_HALT_THRESHOLD,
+    DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD, NoProgress, NoProgressTracker,
+    StreamTextStallDetector, SuccessfulRepeat, SuccessfulRepeatTracker, ToolAttempt,
 };
 pub use observability::{
     AgentCallLatency, AgentLatencyMetrics, AgentObservation, FanOutSink, HarnessEventJournal,

@@ -148,8 +148,9 @@ it applies identically to the unary and streaming paths.
   `invoke_streaming_in_context[_with_status]` — the streaming counterparts of
   the `invoke*` family: each model call goes through
   `ChatModel::stream` instead of `ChatModel::invoke`, threading deltas through
-  every middleware's `on_model_delta` hook, but the loop still only returns
-  once the run is over.
+  every middleware's `on_model_delta` hook. Visible text also crosses the
+  streamed-text stall detector; repeated process narration drops the provider
+  stream and returns non-retryable `GenerationStalled`.
 - `AgentHarness::invoke_stream` / `invoke_stream_in_context` — a caller-facing
   event stream (`stream.rs`): yields every `AgentEvent` emitted during the run
   as `AgentStreamItem::Event`, then a single terminal
@@ -162,6 +163,7 @@ it applies identically to the unary and streaming paths.
 
 `TinyAgentsError::LimitExceeded` (model/tool cap reached),
 `TinyAgentsError::Timeout` (wall-clock deadline elapsed),
+`TinyAgentsError::GenerationStalled` (repetitive visible model stream),
 `TinyAgentsError::ModelNotFound` (no model resolvable),
 `TinyAgentsError::ToolNotFound` (model called an unregistered tool), or any
 error surfaced by a model, tool, middleware, or structured-output extraction.

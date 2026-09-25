@@ -19,11 +19,12 @@ A sibling tracker, [`SuccessfulRepeatTracker`], covers the complementary shape
 — a model that keeps *succeeding* at the same no-op call (or cycles through a
 short repeating sequence) without making progress.
 
-Both trackers are deliberately free of harness types (no `RunContext`, no
-`Message`) so they can be unit-tested in isolation. **Nothing in the crate
-drives them yet** — wiring one into an `after_tool` middleware hook is a
-follow-up; see the "Driving this from an `after_tool` hook" section in
-`mod.rs` for the exact contract a driver must implement.
+All trackers are free of harness types (no `RunContext`, no `Message`) so they
+can be unit-tested in isolation. The agent loop drives
+`StreamTextStallDetector` on visible streaming output and ends the model call
+with non-retryable `GenerationStalled` when it fires. Tool-call trackers remain
+host-wired through `after_tool`; see the "Driving this from an `after_tool`
+hook" section in `mod.rs` for that contract.
 
 ## Public surface
 
@@ -31,6 +32,13 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
   state for one turn. `new(identical_halt_threshold)` builds it,
   `record(step, &ToolAttempt) -> NoProgress` feeds one outcome and returns the
   verdict, `reset()` clears all counters (called internally after a halt).
+- [`ClassifiedFailureTracker`] — an additive ledger for equivalent failures
+  keyed by class, operation, and resource or permission scope. `record` accepts
+  a class-specific recovery budget; `clear` removes one group only after an
+  observation shows its blocker changed. Intervening tool calls leave it intact.
+  Hold one tracker per turn, or call `reset()` at a new turn boundary. A
+  `NoProgress::Halt` verdict does not reset classified counts: retrying the same
+  unchanged blocker in a resumed turn would halt again.
 - [`ToolAttempt`] — one observed outcome, built with `success`/`failure` plus
   the `hard_reject()`/`recoverable_miss()` modifiers.
 - [`NoProgress`] — the verdict enum: `Continue`, `Nudge(String)`,
@@ -40,6 +48,9 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
 - [`SuccessfulRepeatTracker`] / [`SuccessfulRepeat`] — the successful-repeat
   counterpart: `record_output`, `record_call_batch`, `record_call_outcome`,
   and `reset`.
+- [`StreamTextStallDetector`] — consumes visible text fragments during one
+  model call and flags a long run of similarly opened sentences before the
+  provider stream finishes.
 - Threshold constants: [`DEFAULT_IDENTICAL_HALT_THRESHOLD`],
   [`DEFAULT_REPEAT_OUTPUT_THRESHOLD`], [`DEFAULT_REPEAT_CALL_THRESHOLD`] (all
   re-exported from `crate`).
@@ -50,6 +61,7 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
 | --- | --- |
 | `mod.rs` | The identical/any-failure escalation ladder (`NoProgressTracker::record`), argument fingerprinting, and the nudge/halt message builders. |
 | `successful_repeat.rs` | The successful-repeat streak tracker (`SuccessfulRepeatTracker`) and its private `Streak` helper. |
+| `stream_text/` | Chunk-independent streamed-text stall detector and focused tests. |
 | `types.rs` | Public and crate-private type definitions shared by both trackers. |
 | `test.rs` | Unit tests for the escalation ladder. |
 

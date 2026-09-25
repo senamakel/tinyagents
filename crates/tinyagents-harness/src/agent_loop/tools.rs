@@ -314,6 +314,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &RunContext<Ctx>,
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
+        promoted_names: &mut std::collections::BTreeSet<String>,
     ) -> Result<Option<ResolvedToolCall<State, Ctx>>> {
         use crate::tool::discover::{TOOL_CALL_NAME, TOOL_SEARCH_NAME};
         if !self.policy.discovery.enabled
@@ -346,6 +347,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 &call.arguments,
             )
             .await;
+            promoted_names.extend(answer.matched_names.iter().cloned());
             let ranking = answer.ranking;
             // `query` is model-supplied tool-call content, same privacy
             // class as a normal tool call's arguments, so it honors the same
@@ -456,7 +458,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// case. A deferred call gets no tool-result row; every other call in the
     /// batch is still executed and answered, so the caller only has to decide
     /// what to do with the pending ones (exit, or resolve inline).
-    pub(super) async fn execute_tools(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn execute_tools_with_promotions(
         &self,
         state: &State,
         ctx: &mut RunContext<Ctx>,
@@ -464,6 +467,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
+        promoted_names: &mut std::collections::BTreeSet<String>,
     ) -> Result<DeferredToolRequests> {
         // Injection and argument normalization change the model payload before
         // execution. Until admission has produced those authoritative values,
@@ -479,11 +483,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             canonical_parallel_safe,
             self.middleware.tool_middleware_len(),
         ) {
-            self.execute_tools_concurrently(state, ctx, run, status, messages, tool_calls)
-                .await
+            self.execute_tools_concurrently(
+                state,
+                ctx,
+                run,
+                status,
+                messages,
+                tool_calls,
+                promoted_names,
+            )
+            .await
         } else {
-            self.execute_tools_serially(state, ctx, run, status, messages, tool_calls)
-                .await
+            self.execute_tools_serially(
+                state,
+                ctx,
+                run,
+                status,
+                messages,
+                tool_calls,
+                promoted_names,
+            )
+            .await
         }
     }
 
@@ -499,6 +519,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         status: &mut HarnessRunStatus,
         call: &mut ToolCall,
+        promoted_names: &mut std::collections::BTreeSet<String>,
     ) -> Result<ResolvedToolCall<State, Ctx>> {
         // Safe cancellation checkpoint: stop before invoking the next
         // (side-effecting) tool if cancellation was requested.
@@ -533,7 +554,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // a call the provider could not parse is left for the recovery below.
         if call.invalid.is_none()
             && self.tools.dispatch(&call.name).is_none()
-            && let Some(answered) = self.answer_discovery_bridge(ctx, status, call).await?
+            && let Some(answered) = self
+                .answer_discovery_bridge(ctx, status, call, promoted_names)
+                .await?
         {
             return Ok(answered);
         }
@@ -1275,6 +1298,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Executes requested tools one at a time (the historical semantics; used
     /// for single-call turns and whenever tool-wrap middleware is registered).
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tools_serially(
         &self,
         state: &State,
@@ -1283,13 +1307,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
+        promoted_names: &mut std::collections::BTreeSet<String>,
     ) -> Result<DeferredToolRequests> {
         let mut deferred = DeferredToolRequests::default();
         let mut follow_ups = Vec::new();
         for call in tool_calls {
             follow_ups.extend(
-                self.execute_tool_serially(state, ctx, run, status, messages, call, &mut deferred)
-                    .await?,
+                self.execute_tool_serially(
+                    state,
+                    ctx,
+                    run,
+                    status,
+                    messages,
+                    call,
+                    &mut deferred,
+                    promoted_names,
+                )
+                .await?,
             );
         }
         append_follow_ups(messages, follow_ups);
@@ -1316,8 +1350,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         messages: &mut Vec<Message>,
         mut call: ToolCall,
         deferred: &mut DeferredToolRequests,
+        promoted_names: &mut std::collections::BTreeSet<String>,
     ) -> Result<Option<Message>> {
-        let dispatch = match self.admit_tool_call(state, ctx, status, &mut call).await? {
+        let dispatch = match self
+            .admit_tool_call(state, ctx, status, &mut call, promoted_names)
+            .await?
+        {
             ResolvedToolCall::Tool { dispatch, .. } => dispatch,
             ResolvedToolCall::Answered(result) => {
                 return self
@@ -1520,6 +1558,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// tool-wrap middleware is registered (see the module docs); execution
     /// therefore drives each tool directly — exactly what the empty wrap
     /// onion would have done — via a future that borrows no `RunContext`.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tools_concurrently(
         &self,
         state: &State,
@@ -1528,6 +1567,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
         tool_calls: Vec<ToolCall>,
+        promoted_names: &mut std::collections::BTreeSet<String>,
     ) -> Result<DeferredToolRequests> {
         let mut deferred = DeferredToolRequests::default();
         // Phase 1 — admission, serial, in call order. Nothing is announced and
@@ -1538,7 +1578,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // concurrent path now agrees with it by executing none of them.
         let mut admitted: Vec<AdmittedCall<State, Ctx>> = Vec::with_capacity(tool_calls.len());
         for mut call in tool_calls {
-            match self.admit_tool_call(state, ctx, status, &mut call).await? {
+            match self
+                .admit_tool_call(state, ctx, status, &mut call, promoted_names)
+                .await?
+            {
                 ResolvedToolCall::Tool { dispatch, tool } => admitted.push(AdmittedCall::Execute {
                     dispatch,
                     tool,

@@ -8,13 +8,14 @@ use tinytools::{Bm25Ranker, RankCandidate, RankContext, RankError, ToolRanker};
 
 /// How the agent loop exposes [`tinytools::ToolExposure::Deferred`] tools.
 ///
-/// Deferred tools are never part of a request's `tools` array. When a run has
-/// at least one, the loop appends two small bridge tools instead —
+/// Deferred tools stay out of the initial request's `tools` array. When a run has
+/// at least one, the loop appends two small bridge tools —
 /// `tool_search` (find a deferred tool by describing what you need) and
-/// `tool_call` (invoke one by name) — and answers both itself. The `tools`
-/// array therefore stays byte-identical for the whole run, which is what a
-/// provider prompt cache keys on; revealing a schema costs one tool result,
-/// not a cache miss on every later turn.
+/// `tool_call` (invoke one by name) — and answers both itself. A successful
+/// search promotes its matches into subsequent requests as typed declarations,
+/// recorded in the transcript for resume. This changes the provider cache
+/// prefix once per newly discovered tool; requests without new discoveries
+/// retain a stable tool list.
 #[derive(Clone)]
 pub struct ToolDiscoveryPolicy {
     /// Whether the bridge tools are offered at all.
