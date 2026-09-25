@@ -212,12 +212,17 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         "Fetch the latest price for a ticker symbol.",
         ToolExposure::Deferred,
     );
+    let unrelated = ExposedTool::new(
+        "weather_forecast",
+        "Report the weather for a city.",
+        ToolExposure::Deferred,
+    );
     let hidden = ExposedTool::new("internal_step", "Host-only step.", ToolExposure::Hidden);
     let model = RecordingModel::new(vec![
         tool_call(
             "c1",
             TOOL_SEARCH_NAME,
-            json!({"query": "price of a ticker"}),
+            json!({"query": "price of a ticker", "limit": 1}),
         ),
         tool_call(
             "c2",
@@ -237,6 +242,7 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         .set_default_model("mock")
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
         .register_tool(deferred.clone())
+        .register_tool(unrelated.clone())
         .register_tool(hidden.clone())
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -284,6 +290,7 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         "string"
     );
     assert_eq!(stock["parameters"]["required"], json!(["symbol"]));
+    assert!(!seen[1].contains("\"name\":\"weather_forecast\""));
     assert!(!seen[0].contains("Fetch the latest price for a ticker symbol."));
     // The manifest names the deferred tool without its schema.
     assert!(seen[0].contains("- stock_quote: Fetch the latest price for a ticker symbol"));
@@ -298,6 +305,7 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         .set_default_model("mock")
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
         .register_tool(deferred.clone());
+    resumed_harness.register_tool(unrelated);
     let mut resumed_messages = run.messages.clone();
     resumed_messages.push(Message::user("quote another stock"));
     resumed_harness
@@ -345,7 +353,7 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         // `direct` counts only the `read_file` Direct-exposure tool: the two
         // intrinsic bridge schemas are implied by `deferred: 1`, not
         // double-counted into `direct` (see `ToolsAdvertised`'s doc comment).
-        AgentEvent::ToolsAdvertised { direct: 1, deferred: 1, schema_bytes } if *schema_bytes > 0
+        AgentEvent::ToolsAdvertised { direct: 1, deferred: 2, schema_bytes } if *schema_bytes > 0
     )));
     assert!(events.iter().any(|event| matches!(
         event,

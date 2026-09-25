@@ -200,7 +200,7 @@ Schema bytes on the wire went from 24,725 (41 tools) to 3,791 (3 tools + a
 `tool_search`, or straight off the manifest via `tool_call` (Haiku read the
 name in the description and skipped the search). A 2026-09-25 live run of
 `openai/gpt-4.1-mini` after typed promotion used 3,814 → 904 first-call
-tokens and 7,692 → 3,594 total tokens. The separate live promotion case
+tokens and 7,692 → 3,592 total tokens. The separate live promotion case
 searched, received a typed `stock_quote` declaration, and invoked it with
 an integer `options.limit` in three model calls.
 
