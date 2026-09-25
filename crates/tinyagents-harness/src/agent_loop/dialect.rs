@@ -129,6 +129,7 @@ impl RunDialect {
         let tools = std::mem::take(&mut request.tools);
         let messages = prompt_tools::coalesce_tool_results(&request.messages);
         let messages = prompt_tools::ensure_resolvable_user_turn(&messages);
+        let messages = prompt_tools::anchor_user_request_after_tool_result(&messages);
         let had_leading_system = matches!(messages.first(), Some(Message::System(_)));
         if host_renders_catalogue {
             let mut block = String::new();
