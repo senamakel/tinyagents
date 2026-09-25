@@ -1083,6 +1083,70 @@ async fn empty_response_retry_does_not_replace_an_explicit_continuation() {
 }
 
 #[tokio::test]
+async fn empty_response_retry_does_not_replay_a_cached_blank() {
+    use crate::cache::InMemoryResponseCache;
+
+    let model = Arc::new(crate::testkit::ScriptedModel::new(vec![
+        reasoning_only_stop_response(),
+        text_response("recovered", 4, 3),
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
+    harness.with_policy(RunPolicy {
+        empty_response_retries: 1,
+        ..RunPolicy::default()
+    });
+
+    let input = vec![Message::user("same request")];
+    let first = harness
+        .invoke_default(&(), input.clone())
+        .await
+        .expect("the retry must reach the provider, not the cached blank");
+    assert_eq!(first.text(), Some("recovered".to_string()));
+    assert_eq!(model.requests().len(), 2);
+
+    let second = harness
+        .invoke_default(&(), input)
+        .await
+        .expect("the usable answer should be cached");
+    assert_eq!(second.text(), Some("recovered".to_string()));
+    assert_eq!(model.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn empty_response_retry_ignores_a_blank_cached_before_opt_in() {
+    use crate::cache::InMemoryResponseCache;
+
+    let model = Arc::new(crate::testkit::ScriptedModel::new(vec![
+        reasoning_only_stop_response(),
+        text_response("recovered", 4, 3),
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
+    let input = vec![Message::user("same request")];
+
+    let first = harness
+        .invoke_default(&(), input.clone())
+        .await
+        .expect("default policy still accepts a blank final");
+    assert_eq!(first.text(), Some(String::new()));
+    assert_eq!(model.requests().len(), 1);
+
+    harness.with_policy(RunPolicy {
+        empty_response_retries: 1,
+        ..RunPolicy::default()
+    });
+    let second = harness
+        .invoke_default(&(), input)
+        .await
+        .expect("an old blank cache entry must not block recovery");
+    assert_eq!(second.text(), Some("recovered".to_string()));
+    assert_eq!(model.requests().len(), 2);
+}
+
+#[tokio::test]
 async fn truncated_empty_response_retries_then_succeeds() {
     // A local reasoning model burns its whole token budget on the hidden
     // reasoning channel and returns finish_reason="length" with empty content.
