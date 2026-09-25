@@ -3,6 +3,8 @@
 use super::*;
 use crate::events::AgentEvent;
 use crate::ids::{CallId, EventId, RunId};
+use tinyinference_llm::message::MessageDelta;
+use tinyinference_llm::usage::ChargedAmount;
 
 fn obs(offset: u64, event: AgentEvent) -> AgentObservation {
     AgentObservation {
@@ -139,6 +141,75 @@ fn generation_carries_model_from_model_started() {
     // so Langfuse can map pricing instead of recording cost $0.
     assert_eq!(generation["body"]["model"], "managed.chat-v1");
     assert_eq!(generation["body"]["metadata"]["call_id"], "model-call");
+}
+
+#[test]
+fn generation_reports_native_usage_cost_and_first_token_time() {
+    let client = LangfuseClient::proxy("https://backend.test", "t").unwrap();
+    let call_id = CallId::new("model-call");
+    let batch = client
+        .build_ingestion_batch(
+            LangfuseTraceConfig::default(),
+            &[
+                obs(
+                    0,
+                    AgentEvent::ModelStarted {
+                        call_id: call_id.clone(),
+                        model: "chat-v1".into(),
+                    },
+                ),
+                obs(
+                    25,
+                    AgentEvent::ModelDelta {
+                        run_id: RunId::new("run-1"),
+                        call_id: call_id.clone(),
+                        delta: MessageDelta::text("first token"),
+                    },
+                ),
+                obs(
+                    30,
+                    AgentEvent::ModelDelta {
+                        run_id: RunId::new("run-1"),
+                        call_id: call_id.clone(),
+                        delta: MessageDelta::text("more"),
+                    },
+                ),
+                obs(
+                    100,
+                    AgentEvent::ModelCompleted {
+                        call_id,
+                        started_at_ms: Some(1_704_067_200_000),
+                        usage: Some(Usage {
+                            input_tokens: 100,
+                            output_tokens: 20,
+                            total_tokens: 120,
+                            cache_read_tokens: 40,
+                            reasoning_tokens: 5,
+                            charged_amount: Some(ChargedAmount::usd_micros(125)),
+                            ..Default::default()
+                        }),
+                        input: None,
+                        output: None,
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+    let generation = batch["batch"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["type"] == "generation-create")
+        .unwrap();
+    let body = &generation["body"];
+    assert_eq!(body["model"], "chat-v1");
+    assert_eq!(body["completionStartTime"], iso_ms(1_704_067_200_025));
+    assert_eq!(body["startTime"], iso_ms(1_704_067_200_000));
+    assert_eq!(body["endTime"], iso_ms(1_704_067_200_100));
+    assert_eq!(body["usageDetails"]["input"], 60);
+    assert_eq!(body["usageDetails"]["cache_read_input_tokens"], 40);
+    assert_eq!(body["usageDetails"]["reasoning_output_tokens"], 5);
+    assert_eq!(body["costDetails"]["total"], 0.000125);
 }
 
 #[test]

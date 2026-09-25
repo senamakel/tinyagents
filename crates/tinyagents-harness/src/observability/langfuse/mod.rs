@@ -119,6 +119,7 @@ impl LangfuseClient {
         // `body["model"]`; without it Langfuse can't map pricing and every
         // generation's cost is $0.
         let call_models = collect_call_models(observations);
+        let first_deltas = collect_first_deltas(observations);
 
         let mut batch = Vec::with_capacity(observations.len() + 2);
         batch.push(json!({
@@ -156,7 +157,12 @@ impl LangfuseClient {
             if is_run_lifecycle(&obs.event) {
                 continue;
             }
-            batch.push(observation_event(&trace_id, obs, &call_models));
+            batch.push(observation_event(
+                &trace_id,
+                obs,
+                &call_models,
+                &first_deltas,
+            ));
         }
 
         Ok(json!({ "batch": batch }))
@@ -465,10 +471,25 @@ fn collect_call_models(observations: &[AgentObservation]) -> BTreeMap<&str, &str
     models
 }
 
+/// First streamed output for each model call. This is the observable TTFT;
+/// non-streaming calls have no first-delta timestamp to report.
+fn collect_first_deltas(observations: &[AgentObservation]) -> BTreeMap<&str, u64> {
+    let mut first = BTreeMap::new();
+    for obs in observations {
+        if let AgentEvent::ModelDelta { call_id, delta, .. } = &obs.event
+            && (!delta.text.is_empty() || !delta.reasoning.is_empty() || delta.tool_call.is_some())
+        {
+            first.entry(call_id.as_str()).or_insert(obs.ts_ms);
+        }
+    }
+    first
+}
+
 fn observation_event(
     trace_id: &str,
     obs: &AgentObservation,
     call_models: &BTreeMap<&str, &str>,
+    first_deltas: &BTreeMap<&str, u64>,
 ) -> Value {
     let timestamp = iso_ms(obs.ts_ms);
     // Every per-call observation nests under its run's span so the trace renders
@@ -527,7 +548,10 @@ fn observation_event(
                     // existed.
                     "startTime": started_at_ms.map(iso_ms).unwrap_or_else(|| timestamp.clone()),
                     "endTime": timestamp,
+                    "completionStartTime": first_deltas.get(call_id.as_str()).map(|ms| iso_ms(*ms)),
                     "usage": usage.map(langfuse_usage),
+                    "usageDetails": usage.map(langfuse_usage_details),
+                    "costDetails": usage.and_then(langfuse_cost_details),
                     "input": input,
                     "output": output,
                     "metadata": metadata,
@@ -644,6 +668,23 @@ fn langfuse_usage(usage: Usage) -> Value {
         "total": usage.total_tokens,
         "unit": "TOKENS",
     })
+}
+
+fn langfuse_usage_details(usage: Usage) -> Value {
+    json!({
+        "input": usage.input_tokens.saturating_sub(usage.cache_read_tokens),
+        "output": usage.output_tokens,
+        "total": usage.total_tokens,
+        "cache_read_input_tokens": usage.cache_read_tokens,
+        "cache_creation_input_tokens": usage.cache_creation_tokens,
+        "reasoning_output_tokens": usage.reasoning_tokens,
+    })
+}
+
+fn langfuse_cost_details(usage: Usage) -> Option<Value> {
+    usage
+        .charged_amount
+        .map(|amount| json!({ "total": amount.micros as f64 / 1_000_000.0 }))
 }
 
 /// Drops every `null`-valued key from a top-level JSON object, in place at
