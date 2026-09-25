@@ -3767,3 +3767,173 @@ async fn resume_adopts_the_stored_prefix_and_its_committed_turns() {
     ));
     assert!(driver.requests.lock().unwrap().is_empty());
 }
+
+/// A host that builds its locator the way `TranscriptLocator`'s own guidance
+/// says to: lazily from the *current* workspace dir, "never frozen at build
+/// time". That necessarily yields a fresh `Arc` per `before_resume`.
+struct FreshLocatorEachTurn {
+    workspace_dir: PathBuf,
+    session: SessionRef,
+    built: Mutex<usize>,
+}
+
+#[async_trait]
+impl SessionHooks for FreshLocatorEachTurn {
+    async fn before_resume(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        *self.built.lock().unwrap() += 1;
+        Ok(ResumePreparation {
+            transcript: Some(TranscriptTarget::for_session(
+                Arc::new(FileTranscriptLocator::new(self.workspace_dir.clone())),
+                self.session.clone(),
+                meta(),
+            )),
+        })
+    }
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation::default())
+    }
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
+
+/// `same_binding` must judge a locator by the destination it addresses, not by
+/// the allocation it arrived in.
+///
+/// `TranscriptLocator`'s documentation instructs a host to rebuild the locator
+/// from its current `workspace_dir` and never freeze it, so `before_resume`
+/// legitimately hands back a different `Arc` over the same directory every
+/// turn. Comparing those by `Arc::ptr_eq` made the binding guard fire on the
+/// second turn of every such host — "cannot change a transcript target after
+/// it is bound or committed" for a target that had not moved. A host could
+/// only avoid it by memoizing, i.e. by disobeying the trait's own guidance.
+///
+/// The turn count matters: turn one binds, so the guard is only consulted from
+/// turn two onwards. A single-turn test passes either way.
+#[tokio::test]
+async fn a_rebuilt_locator_over_the_same_directory_is_the_same_binding() {
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let hook = Arc::new(FreshLocatorEachTurn {
+        workspace_dir: directory.path().to_path_buf(),
+        session: session_ref.clone(),
+        built: Mutex::new(0),
+    });
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![
+        Ok(session_outcome(
+            vec![Message::user("one"), Message::assistant("first")],
+            "first",
+        )),
+        Ok(session_outcome(
+            vec![
+                Message::user("one"),
+                Message::assistant("first"),
+                Message::user("two"),
+                Message::assistant("second"),
+            ],
+            "second",
+        )),
+    ])))
+    .codec(Arc::new(Codec::default()))
+    .hooks(hook.clone())
+    .build()
+    .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("one")),
+            session_turn_options(ResumeMode::Session, "thread-1"),
+        )
+        .await
+        .expect("the first turn binds the target");
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("two")),
+            session_turn_options(ResumeMode::Session, "thread-1"),
+        )
+        .await
+        .expect(
+            "a locator rebuilt over the same directory addresses the same \
+             destination, so the second turn must not be rejected as a rebind",
+        );
+
+    assert_eq!(
+        *hook.built.lock().unwrap(),
+        2,
+        "the host must have been asked for a target on both turns, or this \
+         test is not exercising the comparison at all"
+    );
+}
+
+/// The converse: two genuinely different destinations must still be rejected,
+/// so the loosened comparison did not turn the redirection guard off.
+#[tokio::test]
+async fn a_locator_over_a_different_directory_is_not_the_same_binding() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+
+    let bound = TranscriptTarget::for_session(
+        Arc::new(FileTranscriptLocator::new(first.path())),
+        session_ref.clone(),
+        meta(),
+    );
+    let same = TranscriptTarget::for_session(
+        Arc::new(FileTranscriptLocator::new(first.path())),
+        session_ref.clone(),
+        meta(),
+    );
+    let elsewhere = TranscriptTarget::for_session(
+        Arc::new(FileTranscriptLocator::new(second.path())),
+        session_ref,
+        meta(),
+    );
+
+    assert!(
+        bound.same_binding(&same),
+        "same directory, different allocation: the same durable destination"
+    );
+    assert!(
+        !bound.same_binding(&elsewhere),
+        "a different directory is a real redirection and must stay rejected"
+    );
+}
+
+/// A locator that cannot name its destination keeps the old strict behaviour,
+/// so no third-party implementor silently gets looser than it is today.
+#[tokio::test]
+async fn a_locator_that_names_no_destination_matches_only_itself() {
+    let (anonymous, _) = locator(None);
+    let (other, _) = locator(None);
+    assert_eq!(anonymous.destination_key(), None);
+
+    let session_ref = SessionRef::scoped("thread-1", "agent-id");
+    let bound = TranscriptTarget::for_session(anonymous.clone(), session_ref.clone(), meta());
+    let itself = TranscriptTarget::for_session(anonymous, session_ref.clone(), meta());
+    let another = TranscriptTarget::for_session(other, session_ref, meta());
+
+    assert!(bound.same_binding(&itself), "one allocation matches itself");
+    assert!(
+        !bound.same_binding(&another),
+        "without a destination key there is nothing to compare but the pointer"
+    );
+}
