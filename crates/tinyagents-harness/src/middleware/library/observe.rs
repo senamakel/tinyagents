@@ -99,7 +99,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         request: &mut ModelRequest,
     ) -> Result<()> {
         if let Some(text) = (self.prompt)(state, &ctx.config) {
-            request.messages.insert(0, Message::system(text));
+            crate::cache::prepend_system_message(request, text);
         }
         Ok(())
     }

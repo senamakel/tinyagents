@@ -289,12 +289,19 @@ impl PromptBuilder {
     /// Appends a cacheable **system** segment.
     ///
     /// The segment is labelled with `id` and receives
-    /// [`SegmentRole::System`].
+    /// [`SegmentRole::System`]. Canonical `system` / `system.N` ids mean exactly
+    /// one message each. A grouped segment requested under one of those ids
+    /// is labelled as custom so cache guards use the conservative full-request
+    /// path rather than mistaking its segment count for a message boundary.
     pub fn push_system(&mut self, id: impl Into<String>, messages: Vec<Message>) -> &mut Self {
+        let mut id = id.into();
+        if messages.len() != 1 && is_system_segment_id(&id) {
+            id.push_str(":grouped");
+        }
         self.segments.push(BuiltSegment {
             messages,
             meta: PromptSegment {
-                id: id.into(),
+                id,
                 role: SegmentRole::System,
                 cacheable: true,
             },

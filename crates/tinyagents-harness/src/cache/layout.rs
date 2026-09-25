@@ -9,7 +9,167 @@ use serde_json::Value;
 use super::hash::fnv1a_hex;
 use super::types::{CacheLayoutEvent, PromptCacheLayout};
 use tinyinference_llm::cache::CachePolicy;
-use tinyinference_llm::model::ModelRequest;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelRequest, PromptSegment, SegmentRole};
+
+/// Explicitly records that a durable run froze zero messages before a later
+/// middleware can insert a leading System summary.
+pub(crate) const VOLATILE_SYSTEM_HISTORY_SEGMENT_ID: &str = "volatile-system-history";
+
+/// A zero-prefix session may acquire tools in a later `before_model` hook.
+/// Promote only the new tool declarations into the stable prefix; a System
+/// summary already in history remains volatile.
+pub(crate) fn promote_tools_after_zero_prefix_marker(request: &mut ModelRequest) {
+    let marker = PromptSegment {
+        id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+        role: SegmentRole::Volatile,
+        cacheable: false,
+    };
+    if request.cache_segments == [marker.clone()] {
+        if request.tools.is_empty() {
+            return;
+        }
+        request.cache_segments = vec![PromptSegment {
+            id: "tools".into(),
+            role: SegmentRole::Tools,
+            cacheable: true,
+        }];
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_tools_segment("tools", request.tools.clone());
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+    } else if request.cache_segments.last() == Some(&marker) && request.prompt_fingerprint.is_some()
+    {
+        let system_count = request.cache_segments.len() - 1;
+        let canonical_system = system_count > 0
+            && (0..system_count).all(|index| {
+                request.cache_segments[index]
+                    == PromptSegment {
+                        id: crate::prompt::system_segment_id(index),
+                        role: SegmentRole::System,
+                        cacheable: true,
+                    }
+            });
+        if canonical_system {
+            request.cache_segments.pop();
+            if !request.tools.is_empty() {
+                request.cache_segments.push(PromptSegment {
+                    id: "tools".into(),
+                    role: SegmentRole::Tools,
+                    cacheable: true,
+                });
+            }
+        }
+    }
+}
+
+/// Number of messages named by an explicit canonical system-prefix layout.
+/// Extra leading System messages may be volatile summaries; their role alone
+/// cannot add them to the declared cacheable prefix.
+pub(crate) fn declared_system_prefix_len(request: &ModelRequest) -> Option<usize> {
+    request.prompt_fingerprint.as_ref()?;
+    if request.cache_segments.is_empty() {
+        return None;
+    }
+    let count = request
+        .cache_segments
+        .iter()
+        .take_while(|segment| segment.role == SegmentRole::System)
+        .count();
+    let leading_system = request
+        .messages
+        .iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    if count > leading_system {
+        return None;
+    }
+    let canonical_head = (0..count).all(|index| {
+        request.cache_segments[index]
+            == PromptSegment {
+                id: crate::prompt::system_segment_id(index),
+                role: SegmentRole::System,
+                cacheable: true,
+            }
+    });
+    let canonical_tools = PromptSegment {
+        id: "tools".into(),
+        role: SegmentRole::Tools,
+        cacheable: true,
+    };
+    let tail = &request.cache_segments[count..];
+    if count == 0 && tail != [canonical_tools.clone()] {
+        return None;
+    }
+    let pending_zero_marker = tail
+        == [PromptSegment {
+            id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+            role: SegmentRole::Volatile,
+            cacheable: false,
+        }];
+    let canonical_tail = if pending_zero_marker {
+        true
+    } else if request.tools.is_empty() {
+        tail.is_empty() || tail == [canonical_tools]
+    } else {
+        tail == [canonical_tools]
+    };
+    (canonical_head && canonical_tail).then_some(count)
+}
+
+/// Prepend a new stable instruction without dropping any previously declared
+/// system tier from the provider cache key. Dynamic prompts and prompted
+/// structured-output schemas both use this path.
+pub(crate) fn prepend_system_message(request: &mut ModelRequest, text: String) {
+    let zero_prefix_marker = request.cache_segments
+        == [PromptSegment {
+            id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+            role: SegmentRole::Volatile,
+            cacheable: false,
+        }];
+    let declared_system_len = declared_system_prefix_len(request);
+    request.messages.insert(0, Message::system(text));
+    if zero_prefix_marker {
+        // This new instruction is the first stable tier; the old marker named
+        // only volatile history. Replace it with a canonical declaration and
+        // give the guard a content-derived annotation before dispatch.
+        request.cache_segments = vec![
+            PromptSegment {
+                id: crate::prompt::system_segment_id(0),
+                role: SegmentRole::System,
+                cacheable: true,
+            },
+            PromptSegment {
+                id: VOLATILE_SYSTEM_HISTORY_SEGMENT_ID.into(),
+                role: SegmentRole::Volatile,
+                cacheable: false,
+            },
+        ];
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_system_messages(&request.messages[..1]);
+        if !request.tools.is_empty() {
+            prompt.push_tools_segment("tools", request.tools.clone());
+        }
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+        return;
+    }
+    if let Some(count) = declared_system_len {
+        let mut suffix = request.cache_segments.split_off(count);
+        request.cache_segments = (0..=count)
+            .map(|index| PromptSegment {
+                id: crate::prompt::system_segment_id(index),
+                role: SegmentRole::System,
+                cacheable: true,
+            })
+            .collect();
+        request.cache_segments.append(&mut suffix);
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_system_messages(&request.messages[..count + 1]);
+        if !request.tools.is_empty() {
+            prompt.push_tools_segment("tools", request.tools.clone());
+        }
+        request.prompt_fingerprint = prompt.build(Vec::new()).prompt_fingerprint;
+    }
+}
 
 impl PromptCacheLayout {
     /// Builds a [`PromptCacheLayout`] from `request`.
@@ -35,12 +195,17 @@ impl PromptCacheLayout {
     /// [`super::cache_key`]. Call it once per middleware pass, not per message.
     pub fn from_request(request: &ModelRequest) -> Self {
         let prefix_ids: Vec<String> = request.cacheable_prefix_ids();
+        let declared_system_count = declared_system_prefix_len(request);
 
-        // Segment identity *and* role/cacheability, so a role flip or a
-        // cacheable-flag flip on an otherwise identically named segment is not
-        // mistaken for "unchanged".
+        // Canonical layouts may vary noncacheable metadata without changing
+        // their stable prefix. Custom layouts dispatch with a whole-request
+        // digest, so retain every segment there, including volatile metadata.
         let mut material = String::new();
-        for segment in &request.cache_segments {
+        for segment in request
+            .cache_segments
+            .iter()
+            .filter(|segment| declared_system_count.is_none() || segment.cacheable)
+        {
             material.push_str(&segment.id);
             material.push('\u{1}');
             material.push_str(
@@ -54,8 +219,17 @@ impl PromptCacheLayout {
             material.push(if segment.cacheable { '1' } else { '0' });
             material.push('\u{2}');
         }
-        // Content of the stable prefix, when the builder computed it.
+        // The builder or caller must identify cacheable message content.
+        // Message roles cannot supply a fallback boundary: a compaction
+        // summary is also a System message immediately after the stable tiers.
         material.push_str(request.prompt_fingerprint.as_deref().unwrap_or(""));
+        if let Some(count) = declared_system_count {
+            // The annotation may predate a middleware rewrite. Hash the actual
+            // declared messages so a changed leading instruction is detected
+            // without treating a later System summary as stable content.
+            material
+                .push_str(&serde_json::to_string(&request.messages[..count]).unwrap_or_default());
+        }
         material.push('\u{2}');
         // Tool declarations sit inside the stable prefix on every provider that
         // caches prompts, so a schema edit invalidates it.
@@ -71,6 +245,7 @@ impl PromptCacheLayout {
                     fnv1a_hex(serde_json::to_vec(message).unwrap_or_default().as_slice())
                 })
                 .collect(),
+            canonical_message_boundary: declared_system_count.is_some(),
         }
     }
 
@@ -88,6 +263,26 @@ impl PromptCacheLayout {
         &self.fingerprint
     }
 
+    /// Whether the declared cacheable segments still have the same identity
+    /// and content. History compaction may invalidate the cached tail without
+    /// changing this reusable leading prefix. With no mapped message boundary,
+    /// compare the whole request history conservatively instead.
+    pub fn has_same_stable_prefix_as(&self, other: &PromptCacheLayout) -> bool {
+        self.prefix_ids == other.prefix_ids
+            && self.fingerprint == other.fingerprint
+            && (self.canonical_message_boundary && other.canonical_message_boundary
+                || self.has_compatible_message_history(other))
+    }
+
+    fn has_compatible_message_history(&self, other: &PromptCacheLayout) -> bool {
+        let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {
+            (&self.message_digests, &other.message_digests)
+        } else {
+            (&other.message_digests, &self.message_digests)
+        };
+        longer.starts_with(shorter.as_slice())
+    }
+
     /// Returns `true` when the provider's KV-cache prefix survives the move
     /// from `self` to `other`.
     ///
@@ -102,21 +297,16 @@ impl PromptCacheLayout {
     /// middleware rewrote a stable segment's text, which is the precise failure
     /// this type exists to catch.
     pub fn is_prefix_stable_against(&self, other: &PromptCacheLayout) -> bool {
-        if self.prefix_ids != other.prefix_ids || self.fingerprint != other.fingerprint {
+        if !self.has_same_stable_prefix_as(other) {
             return false;
         }
-        let (shorter, longer) = if self.message_digests.len() <= other.message_digests.len() {
-            (&self.message_digests, &other.message_digests)
-        } else {
-            (&other.message_digests, &self.message_digests)
-        };
-        longer.starts_with(shorter.as_slice())
+        self.has_compatible_message_history(other)
     }
 
     /// Returns `true` when the segment identities match but the material they
     /// carry does not — the silent invalidation an id-only comparison missed.
     pub fn is_content_only_change(&self, other: &PromptCacheLayout) -> bool {
-        self.prefix_ids == other.prefix_ids && !self.is_prefix_stable_against(other)
+        self.prefix_ids == other.prefix_ids && !self.has_same_stable_prefix_as(other)
     }
 }
 
@@ -129,7 +319,7 @@ impl CacheLayoutEvent {
     /// [`CachePolicy`].
     pub fn new(before: &PromptCacheLayout, after: &PromptCacheLayout) -> Self {
         Self {
-            changed_prefix: !before.is_prefix_stable_against(after),
+            changed_prefix: !before.has_same_stable_prefix_as(after),
             volatile_only: after.prefix_ids().is_empty(),
             content_only_change: before.is_content_only_change(after),
             violates_policy: false,

@@ -22,6 +22,7 @@ fn meta() -> TranscriptMeta {
         created: "2026-01-01T00:00:00Z".into(),
         updated: "2026-01-01T00:00:00Z".into(),
         turn_count: 1,
+        prefix_message_count: None,
         input_tokens: 1,
         output_tokens: 2,
         cached_input_tokens: 0,
@@ -29,6 +30,26 @@ fn meta() -> TranscriptMeta {
         thread_id: None,
         task_id: None,
     }
+}
+
+#[test]
+fn frozen_prefix_count_round_trips_in_meta() {
+    let dir = tempdir().unwrap();
+    let path = resolve_keyed_transcript_path(dir.path(), "prefix-count").unwrap();
+    let mut seed = meta();
+    seed.prefix_message_count = Some(2);
+    write_transcript(
+        &path,
+        &[TranscriptMessage::new("system", "stable")],
+        &seed,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        read_transcript(&path).unwrap().meta.prefix_message_count,
+        Some(2)
+    );
 }
 
 #[test]

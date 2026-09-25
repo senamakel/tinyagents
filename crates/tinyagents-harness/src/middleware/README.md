@@ -113,8 +113,12 @@ built-in catalog:
   prompt-cache prefix.
 - `PromptCacheGuardMiddleware` — computes the request's
   `cache::PromptCacheLayout` in `before_model` and records a
-  `CacheLayoutEvent` whenever the cacheable prefix changes from the previous
-  call, making KV-cache/prompt-cache regressions observable.
+  `CacheLayoutEvent` whenever the cacheable segment ids or content change from
+  the previous call. For canonical declared layouts, a trimmed or compacted
+  history can lose its cached tail while retaining the stable prefix, so it
+  does not raise this event. Layouts without a known message boundary check
+  the full message stream for byte-prefix preservation; pure tail appends
+  remain valid.
 - `UsageAccountingMiddleware` — folds each `response.usage` into a running
   `UsageTotals` in `after_model`, readable via `.totals()`.
 

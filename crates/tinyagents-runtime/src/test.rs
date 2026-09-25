@@ -14,7 +14,8 @@ use tinyagents_harness::{
 use tinyagents_session::transcript::{
     DisplayRecord, FileTranscriptLocator, SessionRef, SessionTranscript, TranscriptHistory,
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
-    TurnUsage, read_transcript, read_transcript_display, session_stem,
+    TurnUsage, read_transcript, read_transcript_display, resolve_keyed_transcript_path,
+    session_stem, write_transcript,
 };
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
@@ -99,6 +100,7 @@ fn meta() -> TranscriptMeta {
         created: "then".into(),
         updated: "then".into(),
         turn_count: 0,
+        prefix_message_count: None,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -2615,6 +2617,491 @@ async fn a_restart_after_a_compaction_resumes_the_head_generation() {
     );
 }
 
+#[tokio::test]
+async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
+    struct RoleCodec;
+    impl TranscriptCodec for RoleCodec {
+        fn decode_history(
+            &self,
+            transcript: &SessionTranscript,
+        ) -> Result<Vec<Message>, RuntimeError> {
+            Ok(transcript
+                .messages
+                .iter()
+                .map(|row| match row.role.as_str() {
+                    "system" => Message::system(&row.content),
+                    "assistant" => Message::assistant(&row.content),
+                    _ => Message::user(&row.content),
+                })
+                .collect())
+        }
+
+        fn reconcile(
+            &self,
+            prior: &[TranscriptMessage],
+            previous: &[Message],
+            next: &[Message],
+            options: &TranscriptTurnOptions,
+        ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
+            Codec::default().reconcile(prior, previous, next, options)
+        }
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let session_ref = SessionRef::scoped("thread-prefix", "agent-id");
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let mut thread_meta = meta();
+    thread_meta.thread_id = Some("thread-prefix".into());
+    let root = locator
+        .open_session(&session_ref, thread_meta.clone())
+        .unwrap();
+    for (role, content) in [
+        ("system", "stable"),
+        ("system", "context"),
+        ("user", "first"),
+    ] {
+        root.append(TranscriptMessage::new(role, content)).unwrap();
+    }
+    let (_, head) = locator
+        .begin_generation(&session_ref, thread_meta.clone())
+        .unwrap();
+    for (role, content) in [
+        ("system", "stable"),
+        ("system", "context"),
+        ("system", "changing history summary"),
+        ("user", "later"),
+    ] {
+        head.append(TranscriptMessage::new(role, content)).unwrap();
+    }
+
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(locator.clone(), session_ref.clone(), thread_meta.clone())
+        .build()
+        .unwrap();
+    let resumed = session
+        .resume(&session_turn_options(ResumeMode::Session, "thread-prefix"))
+        .await
+        .unwrap();
+
+    assert!(resumed.loaded);
+    assert_eq!(session.prefix_snapshot().messages().len(), 2);
+    assert_eq!(
+        session
+            .prefix_snapshot()
+            .messages()
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["stable", "context"]
+    );
+    assert_eq!(resumed.history[2].text(), "changing history summary");
+
+    let mut by_thread = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(locator.clone(), session_ref.clone(), thread_meta.clone())
+        .build()
+        .unwrap();
+    let resumed = by_thread
+        .resume(&session_turn_options(ResumeMode::Thread, "thread-prefix"))
+        .await
+        .unwrap();
+    assert!(resumed.loaded);
+    assert_eq!(by_thread.prefix_snapshot().messages().len(), 2);
+    assert_eq!(
+        by_thread
+            .prefix_snapshot()
+            .messages()
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["stable", "context"]
+    );
+    assert_eq!(resumed.history[2].text(), "changing history summary");
+
+    let mut replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(locator.clone(), session_ref.clone(), thread_meta.clone())
+        .build()
+        .unwrap();
+    let resumed = replacement
+        .resume(&session_turn_options(ResumeMode::Session, "thread-prefix"))
+        .await
+        .unwrap();
+    assert_eq!(replacement.prefix_snapshot().messages().len(), 1);
+    assert_eq!(
+        resumed
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["replacement", "changing history summary", "later"]
+    );
+    let resumed_again = replacement
+        .resume(&session_turn_options(ResumeMode::Session, "thread-prefix"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed_again
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["replacement", "changing history summary", "later"]
+    );
+
+    let altered_dir = tempfile::tempdir().unwrap();
+    let altered_ref = SessionRef::scoped("altered-prefix", "agent-id");
+    let altered_locator = Arc::new(FileTranscriptLocator::new(altered_dir.path()));
+    let sealed = altered_locator.open_session(&altered_ref, meta()).unwrap();
+    for (role, content) in [
+        ("system", "old stable"),
+        ("system", "old context"),
+        ("user", "first"),
+    ] {
+        sealed
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let (_, altered_head) = altered_locator
+        .begin_generation(&altered_ref, meta())
+        .unwrap();
+    for (role, content) in [
+        ("system", "replacement"),
+        ("system", "changing history summary"),
+        ("user", "later"),
+    ] {
+        altered_head
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let mut no_replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(altered_locator.clone(), altered_ref.clone(), meta())
+        .build()
+        .unwrap();
+    let resumed = no_replacement
+        .resume(&session_turn_options(ResumeMode::Session, "altered-prefix"))
+        .await
+        .unwrap();
+    assert!(no_replacement.prefix_snapshot().messages().is_empty());
+    assert_eq!(resumed.history[0].text(), "replacement");
+    let mut conflicting_replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(altered_locator, altered_ref, meta())
+        .build()
+        .unwrap();
+    assert!(matches!(
+        conflicting_replacement
+            .resume(&session_turn_options(ResumeMode::Session, "altered-prefix"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+
+    // A successor that committed a replacement prefix records its own exact
+    // boundary. A later cold resume must use that generation's count rather
+    // than compare its rows with generation zero's different prompt.
+    let recorded_dir = tempfile::tempdir().unwrap();
+    let recorded_ref = SessionRef::scoped("recorded-prefix", "agent-id");
+    let recorded_locator = Arc::new(FileTranscriptLocator::new(recorded_dir.path()));
+    let sealed = recorded_locator
+        .open_session(&recorded_ref, meta())
+        .unwrap();
+    sealed
+        .append(TranscriptMessage::new("system", "old stable"))
+        .unwrap();
+    sealed
+        .append(TranscriptMessage::new("system", "old context"))
+        .unwrap();
+    let mut successor_meta = meta();
+    successor_meta.prefix_message_count = Some(1);
+    let (_, successor) = recorded_locator
+        .begin_generation(&recorded_ref, successor_meta)
+        .unwrap();
+    for (role, content) in [
+        ("system", "replacement"),
+        ("system", "changing history summary"),
+        ("user", "later"),
+    ] {
+        successor
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let mut recorded = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(recorded_locator, recorded_ref, meta())
+        .build()
+        .unwrap();
+    let resumed = recorded
+        .resume(&session_turn_options(
+            ResumeMode::Session,
+            "recorded-prefix",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded.prefix_snapshot().messages()[0].text(),
+        "replacement"
+    );
+    assert_eq!(recorded.prefix_snapshot().messages().len(), 1);
+    assert_eq!(resumed.history[1].text(), "changing history summary");
+
+    let few_shot_dir = tempfile::tempdir().unwrap();
+    let few_shot_ref = SessionRef::scoped("few-shot-prefix", "agent-id");
+    let few_shot_locator = Arc::new(FileTranscriptLocator::new(few_shot_dir.path()));
+    let mut few_shot_meta = meta();
+    few_shot_meta.prefix_message_count = Some(2);
+    let few_shot_history = few_shot_locator
+        .open_session(&few_shot_ref, few_shot_meta.clone())
+        .unwrap();
+    for (role, content) in [
+        ("system", "policy"),
+        ("user", "stable example"),
+        ("user", "latest turn"),
+    ] {
+        few_shot_history
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let mut few_shot = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(few_shot_locator, few_shot_ref, few_shot_meta)
+        .build()
+        .unwrap();
+    let resumed = few_shot
+        .resume(&session_turn_options(
+            ResumeMode::Session,
+            "few-shot-prefix",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(few_shot.prefix_snapshot().messages().len(), 2);
+    assert_eq!(
+        few_shot.prefix_snapshot().messages()[1].text(),
+        "stable example"
+    );
+    assert_eq!(resumed.history[2].text(), "latest turn");
+
+    // A Thread scan can read a different file from the session-bound write
+    // destination. Rebinding to that destination must replace the cached
+    // stored-boundary count as well as its raw rows.
+    let rebound_dir = tempfile::tempdir().unwrap();
+    let destination_ref = SessionRef::scoped("destination-prefix", "agent-id");
+    let rebound_locator = Arc::new(FileTranscriptLocator::new(rebound_dir.path()));
+    let mut destination_meta = meta();
+    destination_meta.thread_id = Some("shared-prefix-thread".into());
+    destination_meta.created = "2026-01-01T00:00:00Z".into();
+    destination_meta.prefix_message_count = Some(2);
+    let destination = rebound_locator
+        .open_session(&destination_ref, destination_meta)
+        .unwrap();
+    for (role, content) in [
+        ("system", "old stable"),
+        ("system", "old context"),
+        ("user", "destination turn"),
+    ] {
+        destination
+            .append(TranscriptMessage::new(role, content))
+            .unwrap();
+    }
+    let scanned_path = resolve_keyed_transcript_path(rebound_dir.path(), "2000_other").unwrap();
+    let mut scanned_meta = meta();
+    scanned_meta.thread_id = Some("shared-prefix-thread".into());
+    scanned_meta.created = "2026-02-01T00:00:00Z".into();
+    scanned_meta.prefix_message_count = Some(1);
+    write_transcript(
+        &scanned_path,
+        &[
+            TranscriptMessage::new("system", "scanned stable"),
+            TranscriptMessage::new("user", "scanned turn"),
+        ],
+        &scanned_meta,
+        None,
+    )
+    .unwrap();
+    let mut rebound = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(rebound_locator, destination_ref, meta())
+        .build()
+        .unwrap();
+    rebound
+        .resume(&session_turn_options(
+            ResumeMode::Thread,
+            "shared-prefix-thread",
+        ))
+        .await
+        .unwrap();
+    let resumed = rebound
+        .resume(&session_turn_options(
+            ResumeMode::Session,
+            "shared-prefix-thread",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resumed
+            .history
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        ["scanned stable", "destination turn"]
+    );
+
+    // If a custom locator can read a compacted head but not its sealed root,
+    // no number of leading System rows can be proven to be frozen instructions.
+    let orphan_head = SessionRef::scoped("orphan", "agent-id").next_generation();
+    let (mock_locator, _) = self::locator(Some(SessionTranscript {
+        meta: meta(),
+        messages: vec![
+            TranscriptMessage::new("system", "stable"),
+            TranscriptMessage::new("system", "changing history summary"),
+            TranscriptMessage::new("user", "later"),
+        ],
+        tools: None,
+    }));
+    mock_locator
+        .known_sessions
+        .lock()
+        .unwrap()
+        .push(orphan_head.clone());
+    let mut missing_root = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(mock_locator.clone(), orphan_head.clone(), meta())
+        .build()
+        .unwrap();
+    let resumed = missing_root
+        .resume(&session_turn_options(ResumeMode::Session, "orphan"))
+        .await
+        .unwrap();
+    assert!(resumed.loaded);
+    assert!(missing_root.prefix_snapshot().messages().is_empty());
+    assert_eq!(resumed.history[0].text(), "stable");
+
+    let mut replacement_without_root = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(mock_locator, orphan_head, meta())
+        .build()
+        .unwrap();
+    assert!(matches!(
+        replacement_without_root
+            .resume(&session_turn_options(ResumeMode::Session, "orphan"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+
+    // A Thread scan may select a different compacted conversation than the
+    // session-bound write destination. Its metadata cannot borrow the bound
+    // session's prefix length, especially under a replacement prompt.
+    let mut scanned_meta = meta();
+    scanned_meta.session_id = Some("another-session.g1".into());
+    scanned_meta.parent_session_id = Some("another-session".into());
+    let (scanned_locator, _) = self::locator(Some(SessionTranscript {
+        meta: scanned_meta,
+        messages: vec![
+            TranscriptMessage::new("system", "other instruction"),
+            TranscriptMessage::new("system", "other summary"),
+            TranscriptMessage::new("user", "later"),
+        ],
+        tools: None,
+    }));
+    let mut scanned_replacement = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .prefix(PrefixSnapshot::new(vec![Message::system("replacement")]))
+        .session(
+            scanned_locator,
+            SessionRef::scoped("destination", "agent-id"),
+            meta(),
+        )
+        .build()
+        .unwrap();
+    assert!(matches!(
+        scanned_replacement
+            .resume(&session_turn_options(ResumeMode::Thread, "destination"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+
+    let expected_ref = SessionRef::scoped("expected", "agent-id").next_generation();
+    let mut wrong_meta = meta();
+    wrong_meta.session_id = Some("a-different-session".into());
+    let (wrong_locator, _) = self::locator(Some(SessionTranscript {
+        meta: wrong_meta,
+        messages: vec![TranscriptMessage::new("system", "wrong instruction")],
+        tools: None,
+    }));
+    wrong_locator
+        .known_sessions
+        .lock()
+        .unwrap()
+        .push(expected_ref.clone());
+    let mut wrong_identity = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
+        .codec(Arc::new(RoleCodec))
+        .session(wrong_locator, expected_ref, meta())
+        .build()
+        .unwrap();
+    assert!(matches!(
+        wrong_identity
+            .resume(&session_turn_options(ResumeMode::Session, "expected"))
+            .await,
+        Err(RuntimeError::Persistence(_))
+    ));
+}
+
+#[tokio::test]
+async fn session_driver_receives_the_frozen_system_boundary() {
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "done",
+    )]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .prefix(PrefixSnapshot::new(vec![
+            Message::system("stable"),
+            Message::system("context"),
+        ]))
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("go")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        driver.requests.lock().unwrap()[0]
+            .run_context
+            .frozen_system_prefix_len,
+        Some(2)
+    );
+
+    let mixed_driver = Arc::new(Driver::new(vec![Ok(outcome(vec![Message::assistant(
+        "done",
+    )]))]));
+    let mut mixed = SessionBuilder::new(mixed_driver.clone())
+        .prefix(PrefixSnapshot::new(vec![
+            Message::system("policy"),
+            Message::user("stable example"),
+        ]))
+        .build()
+        .unwrap();
+    mixed
+        .turn(
+            SessionTurnRequest::new(Message::user("go")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        mixed_driver.requests.lock().unwrap()[0]
+            .run_context
+            .frozen_system_prefix_len,
+        None
+    );
+}
+
 /// A session-bound target's write destination is always its own session
 /// file — construction and `rebind_session` keep `target.session`/`stem` in
 /// lockstep, regardless of resume mode. `ResumeMode::Thread` can legitimately
@@ -3011,6 +3498,7 @@ async fn each_turn_records_the_tools_it_was_sent_with() {
 
     let path = recorded_tools_path(directory.path());
     let transcript = read_transcript(&path).unwrap();
+    assert_eq!(transcript.meta.prefix_message_count, Some(0));
     let stored = ToolSnapshot::from_json(transcript.tools.as_ref().unwrap()).unwrap();
     assert_eq!(tool_names(&stored), vec!["alpha", "beta"]);
     assert_eq!(tool_names(&recorded.unwrap()), vec!["alpha", "beta"]);

@@ -777,21 +777,38 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for PromptCach
         // would report an invalidation that never happened.
         if let Some((prev_run, prev)) = previous.as_ref()
             && prev_run == &run_id
-            && !prev.is_prefix_stable_against(&layout)
         {
-            tracing::debug!(
-                "[cache] prompt_cache_guard: prefix invalidated run={run_id} \
-                 before={} after={}",
-                prev.fingerprint(),
-                layout.fingerprint()
-            );
-            let event = CacheLayoutEvent::new(prev, &layout);
-            let mut events = self.events.lock().expect("events mutex poisoned");
-            if self.max_events > 0 {
-                if events.len() >= self.max_events {
-                    events.pop_front();
+            // Only an explicit canonical layout maps segment ids to message
+            // boundaries. Every other request checks the whole message stream
+            // with the byte-prefix rule: a rewritten message invalidates it,
+            // while a pure tail append can still reuse the earlier KV prefix.
+            let full_request_fallback =
+                !prev.canonical_message_boundary || !layout.canonical_message_boundary;
+            let changed = if full_request_fallback {
+                !prev.is_prefix_stable_against(&layout)
+            } else {
+                !prev.has_same_stable_prefix_as(&layout)
+            };
+            if changed {
+                tracing::debug!(
+                    "[cache] prompt_cache_guard: stable prefix changed run={run_id} \
+                     before={} after={}",
+                    prev.fingerprint(),
+                    layout.fingerprint()
+                );
+                let event = CacheLayoutEvent::new(prev, &layout);
+                let mut events = self.events.lock().expect("events mutex poisoned");
+                if self.max_events > 0 {
+                    if events.len() >= self.max_events {
+                        events.pop_front();
+                    }
+                    events.push_back(event);
                 }
-                events.push_back(event);
+            } else if !prev.is_prefix_stable_against(&layout) {
+                tracing::debug!(
+                    run = %run_id,
+                    "[cache] history changed while stable prefix remained reusable"
+                );
             }
         }
         *previous = Some((run_id, layout));

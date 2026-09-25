@@ -153,6 +153,10 @@ pub struct TranscriptMeta {
     pub created: String,
     pub updated: String,
     pub turn_count: usize,
+    /// Number of leading model messages frozen as the session prompt in this
+    /// generation. `None` on older transcripts that predate this boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_message_count: Option<usize>,
     /// Cumulative input tokens across all provider calls this session.
     pub input_tokens: u64,
     /// Cumulative output tokens across all provider calls this session.

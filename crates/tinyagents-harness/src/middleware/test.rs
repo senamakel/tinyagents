@@ -1155,6 +1155,371 @@ async fn prompt_cache_guard_detects_prefix_change() {
 }
 
 #[tokio::test]
+async fn prompt_cache_guard_ignores_trimmed_history_when_stable_prefix_is_unchanged() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![
+        Message::system("same prompt"),
+        user("old request"),
+        Message::assistant("old answer"),
+    ])
+    .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("same-stable-prefix".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("same prompt"),
+        user("summary of old request"),
+        user("new request"),
+    ])
+    .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    let before_layout = crate::cache::PromptCacheLayout::from_request(&before);
+    let after_layout = crate::cache::PromptCacheLayout::from_request(&after);
+    assert_eq!(before.messages[0].text(), "same prompt");
+    assert_eq!(after.messages[0], before.messages[0]);
+    assert_eq!(before_layout.prefix_ids(), &["system"]);
+    assert_eq!(after_layout.prefix_ids(), before_layout.prefix_ids());
+    assert_eq!(after_layout.fingerprint(), before_layout.fingerprint());
+    assert!(
+        mw.layout_events().is_empty(),
+        "history compaction retains the stable prefix"
+    );
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_reports_same_id_stable_content_change() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("prompt-a".into());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
+        .with_cache_segments(segments);
+    after.prompt_fingerprint = Some("prompt-b".into());
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    let events = mw.layout_events();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].content_only_change);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_rewritten_system_with_stale_annotation() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("builder-value".into());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
+        .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_a_new_leading_system_message() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("builder-value".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("new instruction"),
+        Message::system("stable"),
+        user("question"),
+    ])
+    .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn dynamic_prompt_preserves_the_original_declared_system_tier() {
+    let guard = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(Arc::new(
+        crate::middleware::library::DynamicPromptMiddleware::<(), ()>::from_fn(|_, _| {
+            Some("dynamic".into())
+        }),
+    ));
+    stack.push(guard.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("original A"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("stale-builder-value".into());
+    let mut after = ModelRequest::new(vec![Message::system("original B"), user("question")])
+        .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    let expected_segments = vec![
+        segment("system", SegmentRole::System, true),
+        segment("system.1", SegmentRole::System, true),
+    ];
+    assert_eq!(before.cache_segments, expected_segments);
+    assert_eq!(after.cache_segments, expected_segments);
+    assert_eq!(before.messages[0].text(), "dynamic");
+    assert_eq!(before.messages[1].text(), "original A");
+    assert_eq!(after.messages[1].text(), "original B");
+    assert_eq!(guard.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_custom_dynamic_prompt_rewrite() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("tenant-prompt", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("tenant A"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("builder-value".into());
+    let mut after = ModelRequest::new(vec![Message::system("tenant B"), user("question")])
+        .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_accepts_a_custom_layout_tail_append() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("tenant-prompt", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("question")])
+        .with_cache_segments(segments.clone());
+    before.prompt_fingerprint = Some("builder-value".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("stable"),
+        user("question"),
+        Message::assistant("answer"),
+    ])
+    .with_cache_segments(segments);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert!(mw.layout_events().is_empty());
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_uses_full_request_when_boundary_is_unknown() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("question")])
+        .with_cache_segments(segments.clone());
+    let mut after = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("changing history summary"),
+        user("question"),
+    ])
+    .with_cache_segments(segments);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_checks_history_without_declared_segments() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")]);
+    before.prompt_fingerprint = Some("stale-builder-value".into());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")]);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_same_id_system_edit_without_a_fingerprint() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("system", SegmentRole::System, true)];
+    let mut before = ModelRequest::new(vec![Message::system("prompt A"), user("question")])
+        .with_cache_segments(segments.clone());
+    let mut after = ModelRequest::new(vec![Message::system("prompt B"), user("question")])
+        .with_cache_segments(segments);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_detects_tool_schema_change_without_a_fingerprint() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let segments = vec![segment("tools", SegmentRole::Tools, true)];
+    let tool = |description| {
+        tinyinference_llm::tool::ToolSchema::new(
+            "search",
+            description,
+            serde_json::json!({"type": "object"}),
+        )
+    };
+    let mut before = ModelRequest::new(vec![user("question")])
+        .with_cache_segments(segments.clone())
+        .with_tools(vec![tool("search files")]);
+    let mut after = ModelRequest::new(vec![user("question")])
+        .with_cache_segments(segments)
+        .with_tools(vec![tool("search files recursively")]);
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
+async fn prompt_cache_guard_reports_custom_volatile_segment_changes() {
+    let mw = Arc::new(PromptCacheGuardMiddleware::new());
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw.clone());
+    let mut c = ctx();
+    let mut before = ModelRequest::new(vec![Message::system("stable"), user("first")])
+        .with_cache_segments(vec![
+            segment("system", SegmentRole::System, true),
+            segment("turn-1", SegmentRole::Volatile, false),
+        ]);
+    let mut after = ModelRequest::new(vec![Message::system("stable"), user("first")])
+        .with_cache_segments(vec![
+            segment("system", SegmentRole::System, true),
+            segment("turn-2", SegmentRole::Volatile, false),
+        ]);
+    before.prompt_fingerprint = Some("stable-system".into());
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    stack
+        .run_before_model(&mut c, &(), &mut before)
+        .await
+        .unwrap();
+    stack
+        .run_before_model(&mut c, &(), &mut after)
+        .await
+        .unwrap();
+
+    // A noncanonical annotation takes the same full-request fallback as
+    // dispatch, where even volatile segment metadata can change the key.
+    assert_eq!(mw.layout_events().len(), 1);
+}
+
+#[tokio::test]
 async fn prompt_cache_guard_events_are_bounded_by_max_events() {
     let mw = Arc::new(PromptCacheGuardMiddleware::new().with_max_events(2));
     let mut stack: MiddlewareStack<()> = MiddlewareStack::new();

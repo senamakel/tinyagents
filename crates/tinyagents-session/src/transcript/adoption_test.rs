@@ -19,6 +19,7 @@ fn legacy_meta(created: &str, updated: &str, thread_id: &str) -> TranscriptMeta 
         created: created.into(),
         updated: updated.into(),
         turn_count: 1,
+        prefix_message_count: None,
         input_tokens: 10,
         output_tokens: 5,
         cached_input_tokens: 2,
@@ -96,6 +97,54 @@ fn legacy_roots_fold_into_one_session_in_created_order() {
     );
     assert_eq!(adopted.meta.session_id, Some(session.session_id()));
     assert_eq!(adopted.meta.thread_id.as_deref(), Some(thread));
+}
+
+#[test]
+fn adoption_preserves_the_first_sources_frozen_prefix_count() {
+    let dir = tempdir().unwrap();
+    let thread = "thread-prefix-adoption";
+    let first = resolve_keyed_transcript_path(dir.path(), "1000_orchestrator").unwrap();
+    let mut first_meta = legacy_meta("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", thread);
+    first_meta.prefix_message_count = Some(1);
+    write_transcript(
+        &first,
+        &[
+            TranscriptMessage::new("system", "stable"),
+            TranscriptMessage::new("system", "history summary"),
+            TranscriptMessage::new("user", "first"),
+        ],
+        &first_meta,
+        None,
+    )
+    .unwrap();
+    let second = resolve_keyed_transcript_path(dir.path(), "2000_orchestrator").unwrap();
+    let mut second_meta = legacy_meta("2026-02-01T00:00:00Z", "2026-02-01T00:00:00Z", thread);
+    second_meta.prefix_message_count = Some(2);
+    write_transcript(
+        &second,
+        &[TranscriptMessage::new("user", "later")],
+        &second_meta,
+        None,
+    )
+    .unwrap();
+
+    let session = SessionRef::scoped(thread, "orchestrator");
+    let adopted = adopt_legacy_session_transcripts(
+        dir.path(),
+        &session,
+        thread,
+        &legacy_meta("", "", thread),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        read_transcript(&adopted.path)
+            .unwrap()
+            .meta
+            .prefix_message_count,
+        Some(1)
+    );
 }
 
 #[test]

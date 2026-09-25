@@ -6945,6 +6945,367 @@ fn stripped_tools_segment_still_counts_as_the_harness_layout() {
     assert_ne!(custom.prompt_fingerprint, turn_one.prompt_fingerprint);
 }
 
+#[test]
+fn compaction_summary_keeps_declared_system_prefix_cache_key() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let segments = vec![
+        PromptSegment {
+            id: "system".into(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+        PromptSegment {
+            id: "system.1".into(),
+            role: SegmentRole::System,
+            cacheable: true,
+        },
+    ];
+    let mut before = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::user("first"),
+    ]);
+    before.cache_segments = segments.clone();
+    before.prompt_fingerprint = Some("pre-dispatch annotation".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::system("changing history summary"),
+        Message::user("later"),
+    ]);
+    after.cache_segments = segments;
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_eq!(before.cache_segments, after.cache_segments);
+    assert_eq!(before.prompt_fingerprint, after.prompt_fingerprint);
+    assert_eq!(
+        crate::cache::prompt_cache_key(&before),
+        crate::cache::prompt_cache_key(&after)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&before),
+        crate::cache::cache_key(&after),
+        "the local response cache must still distinguish the changed history"
+    );
+}
+
+#[test]
+fn changing_or_prepending_a_declared_system_message_invalidates_the_prefix() {
+    let build = |system: &str| {
+        let mut prompt = crate::prompt::PromptBuilder::new();
+        prompt.push_system_messages(&[Message::system(system)]);
+        prompt.build(vec![Message::user("question")])
+    };
+    let original = build("stable");
+    let changed = build("revised");
+    assert_ne!(
+        crate::cache::prompt_cache_key(&original),
+        crate::cache::prompt_cache_key(&changed)
+    );
+    assert!(
+        !crate::cache::PromptCacheLayout::from_request(&original)
+            .is_prefix_stable_against(&crate::cache::PromptCacheLayout::from_request(&changed))
+    );
+
+    let mut prepended = original.clone();
+    crate::cache::prepend_system_message(&mut prepended, "new instruction".into());
+    assert_ne!(original.prompt_fingerprint, prepended.prompt_fingerprint);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut prepended);
+    assert_ne!(
+        crate::cache::prompt_cache_key(&original),
+        crate::cache::prompt_cache_key(&prepended)
+    );
+    assert!(
+        !crate::cache::PromptCacheLayout::from_request(&original)
+            .is_prefix_stable_against(&crate::cache::PromptCacheLayout::from_request(&prepended))
+    );
+}
+
+#[test]
+fn rebuilt_session_request_keeps_the_summary_after_frozen_system_tiers() {
+    let messages = vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::system("changing summary"),
+        Message::user("later"),
+    ];
+    let system_end = super::run_loop::cacheable_system_prefix_end(&messages, Some(2));
+    assert_eq!(system_end, 2);
+    assert_eq!(
+        super::run_loop::cacheable_system_prefix_end(&messages, None),
+        3,
+        "standalone harnesses retain their leading-System fallback"
+    );
+    let mut prompt = crate::prompt::PromptBuilder::new();
+    prompt.push_system_messages(&messages[..system_end]);
+    let mut request = prompt.build(messages[system_end..].to_vec());
+
+    assert_eq!(request.cache_segments.len(), 2);
+    assert_eq!(request.cache_segments[0].id, "system");
+    assert_eq!(request.cache_segments[1].id, "system.1");
+    assert_eq!(request.messages[2].text(), "changing summary");
+
+    let mut previous = ModelRequest::new(vec![
+        Message::system("stable"),
+        Message::system("context"),
+        Message::user("first"),
+    ]);
+    previous.cache_segments = request.cache_segments.clone();
+    previous.prompt_fingerprint = request.prompt_fingerprint.clone();
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut previous);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+    assert_eq!(
+        crate::cache::prompt_cache_key(&previous),
+        crate::cache::prompt_cache_key(&request)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&previous),
+        crate::cache::cache_key(&request),
+        "a stable provider route must not merge distinct response-cache entries"
+    );
+}
+
+#[test]
+fn empty_frozen_prefix_does_not_promote_a_system_summary() {
+    let build = |summary: &str| {
+        let messages = vec![Message::system(summary), Message::user("later")];
+        let end = super::run_loop::cacheable_system_prefix_end(&messages, Some(0));
+        assert_eq!(end, 0);
+        // The request starts user-only. Context compression inserts the
+        // System summary after the marker has been declared.
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.messages.insert(0, Message::system(summary));
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let first = build("summary A");
+    let second = build("summary B");
+    assert!(first.cacheable_prefix_ids().is_empty());
+    assert_eq!(
+        first.cache_segments[0].role,
+        tinyinference_llm::model::SegmentRole::Volatile
+    );
+    assert!(!first.cache_segments[0].cacheable);
+    assert_ne!(first.prompt_fingerprint, second.prompt_fingerprint);
+}
+
+#[test]
+fn stable_prepend_promotes_the_zero_prefix_marker_without_caching_history() {
+    let build = |summary: &str| {
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.messages.insert(0, Message::system(summary));
+        crate::cache::prepend_system_message(&mut request, "dynamic instruction".into());
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let first = build("summary A");
+    let second = build("summary B");
+    assert_eq!(first.cache_segments.len(), 1);
+    assert_eq!(first.cache_segments[0].id, "system");
+    assert!(first.cache_segments[0].cacheable);
+    assert_eq!(first.messages[0].text(), "dynamic instruction");
+    assert_eq!(first.messages[1].text(), "summary A");
+    assert_eq!(
+        crate::cache::prompt_cache_key(&first),
+        crate::cache::prompt_cache_key(&second)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&first),
+        crate::cache::cache_key(&second)
+    );
+}
+
+#[test]
+fn tools_added_after_zero_prefix_marking_keep_summary_volatile() {
+    use tinyinference_llm::model::SegmentRole;
+    use tinyinference_llm::tool::ToolSchema;
+
+    let build = |summary: &str| {
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.tools = vec![ToolSchema::new(
+            "lookup",
+            "look up facts",
+            serde_json::json!({"type": "object"}),
+        )];
+        request.messages.insert(0, Message::system(summary));
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let first = build("summary A");
+    let second = build("summary B");
+    assert_eq!(first.cache_segments.len(), 1);
+    assert_eq!(first.cache_segments[0].id, "tools");
+    assert_eq!(first.cache_segments[0].role, SegmentRole::Tools);
+    assert!(first.cache_segments[0].cacheable);
+    assert_eq!(
+        crate::cache::prompt_cache_key(&first),
+        crate::cache::prompt_cache_key(&second)
+    );
+    assert_ne!(
+        crate::cache::cache_key(&first),
+        crate::cache::cache_key(&second)
+    );
+}
+
+#[test]
+fn zero_prefix_stable_prepend_and_tools_keep_both_segments_in_either_order() {
+    use tinyinference_llm::tool::ToolSchema;
+
+    let build = |summary: &str, tools_first: bool| {
+        let mut request = crate::prompt::PromptBuilder::new().build(vec![Message::user("later")]);
+        super::run_loop::mark_empty_frozen_prefix(&mut request, Some(0));
+        request.messages.insert(0, Message::system(summary));
+        let add_tools = |request: &mut ModelRequest| {
+            request.tools = vec![ToolSchema::new(
+                "lookup",
+                "look up facts",
+                serde_json::json!({"type": "object"}),
+            )];
+        };
+        if tools_first {
+            add_tools(&mut request);
+        }
+        crate::cache::prepend_system_message(&mut request, "dynamic instruction".into());
+        if !tools_first {
+            add_tools(&mut request);
+        }
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    for tools_first in [false, true] {
+        let first = build("summary A", tools_first);
+        let second = build("summary B", tools_first);
+        assert_eq!(
+            first.cacheable_prefix_ids(),
+            vec!["system".to_string(), "tools".to_string()]
+        );
+        assert_eq!(first.cache_segments.len(), 2);
+        assert_eq!(
+            crate::cache::prompt_cache_key(&first),
+            crate::cache::prompt_cache_key(&second)
+        );
+        assert_ne!(
+            crate::cache::cache_key(&first),
+            crate::cache::cache_key(&second)
+        );
+    }
+    assert_eq!(
+        crate::cache::prompt_cache_key(&build("summary A", false)),
+        crate::cache::prompt_cache_key(&build("summary A", true)),
+    );
+}
+
+#[test]
+fn tools_only_prefix_survives_a_leading_compaction_summary() {
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new(
+        "lookup",
+        "look up facts",
+        serde_json::json!({"type": "object"}),
+    );
+    let mut before = ModelRequest::new(vec![Message::user("first")]).with_tools(vec![tool.clone()]);
+    super::run_loop::mark_empty_frozen_prefix(&mut before, Some(0));
+    let mut after = ModelRequest::new(vec![Message::user("later")]).with_tools(vec![tool]);
+    super::run_loop::mark_empty_frozen_prefix(&mut after, Some(0));
+    after
+        .messages
+        .insert(0, Message::system("changing history summary"));
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_eq!(before.cache_segments, after.cache_segments);
+    assert_eq!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
+#[test]
+fn fingerprint_without_declared_segments_still_hashes_a_new_system_message() {
+    let mut before = ModelRequest::new(vec![Message::user("first")]);
+    before.prompt_fingerprint = Some("stale".into());
+    let mut after = ModelRequest::new(vec![
+        Message::system("new instruction"),
+        Message::user("later"),
+    ]);
+    after.prompt_fingerprint = before.prompt_fingerprint.clone();
+
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
+#[test]
+fn grouped_system_segment_cannot_masquerade_as_one_canonical_message() {
+    let mut builder = crate::prompt::PromptBuilder::new();
+    builder.push_system(
+        "system",
+        vec![Message::system("first"), Message::system("second")],
+    );
+    let mut before = builder.build(vec![Message::user("question")]);
+    assert_ne!(before.cache_segments[0].id, "system");
+
+    let mut after = before.clone();
+    after.messages[1] = Message::system("changed second");
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut before);
+    super::run_loop::refresh_prompt_cache_fingerprint(&mut after);
+
+    assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
+#[test]
+fn prompted_schema_instruction_preserves_all_original_system_tiers() {
+    use tinyinference_llm::model::{PromptSegment, SegmentRole};
+
+    let segments = (0..2)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    let build = |second: &str| {
+        let mut request = ModelRequest::new(vec![
+            Message::system("first"),
+            Message::system(second),
+            Message::user("question"),
+        ]);
+        request.cache_segments = segments.clone();
+        request.prompt_fingerprint = Some("pre-structured-annotation".into());
+        crate::cache::prepend_system_message(&mut request, "JSON Schema: fixed".into());
+        super::run_loop::refresh_prompt_cache_fingerprint(&mut request);
+        request
+    };
+
+    let before = build("second A");
+    let after = build("second B");
+    let expected_segments = (0..3)
+        .map(|index| PromptSegment {
+            id: crate::prompt::system_segment_id(index),
+            role: SegmentRole::System,
+            cacheable: true,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(before.cache_segments, expected_segments);
+    assert_eq!(after.cache_segments, expected_segments);
+    assert_eq!(before.messages[0].text(), "JSON Schema: fixed");
+    assert_eq!(before.messages[1].text(), "first");
+    assert_eq!(before.messages[2].text(), "second A");
+    assert_eq!(after.messages[2].text(), "second B");
+    assert_ne!(before.prompt_fingerprint, after.prompt_fingerprint);
+}
+
 /// A text-dialect run that starts with *no* leading system message declares
 /// only the `tools` segment (`PromptBuilder` has no system prefix to name
 /// yet). The dialect then synthesizes exactly one new leading system message

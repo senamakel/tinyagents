@@ -64,7 +64,14 @@ Every turn receives explicit `TurnOptions`, including its cancellation token
 and `RunContext<C>`; no task-local data crosses the runtime boundary. The
 stable prefix is reconciled after resume and driver compaction without
 duplication, including a prefix supplied by `before_turn` after a resumed
-history. `Session::seed_history(history, raw)` is the explicit, lossless
+history. Each committed transcript generation records the frozen prefix's
+message count so a cold resume strips that generation's stored tiers rather
+than guessing from every leading System row; older files fall back to the
+sealed generation when it can establish the boundary.
+When all frozen tiers are System messages, the session also carries their
+count into the harness run context, so a later System compaction summary stays
+in history when the next driver invocation rebuilds its request.
+`Session::seed_history(history, raw)` is the explicit, lossless
 resume/seed boundary; a host must not keep a second shadow history. Cancellation before the commit point leaves no durable mutation;
 once it succeeds, the turn remains successful. `after_commit` and terminal
 hooks get the committed outcome, but their error or a cooperative cancellation

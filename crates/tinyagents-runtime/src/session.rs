@@ -25,6 +25,10 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     target: Option<TranscriptTarget>,
     transcript: Option<Arc<dyn TranscriptHistory>>,
     committed_turns: usize,
+    /// Number of leading rows in the currently bound durable transcript that
+    /// belong to its stored prefix. This can differ from a replacement
+    /// `self.prefix` and must survive repeated resume calls before a commit.
+    persisted_prefix_len: Option<usize>,
     /// Tool declarations this session last sent, restored from the transcript
     /// on resume and updated after every recorded turn.
     recorded_tools: Option<ToolSnapshot>,
@@ -54,6 +58,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             target,
             transcript: None,
             committed_turns: 0,
+            persisted_prefix_len: None,
             recorded_tools: None,
             recorded_tools_json: None,
             retain_recorded_tools: false,
@@ -192,25 +197,135 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        if let Some(selected) = session_binding.as_ref() {
+            let expected = selected.session_id();
+            if transcript
+                .meta
+                .session_id
+                .as_deref()
+                .is_some_and(|actual| actual != expected)
+            {
+                return Err(RuntimeError::Persistence(
+                    "exact session read returned a different transcript identity".into(),
+                ));
+            }
+        }
         let codec = self
             .codec
             .as_ref()
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
         let mut decoded = codec.decode_history(&transcript)?;
-        // The transcript already holds the prefix it was sent with as its
-        // leading system rows. They are legacy prefix material rather than
-        // conversational history: a session built without a prefix adopts
-        // them, while a session with a current prefix must discard them
-        // before combining the resumed history. Keeping them in the latter
-        // case would replay stale instructions alongside the current prompt.
+        // A compacted head can start with a System summary immediately after
+        // the original frozen prompt. Its role does not make it prefix
+        // material. Determine how many *stored* rows to strip independently
+        // of any current replacement prefix: a shorter replacement must not
+        // leave an old instruction behind as conversational history. Once this
+        // session has committed a turn, its prefix is already the persisted
+        // boundary; on a cold resume, read the sealed first generation.
         let leading_len = decoded
             .iter()
             .take_while(|message| matches!(message, Message::System(_)))
             .count();
-        if self.prefix.messages().is_empty() && leading_len != 0 {
-            self.prefix = PrefixSnapshot::new(decoded[..leading_len].to_vec());
+        let cached_boundary = self
+            .transcript
+            .as_ref()
+            .filter(|bound| bound.path() == read.path())
+            .and(self.persisted_prefix_len);
+        let recorded_boundary = transcript.meta.prefix_message_count;
+        let mut stored_len = recorded_boundary.or(cached_boundary).unwrap_or(leading_len);
+        let compacted_head = session_binding
+            .as_ref()
+            .is_some_and(|session| session.generation > 0)
+            || transcript.meta.parent_session_id.is_some();
+        let mut boundary_resolved = true;
+        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
+            // Without the sealed root there is no safe boundary in a head
+            // containing a System summary. If a replacement prefix was
+            // supplied, fail rather than replaying unverifiable old System
+            // instructions beside it.
+            stored_len = 0;
+            boundary_resolved = false;
+            let bound_session = session_binding.as_ref().or(target.session.as_ref());
+            if let Some(head) = bound_session
+                .map(|session| target.locator.head_generation(session))
+                .filter(|session| {
+                    session.generation > 0
+                        && transcript.meta.session_id.as_deref()
+                            == Some(session.session_id().as_str())
+                })
+            {
+                let root = head.first_generation();
+                if let Some(read) = target.locator.read_session_transcript(&root) {
+                    match read.read_session() {
+                        Ok(Some(root_transcript)) => match codec.decode_history(&root_transcript) {
+                            Ok(root_messages) => {
+                                let root_prefix = root_messages
+                                    .iter()
+                                    .take_while(|message| matches!(message, Message::System(_)))
+                                    .collect::<Vec<_>>();
+                                if decoded.len() >= root_prefix.len()
+                                    && root_prefix
+                                        .iter()
+                                        .zip(decoded.iter())
+                                        .all(|(root, head)| *root == head)
+                                {
+                                    stored_len = root_prefix.len();
+                                    boundary_resolved = true;
+                                } else {
+                                    tracing::warn!(
+                                        session = %root.session_id(),
+                                        "[session] sealed prefix differs from compacted head; leaving system rows unfrozen"
+                                    );
+                                }
+                            }
+                            Err(error) => tracing::warn!(
+                                session = %root.session_id(),
+                                %error,
+                                "[session] could not decode sealed prefix; leaving head system rows unfrozen"
+                            ),
+                        },
+                        Ok(None) => tracing::warn!(
+                            session = %root.session_id(),
+                            "[session] sealed prefix missing; leaving head system rows unfrozen"
+                        ),
+                        Err(error) => tracing::warn!(
+                            session = %root.session_id(),
+                            %error,
+                            "[session] could not read sealed prefix; leaving head system rows unfrozen"
+                        ),
+                    }
+                } else {
+                    tracing::warn!(
+                        session = %root.session_id(),
+                        "[session] sealed prefix unavailable; leaving head system rows unfrozen"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    scanned_session = ?transcript.meta.session_id,
+                    "[session] scanned compacted head differs from bound session; leaving system rows unfrozen"
+                );
+            }
+            if !boundary_resolved && !self.prefix.messages().is_empty() {
+                return Err(RuntimeError::Persistence(
+                    "cannot apply a replacement prompt without the scanned transcript's sealed prefix"
+                        .into(),
+                ));
+            }
         }
-        decoded.drain(..leading_len);
+        let stored_len = if recorded_boundary.is_some() || cached_boundary.is_some() {
+            // An explicit frozen prefix may include non-System few-shot rows.
+            // Only the legacy inferred boundary is limited to leading System
+            // messages; a recorded count is bounded by the transcript itself.
+            stored_len.min(decoded.len())
+        } else {
+            stored_len.min(leading_len)
+        };
+        self.persisted_prefix_len = boundary_resolved.then_some(stored_len);
+        if self.prefix.messages().is_empty() && stored_len != 0 {
+            self.prefix = PrefixSnapshot::new(decoded[..stored_len].to_vec());
+        }
+        decoded.drain(..stored_len);
         let history = self.with_prefix(decoded);
         self.history = history.clone();
         // Every turn already on disk counts as committed: the prefix those
@@ -307,6 +422,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.recorded_tools_json = destination_transcript.tools.clone();
                     self.recorded_tools =
                         Self::decode_recorded_tools(destination_transcript.tools.as_ref());
+                    self.persisted_prefix_len = destination_transcript.meta.prefix_message_count;
                     self.persisted = destination_transcript.messages;
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
@@ -321,6 +437,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     // own head-resolution above may have rebound it).
                     self.recorded_tools_json = None;
                     self.recorded_tools = None;
+                    self.persisted_prefix_len = None;
                     self.persisted = Vec::new();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = pre_scan_meta;
@@ -428,6 +545,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             ),
         )
         .with_cancellation(cancellation.clone());
+        let run_context = if self
+            .prefix
+            .messages()
+            .iter()
+            .all(|message| matches!(message, Message::System(_)))
+        {
+            run_context.with_frozen_system_prefix_len(self.prefix.messages().len())
+        } else {
+            // A mixed-role prefix is still restored by its recorded count,
+            // but the harness's System-tier cache layout cannot represent its
+            // non-System rows. Keep conservative request construction there.
+            run_context
+        };
         let driver_result = tokio::select! {
             _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
             result = self.driver.execute(DriverRequest { history: input, tools, run_context, stream }) => result,
@@ -708,6 +838,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             None => self.transcript.as_deref().expect("bound above"),
         };
         meta.turn_count += 1;
+        meta.prefix_message_count = Some(self.prefix.messages().len());
         meta.updated = chrono::Utc::now().to_rfc3339();
         // Record every ordinary turn's declarations. Comparing against this
         // session's cached snapshot is unsafe when another live Session has
@@ -747,6 +878,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             self.transcript = Some(handle);
         }
         target.meta = meta;
+        self.persisted_prefix_len = Some(self.prefix.messages().len());
         let delta = if extends {
             TranscriptDelta::Append {
                 previous_len,

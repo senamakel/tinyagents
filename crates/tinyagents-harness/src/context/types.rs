@@ -343,6 +343,10 @@ pub struct RunContext<Ctx = ()> {
     pub config: RunConfig,
     /// Arbitrary user-supplied run data.
     pub data: Ctx,
+    /// Number of frozen leading System messages supplied by a durable
+    /// session. `None` lets a standalone harness infer its initial prefix.
+    /// A child context starts at `None` for its own conversation.
+    pub frozen_system_prefix_len: Option<usize>,
     /// Registry of named long-term stores.
     pub stores: StoreRegistry,
     /// Optional hierarchical long-term store handed to every tool this run
