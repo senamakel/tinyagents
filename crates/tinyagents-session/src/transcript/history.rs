@@ -173,6 +173,22 @@ pub trait TranscriptRead: Send + Sync {
 /// because tests reassign `agent.workspace_dir` after `build()` and a
 /// build-time locator would silently keep pointing at the old directory.
 pub trait TranscriptLocator: Send + Sync {
+    /// The durable destination this locator addresses, when it can name one.
+    ///
+    /// Two locators with equal, `Some` keys resolve every lookup and every
+    /// bind to the same place, so a caller comparing bindings may treat them
+    /// as interchangeable however they were allocated. `None` means "cannot
+    /// say", and such a locator only ever matches itself.
+    ///
+    /// This exists because the guidance above tells a host to build the
+    /// locator lazily from the *current* `workspace_dir` and never freeze it,
+    /// which necessarily yields a fresh `Arc` per call. A caller that
+    /// identified a locator by allocation would reject the very hosts that
+    /// followed that instruction, so it identifies one by this key instead.
+    fn destination_key(&self) -> Option<String> {
+        None
+    }
+
     /// Newest transcript for `agent_name` in this session's raw subtree,
     /// including the legacy `session_raw/DDMMYYYY/` + `.md` fallback.
     fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>>;
@@ -492,6 +508,12 @@ impl FileTranscriptLocator {
 }
 
 impl TranscriptLocator for FileTranscriptLocator {
+    /// The workspace root every lookup and bind resolves under, which is
+    /// this locator's only field and therefore its whole identity.
+    fn destination_key(&self) -> Option<String> {
+        Some(self.workspace_dir.to_string_lossy().into_owned())
+    }
+
     fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
         let path = find_latest_transcript(&self.workspace_dir, agent_name)?;
         tracing::debug!(

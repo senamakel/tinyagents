@@ -117,6 +117,8 @@ pub struct SearchAnswer {
     pub result: ToolResult,
     /// How many tools it named.
     pub matched: usize,
+    /// Names whose typed declarations should be offered on the next model call.
+    pub matched_names: Vec<String>,
     /// Which ranker's answer was served, and how it went. `None` when the
     /// query was rejected before ranking.
     pub ranking: Option<RankedSearch>,
@@ -143,6 +145,7 @@ pub async fn answer_tool_search(
                 "`{TOOL_SEARCH_NAME}` needs a `query` describing what you want to do."
             )),
             matched: 0,
+            matched_names: Vec::new(),
             ranking: None,
         };
     }
@@ -170,6 +173,7 @@ pub async fn answer_tool_search(
                 catalog.len()
             )),
             matched: 0,
+            matched_names: Vec::new(),
             ranking: Some(ranking),
         };
     }
@@ -192,6 +196,7 @@ pub async fn answer_tool_search(
              shown.\n{rendered}"
         )),
         matched,
+        matched_names: matches.iter().map(|schema| schema.name.clone()).collect(),
         ranking: Some(ranking),
     }
 }

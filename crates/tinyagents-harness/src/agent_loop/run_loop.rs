@@ -187,14 +187,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx.limits
             .sync_call_limits(effective_model_calls, effective_tool_calls);
 
-        // The tool set is fixed for the duration of a run, so build the sorted
-        // schema vec once here instead of re-collecting, re-calling every tool's
-        // `schema()`, and re-sorting on every turn (per model call).
+        // Build the direct tool set once. Discovery can add typed declarations
+        // after a search, while the base declarations stay stable.
         //
-        // Only *direct* tools go on the wire. Deferred tools are indexed into
-        // the run's catalogue and reached through the `tool_search` /
-        // `tool_call` bridge, whose two schemas are appended *after* the
-        // name-sorted direct set so the cached prefix is unchanged by them.
+        // Only *direct* tools go on the initial wire request. Deferred tools
+        // are indexed into the run's catalogue and reached through the
+        // `tool_search` / `tool_call` bridge. Search matches are promoted on
+        // the next request; the bridge schemas follow the direct set.
         // The same host allow-list gates both halves: deferral only ever
         // subtracts from what the host admitted. `resolve_tool_allowlist`
         // (not a raw read of `binding.allowed_tools`) is what applies I-9's
@@ -256,6 +255,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // relative to `deferred` and making `direct` mean different things
         // depending on whether any tool happens to be deferred.
         let direct_schema_count = tool_schemas.len();
+        let mut direct_tool_schemas = tool_schemas.clone();
         // B6 (`docs/runtime-comparison/plan.md`): `declared_tool_schemas`
         // tracks what the transcript has actually been told about the
         // toolset chain's tools so far (folded or patched in, turn by turn,
@@ -280,6 +280,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut declared_tool_schemas: Vec<ToolSchema> = Vec::new();
         let mut bridge_schemas: Vec<ToolSchema> = Vec::new();
         let deferred_catalog = self.deferred_catalog(&host_allows);
+        // A resumed transcript carries promoted declarations in SystemMessage
+        // patches. Only restore names still admitted into this run's catalogue.
+        let mut promoted_schemas: std::collections::BTreeMap<String, ToolSchema> =
+            tinyinference_llm::message::replay_system_state(messages)
+                .1
+                .into_iter()
+                .filter(|schema| deferred_catalog.get(&schema.name).is_some())
+                .map(|schema| (schema.name.clone(), schema))
+                .collect();
+        let mut promoted_names: std::collections::BTreeSet<String> =
+            promoted_schemas.keys().cloned().collect();
+        let mut recorded_promotions = promoted_names.clone();
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
             // intrinsic bridge only fills a name nobody registered. Check the
@@ -547,16 +559,51 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                         .is_some_and(|profile| profile.mid_conversation_system_messages);
                     tool_changes::apply_tool_change_patch(messages, patch, mid_conversation);
                     declared_tool_schemas = live_schemas.clone();
-                    tool_schemas = declared_tool_schemas.clone();
-                    tool_schemas.extend(bridge_schemas.clone());
+                    direct_tool_schemas = live_schemas;
                 }
             }
+
+            // Promote only names returned by a successful intrinsic search.
+            // The patch makes the declaration recoverable from the transcript;
+            // the provider receives its typed schema on this and later calls.
+            let newly_promoted: Vec<ToolSchema> = promoted_names
+                .difference(&recorded_promotions)
+                .filter_map(|name| deferred_catalog.get(name).cloned())
+                .collect();
+            if !newly_promoted.is_empty() {
+                if let Some(patch) = tool_changes::diff_tool_set(&[], &newly_promoted) {
+                    let mid_conversation = self
+                        .models
+                        .resolve_request(&ModelRequest::new(messages.clone()), None, None)
+                        .and_then(|binding| binding.model.profile().cloned())
+                        .is_some_and(|profile| profile.mid_conversation_system_messages);
+                    tool_changes::apply_tool_change_patch(messages, patch, mid_conversation);
+                }
+                recorded_promotions.extend(newly_promoted.iter().map(|schema| schema.name.clone()));
+                promoted_schemas.extend(
+                    newly_promoted
+                        .into_iter()
+                        .map(|schema| (schema.name.clone(), schema)),
+                );
+            }
+            tool_schemas = direct_tool_schemas.clone();
+            tool_schemas.extend(
+                promoted_schemas
+                    .values()
+                    .filter(|schema| {
+                        !direct_tool_schemas
+                            .iter()
+                            .any(|direct| direct.name == schema.name)
+                    })
+                    .cloned(),
+            );
+            tool_schemas.extend(bridge_schemas.clone());
 
             // Build the request from the working transcript, tool schemas, and
             // policy response format.  Go through `PromptBuilder` rather than
             // constructing `ModelRequest` directly: a provider KV cache needs
             // an explicit stable prefix, and the system instructions plus the
-            // name-sorted tool schemas are stable for this whole run.
+            // name-sorted tool schemas are stable between discoveries.
             status.mark_running(HarnessPhase::BuildingRequest);
             let system_end = cacheable_system_prefix_end(messages, ctx.frozen_system_prefix_len);
             let mut prompt = crate::prompt::PromptBuilder::new();
@@ -1310,7 +1357,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     }
                     status.mark_running(HarnessPhase::Tools);
                     let deferred = self
-                        .execute_tools(state, ctx, run, status, messages, real_tool_calls)
+                        .execute_tools_with_promotions(
+                            state,
+                            ctx,
+                            run,
+                            status,
+                            messages,
+                            real_tool_calls,
+                            &mut promoted_names,
+                        )
                         .await?;
                     if let Some(exit) = self
                         .settle_deferred(state, ctx, run, status, messages, deferred)
@@ -1363,7 +1418,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
                 status.mark_running(HarnessPhase::Tools);
                 let deferred = self
-                    .execute_tools(state, ctx, run, status, messages, real_tool_calls)
+                    .execute_tools_with_promotions(
+                        state,
+                        ctx,
+                        run,
+                        status,
+                        messages,
+                        real_tool_calls,
+                        &mut promoted_names,
+                    )
                     .await?;
                 if let Some(exit) = self
                     .settle_deferred(state, ctx, run, status, messages, deferred)
@@ -1571,7 +1634,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // preserved in each mode.
             status.mark_running(HarnessPhase::Tools);
             let deferred = self
-                .execute_tools(state, ctx, run, status, messages, real_tool_calls)
+                .execute_tools_with_promotions(
+                    state,
+                    ctx,
+                    run,
+                    status,
+                    messages,
+                    real_tool_calls,
+                    &mut promoted_names,
+                )
                 .await?;
             // A2: a batch that deferred calls either resolves them inline
             // (handler registered) or ends the run here with the pending
@@ -1787,6 +1858,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let record = ctx.emit(AgentEvent::ToolApproved { call_id });
                     status.set_last_event(record.id);
                     ctx.mark_call_approved(call.id.clone());
+                    let mut approved_promotions = std::collections::BTreeSet::new();
                     follow_ups.extend(
                         self.execute_tool_serially(
                             state,
@@ -1796,6 +1868,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             messages,
                             call,
                             &mut deferred,
+                            &mut approved_promotions,
                         )
                         .await?,
                     );

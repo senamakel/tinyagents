@@ -6,8 +6,8 @@
 //! registry of 41 tools: once with every tool `Direct` (the historical
 //! behaviour), once with the 40 long-tail tools `Deferred`. Both runs must
 //! reach the one tool the task needs; the deferred run must do it with fewer
-//! prompt tokens on its first call and a byte-identical `tools` array on every
-//! call. No credential is logged.
+//! prompt tokens on its first call. A separate live case proves that a search
+//! promotes a typed declaration on the next provider request. No credential is logged.
 //!
 //! ```text
 //! TOOL_DEFERRAL_LIVE=1 cargo test -p tinyagents-integration-tests \
@@ -283,7 +283,7 @@ struct Outcome {
     advertised: usize,
     deferred: usize,
     schema_bytes: usize,
-    tools_byte_stable: bool,
+    promoted_typed: bool,
     /// How the model reached `stock_quote`: `search` (via `tool_search`),
     /// `bridge` (a `tool_call` straight off the manifest), `direct` (by name),
     /// or `-` when it never did.
@@ -367,7 +367,7 @@ async fn run_once(
         advertised,
         deferred,
         schema_bytes,
-        tools_byte_stable: seen.iter().all(|tools| tools == &seen[0]),
+        promoted_typed: seen_promoted_stock_quote(&seen),
         route: if events
             .iter()
             .any(|event| matches!(event, AgentEvent::ToolSearched { .. }))
@@ -435,14 +435,14 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
         );
     }
     eprintln!(
-        "first-call prompt tokens: {} -> {} ({:.0}% fewer); tools byte-stable across the deferred run: {}\n",
+        "first-call prompt tokens: {} -> {} ({:.0}% fewer); searched tool promoted with types: {}\n",
         before.first_call_input_tokens,
         after.first_call_input_tokens,
         100.0
             * (1.0
                 - after.first_call_input_tokens as f64
                     / before.first_call_input_tokens.max(1) as f64),
-        after.tools_byte_stable
+        after.promoted_typed
     );
 
     assert!(
@@ -466,8 +466,92 @@ async fn live_deferral_reaches_the_same_tool_with_fewer_prompt_tokens() {
         after.first_call_input_tokens < before.first_call_input_tokens,
         "deferral should cut the first call's prompt"
     );
+    if after.route == "search" {
+        assert!(
+            after.promoted_typed,
+            "search must promote the typed stock_quote schema"
+        );
+    }
+}
+
+fn seen_promoted_stock_quote(requests: &[String]) -> bool {
+    requests.iter().skip(1).any(|request| {
+        serde_json::from_str::<Vec<Value>>(request)
+            .ok()
+            .is_some_and(|tools| tools.iter().any(|tool| {
+                tool["name"] == "stock_quote"
+                    && tool["parameters"]["properties"]["target"]["type"] == "string"
+                    && tool["parameters"]["properties"]["options"]["properties"]["limit"]["type"] == "integer"
+            }))
+    })
+}
+
+#[tokio::test]
+async fn live_search_promotes_typed_schema_before_the_real_call() {
+    if std::env::var("TOOL_DEFERRAL_LIVE").as_deref() != Ok("1") {
+        eprintln!("skipping live promotion check: set TOOL_DEFERRAL_LIVE=1");
+        return;
+    }
+    let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") else {
+        eprintln!("skipping live promotion check: OPENROUTER_API_KEY is not set");
+        return;
+    };
+    let model_name =
+        std::env::var("TOOL_DEFERRAL_MODEL").unwrap_or_else(|_| "openai/gpt-4.1-mini".to_string());
+    let listener = Arc::new(RecordingListener::new());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(Observed {
+        inner: OpenAiModel::openrouter(api_key).with_model(model_name),
+        tools_seen: Mutex::new(Vec::new()),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("live", model.clone())
+        .set_default_model("live")
+        .register_tool(Arc::new(LiveTool {
+            name: "stock_quote",
+            description: "Fetch the trading price of a stock ticker.",
+            exposure: ToolExposure::Deferred,
+            calls: calls.clone(),
+        }))
+        .push_middleware(Arc::new(Capture {
+            listener: listener.clone(),
+        }));
+    let run = harness
+        .invoke_default(&(), vec![
+            Message::system("First call tool_search to find the stock price tool. Then call the returned tool with target ACME and options.limit as the integer 2. Finally answer in one line."),
+            Message::user("What is ACME trading at?"),
+        ])
+        .await
+        .expect("live run succeeds");
+    let events: Vec<AgentEvent> = listener
+        .events()
+        .into_iter()
+        .map(|record| record.event)
+        .collect();
     assert!(
-        after.tools_byte_stable,
-        "the tools array must not change within a run"
+        events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ToolSearched { matched, .. } if *matched > 0))
+    );
+    let seen = model.tools_seen.lock().unwrap();
+    assert!(
+        seen_promoted_stock_quote(&seen),
+        "typed stock_quote schema was not offered after search"
+    );
+    assert!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(name, args)| name == "stock_quote"
+                && args["target"] == "ACME"
+                && args["options"]["limit"].is_number()),
+        "model did not execute stock_quote with typed arguments: {:?}",
+        run.text()
+    );
+    eprintln!(
+        "live promotion: {} model calls, searched and invoked stock_quote with integer options.limit",
+        run.model_calls
     );
 }

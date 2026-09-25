@@ -165,9 +165,31 @@ impl TranscriptTarget {
             (None, None) => self.stem == other.stem,
             _ => false,
         };
-        same_destination
-            && self.resume_agent == other.resume_agent
-            && Arc::ptr_eq(&self.locator, &other.locator)
+        same_destination && self.resume_agent == other.resume_agent && self.same_locator(other)
+    }
+
+    /// Whether both targets' locators resolve to the same durable destination.
+    ///
+    /// Allocation identity is the fast path, not the answer: `TranscriptLocator`
+    /// documents that a host builds one lazily from its *current*
+    /// `workspace_dir` and never freezes it, so a host that follows that
+    /// instruction hands `before_resume` a fresh `Arc` every turn. Judging it
+    /// by pointer rejected exactly those hosts on their second turn — the same
+    /// too-strict comparison [`Self::same_binding`] already had to abandon for
+    /// the session field. A locator that cannot name its destination still
+    /// only matches itself, so no binding that is rejected today starts being
+    /// accepted.
+    fn same_locator(&self, other: &Self) -> bool {
+        if Arc::ptr_eq(&self.locator, &other.locator) {
+            return true;
+        }
+        match (
+            self.locator.destination_key(),
+            other.locator.destination_key(),
+        ) {
+            (Some(ours), Some(theirs)) => ours == theirs,
+            _ => false,
+        }
     }
 }
 
