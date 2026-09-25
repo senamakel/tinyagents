@@ -153,6 +153,7 @@ async fn answer_tool_search_returns_full_schemas_for_hits() {
     let SearchAnswer {
         result,
         matched,
+        matched_names,
         ranking,
     } = answer_tool_search(
         &catalog(),
@@ -162,6 +163,7 @@ async fn answer_tool_search_returns_full_schemas_for_hits() {
     .await;
     assert!(!result.is_error);
     assert_eq!(matched, 1);
+    assert_eq!(matched_names, ["pdf_read"]);
     let ranking = ranking.unwrap();
     assert_eq!(ranking.ranker, "bm25");
     assert_eq!(ranking.names, vec!["pdf_read"]);
