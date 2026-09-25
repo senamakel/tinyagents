@@ -282,13 +282,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let deferred_catalog = self.deferred_catalog(&host_allows);
         // A resumed transcript carries promoted declarations in SystemMessage
         // patches. Only restore names still admitted into this run's catalogue.
-        let mut promoted_names: std::collections::BTreeSet<String> =
+        let mut promoted_schemas: std::collections::BTreeMap<String, ToolSchema> =
             tinyinference_llm::message::replay_system_state(messages)
                 .1
-                .iter()
+                .into_iter()
                 .filter(|schema| deferred_catalog.get(&schema.name).is_some())
-                .map(|schema| schema.name.clone())
+                .map(|schema| (schema.name.clone(), schema))
                 .collect();
+        let mut promoted_names: std::collections::BTreeSet<String> =
+            promoted_schemas.keys().cloned().collect();
         let mut recorded_promotions = promoted_names.clone();
         if !deferred_catalog.is_empty() {
             // A host-registered `tool_search`/`tool_call` keeps its slot: the
@@ -578,12 +580,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     tool_changes::apply_tool_change_patch(messages, patch, mid_conversation);
                 }
                 recorded_promotions.extend(newly_promoted.iter().map(|schema| schema.name.clone()));
+                promoted_schemas.extend(
+                    newly_promoted
+                        .into_iter()
+                        .map(|schema| (schema.name.clone(), schema)),
+                );
             }
             tool_schemas = direct_tool_schemas.clone();
             tool_schemas.extend(
-                promoted_names
-                    .iter()
-                    .filter_map(|name| deferred_catalog.get(name).cloned()),
+                promoted_schemas
+                    .values()
+                    .filter(|schema| {
+                        !direct_tool_schemas
+                            .iter()
+                            .any(|direct| direct.name == schema.name)
+                    })
+                    .cloned(),
             );
             tool_schemas.extend(bridge_schemas.clone());
 

@@ -74,6 +74,27 @@ impl Tool for ExposedTool {
     }
 }
 
+struct ChangedDeferredTool;
+
+#[async_trait]
+impl Tool for ChangedDeferredTool {
+    fn name(&self) -> &str {
+        "stock_quote"
+    }
+    fn description(&self) -> &str {
+        "A changed description after restart."
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object","properties":{"symbol":{"type":"integer"}},"required":["symbol"]})
+    }
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("unused"))
+    }
+}
+
 /// A scripted model that records the `tools` array of every request.
 struct RecordingModel {
     responses: Mutex<Vec<ModelResponse>>,
@@ -304,7 +325,7 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         .register_model("mock", resumed_model.clone())
         .set_default_model("mock")
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
-        .register_tool(deferred.clone());
+        .register_tool(Arc::new(ChangedDeferredTool));
     resumed_harness.register_tool(unrelated);
     let mut resumed_messages = run.messages.clone();
     resumed_messages.push(Message::user("quote another stock"));
@@ -312,7 +333,15 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
         .invoke_default(&(), resumed_messages)
         .await
         .unwrap();
-    assert!(tool_names(&resumed_model.tools_seen()[0]).contains(&"stock_quote".to_string()));
+    let resumed_tools: Vec<Value> = serde_json::from_str(&resumed_model.tools_seen()[0]).unwrap();
+    let resumed_stock = resumed_tools
+        .iter()
+        .find(|tool| tool["name"] == "stock_quote")
+        .unwrap();
+    assert_eq!(
+        resumed_stock["parameters"]["properties"]["symbol"]["type"],
+        "string"
+    );
 
     // Both the bridged and the direct-by-name call reached the real tool.
     let calls = deferred.calls.lock().unwrap().clone();

@@ -175,14 +175,14 @@ pub trait LoopDriver<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
 /// Executes one turn's batch of tool calls and reports what changed.
 ///
 /// This is a thin, behavior-preserving wrapper over the same
-/// [`AgentHarness::execute_tools`][super::AgentHarness::execute_tools]
+/// [`AgentHarness::execute_tools_with_promotions`][super::AgentHarness::execute_tools_with_promotions]
 /// serial-admission / serial-or-concurrent-execution / ordered-fold pipeline
 /// the direct loop uses (see `agent_loop::tools`) — unlike [`TurnPlan`] and
 /// friends, this phase's *implementation*, not just its data contract, is
 /// reused as-is, so a graph-driven tool batch preserves the exact ordering,
 /// concurrency-eligibility, budget/limit, and middleware semantics the direct
 /// loop guarantees. `messages` and `run` are mutated in place, exactly as
-/// `execute_tools` does; the returned [`ToolBatchOutcome`] additionally
+/// `execute_tools_with_promotions` does; the returned [`ToolBatchOutcome`] additionally
 /// reports just the slice each produced, for a caller (a graph node) that
 /// wants the batch's own delta rather than diffing the whole transcript
 /// itself.
