@@ -476,10 +476,10 @@ fn collect_call_models(observations: &[AgentObservation]) -> BTreeMap<&str, &str
 fn collect_first_deltas(observations: &[AgentObservation]) -> BTreeMap<&str, u64> {
     let mut first = BTreeMap::new();
     for obs in observations {
-        if let AgentEvent::ModelDelta { call_id, delta, .. } = &obs.event {
-            if !delta.text.is_empty() || !delta.reasoning.is_empty() || delta.tool_call.is_some() {
-                first.entry(call_id.as_str()).or_insert(obs.ts_ms);
-            }
+        if let AgentEvent::ModelDelta { call_id, delta, .. } = &obs.event
+            && (!delta.text.is_empty() || !delta.reasoning.is_empty() || delta.tool_call.is_some())
+        {
+            first.entry(call_id.as_str()).or_insert(obs.ts_ms);
         }
     }
     first
