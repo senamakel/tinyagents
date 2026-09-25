@@ -19,11 +19,12 @@ A sibling tracker, [`SuccessfulRepeatTracker`], covers the complementary shape
 — a model that keeps *succeeding* at the same no-op call (or cycles through a
 short repeating sequence) without making progress.
 
-Both trackers are deliberately free of harness types (no `RunContext`, no
-`Message`) so they can be unit-tested in isolation. **Nothing in the crate
-drives them yet** — wiring one into an `after_tool` middleware hook is a
-follow-up; see the "Driving this from an `after_tool` hook" section in
-`mod.rs` for the exact contract a driver must implement.
+All trackers are free of harness types (no `RunContext`, no `Message`) so they
+can be unit-tested in isolation. The agent loop drives
+`StreamTextStallDetector` on visible streaming output and ends the model call
+with non-retryable `GenerationStalled` when it fires. Tool-call trackers remain
+host-wired through `after_tool`; see the "Driving this from an `after_tool`
+hook" section in `mod.rs` for that contract.
 
 ## Public surface
 
@@ -47,6 +48,9 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
 - [`SuccessfulRepeatTracker`] / [`SuccessfulRepeat`] — the successful-repeat
   counterpart: `record_output`, `record_call_batch`, `record_call_outcome`,
   and `reset`.
+- [`StreamTextStallDetector`] — consumes visible text fragments during one
+  model call and flags a long run of similarly opened sentences before the
+  provider stream finishes.
 - Threshold constants: [`DEFAULT_IDENTICAL_HALT_THRESHOLD`],
   [`DEFAULT_REPEAT_OUTPUT_THRESHOLD`], [`DEFAULT_REPEAT_CALL_THRESHOLD`] (all
   re-exported from `crate`).
@@ -57,6 +61,7 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
 | --- | --- |
 | `mod.rs` | The identical/any-failure escalation ladder (`NoProgressTracker::record`), argument fingerprinting, and the nudge/halt message builders. |
 | `successful_repeat.rs` | The successful-repeat streak tracker (`SuccessfulRepeatTracker`) and its private `Streak` helper. |
+| `stream_text/` | Chunk-independent streamed-text stall detector and focused tests. |
 | `types.rs` | Public and crate-private type definitions shared by both trackers. |
 | `test.rs` | Unit tests for the escalation ladder. |
 

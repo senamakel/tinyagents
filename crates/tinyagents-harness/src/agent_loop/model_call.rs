@@ -18,6 +18,7 @@ pub(super) const PER_CALL_BOUND_LABEL: &str = "per-model-call ceiling";
 
 use super::*;
 use crate::cache::{CacheSkipReason, apply_prompt_cache_breakpoints, scoped_cache_key};
+use crate::no_progress::StreamTextStallDetector;
 use tinyinference_llm::cache::CachePolicy;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -920,6 +921,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut saw_streamed_content = false;
         let mut transformed_tools = StreamAccumulator::new();
         let mut saw_tool_delta = false;
+        let mut stream_stall = StreamTextStallDetector::default();
 
         // Some providers pad the very first streamed text chunk with
         // whitespace that is a wire-format artifact, not content (see
@@ -984,6 +986,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     self.middleware
                         .run_on_model_delta(ctx, state, &mut model_delta)
                         .await?;
+                    if stream_stall.observe(&model_delta.content) {
+                        tracing::warn!("[stream] stopped repetitive model narration");
+                        return Err(TinyAgentsError::GenerationStalled);
+                    }
                     // Unconditional, not gated on the post-middleware content:
                     // the pre-middleware tail here is always non-empty (the
                     // surrounding `if` already checked it), matching the
@@ -1053,6 +1059,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 self.middleware
                     .run_on_model_delta(ctx, state, &mut model_delta)
                     .await?;
+                if model_delta.tool_call.is_some() {
+                    stream_stall.reset();
+                } else if stream_stall.observe(&model_delta.content) {
+                    tracing::warn!("[stream] stopped repetitive model narration");
+                    return Err(TinyAgentsError::GenerationStalled);
+                }
                 saw_streamed_content |= !message_delta.text.is_empty()
                     || !message_delta.reasoning.is_empty()
                     || !model_delta.content.is_empty()

@@ -61,10 +61,12 @@
 //! `as_str()` gives a stable telemetry label.
 
 mod classified;
+mod stream_text;
 mod successful_repeat;
 mod types;
 
 pub use classified::{ClassifiedFailure, ClassifiedFailureTracker};
+pub use stream_text::StreamTextStallDetector;
 pub use successful_repeat::{DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD};
 use types::LadderState;
 pub use types::{
