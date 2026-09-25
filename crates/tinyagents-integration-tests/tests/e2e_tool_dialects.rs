@@ -25,7 +25,7 @@ use tinyinference_llm::model::{
 };
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
-use tinytools::{Tool, ToolResult};
+use tinytools::{Tool, ToolExposure, ToolResult};
 
 struct CaptureMiddleware {
     listener: Arc<RecordingListener>,
@@ -106,6 +106,108 @@ fn harness_with(
             listener: listener.clone(),
         }));
     harness
+}
+
+/// Mimics the failure in a real conversation: a greeting precedes a request
+/// to fetch email, and a discovered tool must still be invoked after search.
+struct EmailContinuationModel {
+    calls: Mutex<usize>,
+}
+
+#[async_trait]
+impl ChatModel<()> for EmailContinuationModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let mut calls = self.calls.lock().unwrap();
+        let response = match *calls {
+            0 => "<tool_call>tool_search(query=\"fetch emails from Gmail\")</tool_call>",
+            1 => {
+                let latest_user = request
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| matches!(message, Message::User(_)))
+                    .map(Message::text)
+                    .unwrap_or_default();
+                if latest_user.contains("fetch my latest email")
+                    && latest_user.contains("GMAIL_FETCH_EMAILS")
+                {
+                    "<tool_call>tool_call(name=\"GMAIL_FETCH_EMAILS\", arguments=\"{}\")</tool_call>"
+                } else {
+                    "Hey! What's up?"
+                }
+            }
+            _ => "Email fetched.",
+        };
+        *calls += 1;
+        Ok(ModelResponse::assistant(response))
+    }
+}
+
+struct DeferredEmail {
+    calls: Mutex<usize>,
+}
+
+#[async_trait]
+impl Tool for DeferredEmail {
+    fn name(&self) -> &str {
+        "GMAIL_FETCH_EMAILS"
+    }
+
+    fn description(&self) -> &str {
+        "Fetch email messages from Gmail."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({"type": "object", "properties": {}})
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        *self.calls.lock().unwrap() += 1;
+        Ok(ToolResult::success("one email found"))
+    }
+}
+
+#[tokio::test]
+async fn a_greeting_does_not_replace_the_email_request_after_tool_search() {
+    let model = Arc::new(EmailContinuationModel {
+        calls: Mutex::new(0),
+    });
+    let email = Arc::new(DeferredEmail {
+        calls: Mutex::new(0),
+    });
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness
+        .register_model("mock", model.clone())
+        .set_default_model("mock")
+        .register_tool(email.clone())
+        .with_policy(RunPolicy {
+            tool_dialect: ToolDispatcher::Python,
+            ..RunPolicy::default()
+        });
+
+    let run = harness
+        .invoke_default(
+            &(),
+            vec![
+                Message::user("Hi"),
+                Message::assistant("Hey! What's up?"),
+                Message::user("fetch my latest email"),
+            ],
+        )
+        .await
+        .expect("email continuation completes");
+
+    assert_eq!(*email.calls.lock().unwrap(), 1, "deferred email tool ran");
+    assert_eq!(*model.calls.lock().unwrap(), 3, "search, fetch, answer");
+    assert_eq!(run.text().as_deref(), Some("Email fetched."));
 }
 
 #[tokio::test]

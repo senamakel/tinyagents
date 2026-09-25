@@ -41,7 +41,10 @@ fn text_dialect_keeps_latest_request_after_a_tool_search_result() {
     dialect.apply_to_request(&mut request, true, &[]);
 
     assert!(
-        request.messages[request.messages.len() - 2]
+        request
+            .messages
+            .last()
+            .unwrap()
             .text()
             .contains("GMAIL_FETCH_EMAILS")
     );
