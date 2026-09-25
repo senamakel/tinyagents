@@ -17,6 +17,45 @@ fn auto_uses_xml_when_the_model_disables_native_tool_calling() {
 }
 
 #[test]
+fn text_dialect_keeps_latest_request_after_a_tool_search_result() {
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::ModelRequest;
+    use tinyinference_llm::tool::ToolSchema;
+
+    let tool = ToolSchema::new("tool_search", "find tools", serde_json::json!({}));
+    let dialect = RunDialect::resolve(
+        ToolDispatcher::Xml,
+        std::slice::from_ref(&tool),
+        Some(false),
+    );
+    let mut request = ModelRequest::new(vec![
+        Message::system("system"),
+        Message::user("hey"),
+        Message::assistant("Hey! What's up?"),
+        Message::user("fetch my latest email"),
+        Message::assistant("searching"),
+        Message::tool("search-1", "GMAIL_FETCH_EMAILS schema"),
+    ])
+    .with_tools(vec![tool]);
+
+    dialect.apply_to_request(&mut request, true, &[]);
+
+    assert!(
+        request.messages[request.messages.len() - 2]
+            .text()
+            .contains("GMAIL_FETCH_EMAILS")
+    );
+    assert!(
+        request
+            .messages
+            .last()
+            .unwrap()
+            .text()
+            .contains("fetch my latest email")
+    );
+}
+
+#[test]
 fn code_dialects_are_opt_in_and_share_the_positional_registry() {
     use tinyinference_llm::tool::ToolSchema;
     use tinytools_agent::dialect::CodeStyle;
