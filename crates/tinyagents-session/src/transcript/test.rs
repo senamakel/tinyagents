@@ -138,6 +138,8 @@ fn a_torn_append_does_not_swallow_the_next_turn() {
         .write_all(b"{\"role\":\"assistant\",\"content\":\"cut")
         .unwrap();
 
+    // Both readers skip malformed JSON records. The next append must start
+    // on a separate line so only this cut record is skipped.
     let next = [
         first.clone(),
         vec![TranscriptMessage::new("user", "after crash")],
