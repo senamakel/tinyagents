@@ -287,9 +287,7 @@ pub(super) fn read_transcript_meta_only(path: &Path) -> Option<TranscriptMeta> {
     let mut latest: Option<TranscriptMeta> = None;
     for line in &lines {
         let Some(line) = line else {
-            if latest.is_none() {
-                return None;
-            }
+            latest.as_ref()?;
             continue;
         };
         let line = line.trim();
