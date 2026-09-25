@@ -40,6 +40,9 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
 - [`SuccessfulRepeatTracker`] / [`SuccessfulRepeat`] — the successful-repeat
   counterpart: `record_output`, `record_call_batch`, `record_call_outcome`,
   and `reset`.
+- [`StreamTextStallDetector`] — consumes visible text fragments during one
+  model call and flags a long run of similarly opened sentences before the
+  provider stream finishes.
 - Threshold constants: [`DEFAULT_IDENTICAL_HALT_THRESHOLD`],
   [`DEFAULT_REPEAT_OUTPUT_THRESHOLD`], [`DEFAULT_REPEAT_CALL_THRESHOLD`] (all
   re-exported from `crate`).
@@ -50,6 +53,7 @@ follow-up; see the "Driving this from an `after_tool` hook" section in
 | --- | --- |
 | `mod.rs` | The identical/any-failure escalation ladder (`NoProgressTracker::record`), argument fingerprinting, and the nudge/halt message builders. |
 | `successful_repeat.rs` | The successful-repeat streak tracker (`SuccessfulRepeatTracker`) and its private `Streak` helper. |
+| `stream_text/` | Chunk-independent streamed-text stall detector and focused tests. |
 | `types.rs` | Public and crate-private type definitions shared by both trackers. |
 | `test.rs` | Unit tests for the escalation ladder. |
 
