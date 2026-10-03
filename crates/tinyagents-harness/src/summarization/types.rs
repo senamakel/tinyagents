@@ -488,6 +488,58 @@ pub struct SummarizationPolicy {
     /// when `context_window` is `None`.
     #[serde(default = "default_threshold_fraction")]
     pub threshold_fraction: f64,
+
+    /// Keep at least this many estimated tokens of the most recent
+    /// non-system messages verbatim, instead of a fixed
+    /// [`keep_last`][Self::keep_last] message count.
+    ///
+    /// When set, [`plan`][SummarizationPolicy::plan] cuts with
+    /// [`find_cut_point`][crate::summarization::find_cut_point] and
+    /// `keep_last` is ignored. A count says nothing about size: eight
+    /// messages of a tool loop can be a few hundred tokens or most of the
+    /// window. `None` (the default) keeps the count-based split.
+    #[serde(default)]
+    pub keep_recent_tokens: Option<u64>,
+
+    /// Keep the turn's originating user message verbatim across a compaction.
+    ///
+    /// A long tool-driven turn crosses the threshold mid-turn, and its only
+    /// user message — the assignment being worked on — is the oldest message
+    /// in it, so the split folds it into the summary. When this is set and
+    /// the kept tail holds no user message, [`plan`][SummarizationPolicy::plan]
+    /// moves the most recent user message out of the summarized head to the
+    /// front of the kept tail, verbatim up to
+    /// [`PINNED_USER_MESSAGE_MAX_TOKENS`] (truncated with a marker beyond).
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub pin_turn_user_message: bool,
+}
+
+/// Size cap, in estimated tokens, of a user message pinned by
+/// [`SummarizationPolicy::pin_turn_user_message`]. A larger message is cut to
+/// this size with a truncation marker, so a pasted document cannot pin most of
+/// the window in place.
+pub const PINNED_USER_MESSAGE_MAX_TOKENS: u64 = 8_192;
+
+/// The result of [`SummarizationPolicy::plan_split`]: the split itself plus
+/// where it was taken, in the coordinates of the non-system messages of the
+/// slice that was planned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompactionPlan {
+    /// The messages to fold into a summary, in order. Never contains a system
+    /// message or the pinned user message.
+    pub to_summarize: Vec<Message>,
+    /// System messages, then the pinned user message (when one was pinned),
+    /// then the recent tail kept verbatim.
+    pub to_keep: Vec<Message>,
+    /// Index, into the non-system messages, of the first message of the
+    /// recent tail. Everything before it was summarized, except
+    /// [`Self::pinned`].
+    pub cut: usize,
+    /// Index, into the non-system messages, of the user message moved from
+    /// the summarized head to the front of the kept tail, when one was.
+    /// Always `< cut`.
+    pub pinned: Option<usize>,
 }
 
 /// The default [`SummarizationPolicy::threshold_fraction`] (90% of the context
@@ -503,6 +555,8 @@ impl Default for SummarizationPolicy {
             keep_last: 0,
             context_window: None,
             threshold_fraction: default_threshold_fraction(),
+            keep_recent_tokens: None,
+            pin_turn_user_message: false,
         }
     }
 }
@@ -594,6 +648,13 @@ pub struct CompactionRecord {
     /// the first message that survives verbatim (everything before it was
     /// folded into [`Self::summary`]). Matches [`crate::summarization::CutPoint::index`] when the
     /// record was produced from a [`crate::summarization::CutPoint`].
+    ///
+    /// One exception: when the policy pinned a user message
+    /// ([`SummarizationPolicy::pin_turn_user_message`]), that message lies
+    /// before this index yet was kept verbatim, right after the summary. Its
+    /// index (same coordinates) is in [`Self::details`] as
+    /// `pinned_user_index`; a sink rebuilding the compacted transcript must
+    /// restore it there.
     pub first_kept_index: usize,
     /// Estimated total tokens of the transcript immediately before
     /// compaction.

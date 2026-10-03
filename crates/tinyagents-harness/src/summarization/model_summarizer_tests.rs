@@ -294,3 +294,32 @@ async fn a_summarizer_that_keeps_calling_tools_fails_so_the_fallback_trims() {
     assert!(record.summary.text().contains("deterministic trim"));
     assert!(!record.summary.text().contains("DSML"));
 }
+
+/// Issue tinyhumansai/openhuman#6960: a compaction that fires mid-turn folds
+/// work the agent is still doing. The summary's pending section must hand that
+/// work on as in progress, not tell the model it is stale.
+#[tokio::test]
+async fn pending_work_is_handed_on_as_in_progress_not_stale() {
+    let model = Arc::new(ScriptedModel::replies(vec!["## Goal\nx"]));
+    let summarizer = ModelSummarizer::new(model.clone(), "m");
+    summarizer
+        .summarize(&[
+            Message::user("write the report"),
+            Message::assistant("drafting"),
+        ])
+        .await
+        .unwrap();
+
+    let prompt = model.requests()[0].messages[0].text();
+    assert!(
+        !prompt.contains("STALE"),
+        "pending work must not be labelled stale: {prompt}"
+    );
+    assert!(
+        prompt
+            .contains("In progress — continue these unless a later live message changes direction"),
+        "{prompt}"
+    );
+    // The guard against redoing requests that were already answered stays.
+    assert!(prompt.contains("already answered"), "{prompt}");
+}

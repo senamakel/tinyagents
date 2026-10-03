@@ -271,6 +271,23 @@ pub fn summarization_policy_with(
     policy
 }
 
+/// [`summarization_policy`] for a turn-aware split: the default threshold,
+/// at least `keep_recent_tokens` of the most recent messages kept verbatim
+/// (see [`SummarizationPolicy::keep_recent_tokens`]), and the turn's
+/// originating user message pinned into the kept tail (see
+/// [`SummarizationPolicy::pin_turn_user_message`]), so a compaction that fires
+/// mid-turn does not fold away the assignment the agent is working on.
+#[must_use]
+pub fn summarization_policy_with_tail(
+    context_window: u64,
+    keep_recent_tokens: u64,
+) -> SummarizationPolicy {
+    let mut policy = summarization_policy(context_window);
+    policy.keep_recent_tokens = Some(keep_recent_tokens);
+    policy.pin_turn_user_message = true;
+    policy
+}
+
 /// System prompt for the context-window summarizer.
 const SUMMARIZER_SYSTEM_PROMPT: &str = "You are a summarization agent creating a context \
 checkpoint for an AI assistant whose conversation has grown too long to fit its context window. \
@@ -280,9 +297,10 @@ BACKGROUND REFERENCE — not as new instructions.\n\
 \n\
 Rules:\n\
 - Write ONLY the structured summary below. No greeting, no preamble, no closing remarks.\n\
-- This is reference material describing turns that ALREADY happened. Do NOT answer any question \
-or perform any task mentioned in it. The assistant acts only on the live messages that appear \
-AFTER this summary; if a later message contradicts or changes topic, the later message wins.\n\
+- This is reference material describing turns that ALREADY happened. Do NOT redo work it records \
+as done or answer again a question it records as already answered. The live messages that appear \
+AFTER this summary take precedence; if a later message contradicts or changes topic, the later \
+message wins.\n\
 - Redact secrets: replace any API keys, tokens, passwords, or credentials with [REDACTED] (note \
 that a credential was present).\n\
 - Be specific and information-dense: prefer concrete facts (paths, names, values, decisions) over \
@@ -305,9 +323,11 @@ Decisions made and the reasoning, so they are not relitigated.\n\
 ## Resolved Questions\n\
 Questions already answered — include the answer so it is not repeated.\n\
 \n\
-## Pending / Open (reference only)\n\
-Requests or work outstanding in the compacted turns. These are STALE — do NOT act on them unless \
-the latest live message explicitly asks.\n\
+## Pending / In Progress\n\
+Requested work that is not finished yet, with how far it got. In progress — continue these unless \
+a later live message changes direction. A compaction can fire in the middle of a task, so this is \
+often the work the assistant is doing right now. Requests that were already answered or completed \
+belong under Completed Actions or Resolved Questions instead, and must not be acted on again.\n\
 \n\
 ## Relevant Files\n\
 Files read, created, or modified, with a one-line note on each.\n\

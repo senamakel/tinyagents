@@ -34,6 +34,14 @@ use super::types::{CompactionEntry, EntryId, EntryKind};
 /// outside that count (for example, one produced from a transcript this
 /// session never saw) is skipped rather than persisted as a boundary that
 /// would corrupt [`EntryTree::build_context`].
+/// [`CompactionRecord::details`] key carrying the live index of a user
+/// message the harness pinned out of the folded range.
+const PINNED_USER_INDEX: &str = "pinned_user_index";
+
+/// [`CompactionEntry::details`] key carrying that message's [`EntryId`], read
+/// back by [`EntryTree::build_context`].
+pub(crate) const PINNED_ENTRY_ID: &str = "pinned_entry_id";
+
 pub struct SessionCompactionSink<'a> {
     tree: EntryTree<'a>,
     tip: Mutex<Option<EntryId>>,
@@ -86,12 +94,25 @@ impl CompactionSink for SessionCompactionSink<'_> {
             return Ok(());
         };
 
+        // A user message the compaction pinned out of the folded range is
+        // recorded by entry id too, so `build_context` restores it after the
+        // summary instead of dropping it with the rest of the folded entries.
+        let mut details = record.details.clone();
+        if let Some(pinned_entry_id) = details
+            .get(PINNED_USER_INDEX)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| message_entry_ids.get(index))
+        {
+            details[PINNED_ENTRY_ID] = serde_json::json!(pinned_entry_id);
+        }
+
         let entry = EntryKind::Compaction(CompactionEntry {
             summary: record.summary.clone(),
             first_kept_entry_id,
             tokens_before: record.tokens_before,
             usage: record.usage,
-            details: record.details.clone(),
+            details,
         });
         let new_tip = self.tree.append(Some(&tip), entry)?;
         *tip_guard = Some(new_tip);

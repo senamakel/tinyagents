@@ -1019,9 +1019,24 @@ pub(crate) struct CompactionFold {
     pub(crate) fingerprint: u64,
     /// The summary message spliced in place of the folded messages.
     pub(crate) summary: tinyinference_llm::message::Message,
+    /// The user message the compaction kept verbatim out of the folded range
+    /// (see [`crate::summarization::SummarizationPolicy::pin_turn_user_message`]).
+    /// Re-applying the fold splices it in right after the summary.
+    pub(crate) pinned: Option<PinnedTurnMessage>,
     /// Summary previously spliced by the host and incorporated into this one.
     /// Remove it when rebuilding requests from the host's unchanged transcript.
     pub(crate) replaces: Option<tinyinference_llm::message::Message>,
+}
+
+/// A user message a compaction pinned: kept verbatim although it lies inside
+/// the folded range.
+#[derive(Clone, Debug)]
+pub(crate) struct PinnedTurnMessage {
+    /// Its position in the live (pre-fold) non-system transcript. Always below
+    /// [`CompactionFold::folded`].
+    pub(crate) live_index: usize,
+    /// The message as it is sent: verbatim, or size-capped with a marker.
+    pub(crate) message: tinyinference_llm::message::Message,
 }
 
 // ── MicrocompactMiddleware ────────────────────────────────────────────────────

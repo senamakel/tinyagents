@@ -511,6 +511,41 @@ fn compaction_sink_persists_a_record_anchored_at_the_tip() {
     assert_eq!(context[2].text(), "three");
 }
 
+/// A compaction that pinned the turn's user message out of the folded range
+/// (`details.pinned_user_index`) restores it right after the summary.
+#[test]
+fn compaction_sink_restores_a_pinned_user_message_after_the_summary() {
+    use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
+
+    let ws = workspace();
+    let tree = EntryTree::new(ws.path(), "sess-1");
+    tree.append(None, message_kind("user", "the task")).unwrap();
+    tree.append_to_head(message_kind("assistant", "step one"))
+        .unwrap();
+    tree.append_to_head(message_kind("assistant", "step two"))
+        .unwrap();
+    tree.append_to_head(message_kind("assistant", "step three"))
+        .unwrap();
+
+    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+    let record = CompactionRecord {
+        summary: "steps one and two".to_string(),
+        first_kept_index: 3,
+        tokens_before: 300,
+        tokens_after: 120,
+        usage: None,
+        details: serde_json::json!({ "pinned_user_index": 0 }),
+        reason: CompactionReason::Threshold,
+    };
+    sink.persist(&record).expect("persist");
+
+    let context = tree
+        .build_context(&sink.tip().expect("tip"))
+        .expect("context");
+    let texts: Vec<String> = context.iter().map(|m| m.text()).collect();
+    assert_eq!(texts, vec!["steps one and two", "the task", "step three"]);
+}
+
 #[test]
 fn compaction_sink_advances_its_tip_across_repeated_compactions() {
     use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};

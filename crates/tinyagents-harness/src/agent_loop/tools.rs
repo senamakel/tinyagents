@@ -1275,11 +1275,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         );
         status.set_last_event(record.id);
 
-        messages.push(Message::Tool(tool_message_from_result(
-            transcript_call_id,
-            &result,
-            prepared.options,
-        )));
+        let mut tool_message =
+            tool_message_from_result(transcript_call_id, &result, prepared.options);
+        if self.policy.tool_result_durations && prepared.executed {
+            super::tool_timing::append_duration(&mut tool_message, duration_ms);
+        }
+        messages.push(Message::Tool(tool_message));
         Ok(follow_up_message(&result.follow_up))
     }
 

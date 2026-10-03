@@ -151,9 +151,21 @@ plain retry still helps). Each attempt counts as a model call and emits
 `AgentEvent::RetryScheduled`. The retry runs *before*
 `RunPolicy::error_on_empty_response`; only once the retries are exhausted does
 that guard (if enabled) turn the still-blank final into
-`TinyAgentsError::EmptyResponse`. Set `truncated_empty_retries` to `0` to
-restore exact-replay behavior. The recovery lives in the shared `run_loop`, so
-it applies identically to the unary and streaming paths.
+`TinyAgentsError::EmptyResponse`.
+
+A hosted reasoning model on a high effort setting can deliberate past the
+boosted budget too. Once the retries are spent the loop does not finish on the
+blank reply: up to `RunPolicy::truncated_empty_nudges` times (default `1`) it
+drops the row, appends a user message saying the reply ran out of output tokens
+while reasoning, and asks for the next tool call now, written incrementally (or,
+on a turn with no callable tool, a short answer). It then continues the loop
+at the boosted cap and emits `AgentEvent::ControlApplied`
+(`truncated_empty_nudge`). Both the retry and the nudge are skipped when
+`limits.max_model_calls` leaves no room for another call, so a run on its last
+allowed call ends on the blank reply instead of failing with
+`LimitExceeded`. Set `truncated_empty_retries` and `truncated_empty_nudges` to
+`0` to restore exact-replay behavior. The recovery lives in the shared
+`run_loop`, so it applies identically to the unary and streaming paths.
 
 A provider can also end a stream normally after emitting only reasoning, with
 no visible text or tool call. Hosts may set

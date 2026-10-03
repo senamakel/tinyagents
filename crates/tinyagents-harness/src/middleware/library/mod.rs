@@ -72,6 +72,7 @@ mod policy_gate;
 mod repeat_progress;
 mod resilience;
 mod tool_policy;
+mod turn_clock;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
@@ -99,6 +100,7 @@ pub use policy_gate::{
 pub use repeat_progress::{
     HaltSummarySlot, RepeatEvictionObserver, RepeatExemption, RepeatProgressMiddleware,
 };
+pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };
@@ -115,6 +117,9 @@ mod context_fold_test;
 #[cfg(test)]
 #[path = "context_loop_tests.rs"]
 mod context_loop_test;
+#[cfg(test)]
+#[path = "context_pin_tests.rs"]
+mod context_pin_test;
 #[cfg(test)]
 #[path = "context_task_state_tests.rs"]
 mod context_task_state_test;

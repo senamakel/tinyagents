@@ -110,6 +110,15 @@ loop.
   `len - keep_last` index.** It always routes through
   `find_safe_cutoff_point`, so `keep_last` is a *minimum*, not an exact
   count, and `to_keep` is always a provider-acceptable slice.
+- **`keep_recent_tokens` replaces the `keep_last` count when set.** The tail
+  is then cut by `find_cut_point` (pairing-repaired, never empty).
+- **`pin_turn_user_message` keeps the turn's assignment verbatim.** When the
+  kept tail holds no user message, `plan` moves the most recent one out of the
+  summarized head to the front of the tail (capped at
+  `PINNED_USER_MESSAGE_MAX_TOKENS`, truncated with a marker beyond).
+  `plan_split` reports its index; `ContextCompressionMiddleware` re-applies it
+  with the fold and records it as `details.pinned_user_index` on the
+  `CompactionRecord`, and the `FallbackTrim` front-drop keeps it too.
 - **System messages are never placed in `to_summarize`** and are (by
   default) never dropped by trimming either — they carry persistent
   instructions.

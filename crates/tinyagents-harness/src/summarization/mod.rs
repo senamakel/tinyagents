@@ -41,7 +41,7 @@ pub use compaction::{
 pub use model_summarizer::{
     DEFAULT_SUMMARIZE_KEEP_LAST, DEFAULT_SUMMARIZE_THRESHOLD_FRACTION,
     DEFAULT_SUMMARIZE_TRIGGER_CAP_TOKENS, default_threshold_fraction_for, summarization_policy,
-    summarization_policy_with,
+    summarization_policy_with, summarization_policy_with_tail,
 };
 pub use pairing::{
     advance_past_orphan_tools, find_safe_cutoff_point, is_tool_calling_assistant,
@@ -308,30 +308,44 @@ impl SummarizationPolicy {
     /// unpairable results), so `to_keep` is always a slice a provider accepts.
     /// `keep_last` is therefore a **minimum**, not an exact count.
     pub fn plan(&self, messages: &[Message]) -> (Vec<Message>, Vec<Message>) {
-        let (system, non_system) = partition_system(messages);
+        let plan = self.plan_split(messages);
+        (plan.to_summarize, plan.to_keep)
+    }
 
+    /// [`Self::plan`], also reporting where the split was taken.
+    ///
+    /// With [`keep_recent_tokens`][Self::keep_recent_tokens] set, the tail is
+    /// sized in tokens by [`find_cut_point`] (pairing-repaired the same way)
+    /// and never left empty; otherwise it is the last
+    /// [`keep_last`][Self::keep_last] messages. With
+    /// [`pin_turn_user_message`][Self::pin_turn_user_message] set, the turn's
+    /// user message is then moved to the front of the tail (see
+    /// [`CompactionPlan::pinned`]).
+    pub fn plan_split(&self, messages: &[Message]) -> CompactionPlan {
+        let (system, non_system) = partition_system(messages);
+        let cut = match self.keep_recent_tokens {
+            Some(keep_tokens) => token_tail_cut(&non_system, keep_tokens),
+            None => self.count_tail_cut(&non_system),
+        };
+        split_at_cut(system, &non_system, cut, self.pin_turn_user_message)
+    }
+
+    /// The count-based cut: the last [`keep_last`][Self::keep_last] messages,
+    /// moved back to keep tool-call pairing intact.
+    fn count_tail_cut(&self, non_system: &[Message]) -> usize {
         if non_system.len() <= self.keep_last {
             // Nothing old enough to summarize; keep everything.
-            let mut to_keep = system;
-            to_keep.extend(non_system);
-            return (Vec::new(), to_keep);
+            return 0;
         }
-
         let requested_split = non_system.len() - self.keep_last;
-        let split = find_safe_cutoff_point(&non_system, requested_split);
+        let split = find_safe_cutoff_point(non_system, requested_split);
         if split != requested_split {
             tracing::debug!(
                 "[summarization::plan] keep_last={} moved split {requested_split} -> {split} to preserve tool-call pairing",
                 self.keep_last
             );
         }
-        let to_summarize = non_system[..split].to_vec();
-        let to_keep_recent = non_system[split..].to_vec();
-
-        let mut to_keep = system;
-        to_keep.extend(to_keep_recent);
-
-        (to_summarize, to_keep)
+        split
     }
 }
 
@@ -383,6 +397,142 @@ impl SummarizationPolicy {
         to_keep.extend(non_system[split..].iter().cloned());
         (to_summarize, to_keep)
     }
+}
+
+/// The token-budget cut: at least `keep_tokens` of the newest messages, and
+/// never an empty tail. When the newest message alone is over the budget it is
+/// still kept (with the call it answers), since a tail with no recent message
+/// at all leaves the model nothing to continue from.
+fn token_tail_cut(non_system: &[Message], keep_tokens: u64) -> usize {
+    let Some(cut) = find_cut_point(
+        non_system,
+        keep_tokens,
+        crate::token_estimation::estimate_message_tokens,
+    ) else {
+        // Everything fits in the tail: nothing to summarize.
+        return 0;
+    };
+    let index = if cut.index >= non_system.len() {
+        find_safe_cutoff_point(non_system, non_system.len() - 1)
+    } else {
+        cut.index
+    };
+    tracing::debug!(
+        keep_tokens,
+        cut = index,
+        kept_tokens = cut.tokens_after,
+        "[summarization::plan] token-budget tail"
+    );
+    index
+}
+
+/// Split `non_system` at `cut` (a pairing-safe index) into a
+/// [`CompactionPlan`], pinning the turn's user message when `pin` is set.
+///
+/// The pin applies only when the kept tail `non_system[cut..]` holds no user
+/// message: the most recent user message before `cut` is then left out of
+/// `to_summarize` and placed at the front of the kept tail, verbatim up to
+/// [`PINNED_USER_MESSAGE_MAX_TOKENS`]. A user message never sits between an
+/// assistant tool-call turn and its results, so removing it from the head and
+/// putting it ahead of the tail keeps both sides' tool pairing intact.
+pub(crate) fn split_at_cut(
+    system: Vec<Message>,
+    non_system: &[Message],
+    cut: usize,
+    pin: bool,
+) -> CompactionPlan {
+    let cut = cut.min(non_system.len());
+    let tail_has_user = non_system[cut..]
+        .iter()
+        .any(|m| matches!(m, Message::User(_)));
+    let pinned = (pin && !tail_has_user)
+        .then(|| {
+            non_system[..cut]
+                .iter()
+                .rposition(|m| matches!(m, Message::User(_)))
+        })
+        .flatten();
+
+    let to_summarize: Vec<Message> = non_system[..cut]
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != pinned)
+        .map(|(_, m)| m.clone())
+        .collect();
+    let mut to_keep = system;
+    if let Some(index) = pinned {
+        tracing::debug!(
+            pinned = index,
+            cut,
+            "[summarization::plan] pinning the turn's user message into the kept tail"
+        );
+        to_keep.push(cap_pinned_message(&non_system[index]));
+    }
+    to_keep.extend(non_system[cut..].iter().cloned());
+
+    CompactionPlan {
+        to_summarize,
+        to_keep,
+        cut,
+        pinned,
+    }
+}
+
+/// Front-drop `messages` to `budget` tokens ([`TrimStrategy::MaxTokens`]) the
+/// way the compression middleware's fallback does, but keep the most recent
+/// user message — size-capped as a pin is — when the drop would remove every
+/// user message. Its tokens are reserved from `budget` first, so the result
+/// still fits.
+pub(crate) fn trim_keeping_turn_user_message(messages: &[Message], budget: u64) -> Vec<Message> {
+    let Some(pin) = messages
+        .iter()
+        .rposition(|m| matches!(m, Message::User(_)))
+        .map(|index| cap_pinned_message(&messages[index]))
+    else {
+        return trim_messages(messages, &TrimStrategy::MaxTokens(budget));
+    };
+    let reserved = crate::token_estimation::estimate_message_tokens(&pin);
+    let mut trimmed = trim_messages(
+        messages,
+        &TrimStrategy::MaxTokens(budget.saturating_sub(reserved)),
+    );
+    if trimmed.iter().any(|m| matches!(m, Message::User(_))) {
+        return trimmed;
+    }
+    let system_prefix = trimmed
+        .iter()
+        .take_while(|m| matches!(m, Message::System(_)))
+        .count();
+    tracing::debug!(
+        budget,
+        reserved,
+        "[summarization::trim] re-inserting the turn's user message after a fallback front-drop"
+    );
+    trimmed.insert(system_prefix, pin);
+    trimmed
+}
+
+/// `message`, or — when it estimates above [`PINNED_USER_MESSAGE_MAX_TOKENS`]
+/// — its text cut to that size with a truncation marker. A truncated message
+/// keeps only its text: the cap exists to bound size, and an attachment large
+/// enough to need it cannot stay either.
+fn cap_pinned_message(message: &Message) -> Message {
+    let tokens = crate::token_estimation::estimate_message_tokens(message);
+    if tokens <= PINNED_USER_MESSAGE_MAX_TOKENS {
+        return message.clone();
+    }
+    let keep_chars = (PINNED_USER_MESSAGE_MAX_TOKENS as usize).saturating_mul(4);
+    let text = message.text();
+    let kept: String = text.chars().take(keep_chars).collect();
+    tracing::debug!(
+        tokens,
+        cap = PINNED_USER_MESSAGE_MAX_TOKENS,
+        "[summarization::plan] truncating an oversized pinned user message"
+    );
+    Message::user(format!(
+        "{kept}\n[… message truncated to fit the context window: the original was about \
+         {tokens} tokens]"
+    ))
 }
 
 #[cfg(test)]

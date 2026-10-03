@@ -286,10 +286,22 @@ impl<'a> EntryTree<'a> {
                     content: vec![ContentBlock::Text(compaction.summary.clone())],
                     ..SystemMessage::default()
                 }));
-                chain
+                let start_idx = chain
                     .iter()
                     .position(|e| e.id == compaction.first_kept_entry_id)
-                    .unwrap_or(idx + 1)
+                    .unwrap_or(idx + 1);
+                // A user message the compaction pinned lies inside the folded
+                // range but was kept verbatim: it follows the summary.
+                if let Some(pinned) = compaction
+                    .details
+                    .get(compaction_sink::PINNED_ENTRY_ID)
+                    .and_then(|id| serde_json::from_value::<EntryId>(id.clone()).ok())
+                    .and_then(|id| chain[..start_idx].iter().find(|e| e.id == id))
+                    .and_then(|entry| entry_to_message(&entry.kind))
+                {
+                    messages.push(pinned);
+                }
+                start_idx
             }
             None => 0,
         };

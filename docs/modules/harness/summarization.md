@@ -124,6 +124,10 @@ See [`compaction.md`](./compaction.md) for the full contract.
   `keep_last` count or a `keep_recent_tokens` budget is therefore a
   *minimum*, not an exact value; `to_keep` is always a provider-acceptable
   slice.
+- **`pin_turn_user_message` keeps the turn's assignment out of the
+  summary.** When the kept tail has no user message, the most recent one is
+  moved to its front verbatim (size-capped), and the persisted
+  `CompactionRecord` names it in `details.pinned_user_index`.
 - **System messages are never placed in `to_summarize`** and are (by
   default) never dropped by trimming either.
 - **`ConcatSummarizer` renders through `render_message_for_summary`, not

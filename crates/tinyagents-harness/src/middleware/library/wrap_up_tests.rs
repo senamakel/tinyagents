@@ -471,3 +471,162 @@ async fn wrap_up_restoration_stays_bounded_when_no_window_is_advertised() {
         "some restored, not all 40 — got {restored}"
     );
 }
+
+// ── the budget notice (openhuman#6958) ──────────────────────────────────────
+
+/// Drive one run of `max` model calls through the middleware and return, per
+/// call number (1-based), the text of whatever it appended to a fresh request.
+async fn appended_per_call(
+    mw: &FinalCallWrapUpMiddleware,
+    ctx: &mut RunContext,
+    max: usize,
+) -> Vec<(usize, String)> {
+    let mut appended = Vec::new();
+    for call in 1..=max {
+        ctx.limits.record_model_call().unwrap();
+        let mut request = ModelRequest {
+            messages: vec![TaMessage::user("fix the bug")],
+            tools: mixed_belt(),
+            ..Default::default()
+        };
+        mw.before_model(ctx, &(), &mut request).await.unwrap();
+        if request.messages.len() > 1 {
+            appended.push((call, request.messages.last().unwrap().text()));
+        }
+    }
+    appended
+}
+
+/// Without opting in, nothing is said about the budget until the wrap-up.
+#[tokio::test]
+async fn no_budget_notice_unless_configured() {
+    let mw = mw(sink_with(&[]));
+    let mut ctx = RunContext::new(RunConfig::new("mw-test").with_max_model_calls(20), ());
+
+    let appended = appended_per_call(&mw, &mut ctx, 20).await;
+
+    let calls: Vec<usize> = appended.iter().map(|(call, _)| *call).collect();
+    assert_eq!(calls, vec![19, 20], "only the wrap-up pair may speak");
+}
+
+/// The defect: the model first heard of its budget on the penultimate call.
+/// With the notice on it hears once at half the budget and once at 80%, each
+/// stating how many calls are left — and never again for the same threshold.
+#[tokio::test]
+async fn budget_notice_fires_once_at_each_threshold() {
+    let mw = mw(sink_with(&[])).with_budget_notice([0.5, 0.8]);
+    let mut ctx = RunContext::new(RunConfig::new("mw-test").with_max_model_calls(20), ());
+
+    let appended = appended_per_call(&mw, &mut ctx, 20).await;
+
+    let calls: Vec<usize> = appended.iter().map(|(call, _)| *call).collect();
+    assert_eq!(
+        calls,
+        vec![10, 16, 19, 20],
+        "a notice at 50% and 80%, then the wrap-up pair: {appended:?}"
+    );
+    assert!(
+        appended[0].1.contains("10 model calls left"),
+        "the 50% notice states the remaining budget: {}",
+        appended[0].1
+    );
+    assert!(
+        appended[1].1.contains("4 model calls left"),
+        "the 80% notice states the remaining budget: {}",
+        appended[1].1
+    );
+}
+
+/// A notice must not report the turn as capped: only the conclusion does.
+#[tokio::test]
+async fn budget_notice_does_not_mark_the_turn_capped() {
+    let mw = mw(sink_with(&[])).with_budget_notice([0.5]);
+    let mut ctx = ctx_at(20, 10);
+    let mut request = ModelRequest {
+        messages: vec![TaMessage::user("hi")],
+        tools: mixed_belt(),
+        ..Default::default()
+    };
+
+    mw.before_model(&mut ctx, &(), &mut request).await.unwrap();
+
+    assert_eq!(request.messages.len(), 2, "the 50% notice is appended");
+    assert_eq!(request.tools.len(), 4, "a notice never narrows the belt");
+    assert!(!mw.fired(&ctx));
+}
+
+/// Two thresholds crossed by the same call produce one notice, not two
+/// stacked messages, and neither fires again.
+#[tokio::test]
+async fn thresholds_crossed_together_produce_one_notice() {
+    let mw = mw(sink_with(&[])).with_budget_notice([0.5, 0.6]);
+    // The first call this middleware sees is already past both thresholds
+    // (6 of 10 used), as on a run whose earlier calls it did not observe.
+    let mut ctx = ctx_at(10, 4);
+    let mut request = ModelRequest {
+        messages: vec![TaMessage::user("hi")],
+        tools: mixed_belt(),
+        ..Default::default()
+    };
+
+    mw.before_model(&mut ctx, &(), &mut request).await.unwrap();
+
+    assert_eq!(request.messages.len(), 2, "exactly one notice for both");
+    assert!(request.messages[1].text().contains("4 model calls left"));
+
+    ctx.limits.record_model_call().unwrap();
+    let mut next = ModelRequest {
+        messages: vec![TaMessage::user("hi")],
+        tools: mixed_belt(),
+        ..Default::default()
+    };
+    mw.before_model(&mut ctx, &(), &mut next).await.unwrap();
+    assert_eq!(next.messages.len(), 1, "neither threshold fires again");
+}
+
+/// A notice never lands on the penultimate or final call: those carry their
+/// own instruction, and a second voice there only competes with it.
+#[tokio::test]
+async fn budget_notice_yields_to_the_wrap_up_calls() {
+    let mw = mw(sink_with(&[])).with_budget_notice([0.8, 0.95]);
+    let mut ctx = RunContext::new(RunConfig::new("mw-test").with_max_model_calls(5), ());
+
+    let appended = appended_per_call(&mw, &mut ctx, 5).await;
+
+    assert_eq!(
+        appended,
+        vec![
+            (4, "WRITE NOW".to_string()),
+            (5, "CONCLUDE NOW".to_string())
+        ],
+        "80% of 5 is the penultimate call and 95% the last: no notice fits"
+    );
+}
+
+/// Each run gets its own notices: the bookkeeping is per run context, not
+/// per middleware instance.
+#[tokio::test]
+async fn budget_notice_is_tracked_per_run() {
+    let mw = mw(sink_with(&[])).with_budget_notice([0.5]);
+    let mut first = RunContext::new(RunConfig::new("mw-test").with_max_model_calls(10), ());
+    let mut second = RunContext::new(RunConfig::new("mw-test").with_max_model_calls(10), ());
+
+    let a = appended_per_call(&mw, &mut first, 8).await;
+    let b = appended_per_call(&mw, &mut second, 8).await;
+
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert_eq!(b.len(), 1, "a second run hears its own notice: {b:?}");
+}
+
+/// Thresholds outside (0, 1) mean nothing as a fraction of a budget and are
+/// ignored rather than firing on the first call or never.
+#[tokio::test]
+async fn out_of_range_thresholds_are_ignored() {
+    let mw = mw(sink_with(&[])).with_budget_notice([0.0, -1.0, 1.0, 2.5, f64::NAN]);
+    let mut ctx = RunContext::new(RunConfig::new("mw-test").with_max_model_calls(10), ());
+
+    let appended = appended_per_call(&mw, &mut ctx, 10).await;
+
+    let calls: Vec<usize> = appended.iter().map(|(call, _)| *call).collect();
+    assert_eq!(calls, vec![9, 10], "{appended:?}");
+}

@@ -401,6 +401,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // records the original cap so growth stays clamped at 4x, and the counter
         // bounds how many times we re-issue the call.
         let mut truncated_empty_retries_used: u32 = 0;
+        // "Stop deliberating" re-prompts once the retries above are spent
+        // (see `RunPolicy::truncated_empty_nudges`). Same per-turn scope.
+        let mut truncated_empty_nudges_used: u32 = 0;
         let mut empty_response_retries_used: u32 = 0;
         // Consecutive "you said tool_calls but sent none" re-prompts
         // (see `RunPolicy::dropped_tool_call_nudges`).
@@ -1449,6 +1452,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 empty_response_retries_used = 0;
                 reset_truncated_empty_recovery(
                     &mut truncated_empty_retries_used,
+                    &mut truncated_empty_nudges_used,
                     &mut boosted_max_tokens,
                     &mut truncation_base,
                 );
@@ -1543,6 +1547,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     && response.text().trim().is_empty();
                 if truncated_empty
                     && truncated_empty_retries_used < self.policy.truncated_empty_retries
+                    && ctx.limits.remaining_model_calls() > 0
                 {
                     // Drop the useless empty assistant row appended above so the
                     // retry re-sends the identical transcript.
@@ -1563,6 +1568,50 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     let record = ctx.emit(AgentEvent::RetryScheduled {
                         call_id: call_id.clone(),
                         attempt: truncated_empty_retries_used as usize,
+                    });
+                    status.set_last_event(record.id);
+                    continue;
+                }
+
+                // The boosted retry is spent and the model still deliberated
+                // past its output budget. Re-sending the same transcript keeps
+                // failing the same way (a high-effort reasoning model thinks
+                // as long as it is allowed to), and finishing here hands the
+                // host a blank reply it can only close as if the work were
+                // done. Say plainly what happened and ask for the next step,
+                // then carry on with the loop. The boosted cap stays in force.
+                if truncated_empty
+                    && truncated_empty_nudges_used < self.policy.truncated_empty_nudges
+                    && ctx.limits.remaining_model_calls() > 0
+                {
+                    messages.pop();
+                    truncated_empty_nudges_used += 1;
+                    let nudge = if tools_available_this_turn {
+                        TRUNCATED_EMPTY_TOOL_NUDGE
+                    } else {
+                        TRUNCATED_EMPTY_ANSWER_NUDGE
+                    };
+                    tracing::info!(
+                        target: "tinyagents::agent_loop",
+                        run_id = %ctx.run_id(),
+                        call_id = %call_id,
+                        attempt = truncated_empty_nudges_used,
+                        tools_available = tools_available_this_turn,
+                        max_tokens = ?boosted_max_tokens.or(attempt_max_tokens),
+                        "[agent_loop] truncated-empty retries spent; nudging model to act"
+                    );
+                    ctx.emit(AgentEvent::ControlApplied {
+                        control: "truncated_empty_nudge".to_string(),
+                        detail: format!(
+                            "model call `{call_id}` ran out of output tokens while reasoning \
+                             after {truncated_empty_retries_used} retry(ies); re-prompted to act"
+                        ),
+                    });
+                    messages.push(Message::user(nudge));
+                    let record = ctx.emit(AgentEvent::RetryScheduled {
+                        call_id: call_id.clone(),
+                        attempt: (truncated_empty_retries_used + truncated_empty_nudges_used)
+                            as usize,
                     });
                     status.set_last_event(record.id);
                     continue;
@@ -1665,6 +1714,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // counter would deny recovery to a later turn that needs it.
                 reset_truncated_empty_recovery(
                     &mut truncated_empty_retries_used,
+                    &mut truncated_empty_nudges_used,
                     &mut boosted_max_tokens,
                     &mut truncation_base,
                 );
@@ -1774,6 +1824,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             empty_response_retries_used = 0;
             reset_truncated_empty_recovery(
                 &mut truncated_empty_retries_used,
+                &mut truncated_empty_nudges_used,
                 &mut boosted_max_tokens,
                 &mut truncation_base,
             );
@@ -2505,6 +2556,23 @@ const WITHHELD_TOOL_CALL_NUDGE: &str = "Your previous reply was a tool call, but
      available for this reply, so it did not run. Do not write tool calls. Answer now in plain \
      text from the results already gathered, and state any remaining uncertainty.";
 
+/// The re-prompt sent when a reply ran out of output tokens while reasoning,
+/// produced no tool call, and the boosted retry failed the same way (see
+/// [`crate::runtime::RunPolicy::truncated_empty_nudges`]). It names the cause
+/// and asks for the smallest next step: a model told only to "continue"
+/// deliberates again, and one writing a large file in a single call runs out
+/// again.
+const TRUNCATED_EMPTY_TOOL_NUDGE: &str = "Your last reply ran out of output tokens while \
+     reasoning and produced no tool call. Stop deliberating: make the next tool call now, and \
+     write files incrementally in small pieces.";
+
+/// [`TRUNCATED_EMPTY_TOOL_NUDGE`] for a turn with no callable tool (tools
+/// withdrawn for a concluding answer, or `ToolChoice::None`): asking for a
+/// tool call there would only get a call that cannot run.
+const TRUNCATED_EMPTY_ANSWER_NUDGE: &str = "Your last reply ran out of output tokens while \
+     reasoning and produced no answer. Stop deliberating and write a short answer now from \
+     what you already have.";
+
 /// The re-prompt sent when a text-dialect tool-call block could not be
 /// decoded: no tool ran, and the model should know why rather than assume
 /// its call went through.
@@ -2566,13 +2634,15 @@ fn resolve_call_cap(config_cap: Option<usize>, policy_cap: usize) -> usize {
 /// [`crate::runtime::RunPolicy::truncated_empty_retries`]).
 ///
 /// The state is scoped to a single logical turn: the boosted token cap and the
-/// retry counter must not carry over into the turns that follow a recovered one.
+/// retry and nudge counters must not carry over into the turns that follow a recovered one.
 fn reset_truncated_empty_recovery(
     retries_used: &mut u32,
+    nudges_used: &mut u32,
     boosted_max_tokens: &mut Option<u32>,
     truncation_base: &mut Option<u32>,
 ) {
     *retries_used = 0;
+    *nudges_used = 0;
     *boosted_max_tokens = None;
     *truncation_base = None;
 }

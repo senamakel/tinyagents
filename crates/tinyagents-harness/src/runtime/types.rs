@@ -326,6 +326,22 @@ pub struct RunPolicy {
     /// Defaults to `1` (one retry, two attempts total). Set to `0` to disable
     /// for exact-replay callers that must not re-issue a call.
     pub truncated_empty_retries: u32,
+    /// Re-prompts after [`Self::truncated_empty_retries`] are spent and the
+    /// model *still* returned a truncated-empty completion.
+    ///
+    /// A hosted reasoning model with a high effort setting can deliberate past
+    /// every output budget it is given, so a bare retry (even a boosted one)
+    /// fails the same way. Rather than finishing the run on that blank reply —
+    /// which a host then closes as if the model were done — the loop drops
+    /// the blank row and appends a user message saying the reply ran out of
+    /// output tokens while reasoning and asking for the next step now (the
+    /// tool call when tools are callable, a short answer otherwise). The loop
+    /// then continues. Each nudge is a model call; it is only sent while
+    /// `limits.max_model_calls` leaves room for it.
+    ///
+    /// Defaults to `1`. Set to `0` (together with `truncated_empty_retries =
+    /// 0`) for exact-replay callers that must not re-issue a call.
+    pub truncated_empty_nudges: u32,
     /// Automatic retries for a completion with no visible text, tool calls, or
     /// structured output when the provider did not report length truncation.
     /// Reasoning-only `stop` responses are one example: the model spent tokens
@@ -416,6 +432,16 @@ pub struct RunPolicy {
     /// [`crate::error::TinyAgentsError::Validation`] rather than silently
     /// falling back to `Direct`.
     pub execution: LoopExecution,
+    /// Whether each executed tool's result row ends with how long the call
+    /// took, as a trailing `[took 12.3s]` line the model reads.
+    ///
+    /// A model that cannot see elapsed time cannot budget it: it starts a
+    /// fifteen-minute command three minutes before the run's deadline because
+    /// nothing in its context said the last one took fifteen minutes. The
+    /// duration is the same wall-clock figure `ToolCompleted` already
+    /// carries. Defaults to `false`, so a transcript stays byte-identical
+    /// unless the host opts in.
+    pub tool_result_durations: bool,
 }
 
 /// See [`RunPolicy::execution`].
@@ -579,6 +605,10 @@ impl Default for RunPolicy {
             // caller, so one stochastic-failure retry is strictly better than a
             // blank final.
             truncated_empty_retries: 1,
+            // A truncation that survives the boosted retry is a model that
+            // keeps deliberating; one plain "stop and act" re-prompt recovers
+            // the step instead of ending the run on a blank reply.
+            truncated_empty_nudges: 1,
             empty_response_retries: 0,
             text_dialect_recovery: TextDialectRecovery::default(),
             discovery: crate::tool::discover::ToolDiscoveryPolicy::default(),
@@ -588,6 +618,7 @@ impl Default for RunPolicy {
             structured_strategy_override: None,
             queue_mode: QueueMode::default(),
             execution: LoopExecution::default(),
+            tool_result_durations: false,
         }
     }
 }

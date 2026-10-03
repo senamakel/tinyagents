@@ -39,11 +39,14 @@ keep a few extra tokens to preserve pairing.
 Returns `None` when there is nothing to cut: no non-system content, or the
 whole non-system slice already fits under `keep_recent_tokens`.
 
-This is distinct from `SummarizationPolicy::plan`, which splits by a fixed
-`keep_last` *message count*. `find_cut_point` is used by
+`SummarizationPolicy::plan` splits by a fixed `keep_last` *message count*
+unless `SummarizationPolicy::keep_recent_tokens` is set, in which case it uses
+`find_cut_point` too. `find_cut_point` is also used by
 `ContextCompressionMiddleware::wrap_model`'s overflow recovery path, where a
 token budget (not a message count) is what needs to shrink under a provider's
-context window.
+context window. With `pin_turn_user_message`, both paths keep the turn's most
+recent user message verbatim at the front of the kept tail when the tail has
+none of its own.
 
 ## Split turns: `summarize_with_split`
 

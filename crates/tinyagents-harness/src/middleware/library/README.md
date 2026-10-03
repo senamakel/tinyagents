@@ -65,6 +65,14 @@ Grouped by extension shape:
   `after_model`, and releases the reservation in `on_error` so a failed call
   never leaks it. Emits `AgentEvent::BudgetReserved`, `BudgetReconciled`,
   `UsageRecorded`, `CostRecorded`, `BudgetWarning`, and `BudgetExceeded`.
+- `TurnClock` / `TurnClockMiddleware` — a reading of the run's wall-clock
+  budget (the tighter of the run's own deadline and the host's
+  `RunPolicy::limits.max_wall_clock_ms`), and an `after_tool` hook that appends
+  `[turn budget: 32m elapsed / 28m remaining]` to a tool result once per tenth
+  of the budget past half of it. The note rides a tool result (durable,
+  never rewritten) rather than a per-request system message, so it does not
+  churn the prompt-prefix cache. Pair with `RunPolicy::tool_result_durations`,
+  which appends `[took 12.3s]` to each executed tool row.
 
 ### Observation (`Middleware` lifecycle hooks)
 
