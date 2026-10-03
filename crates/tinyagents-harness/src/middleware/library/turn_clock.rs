@@ -152,6 +152,29 @@ impl TurnClockMiddleware {
     }
 }
 
+/// Whether `text` is one JSON document (an object or array), ignoring
+/// surrounding whitespace.
+///
+/// Such a tool result is read by machines as well as the model — hosts parse
+/// workflow proposals and sub-agent payloads out of it — so a trailing
+/// annotation would make it unparseable. The duration line and the turn-budget
+/// note both skip it.
+pub(crate) fn is_json_document(text: &str) -> bool {
+    let trimmed = text.trim();
+    (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && serde_json::from_str::<serde::de::IgnoredAny>(trimmed).is_ok()
+}
+
+/// Whether a tool result carries structured output that must stay parseable:
+/// a JSON block, or text that is one JSON document.
+fn is_structured(result: &ToolResult) -> bool {
+    result
+        .content
+        .iter()
+        .any(|block| matches!(block, ToolContent::Json { .. }))
+        || is_json_document(&result.output())
+}
+
 /// Append `note` after the result's own content, in the plain blocks and in
 /// the markdown rendering (which replaces the blocks when a caller prefers
 /// markdown).
@@ -184,6 +207,14 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for TurnClockMiddleware {
         let Some(band) = clock.band() else {
             return Ok(());
         };
+        if is_structured(result) {
+            tracing::trace!(
+                target: "tinyagents::middleware",
+                call_id = %invocation.call_id(),
+                "[turn_clock] structured tool result; leaving the note for a later one"
+            );
+            return Ok(());
+        }
         if !self.claim_band(ctx.instance_id(), band) {
             return Ok(());
         }

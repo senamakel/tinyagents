@@ -100,6 +100,7 @@ pub use policy_gate::{
 pub use repeat_progress::{
     HaltSummarySlot, RepeatEvictionObserver, RepeatExemption, RepeatProgressMiddleware,
 };
+pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,

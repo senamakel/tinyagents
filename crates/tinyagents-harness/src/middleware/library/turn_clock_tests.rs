@@ -182,8 +182,15 @@ async fn a_json_result_is_skipped_and_the_band_waits_for_the_next_text_result() 
     Middleware::<(), ()>::after_tool(&middleware, &mut ctx, &(), &identity, &mut json_result)
         .await
         .expect("after_tool succeeds");
-    assert_eq!(result_text(&json_result), "{\"type\":\"workflow_proposal\"}");
+    assert_eq!(
+        result_text(&json_result),
+        "{\"type\":\"workflow_proposal\"}"
+    );
 
     let text = run_after_tool(&middleware, &mut ctx).await;
-    assert_ne!(result_text(&text), "output", "the band was not spent on the JSON row");
+    assert_ne!(
+        result_text(&text),
+        "output",
+        "the band was not spent on the JSON row"
+    );
 }
