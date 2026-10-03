@@ -9,13 +9,14 @@ use crate::cache::{CacheLayoutEvent, PromptCacheLayout};
 use crate::middleware::AgentRun;
 use crate::middleware::{
     CompressionFailurePolicy, ContextCompressionMiddleware, DEFAULT_CACHE_GUARD_EVENT_CAP,
-    DEFAULT_COMPRESSION_RECORD_CAP, MessageTrimMiddleware, MicrocompactMiddleware,
-    PromptCacheGuardMiddleware,
+    DEFAULT_COMPRESSION_RECORD_CAP, DEFAULT_THRASH_COOLDOWN_CALLS, DEFAULT_THRASH_STRIKES,
+    MessageTrimMiddleware, MicrocompactMiddleware, PromptCacheGuardMiddleware,
 };
 use crate::summarization::{
     CompactionContext, CompactionDecision, CompactionReason, CompactionRecord, ConcatSummarizer,
-    OverflowClassifier, SummarizationPolicy, Summarizer, SummaryRecord, TrimStrategy,
-    find_cut_point, summarize_with_split, trim_messages,
+    OverflowClassifier, SummarizationPolicy, Summarizer, SummaryPlacement, SummaryRecord,
+    TrimStrategy, checkpoint_body, checkpoint_message, find_cut_point, is_checkpoint,
+    summarize_with_split, trim_messages,
 };
 
 // ── MessageTrimMiddleware ─────────────────────────────────────────────────────
@@ -84,7 +85,50 @@ impl ContextCompressionMiddleware {
             overflow_classifier: OverflowClassifier::default(),
             before_compaction: None,
             runs: std::sync::Mutex::new(std::collections::HashMap::new()),
+            placement: SummaryPlacement::default(),
+            thrash_strikes: DEFAULT_THRASH_STRIKES,
+            thrash_cooldown_calls: DEFAULT_THRASH_COOLDOWN_CALLS,
+            keep_recent_tokens: None,
         }
+    }
+
+    /// Keeps the most recent `tokens` of history verbatim at each compaction
+    /// (cut at a user or assistant message), instead of the policy's
+    /// `keep_last` message count. A fixed message count keeps almost nothing
+    /// when recent turns are large tool results and too much when they are
+    /// short; a token budget keeps a predictable working set. 20k is the
+    /// measured default for coding agents with large windows; scale it to
+    /// about a fifth of a small model's window.
+    pub fn with_keep_recent_tokens(mut self, tokens: u64) -> Self {
+        self.keep_recent_tokens = Some(tokens);
+        self
+    }
+
+    /// Sets the role the summary is written with. Defaults to
+    /// [`SummaryPlacement::User`]: a reference-only checkpoint after the
+    /// system prompt that leaves the system prompt and tool declarations
+    /// byte-stable. [`SummaryPlacement::System`] restores the original
+    /// system-role summary.
+    pub fn with_summary_placement(mut self, placement: SummaryPlacement) -> Self {
+        self.placement = placement;
+        self
+    }
+
+    /// Configures the anti-thrash guard: after `strikes` compactions in a row
+    /// whose next provider-reported prompt is still at or above the trigger,
+    /// summarization is suppressed for `cooldown_calls` model calls and the
+    /// request is trimmed deterministically instead. Defaults to
+    /// [`DEFAULT_THRASH_STRIKES`] and [`DEFAULT_THRASH_COOLDOWN_CALLS`];
+    /// `strikes == 0` disables the guard.
+    pub fn with_thrash_guard(mut self, strikes: u32, cooldown_calls: u32) -> Self {
+        self.thrash_strikes = strikes;
+        self.thrash_cooldown_calls = cooldown_calls;
+        self
+    }
+
+    /// Returns the configured [`SummaryPlacement`].
+    pub fn summary_placement(&self) -> SummaryPlacement {
+        self.placement
     }
 
     /// Sets the token budget above which a single turn handed to the
@@ -165,17 +209,36 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         self.label
     }
 
-    /// Drops the finished run's fold: it describes that run's transcript only.
+    /// Hands the finished run's compaction to the host, then drops the run's
+    /// state: the fold describes that run's transcript only.
+    ///
+    /// When the run compacted, [`AgentRun::compacted_history`] is set to the
+    /// transcript the next call would have seen, so a host that carries it
+    /// into its next turn starts from the checkpoint instead of re-reading
+    /// (and re-summarizing) everything this run already folded.
     async fn after_agent(
         &self,
         ctx: &mut RunContext<Ctx>,
         _state: &State,
-        _run: &mut AgentRun,
+        run: &mut AgentRun,
     ) -> Result<()> {
-        self.runs
+        let state = self
+            .runs
             .lock()
             .expect("runs mutex poisoned")
             .remove(&ctx.instance_id());
+        if let Some(fold) = state.and_then(|state| state.fold)
+            && let Some(history) = compacted_history(&fold, &run.messages)
+        {
+            tracing::info!(
+                run_id = %ctx.run_id(),
+                full = run.messages.len(),
+                compacted = history.len(),
+                "[context_compression] run ends compacted; exposing the folded transcript \
+                 as AgentRun::compacted_history"
+            );
+            run.compacted_history = Some(history);
+        }
         Ok(())
     }
 
@@ -185,6 +248,61 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         _state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
+        let suppressed = touch_run(
+            &mut self.runs.lock().expect("runs mutex poisoned"),
+            ctx.instance_id(),
+        )
+        .pressure
+        .begin_call();
+        let result = self.compress_request(ctx, request, suppressed).await;
+        // Whatever the outcome, this is the request whose provider usage the
+        // next `after_model` attributes.
+        let schema_tokens = schema_tokens(&request.tools);
+        if let Some(state) = self
+            .runs
+            .lock()
+            .expect("runs mutex poisoned")
+            .get_mut(&ctx.instance_id())
+        {
+            state
+                .pressure
+                .note_request(request.messages.len(), schema_tokens);
+        }
+        result
+    }
+
+    async fn after_model(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        response: &mut ModelResponse,
+    ) -> Result<()> {
+        if let Some(state) = self
+            .runs
+            .lock()
+            .expect("runs mutex poisoned")
+            .get_mut(&ctx.instance_id())
+        {
+            state.pressure.observe(
+                response.usage.as_ref(),
+                &self.policy,
+                self.thrash_strikes,
+                self.thrash_cooldown_calls,
+            );
+        }
+        Ok(())
+    }
+}
+
+impl ContextCompressionMiddleware {
+    /// The `before_model` body: re-apply this run's fold, then compact further
+    /// when the request is still over the trigger.
+    async fn compress_request<Ctx: Send + Sync>(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        request: &mut ModelRequest,
+        suppressed: bool,
+    ) -> Result<()> {
         // The loop rebuilds every request from its full working transcript, so
         // re-apply the compaction this instance already made before deciding
         // anything (see `CompactionFold`). Without this, every call after the
@@ -193,16 +311,59 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         let (mut system, live) = partition_messages_system(&request.messages);
         let chain = fingerprint_chain(&live);
         let check = self.check_fold(ctx.instance_id(), &chain, &mut system);
-        let prior = match &check {
+        // A system-role checkpoint (`SummaryPlacement::System`) the host
+        // carried in from an earlier turn: it is the previous summary, never an
+        // instruction to keep beside a newer one.
+        let inherited_system = take_checkpoints(&mut system);
+        let mut prior = match &check {
             FoldCheck::Applies(fold) => Some((**fold).clone()),
             _ => None,
         };
+        // A user-role checkpoint opening the live transcript was written by an
+        // earlier compaction whose result the host persisted (see
+        // `AgentRun::compacted_history`), or spliced in itself. Adopt it as a
+        // fold over itself: it is refined as the previous summary rather than
+        // summarized as raw history, and later folds extend it in live
+        // coordinates.
+        let mut adopted = false;
+        if prior.is_none()
+            && let (Some(first), Some(_)) = (live.first(), chain.first())
+            && is_checkpoint(first)
+        {
+            tracing::debug!(
+                live = live.len(),
+                "[context_compression] adopting the transcript's checkpoint as the prior summary"
+            );
+            self.remember_fold(ctx.instance_id(), 1, &chain, first);
+            prior = Some(crate::middleware::types::CompactionFold {
+                folded: 1,
+                fingerprint: chain[0],
+                summary: first.clone(),
+                replaces: None,
+            });
+            adopted = true;
+        }
         let folded = prior.as_ref().map_or(0, |fold| fold.folded);
-        let prior_summary = match &check {
-            FoldCheck::Applies(fold) => Some(fold.summary.text()),
-            FoldCheck::HostApplied(text) => Some(text.clone()),
-            FoldCheck::Stale => None,
-            FoldCheck::None => self.run_last_summary(ctx.instance_id()),
+        // What stands in for everything before the unfolded remainder: this
+        // run's fold, or the same summary when the host spliced it into its
+        // transcript itself (it was lifted out of `system` above, so the new
+        // summary replaces it instead of sitting beside it). An adopted
+        // checkpoint (persisted by the host from an earlier turn, or spliced
+        // in by it) is that summary in user-role form. A transcript that no
+        // longer matches the fold gets no previous summary from it: that
+        // summary describes some other history. Otherwise fall back to a
+        // system checkpoint the host carried in, then to the last summary
+        // this run produced. Both the summarizer and a `before_compaction`
+        // hook's own summary build on it.
+        let previous_summary = match &check {
+            _ if adopted => prior.as_ref().map(|fold| summary_text(&fold.summary)),
+            FoldCheck::Applies(fold) => Some(summary_text(&fold.summary)),
+            FoldCheck::HostApplied(text) => Some(strip_checkpoint_marker(text)),
+            FoldCheck::Stale => inherited_system.as_ref().map(summary_text),
+            FoldCheck::None => inherited_system
+                .as_ref()
+                .map(summary_text)
+                .or_else(|| self.run_last_summary(ctx.instance_id())),
         };
         if let Some(fold) = &prior {
             request.messages = splice_summary(
@@ -215,12 +376,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
             );
         }
 
-        // Below the window threshold: pass through (no new compaction, no
-        // event). The tool declarations count: they ride along on every request.
-        if !self
-            .policy
-            .should_summarize_with_tools(&request.messages, &request.tools)
-        {
+        // Below the threshold: pass through (no new compaction, no event).
+        // Prefer the provider's own count of the previous request plus an
+        // estimate of what was appended since; the tool declarations count
+        // either way, since they ride along on every request.
+        let schema_tokens = schema_tokens(&request.tools);
+        let (prompt_tokens, source) = touch_run(
+            &mut self.runs.lock().expect("runs mutex poisoned"),
+            ctx.instance_id(),
+        )
+        .pressure
+        .prompt_tokens(&request.messages, schema_tokens);
+        if !self.policy.exceeds_trigger(prompt_tokens) {
+            return Ok(());
+        }
+        tracing::debug!(
+            prompt_tokens,
+            source = source.as_str(),
+            trigger = self.policy.trigger_budget(),
+            "[context_compression] request over the trigger"
+        );
+
+        // Anti-thrash: summaries that did not bring the prompt under the
+        // trigger are not bought again during the cooldown.
+        if suppressed {
+            tracing::info!(
+                prompt_tokens,
+                "[context_compression] summarization suppressed by the anti-thrash guard; \
+                 trimming deterministically"
+            );
+            let from_tokens = total_message_tokens(&request.messages);
+            self.trim_to_trigger(ctx, request, from_tokens);
             return Ok(());
         }
 
@@ -232,7 +418,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
             .cloned()
             .chain(live[folded..].iter().cloned())
             .collect();
-        let (to_summarize, to_keep) = self.policy.plan(&unfolded);
+        let (to_summarize, to_keep) = match self.keep_recent_tokens {
+            Some(tokens) => self.policy.plan_recent_tokens(&unfolded, tokens),
+            None => self.policy.plan(&unfolded),
+        };
         // Nothing old enough to compress (e.g. keep_last covers everything):
         // keep the request as it stands rather than summarizing an empty set.
         if to_summarize.is_empty() {
@@ -240,7 +429,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         }
 
         let from_tokens = total_message_tokens(&request.messages);
-        // `plan` splits by count, so `to_summarize` is exactly the next
+        // Both plans split one contiguous range, so `to_summarize` is exactly the next
         // `to_summarize.len()` live messages after the existing fold. The
         // record's `first_kept_index` is in live-transcript coordinates — what
         // a session-backed `CompactionSink` maps to an entry id — see
@@ -255,17 +444,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
         ) {
             CompactionDecision::Decline => return Ok(()),
             CompactionDecision::UseSummary(text) => {
-                let text = prior_summary
+                let text = previous_summary
                     .as_deref()
                     .map_or(text.clone(), |previous| format!("{previous}\n{text}"));
                 let record = SummaryRecord {
-                    summary: Message::system(text),
+                    summary: checkpoint_message(self.placement, &text),
                     provenance: crate::summarization::CompressionProvenance {
                         source_ids: Vec::new(),
                         original_token_estimate: 0,
                         summary_token_estimate: 0,
                         reason: "before_compaction hook supplied the summary".to_string(),
                     },
+                    usage: None,
                 };
                 self.remember_fold(ctx.instance_id(), first_kept_index, &chain, &record.summary);
                 let new_messages = splice_summary(to_keep, record.summary.clone());
@@ -277,6 +467,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
                     from_tokens,
                     to_tokens,
                     CompactionReason::Threshold,
+                    None,
                 );
                 request.messages = new_messages;
                 ctx.emit(AgentEvent::Compressed {
@@ -288,14 +479,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
             CompactionDecision::Proceed => {}
         }
 
-        // What stands in for everything before `to_summarize`: this run's fold,
-        // or the same summary when the host spliced it into its transcript
-        // itself (it was lifted out of `system` above, so the new summary
-        // replaces it instead of sitting beside it). A transcript that no
-        // longer matches the fold gets no previous summary: that summary
-        // describes some other history. Otherwise fall back to the last
-        // summary this run produced.
-        let previous_summary = prior_summary;
         tracing::debug!(
             folded,
             to_summarize = to_summarize.len(),
@@ -304,6 +487,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
             incremental = previous_summary.is_some(),
             "[context_compression] compacting"
         );
+        let started = std::time::Instant::now();
         let record = match summarize_with_split(
             self.summarizer.as_ref(),
             &to_summarize,
@@ -341,27 +525,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
                     // remain above the threshold after trimming, with no
                     // further recovery possible.
                     CompressionFailurePolicy::FallbackTrim => {
-                        let schema_tokens = crate::token_estimation::count_tool_schema_tokens(
-                            &request.tools,
-                            &crate::token_estimation::TokenCountOptions::default(),
-                        );
-                        let message_budget =
-                            self.policy.trigger_budget().saturating_sub(schema_tokens);
-                        let trimmed = trim_messages(
-                            &request.messages,
-                            &TrimStrategy::MaxTokens(message_budget),
-                        );
-                        let to_tokens = total_message_tokens(&trimmed);
-                        request.messages = trimmed;
-                        ctx.emit(AgentEvent::Compressed {
-                            from_tokens,
-                            to_tokens,
-                        });
+                        self.trim_to_trigger(ctx, request, from_tokens);
                         return Ok(());
                     }
                 }
             }
         };
+        let latency_ms = elapsed_ms(started);
+        let record = self.placed(record);
 
         // `plan` returns `to_keep` as `[system prompts..., recent turns...]`.
         // `splice_summary` inserts the summary *after* the leading system
@@ -382,6 +553,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ContextCom
             from_tokens,
             to_tokens,
             CompactionReason::Threshold,
+            Some(latency_ms),
         );
         request.messages = new_messages;
 
@@ -423,13 +595,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             Err(error) => error,
         };
 
-        let Some(_overflow) = self.overflow_classifier.classify(&first_error) else {
+        let Some(overflow) = self.overflow_classifier.classify(&first_error) else {
             return Err(first_error);
         };
 
-        let keep_recent_tokens = self.policy.trigger_budget();
+        // Checkpoints in the request (this run's fold summary, or one carried
+        // in from an earlier turn) are the previous summary, never raw history
+        // to summarize again.
+        let mut stripped = request.messages.clone();
+        let carried = take_checkpoints(&mut stripped);
+        // The provider just rejected a request `before_model` judged to fit, so
+        // the estimate cannot be trusted to size the kept tail: keep at most
+        // half of what the transcript estimates to (and half the provider's
+        // stated limit, when it gave one), never more than the trigger budget.
+        // Keeping the full trigger budget found no cut at all whenever the
+        // estimate was under the trigger, which is exactly when a provider
+        // overflow is a surprise.
+        let keep_recent_tokens = self
+            .policy
+            .trigger_budget()
+            .min(total_message_tokens(&stripped) / 2)
+            .min(overflow.limit.map_or(u64::MAX, |limit| limit / 2))
+            .max(1);
         let Some(cut) = find_cut_point(
-            &request.messages,
+            &stripped,
             keep_recent_tokens,
             crate::token_estimation::estimate_message_tokens,
         ) else {
@@ -440,7 +629,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             return Err(first_error);
         };
 
-        let (system, non_system) = partition_messages_system(&request.messages);
+        let (system, non_system) = partition_messages_system(&stripped);
         let to_summarize = non_system[..cut.index].to_vec();
         // This run's fold and the live transcript its `before_model` saw. The
         // fold extends in live-transcript coordinates only when this request's
@@ -451,9 +640,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
         // With no `before_model` state for this run (compression installed only
         // as model middleware), nothing rewrote the request: it is the live
         // transcript itself.
-        let (prior, live_chain) = self
-            .run_state(ctx.instance_id())
-            .unwrap_or_else(|| (None, fingerprint_chain(&non_system)));
+        // (Over the request's own non-system messages, checkpoint included,
+        // so a carried checkpoint the fold does not know about breaks the
+        // alignment instead of shifting it.)
+        let (prior, live_chain) = self.run_state(ctx.instance_id()).unwrap_or_else(|| {
+            let (_, live) = partition_messages_system(&request.messages);
+            (None, fingerprint_chain(&live))
+        });
         let folded = prior.as_ref().map_or(0, |fold| fold.folded);
         // Content, not just count: a later step that rewrites messages in place
         // (microcompact blanking tool bodies) keeps the count but changes what
@@ -465,13 +658,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             .unwrap_or(0);
         let fold_extends = live_chain.len() >= folded
             && fingerprint_chain_from(seed, &non_system) == live_chain[folded..];
-        // When aligned, the request's copy of the prior summary is superseded
-        // by the new one built on it. When not, keep it: the new summary is
-        // built without it and covers only the cut slice.
-        let mut to_keep: Vec<Message> = system
-            .into_iter()
-            .filter(|m| !fold_extends || prior.as_ref().is_none_or(|fold| *m != fold.summary))
-            .collect();
+        // The request's checkpoint (stripped above) is superseded by the new
+        // one, which is built on it: the checkpoint is taken from this very
+        // request, so it describes exactly the history before the cut whether
+        // or not the request still aligns with the live transcript.
+        let mut to_keep: Vec<Message> = system;
         to_keep.extend(non_system[cut.index..].iter().cloned());
         let from_tokens = cut.tokens_before + cut.tokens_after;
         if !fold_extends {
@@ -483,6 +674,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             );
         }
 
+        // The request's own checkpoint describes its history before the cut;
+        // without one, the run's summaries only do when the request still
+        // lines up with the live transcript (an unaligned request's summary
+        // would describe altered history). Both the summarizer and a
+        // `before_compaction` hook's own summary build on it, since the
+        // checkpoint it came from is dropped from `to_keep` either way.
+        let previous_summary = carried.as_ref().map(summary_text).or_else(|| {
+            fold_extends
+                .then(|| {
+                    prior
+                        .as_ref()
+                        .map(|fold| summary_text(&fold.summary))
+                        .or_else(|| self.run_last_summary(ctx.instance_id()))
+                })
+                .flatten()
+        });
+
         match self.hook_decision(
             CompactionReason::Overflow,
             from_tokens,
@@ -492,21 +700,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             CompactionDecision::Decline => return Err(first_error),
             CompactionDecision::Proceed => {}
             CompactionDecision::UseSummary(text) => {
-                // Built on the prior summary only when that summary is being
-                // replaced (aligned); otherwise it stays in `to_keep` as is.
-                let text = prior
-                    .as_ref()
-                    .filter(|_| fold_extends)
-                    .map(|fold| format!("{}\n{text}", fold.summary.text()))
-                    .unwrap_or(text);
+                let text = previous_summary
+                    .as_deref()
+                    .map_or(text.clone(), |previous| format!("{previous}\n{text}"));
                 let record = SummaryRecord {
-                    summary: Message::system(text),
+                    summary: checkpoint_message(self.placement, &text),
                     provenance: crate::summarization::CompressionProvenance {
                         source_ids: Vec::new(),
                         original_token_estimate: 0,
                         summary_token_estimate: 0,
                         reason: "before_compaction hook supplied the summary".to_string(),
                     },
+                    usage: None,
                 };
                 let mut retried = request.clone();
                 if fold_extends {
@@ -529,22 +734,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
                     from_tokens,
                     to_tokens,
                     CompactionReason::Overflow,
+                    None,
                 );
                 retried.messages = new_messages;
+                self.forget_pending(ctx.instance_id());
                 return next.run(ctx, state, retried).await;
             }
         }
 
-        // The prior summary only describes this request's history when the
-        // request still lines up with the live transcript.
-        let previous_summary = if fold_extends {
-            prior
-                .as_ref()
-                .map(|fold| fold.summary.text())
-                .or_else(|| self.run_last_summary(ctx.instance_id()))
-        } else {
-            None
-        };
+        tracing::info!(
+            to_summarize = to_summarize.len(),
+            to_keep = to_keep.len(),
+            from_tokens,
+            "[context_compression] provider reported a context overflow; compacting once and retrying"
+        );
+        let started = std::time::Instant::now();
         let record = match summarize_with_split(
             self.summarizer.as_ref(),
             &to_summarize,
@@ -559,6 +763,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             // original overflow rather than a confusing summarizer error.
             Err(_) => return Err(first_error),
         };
+        let latency_ms = elapsed_ms(started);
+        let record = self.placed(record);
 
         if fold_extends {
             self.remember_fold(
@@ -580,10 +786,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
             from_tokens,
             to_tokens,
             CompactionReason::Overflow,
+            Some(latency_ms),
         );
 
         let mut retried = request;
         retried.messages = new_messages;
+        self.forget_pending(ctx.instance_id());
         // The retry is the *last* attempt: a second overflow propagates
         // rather than looping — see this method's docs.
         next.run(ctx, state, retried).await
@@ -714,7 +922,9 @@ impl ContextCompressionMiddleware {
     ///
     /// When the fold no longer matches but `system` carries its summary, the
     /// host spliced the summary into its own transcript: the summary is lifted
-    /// out of `system` and returned so the next compaction replaces it.
+    /// out of `system` and returned so the next compaction replaces it. A
+    /// user-role checkpoint the host spliced in as its first live message is
+    /// reported the same way; the caller adopts it from the live transcript.
     fn check_fold(&self, run: u64, chain: &[u64], system: &mut Vec<Message>) -> FoldCheck {
         let mut runs = self.runs.lock().expect("runs mutex poisoned");
         let state = touch_run(&mut runs, run);
@@ -723,6 +933,9 @@ impl ContextCompressionMiddleware {
             return FoldCheck::None;
         };
         if fold.folded > 0 && chain.get(fold.folded - 1) == Some(&fold.fingerprint) {
+            if let Some(replaced) = &fold.replaces {
+                system.retain(|message| message != replaced);
+            }
             return FoldCheck::Applies(Box::new(fold));
         }
         if let Some(at) = system.iter().position(|m| *m == fold.summary) {
@@ -737,11 +950,29 @@ impl ContextCompressionMiddleware {
             if let Some(host_fold) = state.fold.as_mut() {
                 host_fold.folded = 0;
             }
+            state.host_applied_summary = Some(fold.summary.clone());
             state.boundary_unaligned = true;
             tracing::debug!("[context_compression] host carries the fold summary itself");
             return FoldCheck::HostApplied(fold.summary.text());
         }
+        // The same, for a user-role checkpoint: the host spliced it in as the
+        // first live message, so it is part of the live transcript rather
+        // than of `system`. The caller adopts it as a fold over itself (which
+        // supersedes this one); its boundaries are in the host's shortened
+        // transcript's coordinates from here on.
+        if is_checkpoint(&fold.summary)
+            && chain.first() == fingerprint_chain(std::slice::from_ref(&fold.summary)).first()
+        {
+            state.fold = None;
+            state.host_applied_summary = None;
+            state.boundary_unaligned = true;
+            tracing::debug!(
+                "[context_compression] host carries the fold's checkpoint as its first live message"
+            );
+            return FoldCheck::HostApplied(fold.summary.text());
+        }
         state.fold = None;
+        state.host_applied_summary = None;
         state.last_summary = None;
         tracing::debug!(
             folded = fold.folded,
@@ -784,14 +1015,19 @@ impl ContextCompressionMiddleware {
         };
         let mut runs = self.runs.lock().expect("runs mutex poisoned");
         let state = touch_run(&mut runs, run);
+        let replaces = state
+            .host_applied_summary
+            .take()
+            .or_else(|| state.fold.as_ref().and_then(|fold| fold.replaces.clone()));
         state.fold = Some(crate::middleware::types::CompactionFold {
             folded,
             fingerprint,
             summary: summary.clone(),
+            replaces,
         });
         // Only a summary attached to a valid fold is worth building on: one
         // from an unaligned overflow request describes altered history.
-        state.last_summary = Some(summary.text());
+        state.last_summary = Some(summary_text(summary));
     }
 
     /// Finalizes a successful compaction: records `record` in the in-process
@@ -799,6 +1035,7 @@ impl ContextCompressionMiddleware {
     /// [`RunContext::compaction_sink`] when attached, and emits
     /// [`AgentEvent::Compacted`]. Does **not** emit `Compressed` — callers
     /// that also want the legacy event emit it themselves.
+    #[allow(clippy::too_many_arguments)]
     fn finish_compaction<Ctx: Send + Sync>(
         &self,
         ctx: &mut RunContext<Ctx>,
@@ -807,7 +1044,30 @@ impl ContextCompressionMiddleware {
         tokens_before: u64,
         tokens_after: u64,
         reason: CompactionReason,
+        latency_ms: Option<u64>,
     ) {
+        // The run's last summary is set by `remember_fold` only: a summary
+        // with no valid fold (an unaligned overflow) is not built on later.
+        touch_run(
+            &mut self.runs.lock().expect("runs mutex poisoned"),
+            ctx.instance_id(),
+        )
+        .pressure
+        .note_compaction();
+        let usage = record.usage;
+        tracing::info!(
+            run_id = %ctx.run_id(),
+            reason = reason.as_str(),
+            boundary,
+            tokens_before,
+            tokens_after,
+            latency_ms,
+            summarizer_input_tokens = usage.map(|u| u.input_tokens),
+            summarizer_output_tokens = usage.map(|u| u.output_tokens),
+            placement = ?self.placement,
+            "[context_compression] compacted"
+        );
+
         // `boundary` is the first kept live-transcript position, or `None`
         // when it cannot be trusted as one (see the overflow path): a durable
         // boundary there would restore or duplicate the wrong messages on
@@ -820,7 +1080,7 @@ impl ContextCompressionMiddleware {
                 first_kept_index,
                 tokens_before,
                 tokens_after,
-                usage: None,
+                usage,
                 details: serde_json::json!({ "source_ids": record.provenance.source_ids }),
                 reason,
             };
@@ -843,8 +1103,135 @@ impl ContextCompressionMiddleware {
             reason,
             tokens_before,
             tokens_after,
+            usage,
+            latency_ms,
         });
     }
+
+    /// `record` with its summary rewritten as this middleware's checkpoint
+    /// message (see [`SummaryPlacement`]).
+    fn placed(&self, mut record: SummaryRecord) -> SummaryRecord {
+        record.summary = checkpoint_message(self.placement, &record.summary.text());
+        record
+    }
+
+    /// Deterministic front-drop of `request` to the policy's trigger budget,
+    /// preserving system messages (see `TrimStrategy::MaxTokens`).
+    ///
+    /// The trigger charges tool schemas, so the message budget reserves that
+    /// same schema cost first: otherwise a request whose schemas already
+    /// consume a meaningful share of `trigger_budget` (or all of it) would
+    /// still trim messages to the *full* budget and stay over the threshold.
+    fn trim_to_trigger<Ctx: Send + Sync>(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        request: &mut ModelRequest,
+        from_tokens: u64,
+    ) {
+        let message_budget = self
+            .policy
+            .trigger_budget()
+            .saturating_sub(schema_tokens(&request.tools));
+        let trimmed = trim_messages(&request.messages, &TrimStrategy::MaxTokens(message_budget));
+        let to_tokens = total_message_tokens(&trimmed);
+        request.messages = trimmed;
+        ctx.emit(AgentEvent::Compressed {
+            from_tokens,
+            to_tokens,
+        });
+    }
+
+    /// Drops `run`'s pending usage attribution: an overflow retry sends a
+    /// request whose shape `before_model` never saw, so its usage cannot
+    /// anchor the next call's measurement.
+    fn forget_pending(&self, run: u64) {
+        if let Some(state) = self.runs.lock().expect("runs mutex poisoned").get_mut(&run) {
+            state.pressure.pending = None;
+        }
+    }
+}
+
+/// `messages` with `fold` applied, when the fold still matches them and covers
+/// more than a checkpoint the transcript already opened with.
+///
+/// Leading system messages stay first, then the fold's summary, then every
+/// message after the folded prefix; mid-conversation system messages are
+/// kept, and system-role checkpoints the fold superseded are dropped.
+fn compacted_history(
+    fold: &crate::middleware::types::CompactionFold,
+    messages: &[Message],
+) -> Option<Vec<Message>> {
+    let (_, live) = partition_messages_system(messages);
+    let chain = fingerprint_chain(&live);
+    if fold.folded == 0 || chain.get(fold.folded - 1) != Some(&fold.fingerprint) {
+        return None;
+    }
+    if fold.folded == 1 && live.first() == Some(&fold.summary) {
+        // Only an adopted checkpoint: nothing new was folded.
+        return None;
+    }
+    let leading = messages
+        .iter()
+        .take_while(|m| matches!(m, Message::System(_)) && !is_checkpoint(m))
+        .count();
+    let mut history = Vec::with_capacity(messages.len());
+    history.extend(messages[..leading].iter().cloned());
+    history.push(fold.summary.clone());
+    let mut skipped = 0usize;
+    for message in &messages[leading..] {
+        let system = matches!(message, Message::System(_));
+        if system && is_checkpoint(message) {
+            continue;
+        }
+        if !system && skipped < fold.folded {
+            skipped += 1;
+            continue;
+        }
+        history.push(message.clone());
+    }
+    Some(history)
+}
+
+/// Estimated tokens of a request's tool declarations.
+fn schema_tokens(tools: &[tinyinference_llm::tool::ToolSchema]) -> u64 {
+    crate::token_estimation::count_tool_schema_tokens(
+        tools,
+        &crate::token_estimation::TokenCountOptions::default(),
+    )
+}
+
+/// Milliseconds since `started`, saturating.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The summary a message carries: a checkpoint's body without its marker, or
+/// the message text for any other summary message.
+fn summary_text(message: &Message) -> String {
+    checkpoint_body(message).unwrap_or_else(|| message.text())
+}
+
+/// `text` without a leading checkpoint marker.
+fn strip_checkpoint_marker(text: &str) -> String {
+    text.strip_prefix(crate::summarization::CHECKPOINT_PREFIX)
+        .unwrap_or(text)
+        .trim()
+        .to_string()
+}
+
+/// Removes every compaction checkpoint from `messages`, returning the last
+/// one (the most recent summary).
+fn take_checkpoints(messages: &mut Vec<Message>) -> Option<Message> {
+    let mut last = None;
+    messages.retain(|m| {
+        if is_checkpoint(m) {
+            last = Some(m.clone());
+            false
+        } else {
+            true
+        }
+    });
+    last
 }
 
 // ── MicrocompactMiddleware ────────────────────────────────────────────────────

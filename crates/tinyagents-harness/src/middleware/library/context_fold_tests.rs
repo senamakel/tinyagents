@@ -30,9 +30,14 @@ fn user(text: &str) -> Message {
     })
 }
 
-/// ~30 estimated tokens (chars / 4) tagged with `tag`.
+/// ~60 estimated tokens (chars / 4) tagged with `tag`.
 fn chunk(tag: &str) -> Message {
-    user(&format!("{tag}:{}", "x".repeat(116)))
+    user(&format!("{tag}:{}", "x".repeat(236)))
+}
+
+/// The checkpoint the middleware writes for `summary` (default user placement).
+fn cp(summary: &str) -> Message {
+    crate::summarization::checkpoint_message(crate::summarization::SummaryPlacement::User, summary)
 }
 
 /// Answers every request with a short summary naming how many requests it has
@@ -60,6 +65,7 @@ impl Summarizer for ShortSummarizer {
                 summary_token_estimate: 0,
                 reason: "test".into(),
             },
+            usage: None,
         })
     }
 }
@@ -84,13 +90,14 @@ struct Fixture {
     c: RunContext,
 }
 
-/// A 100-token window at 0.5 → a 50-token trigger, keeping the newest message.
+/// A 300-token window at 0.5 → a 150-token trigger, keeping the newest message.
+/// Roomy enough that the checkpoint marker plus one kept chunk stays under it.
 fn fixture() -> Fixture {
     let policy = SummarizationPolicy {
         keep_last: 1,
         ..SummarizationPolicy::default()
     }
-    .with_context_window(100)
+    .with_context_window(300)
     .with_threshold_fraction(0.5);
     let summarizer = ShortSummarizer::default();
     let seen = summarizer.seen.clone();
@@ -133,10 +140,10 @@ async fn reapplies_the_fold_instead_of_recompacting_every_call() {
     } = fixture();
     let mut transcript = vec![chunk("m1"), chunk("m2"), chunk("m3")];
 
-    // ~90 tokens: over the 50-token trigger, so the first call compacts m1, m2.
+    // ~180 tokens: over the 150-token trigger, so the first call compacts m1, m2.
     let sent = send(&stack, &mut c, &transcript).await;
     assert_eq!(seen.lock().unwrap().len(), 1);
-    assert_eq!(sent, vec![Message::system("summary #1"), chunk("m3")]);
+    assert_eq!(sent, vec![cp("summary #1"), chunk("m3")]);
 
     // The loop's transcript still holds m1 and m2 (it never saw the summary)
     // and grows by a small message. The fold is re-applied, so the request
@@ -144,10 +151,7 @@ async fn reapplies_the_fold_instead_of_recompacting_every_call() {
     transcript.push(user("ok"));
     let sent = send(&stack, &mut c, &transcript).await;
     assert_eq!(seen.lock().unwrap().len(), 1, "no second summarizer call");
-    assert_eq!(
-        sent,
-        vec![Message::system("summary #1"), chunk("m3"), user("ok")]
-    );
+    assert_eq!(sent, vec![cp("summary #1"), chunk("m3"), user("ok")]);
     assert_eq!(sink.records.lock().unwrap().len(), 1);
 }
 
@@ -173,7 +177,7 @@ async fn compacts_only_history_newer_than_the_fold() {
     assert_eq!(seen[1].messages, vec![chunk("m3"), chunk("m4")]);
     assert_eq!(seen[1].previous_summary.as_deref(), Some("summary #1"));
     // The new summary replaces the one it was built on.
-    assert_eq!(sent, vec![Message::system("summary #2"), chunk("m5")]);
+    assert_eq!(sent, vec![cp("summary #2"), chunk("m5")]);
 
     // Persisted boundaries are positions in the live transcript, which is
     // what a session-backed sink maps to entry ids: m3, then m5.
@@ -207,7 +211,7 @@ async fn drops_the_fold_when_the_transcript_no_longer_matches() {
     assert_eq!(seen[1].messages, vec![chunk("n1"), chunk("n2")]);
     // The old summary describes some other history: it is not handed on.
     assert_eq!(seen[1].previous_summary, None);
-    assert_eq!(sent, vec![Message::system("summary #2"), chunk("n3")]);
+    assert_eq!(sent, vec![cp("summary #2"), chunk("n3")]);
 }
 
 #[tokio::test]
@@ -227,10 +231,14 @@ async fn replaces_a_summary_the_host_spliced_in_itself() {
     transcript.extend([chunk("m4"), chunk("m5")]);
     let sent = send(&stack, &mut c, &transcript).await;
 
-    let seen = seen.lock().unwrap();
-    assert_eq!(seen.len(), 2);
-    assert_eq!(seen[1].previous_summary.as_deref(), Some("summary #1"));
-    assert_eq!(sent, vec![Message::system("summary #2"), chunk("m5")]);
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].previous_summary.as_deref(), Some("summary #1"));
+    }
+    assert_eq!(sent, vec![cp("summary #2"), chunk("m5")]);
+    // The host's transcript has its own coordinates now: no boundary in them
+    // is persisted.
     assert_eq!(sink.records.lock().unwrap().len(), 1);
 }
 
@@ -256,10 +264,77 @@ async fn keeps_recognizing_a_host_spliced_summary_until_it_is_replaced() {
     // ...then over it. The old summary is still recognized and replaced.
     transcript.extend([chunk("m4"), chunk("m5")]);
     let sent = send(&stack, &mut c, &transcript).await;
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].previous_summary.as_deref(), Some("summary #1"));
+    }
+    assert_eq!(sent, vec![cp("summary #2"), chunk("m5")]);
+
+    // Until the host persists summary #2, it still sends summary #1. The
+    // replacement fold must remove that obsolete host summary on reapply.
+    let reapplied = send(&stack, &mut c, &transcript).await;
     let seen = seen.lock().unwrap();
-    assert_eq!(seen.len(), 2);
-    assert_eq!(seen[1].previous_summary.as_deref(), Some("summary #1"));
-    assert_eq!(sent, vec![Message::system("summary #2"), chunk("m5")]);
+    assert_eq!(seen.len(), 2, "the replacement fold is reused");
+    assert_eq!(reapplied, vec![cp("summary #2"), chunk("m5")]);
+}
+
+/// [`keeps_recognizing_a_host_spliced_summary_until_it_is_replaced`] with the
+/// opt-in system placement: the host's summary sits in `system`, is lifted out
+/// and remembered as the one the next fold replaces.
+#[tokio::test]
+async fn keeps_recognizing_a_host_spliced_system_summary_until_it_is_replaced() {
+    let policy = SummarizationPolicy {
+        keep_last: 1,
+        ..SummarizationPolicy::default()
+    }
+    .with_context_window(300)
+    .with_threshold_fraction(0.5);
+    let summarizer = ShortSummarizer::default();
+    let seen = summarizer.seen.clone();
+    let mw: Arc<dyn Middleware<()>> = Arc::new(
+        ContextCompressionMiddleware::with_summarizer(policy, Box::new(summarizer))
+            .with_summary_placement(crate::summarization::SummaryPlacement::System),
+    );
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push(mw);
+    let sink = Arc::new(RecordingSink::default());
+    let mut c = ctx().with_compaction_sink(sink.clone());
+    let sys_cp = |summary: &str| {
+        crate::summarization::checkpoint_message(
+            crate::summarization::SummaryPlacement::System,
+            summary,
+        )
+    };
+
+    let first = send(&stack, &mut c, &[chunk("m1"), chunk("m2"), chunk("m3")]).await;
+    assert_eq!(first, vec![sys_cp("summary #1"), chunk("m3")]);
+
+    let mut transcript = first.clone();
+    transcript.push(user("ok"));
+    let sent = send(&stack, &mut c, &transcript).await;
+    assert_eq!(
+        sent, transcript,
+        "below the threshold the request is left alone"
+    );
+
+    transcript.extend([chunk("m4"), chunk("m5")]);
+    let sent = send(&stack, &mut c, &transcript).await;
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].previous_summary.as_deref(), Some("summary #1"));
+    }
+    assert_eq!(sent, vec![sys_cp("summary #2"), chunk("m5")]);
+
+    let reapplied = send(&stack, &mut c, &transcript).await;
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        2,
+        "the replacement fold is reused"
+    );
+    assert_eq!(reapplied, vec![sys_cp("summary #2"), chunk("m5")]);
+    assert_eq!(sink.records.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -279,16 +354,13 @@ async fn keeps_each_runs_fold_separate() {
     send(&stack, &mut run_a, &a).await;
     // Run B, on the same middleware, has its own history and its own fold.
     let sent_b = send(&stack, &mut run_b, &[chunk("b1"), chunk("b2"), chunk("b3")]).await;
-    assert_eq!(sent_b, vec![Message::system("summary #2"), chunk("b3")]);
+    assert_eq!(sent_b, vec![cp("summary #2"), chunk("b3")]);
     assert_eq!(seen.lock().unwrap()[1].previous_summary, None);
 
     // Run A's fold survived B and still applies, with no new summarizer call.
     a.push(user("ok"));
     let sent_a = send(&stack, &mut run_a, &a).await;
-    assert_eq!(
-        sent_a,
-        vec![Message::system("summary #1"), chunk("a3"), user("ok")]
-    );
+    assert_eq!(sent_a, vec![cp("summary #1"), chunk("a3"), user("ok")]);
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
@@ -313,7 +385,7 @@ async fn keeps_concurrent_contexts_with_the_same_run_id_separate() {
         &[chunk("b1"), chunk("b2"), chunk("b3")],
     )
     .await;
-    assert_eq!(sent_b, vec![Message::system("summary #2"), chunk("b3")]);
+    assert_eq!(sent_b, vec![cp("summary #2"), chunk("b3")]);
     assert_eq!(seen.lock().unwrap()[1].previous_summary, None);
 
     // The second context finishing must not erase the first one's fold.
@@ -323,10 +395,7 @@ async fn keeps_concurrent_contexts_with_the_same_run_id_separate() {
         .unwrap();
     a.push(user("ok"));
     let sent_a = send(&stack, &mut first, &a).await;
-    assert_eq!(
-        sent_a,
-        vec![Message::system("summary #1"), chunk("a3"), user("ok")]
-    );
+    assert_eq!(sent_a, vec![cp("summary #1"), chunk("a3"), user("ok")]);
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
@@ -513,12 +582,7 @@ async fn keeps_system_prompts_ahead_of_the_reapplied_summary() {
     assert_eq!(seen.lock().unwrap().len(), 1);
     assert_eq!(
         sent,
-        vec![
-            system,
-            Message::system("summary #1"),
-            chunk("m3"),
-            user("ok"),
-        ]
+        vec![system, cp("summary #1"), chunk("m3"), user("ok"),]
     );
 }
 

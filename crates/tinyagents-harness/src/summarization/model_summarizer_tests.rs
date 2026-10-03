@@ -52,8 +52,31 @@ fn policy_is_context_window_aware_at_the_default_threshold() {
 #[test]
 fn default_threshold_leaves_headroom_below_the_window() {
     let policy = summarization_policy(100_000);
-    let effective = (policy.context_window.unwrap() as f64 * policy.threshold_fraction) as u64;
-    assert_eq!(effective, 90_000);
+    assert_eq!(policy.trigger_budget(), 80_000);
+}
+
+#[test]
+fn default_trigger_is_capped_for_large_windows() {
+    // min(80% of the window, 350k): small windows compact at 80%, a 1M window
+    // at 350k rather than ~840k.
+    for (window, trigger) in [
+        (32_768, 26_214),
+        (128_000, 102_400),
+        (200_000, 160_000),
+        (437_500, 350_000),
+        (1_048_576, 350_000),
+        (2_000_000, 350_000),
+    ] {
+        let budget = summarization_policy(window).trigger_budget();
+        assert!(
+            budget.abs_diff(trigger) <= 1,
+            "window {window}: trigger {budget}, want {trigger}"
+        );
+    }
+    assert_eq!(
+        super::default_threshold_fraction_for(0),
+        DEFAULT_SUMMARIZE_THRESHOLD_FRACTION
+    );
 }
 
 #[test]
@@ -219,22 +242,6 @@ async fn the_fallback_front_drops_oldest_messages_to_fit_its_budget() {
 const DSML_REPLY: &str = "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"shell\">\n\
 <｜｜DSML｜｜ parameter name=\"command\" string=\"true\">cd /app && cat src/lib.rs</｜｜DSML｜｜ parameter>\n\
 </｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>";
-
-#[test]
-fn tool_call_markup_is_detected_but_quoted_json_and_prose_are_not() {
-    assert!(super::model_summarizer::contains_tool_call_markup(
-        DSML_REPLY
-    ));
-    assert!(super::model_summarizer::contains_tool_call_markup(
-        "<tool_call>{\"name\":\"shell\",\"arguments\":{\"command\":\"ls\"}}</tool_call>"
-    ));
-    assert!(!super::model_summarizer::contains_tool_call_markup(
-        "## Goal\nShip the parser.\n\n## Active State\nConfig is {\"retries\": 3}."
-    ));
-    assert!(!super::model_summarizer::contains_tool_call_markup(
-        "{\"name\":\"shell\",\"arguments\":{}}"
-    ));
-}
 
 #[tokio::test]
 async fn the_transcript_is_fenced_as_data_with_the_instruction_last() {

@@ -178,6 +178,7 @@ impl FaultTolerantCachingSummarizer {
                     self.fallback_trim_budget
                 ),
             },
+            usage: None,
         }
     }
 }

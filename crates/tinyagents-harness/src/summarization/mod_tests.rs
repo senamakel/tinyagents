@@ -747,3 +747,68 @@ mod rendering {
         );
     }
 }
+
+mod plan_recent_tokens {
+    use crate::summarization::{SummarizationPolicy, summarization_policy};
+    use serde_json::json;
+    use tinyinference_llm::message::{AssistantMessage, Message};
+    use tinyinference_llm::tool::ToolCall;
+
+    fn turn(i: usize, output_chars: usize) -> Vec<Message> {
+        let id = format!("c{i}");
+        vec![
+            Message::Assistant(AssistantMessage {
+                id: None,
+                content: Vec::new(),
+                tool_calls: vec![ToolCall::new(&id, "shell", json!({"command": "ls"}))],
+                usage: None,
+                origin: None,
+            }),
+            Message::tool(&id, "y".repeat(output_chars)),
+        ]
+    }
+
+    fn history() -> Vec<Message> {
+        let mut m = vec![Message::system("sys"), Message::user("task")];
+        for i in 0..10 {
+            m.extend(turn(i, 4_000)); // ~1k tokens per turn
+        }
+        m
+    }
+
+    #[test]
+    fn keeps_about_the_token_budget_and_never_opens_on_a_tool_result() {
+        let policy = summarization_policy(1_000_000);
+        let (to_summarize, to_keep) = policy.plan_recent_tokens(&history(), 3_500);
+        assert!(matches!(to_keep[0], Message::System(_)));
+        assert!(
+            matches!(to_keep[1], Message::Assistant(_)),
+            "tail opens on {:?}",
+            to_keep[1]
+        );
+        let kept_turns = (to_keep.len() - 1) / 2;
+        assert!((2..=4).contains(&kept_turns), "kept {kept_turns} turns");
+        assert_eq!(to_summarize.len() + to_keep.len(), history().len());
+        assert!(matches!(to_summarize[0], Message::User(_)));
+    }
+
+    #[test]
+    fn budget_is_capped_at_half_the_trigger() {
+        // Trigger at 4k tokens: a 20k tail would keep everything and never
+        // compact; the cap keeps about 2k.
+        let policy = SummarizationPolicy::default().with_trigger_override(4_000);
+        let (to_summarize, to_keep) = policy.plan_recent_tokens(&history(), 20_000);
+        assert!(!to_summarize.is_empty());
+        assert!((to_keep.len() - 1) / 2 <= 2);
+    }
+
+    #[test]
+    fn an_oversized_last_turn_is_still_kept() {
+        let mut m = history();
+        m.extend(turn(99, 400_000));
+        let policy = summarization_policy(1_000_000);
+        let (_, to_keep) = policy.plan_recent_tokens(&m, 1_000);
+        assert_eq!(to_keep.len(), 3, "system + the last call and its result");
+        assert!(matches!(to_keep[1], Message::Assistant(_)));
+    }
+}

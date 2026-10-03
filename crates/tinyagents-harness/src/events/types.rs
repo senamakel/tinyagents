@@ -627,6 +627,15 @@ pub enum AgentEvent {
         tokens_before: u64,
         /// Estimated total tokens of the transcript after compaction.
         tokens_after: u64,
+        /// Provider usage of the summarization call(s), when the summarizer
+        /// made a model call and the provider reported it. The summarizer
+        /// runs outside the run's own model calls, so this is the only place
+        /// its spend reaches the event stream.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<tinyinference_llm::usage::Usage>,
+        /// Wall-clock milliseconds the summarization took, when it ran.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latency_ms: Option<u64>,
     },
 
     /// The final turn's structured-output extraction failed schema

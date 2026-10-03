@@ -17,24 +17,30 @@
 //! - [`SummarizationPolicy`] — decides when to summarize and how to split the slice.
 //! - [`ModelSummarizer`] / [`FaultTolerantCachingSummarizer`] — LLM-backed summarization
 //!   that never aborts a turn on a summarizer outage.
+//! - [`TaskStateSummarizer`] — typed task-state checkpoints: facts copied from tool
+//!   records plus one structured state-update call (see [`task_state`]).
 //!
 //! All policy decisions are explicit data types, never hidden behaviour. Callers
 //! choose when to call, what to pass, and how to handle the result.
 
+mod checkpoint;
 pub mod compaction;
 mod model_summarizer;
 pub mod pairing;
 mod render;
 mod resilient;
+pub mod task_state;
 mod trim;
 mod types;
 
+pub use checkpoint::{CHECKPOINT_PREFIX, checkpoint_body, checkpoint_message, is_checkpoint};
 pub use compaction::{
     CompactionContext, CompactionDecision, CutPoint, OverflowClassifier, OverflowInfo,
     OverflowProbe, find_cut_point, summarize_with_split,
 };
 pub use model_summarizer::{
-    DEFAULT_SUMMARIZE_KEEP_LAST, DEFAULT_SUMMARIZE_THRESHOLD_FRACTION, summarization_policy,
+    DEFAULT_SUMMARIZE_KEEP_LAST, DEFAULT_SUMMARIZE_THRESHOLD_FRACTION,
+    DEFAULT_SUMMARIZE_TRIGGER_CAP_TOKENS, default_threshold_fraction_for, summarization_policy,
     summarization_policy_with,
 };
 pub use pairing::{
@@ -43,6 +49,7 @@ pub use pairing::{
 };
 pub use render::render_message_for_summary;
 pub use resilient::FaultTolerantCachingSummarizer;
+pub use task_state::{DEFAULT_TASK_STATE_CHUNK_TOKENS, TaskLedger, TaskState, TaskStateSummarizer};
 pub use trim::{trim_messages, trim_messages_to_token_budget_with, trim_messages_with};
 pub use types::*;
 
@@ -136,6 +143,7 @@ impl Summarizer for ConcatSummarizer {
         Ok(SummaryRecord {
             summary,
             provenance,
+            usage: None,
         })
     }
 
@@ -144,9 +152,12 @@ impl Summarizer for ConcatSummarizer {
     ///
     /// Compaction is incremental: once a transcript has been folded, the next
     /// compaction hands the summarizer only the messages since that fold, plus
-    /// the prior summary. The trait default ignores the prior summary, which
-    /// for this deterministic stand-in would silently drop everything folded
-    /// before.
+    /// the prior summary, which must survive into the result. The trait default
+    /// would forward it as a leading system message rendered through
+    /// [`render_message_for_summary`] and given a positional `msg-N` id, so it
+    /// would read as one more transcript entry. This override keeps it verbatim
+    /// ahead of the concatenation instead, and is the only forwarding: it
+    /// replaces the default rather than adding to it.
     async fn summarize_request(&self, request: &SummaryRequest) -> Result<SummaryRecord> {
         let mut record = self.summarize(&request.messages).await?;
         if let Some(previous) = request.previous_summary.as_deref() {
@@ -236,10 +247,34 @@ impl SummarizationPolicy {
                 tools,
                 &crate::token_estimation::TokenCountOptions::default(),
             );
+        self.exceeds_trigger(tokens)
+    }
+
+    /// Whether a request of `tokens` total input tokens (messages plus tool
+    /// declarations, however they were measured) reaches the trigger.
+    ///
+    /// The same comparison [`Self::should_summarize_with_tools`] applies to
+    /// its own estimate, exposed so a caller holding a better measurement —
+    /// the provider-reported prompt size of the previous call, say — can use
+    /// it instead: at or above [`Self::trigger_budget`] when a context window
+    /// is set, strictly above [`Self::trigger_tokens`] otherwise.
+    pub fn exceeds_trigger(&self, tokens: u64) -> bool {
         match self.context_window {
             Some(_) => tokens >= self.trigger_budget(),
             None => tokens > self.trigger_tokens,
         }
+    }
+
+    /// Pins the trigger to an absolute token count, ignoring any context
+    /// window: the policy then compacts once a request exceeds `tokens`.
+    ///
+    /// For forcing compaction early (benchmarks, tests) and for models whose
+    /// window is unknown. Clears [`Self::context_window`], which only ever
+    /// fed the trigger.
+    pub fn with_trigger_override(mut self, tokens: u64) -> Self {
+        self.context_window = None;
+        self.trigger_tokens = tokens;
+        self
     }
 
     /// Split `messages` into `(to_summarize, to_keep)`.
@@ -296,6 +331,56 @@ impl SummarizationPolicy {
         let mut to_keep = system;
         to_keep.extend(to_keep_recent);
 
+        (to_summarize, to_keep)
+    }
+}
+
+impl SummarizationPolicy {
+    /// [`Self::plan`] with a token-budgeted tail: keep the most recent
+    /// `keep_recent_tokens` of non-system messages verbatim (capped at half
+    /// the trigger budget, so the compacted request lands well under the
+    /// trigger) and summarize the rest.
+    ///
+    /// The tail starts at a user or assistant message: a cut that would land
+    /// on a tool result moves back to the assistant turn that called it (see
+    /// [`find_safe_cutoff_point`]). The most recent message group is always
+    /// kept, even when it alone exceeds the budget.
+    pub fn plan_recent_tokens(
+        &self,
+        messages: &[Message],
+        keep_recent_tokens: u64,
+    ) -> (Vec<Message>, Vec<Message>) {
+        let (system, non_system) = partition_system(messages);
+        let budget = match self.trigger_budget() {
+            0 => keep_recent_tokens,
+            trigger => keep_recent_tokens.min(trigger / 2),
+        };
+        let mut kept = 0u64;
+        let mut start = non_system.len();
+        for (index, message) in non_system.iter().enumerate().rev() {
+            let tokens = crate::token_estimation::estimate_message_tokens(message);
+            if kept + tokens > budget {
+                break;
+            }
+            kept += tokens;
+            start = index;
+        }
+        if start == non_system.len() {
+            start = non_system.len().saturating_sub(1);
+        }
+        let split = find_safe_cutoff_point(&non_system, start);
+        tracing::debug!(
+            keep_recent_tokens,
+            budget,
+            kept_tokens = kept,
+            requested = start,
+            split,
+            total = non_system.len(),
+            "[summarization::plan_recent_tokens] token-budgeted split"
+        );
+        let to_summarize = non_system[..split].to_vec();
+        let mut to_keep = system;
+        to_keep.extend(non_system[split..].iter().cloned());
         (to_summarize, to_keep)
     }
 }

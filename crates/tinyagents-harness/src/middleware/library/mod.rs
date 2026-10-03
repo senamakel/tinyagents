@@ -61,6 +61,7 @@ use tinytools::ToolResult;
 mod arg_recovery;
 mod artifact_toc;
 mod budget;
+mod compaction_pressure;
 mod context;
 mod credential_scrub;
 mod image_trim;
@@ -111,6 +112,12 @@ mod artifact_toc_test;
 #[cfg(test)]
 #[path = "context_fold_tests.rs"]
 mod context_fold_test;
+#[cfg(test)]
+#[path = "context_loop_tests.rs"]
+mod context_loop_test;
+#[cfg(test)]
+#[path = "context_task_state_tests.rs"]
+mod context_task_state_test;
 #[cfg(test)]
 #[path = "credential_scrub_tests.rs"]
 mod credential_scrub_test;

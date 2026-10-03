@@ -281,6 +281,12 @@ pub struct SummaryRecord {
 
     /// Provenance metadata linking this summary back to its source messages.
     pub provenance: CompressionProvenance,
+
+    /// Provider-reported usage of the summarization call(s) that produced
+    /// [`Self::summary`], when the summarizer made a model call and the
+    /// provider reported it. `None` for deterministic summarizers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<tinyinference_llm::usage::Usage>,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +365,10 @@ pub trait Summarizer: Send + Sync {
                 summary_token_estimate,
                 reason: "merged split-turn summaries (default concatenation)".to_string(),
             },
+            usage: summaries
+                .iter()
+                .filter_map(|record| record.usage)
+                .reduce(|sum, usage| sum + usage),
         })
     }
 }
@@ -472,7 +482,9 @@ pub struct SummarizationPolicy {
     pub context_window: Option<u64>,
 
     /// Fraction of [`context_window`][Self::context_window] that must be
-    /// reached before summarization triggers. Defaults to `0.9` (90%). Ignored
+    /// reached before summarization triggers. Defaults to `0.9` (90%) for a
+    /// bare policy; [`crate::summarization::summarization_policy`] uses
+    /// `min(80% of the window, 350k tokens)` instead. Ignored
     /// when `context_window` is `None`.
     #[serde(default = "default_threshold_fraction")]
     pub threshold_fraction: f64,
@@ -493,6 +505,35 @@ impl Default for SummarizationPolicy {
             threshold_fraction: default_threshold_fraction(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Summary placement
+// ---------------------------------------------------------------------------
+
+/// Where a compaction summary is placed in the rebuilt transcript.
+///
+/// Either way the summary sits *after* the leading system prompt and *before*
+/// the kept recent messages; the variants differ only in the role it carries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryPlacement {
+    /// A `user`-role message opening with
+    /// [`crate::summarization::CHECKPOINT_PREFIX`], a reference-only marker
+    /// telling the model the content is background data, not instructions.
+    /// It sits after the system prompt and before the kept messages.
+    ///
+    /// The default: the system prompt and tool declarations stay
+    /// byte-identical across a compaction, so the provider's prefix cache
+    /// for them survives, and the summary cannot be mistaken for a new
+    /// system instruction.
+    #[default]
+    User,
+    /// A `system`-role message carrying the same marker (the original
+    /// placement). Kept for hosts that relied on it; it adds a second system
+    /// message after the prompt, which churns the cacheable prefix on every
+    /// compaction.
+    System,
 }
 
 // ---------------------------------------------------------------------------
