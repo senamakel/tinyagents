@@ -442,15 +442,9 @@ pub(crate) fn split_at_cut(
     pin: bool,
 ) -> CompactionPlan {
     let cut = cut.min(non_system.len());
-    let tail_has_user = non_system[cut..]
-        .iter()
-        .any(|m| matches!(m, Message::User(_)));
+    let tail_has_user = non_system[cut..].iter().any(is_turn_user_message);
     let pinned = (pin && !tail_has_user)
-        .then(|| {
-            non_system[..cut]
-                .iter()
-                .rposition(|m| matches!(m, Message::User(_)))
-        })
+        .then(|| non_system[..cut].iter().rposition(is_turn_user_message))
         .flatten();
 
     let to_summarize: Vec<Message> = non_system[..cut]
@@ -486,7 +480,7 @@ pub(crate) fn split_at_cut(
 pub(crate) fn trim_keeping_turn_user_message(messages: &[Message], budget: u64) -> Vec<Message> {
     let Some(pin) = messages
         .iter()
-        .rposition(|m| matches!(m, Message::User(_)))
+        .rposition(is_turn_user_message)
         .map(|index| cap_pinned_message(&messages[index]))
     else {
         return trim_messages(messages, &TrimStrategy::MaxTokens(budget));
@@ -496,7 +490,7 @@ pub(crate) fn trim_keeping_turn_user_message(messages: &[Message], budget: u64) 
         messages,
         &TrimStrategy::MaxTokens(budget.saturating_sub(reserved)),
     );
-    if trimmed.iter().any(|m| matches!(m, Message::User(_))) {
+    if trimmed.iter().any(is_turn_user_message) {
         return trimmed;
     }
     let system_prefix = trimmed
@@ -510,6 +504,12 @@ pub(crate) fn trim_keeping_turn_user_message(messages: &[Message], budget: u64) 
     );
     trimmed.insert(system_prefix, pin);
     trimmed
+}
+
+/// Whether `message` is a user message a person (or host) wrote, not a
+/// user-role compaction checkpoint, which is a summary rather than an assignment.
+fn is_turn_user_message(message: &Message) -> bool {
+    matches!(message, Message::User(_)) && !is_checkpoint(message)
 }
 
 /// `message`, or — when it estimates above [`PINNED_USER_MESSAGE_MAX_TOKENS`]

@@ -752,6 +752,38 @@ mod turn_pin {
     }
 
     #[test]
+    fn a_carried_user_role_checkpoint_is_not_pinned_as_the_turn_message() {
+        let mut messages = long_turn();
+        // A prior compaction's summary rides as a user message after the
+        // assignment; it is a summary, not the turn's assignment.
+        messages.insert(
+            1,
+            crate::summarization::checkpoint_message(
+                crate::summarization::SummaryPlacement::User,
+                "earlier work summary",
+            ),
+        );
+        let split = pinning_policy().plan_split(&messages);
+
+        assert_eq!(
+            split.pinned,
+            Some(0),
+            "the assignment is pinned, not the checkpoint"
+        );
+        assert_eq!(
+            split.to_keep[1].text(),
+            "Write the quarterly report to report.md"
+        );
+
+        let only_checkpoint: Vec<Message> = messages
+            .iter()
+            .filter(|m| !matches!(m, Message::User(_)) || crate::summarization::is_checkpoint(m))
+            .cloned()
+            .collect();
+        assert_eq!(pinning_policy().plan_split(&only_checkpoint).pinned, None);
+    }
+
+    #[test]
     fn plan_split_reports_the_cut_and_the_pinned_index() {
         let messages = long_turn();
         let split = pinning_policy().plan_split(&messages);
