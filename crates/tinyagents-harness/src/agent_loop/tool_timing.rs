@@ -5,7 +5,8 @@
 //! in. When on, the fold appends one trailing `[took 12.3s]` line to every
 //! executed call's tool row. Calls the loop answered without running a tool
 //! (denials, unknown tools, invalid arguments) carry no line — there was no
-//! execution to time.
+//! execution to time — and neither do rows that are structured output (a JSON
+//! block, or text that is one JSON document), which hosts parse.
 
 use tinyinference_llm::message::{ContentBlock, ToolMessage};
 
@@ -31,10 +32,37 @@ pub(super) fn append_duration(message: &mut ToolMessage, duration_ms: u64) {
         );
         return;
     }
+    if is_structured(message) {
+        tracing::trace!(
+            target: "tinyagents::agent_loop",
+            call_id = %message.tool_call_id,
+            "[agent_loop::tool_timing] structured tool row; not appending its duration"
+        );
+        return;
+    }
     message.content.push(ContentBlock::Text(format!(
         "\n{}",
         duration_suffix(duration_ms)
     )));
+}
+
+/// Whether the row is structured output that must stay parseable: a JSON
+/// block, or text that is one JSON document
+/// (see [`crate::middleware::library::is_json_document`]).
+fn is_structured(message: &ToolMessage) -> bool {
+    if message
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Json(_)))
+    {
+        return true;
+    }
+    let text: String = message
+        .content
+        .iter()
+        .filter_map(ContentBlock::as_text)
+        .collect();
+    crate::middleware::library::is_json_document(&text)
 }
 
 #[cfg(test)]
