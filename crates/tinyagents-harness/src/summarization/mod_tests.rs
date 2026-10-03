@@ -757,7 +757,7 @@ mod turn_pin {
         // A prior compaction's summary rides as a user message after the
         // assignment; it is a summary, not the turn's assignment.
         messages.insert(
-            1,
+            2,
             crate::summarization::checkpoint_message(
                 crate::summarization::SummaryPlacement::User,
                 "earlier work summary",
