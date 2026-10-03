@@ -116,3 +116,28 @@ async fn tool_rows_carry_their_duration_when_the_policy_asks() {
         "unexpected tool row: {text:?}"
     );
 }
+
+/// A row that is one JSON document is read by machines as well as the model
+/// (hosts parse workflow proposals and sub-agent payloads out of it), so a
+/// trailing line would make it unparseable.
+#[test]
+fn append_duration_leaves_json_documents_parseable() {
+    let mut text_json = tool_message(vec![ContentBlock::Text(
+        "  {\"type\": \"workflow_proposal\"}\n".to_string(),
+    )]);
+    append_duration(&mut text_json, 1_500);
+    assert_eq!(text_json.content.len(), 1);
+
+    let mut block_json = tool_message(vec![ContentBlock::Json(json!({"ok": true}))]);
+    append_duration(&mut block_json, 1_500);
+    assert_eq!(block_json.content.len(), 1);
+
+    let mut array = tool_message(vec![ContentBlock::Text("[1, 2]".to_string())]);
+    append_duration(&mut array, 1_500);
+    assert_eq!(array.content.len(), 1);
+
+    // Text that merely starts like JSON is still prose.
+    let mut prose = tool_message(vec![ContentBlock::Text("{not json} done".to_string())]);
+    append_duration(&mut prose, 1_500);
+    assert_eq!(prose.content.len(), 2);
+}

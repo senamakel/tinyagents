@@ -170,3 +170,20 @@ async fn a_markdown_rendering_carries_the_note_too() {
         "{markdown:?}"
     );
 }
+
+#[tokio::test]
+async fn a_json_result_is_skipped_and_the_band_waits_for_the_next_text_result() {
+    let middleware = TurnClockMiddleware::new(Some(Duration::from_millis(1)));
+    let mut ctx = RunContext::new(RunConfig::new("r"), ());
+    std::thread::sleep(Duration::from_millis(5));
+    let identity = ToolInvocationIdentity::new("call-1", "propose_workflow");
+
+    let mut json_result = ToolResult::success("{\"type\":\"workflow_proposal\"}");
+    Middleware::<(), ()>::after_tool(&middleware, &mut ctx, &(), &identity, &mut json_result)
+        .await
+        .expect("after_tool succeeds");
+    assert_eq!(result_text(&json_result), "{\"type\":\"workflow_proposal\"}");
+
+    let text = run_after_tool(&middleware, &mut ctx).await;
+    assert_ne!(result_text(&text), "output", "the band was not spent on the JSON row");
+}
