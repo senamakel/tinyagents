@@ -4158,7 +4158,7 @@ async fn a_provider_budget_refusal_stops_retries_and_model_fallback() {
     harness.register_model("fallback", fallback.clone());
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(4),
-        fallback: Some(FallbackPolicy::new(["fallback"])),
+        fallback: Some(FallbackPolicy::new(["primary", "fallback"])),
         ..RunPolicy::default()
     });
 
