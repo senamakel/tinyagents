@@ -31,7 +31,7 @@ fn span_level(span: &TraceSpan) -> Option<&'static str> {
 const MAX_SPANS_PER_REQUEST: usize = 20;
 const MAX_REQUEST_BYTES: usize = 8_000_000;
 
-fn hex_id(source: &str, bytes: usize) -> String {
+pub(super) fn hex_id(source: &str, bytes: usize) -> String {
     let digest = Sha256::digest(source.as_bytes());
     digest[..bytes]
         .iter()
@@ -39,11 +39,11 @@ fn hex_id(source: &str, bytes: usize) -> String {
         .collect()
 }
 
-fn attribute(key: &str, value: impl Into<String>) -> Value {
+pub(super) fn attribute(key: &str, value: impl Into<String>) -> Value {
     json!({ "key": key, "value": { "stringValue": value.into() } })
 }
 
-fn json_attribute(key: &str, value: &Value) -> Value {
+pub(super) fn json_attribute(key: &str, value: &Value) -> Value {
     attribute(key, value.to_string())
 }
 
@@ -457,11 +457,23 @@ pub fn otlp_requests(
     // only once so Langfuse usage metrics do not count it twice.
     let visible = without_child_run_details(spans);
     let compacted = compact_internal_searches(&visible);
+    let converted = compacted
+        .iter()
+        .map(|span| span_to_otlp(span, root, environment, brand))
+        .collect();
+    chunk_otlp_spans(converted, brand.product, &format!("{}.agent", brand.product))
+}
+
+/// Wrap already-converted OTLP spans into OTLP/HTTP JSON request bodies under
+/// one resource (`service.name = service`) and instrumentation scope, chunked
+/// so no request exceeds the transport caps (20 spans, ~8 MB). Span order is
+/// preserved; an empty input yields no requests.
+pub fn chunk_otlp_spans(spans: Vec<Value>, service: &str, scope: &str) -> Vec<Value> {
     let make_request = |spans: Vec<Value>| {
         json!({ "resourceSpans": [{
-            "resource": { "attributes": [attribute("service.name", brand.product)] },
+            "resource": { "attributes": [attribute("service.name", service)] },
             "scopeSpans": [{
-                "scope": { "name": format!("{}.agent", brand.product) },
+                "scope": { "name": scope },
                 "spans": spans,
             }],
         }] })
@@ -469,8 +481,7 @@ pub fn otlp_requests(
     let mut requests = Vec::new();
     let mut batch = Vec::new();
     let mut bytes = 256;
-    for span in &compacted {
-        let converted = span_to_otlp(span, root, environment, brand);
+    for converted in spans {
         let span_bytes = converted.to_string().len();
         if !batch.is_empty()
             && (batch.len() >= MAX_SPANS_PER_REQUEST || bytes + span_bytes > MAX_REQUEST_BYTES)
