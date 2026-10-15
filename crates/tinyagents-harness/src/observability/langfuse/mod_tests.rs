@@ -751,3 +751,36 @@ async fn reports_a_refused_otlp_request() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn sends_observations_as_v4_otlp_spans() {
+    let (base, rx) = serve_once(200);
+    let client = LangfuseClient::direct(base, "pk", "sk").unwrap();
+    let trace = LangfuseTraceConfig {
+        trace_id: Some("trace-otlp".into()),
+        name: Some("agent.turn".into()),
+        session_id: Some("thread-1".into()),
+        ..Default::default()
+    };
+    let responses = client
+        .send_observations_otlp(trace, &sample_observations(), "tinyagents")
+        .await
+        .unwrap();
+    assert_eq!(responses.len(), 1);
+    let (line, _, version, body) = rx.recv().unwrap();
+    assert_eq!(line, "POST /api/public/otel/v1/traces HTTP/1.1");
+    assert_eq!(version, "4");
+    let spans = body["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .unwrap();
+    assert!(!spans.is_empty());
+    for span in spans {
+        let session = span["attributes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|attr| attr["key"] == "langfuse.session.id")
+            .map(|attr| attr["value"]["stringValue"].clone());
+        assert_eq!(session, Some(json!("thread-1")));
+    }
+}

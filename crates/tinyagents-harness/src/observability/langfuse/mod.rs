@@ -1,8 +1,12 @@
 //! Langfuse ingestion exporter for durable harness observations.
 //!
-//! The exporter targets Langfuse's `/api/public/ingestion` batch API. It can
-//! send directly to a self-hosted Langfuse instance with public/secret keys, or
-//! to the TinyHumans backend proxy with a bearer token.
+//! The exporter builds a Langfuse ingestion batch (`trace-create` plus one
+//! event per observation) and sends it either over OTLP to Langfuse v4's
+//! `/api/public/otel/v1/traces` (`send_observations_otlp`, `send_batch_otlp`,
+//! `send_otlp`), or to the legacy `/api/public/ingestion` batch API, which
+//! Langfuse v4 keeps only for scores. It can send directly to a self-hosted
+//! Langfuse instance with public/secret keys, or to the TinyHumans backend
+//! proxy with a bearer token.
 
 use std::collections::BTreeMap;
 
@@ -294,7 +298,54 @@ impl LangfuseClient {
         self.send_batch(payload).await
     }
 
-    /// Sends observations as one Langfuse ingestion batch.
+    /// Sends observations to Langfuse v4 over OTLP: builds the same trace as
+    /// [`Self::build_ingestion_batch`] and exports it through
+    /// [`Self::send_batch_otlp`]. Prefer this over [`Self::send_observations`],
+    /// whose legacy batch path Langfuse Cloud removes on 2026-11-16.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::build_ingestion_batch`] and [`Self::send_batch_otlp`].
+    pub async fn send_observations_otlp(
+        &self,
+        trace: LangfuseTraceConfig,
+        observations: &[AgentObservation],
+        service: &str,
+    ) -> Result<Vec<Value>> {
+        let payload = self.build_ingestion_batch(trace, observations)?;
+        self.send_batch_otlp(&payload, service).await
+    }
+
+    /// Exports a locally built ingestion `payload` (one `trace-create` plus its
+    /// completed observations) to Langfuse v4 over OTLP, converted by
+    /// [`ingestion_batch_otlp_requests`](crate::observability::trace_export::ingestion_otlp::ingestion_batch_otlp_requests)
+    /// under resource `service.name = service` and scope `<service>.trace`.
+    /// Requests are sent in order and the first failure stops the export.
+    /// Non-trace events (scores) in the payload are skipped; send those with
+    /// [`Self::send_batch`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload has no trace, or any request fails
+    /// as described on [`Self::send_otlp`].
+    pub async fn send_batch_otlp(&self, payload: &Value, service: &str) -> Result<Vec<Value>> {
+        let requests =
+            crate::observability::trace_export::ingestion_otlp::ingestion_batch_otlp_requests(
+                payload,
+                service,
+                &format!("{service}.trace"),
+            )?;
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(self.send_otlp(request).await?);
+        }
+        Ok(responses)
+    }
+
+    /// Sends observations as one legacy Langfuse ingestion batch.
+    ///
+    /// Langfuse v4 no longer accepts trace payloads on this path (Langfuse
+    /// Cloud removes it on 2026-11-16); use [`Self::send_observations_otlp`].
     pub async fn send_observations(
         &self,
         trace: LangfuseTraceConfig,
