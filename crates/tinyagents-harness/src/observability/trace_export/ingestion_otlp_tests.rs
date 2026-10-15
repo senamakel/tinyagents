@@ -72,7 +72,11 @@ fn text<'a>(span: &'a Value, key: &str) -> Option<&'a str> {
 #[test]
 fn every_observation_carries_the_trace_attributes_v4_filters_on() {
     let spans = ingestion_batch_to_otlp_spans(&batch()).unwrap();
-    assert_eq!(spans.len(), 4, "trace-create and score-create are not spans");
+    assert_eq!(
+        spans.len(),
+        4,
+        "trace-create and score-create are not spans"
+    );
     for span in &spans {
         assert_eq!(text(span, "langfuse.trace.name"), Some("flow.run:demo"));
         assert_eq!(text(span, "langfuse.user.id"), Some("user-7"));
@@ -96,8 +100,14 @@ fn trace_io_moves_to_the_root_observation_only() {
     let root = &spans[0];
     assert!(root.get("parentSpanId").is_none());
     assert_eq!(text(root, "langfuse.observation.type"), Some("span"));
-    assert_eq!(text(root, "langfuse.observation.input"), Some(r#"{"goal":"ship"}"#));
-    assert_eq!(text(root, "langfuse.observation.output"), Some(r#"{"ok":true}"#));
+    assert_eq!(
+        text(root, "langfuse.observation.input"),
+        Some(r#"{"goal":"ship"}"#)
+    );
+    assert_eq!(
+        text(root, "langfuse.observation.output"),
+        Some(r#"{"ok":true}"#)
+    );
     for child in &spans[1..] {
         assert!(text(child, "langfuse.observation.input").is_none());
         assert!(attr(child, "langfuse.trace.input").is_none());
@@ -111,14 +121,29 @@ fn parentage_levels_and_generation_fields_map_to_otel() {
     assert_eq!(node["parentSpanId"], root["spanId"]);
     assert_eq!(generation["parentSpanId"], node["spanId"]);
     assert_eq!(text(node, "langfuse.observation.level"), Some("ERROR"));
-    assert_eq!(text(node, "langfuse.observation.status_message"), Some("boom"));
+    assert_eq!(
+        text(node, "langfuse.observation.status_message"),
+        Some("boom")
+    );
     assert_eq!(node["status"]["code"], 2);
-    assert_eq!(text(node, "langfuse.observation.metadata.langgraph_node"), Some("fetch"));
-    assert_eq!(text(node, "langfuse.observation.metadata.langgraph_step"), Some("0"));
+    assert_eq!(
+        text(node, "langfuse.observation.metadata.langgraph_node"),
+        Some("fetch")
+    );
+    assert_eq!(
+        text(node, "langfuse.observation.metadata.langgraph_step"),
+        Some("0")
+    );
     assert_eq!(text(event, "langfuse.observation.type"), Some("event"));
     assert_eq!(event["startTimeUnixNano"], event["endTimeUnixNano"]);
-    assert_eq!(text(generation, "langfuse.observation.type"), Some("generation"));
-    assert_eq!(text(generation, "langfuse.observation.model.name"), Some("gpt-x"));
+    assert_eq!(
+        text(generation, "langfuse.observation.type"),
+        Some("generation")
+    );
+    assert_eq!(
+        text(generation, "langfuse.observation.model.name"),
+        Some("gpt-x")
+    );
     assert_eq!(
         text(generation, "langfuse.observation.usage_details"),
         Some(r#"{"input":10,"output":5}"#)
@@ -164,8 +189,14 @@ fn requests_wrap_spans_under_one_resource() {
         resource["resource"]["attributes"][0]["value"]["stringValue"],
         "openhuman"
     );
-    assert_eq!(resource["scopeSpans"][0]["scope"]["name"], "openhuman.flows");
-    assert_eq!(resource["scopeSpans"][0]["spans"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        resource["scopeSpans"][0]["scope"]["name"],
+        "openhuman.flows"
+    );
+    assert_eq!(
+        resource["scopeSpans"][0]["spans"].as_array().unwrap().len(),
+        4
+    );
 }
 
 #[test]

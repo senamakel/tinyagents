@@ -183,7 +183,10 @@ fn observation_span(
     if end.is_none() && kind != "event" {
         // A span still open when the batch was built: v4 exports a span once,
         // so it goes out closed at its start and is flagged for readers.
-        attrs.push(attribute("langfuse.observation.metadata.unfinished", "true"));
+        attrs.push(attribute(
+            "langfuse.observation.metadata.unfinished",
+            "true",
+        ));
     }
 
     let name = body.get("name").and_then(Value::as_str).unwrap_or(kind);
@@ -248,10 +251,7 @@ pub fn ingestion_batch_to_otlp_spans(payload: &Value) -> Result<Vec<Value>> {
         let Some(body) = event["body"].as_object() else {
             continue;
         };
-        let is_root = !root_assigned
-            && body
-                .get("parentObservationId")
-                .is_none_or(Value::is_null);
+        let is_root = !root_assigned && body.get("parentObservationId").is_none_or(Value::is_null);
         let root_io = is_root.then_some((trace_io.0, trace_io.1));
         if let Some(span) = observation_span(&trace_hex, kind, body, &trace_attrs, root_io) {
             root_assigned |= is_root;

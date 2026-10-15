@@ -461,7 +461,11 @@ pub fn otlp_requests(
         .iter()
         .map(|span| span_to_otlp(span, root, environment, brand))
         .collect();
-    chunk_otlp_spans(converted, brand.product, &format!("{}.agent", brand.product))
+    chunk_otlp_spans(
+        converted,
+        brand.product,
+        &format!("{}.agent", brand.product),
+    )
 }
 
 /// Wrap already-converted OTLP spans into OTLP/HTTP JSON request bodies under

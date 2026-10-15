@@ -149,7 +149,10 @@ impl LangfuseClient {
         let req = self.authorized(
             self.client
                 .post(self.otlp_endpoint())
-                .header(LANGFUSE_INGESTION_VERSION_HEADER, LANGFUSE_INGESTION_VERSION)
+                .header(
+                    LANGFUSE_INGESTION_VERSION_HEADER,
+                    LANGFUSE_INGESTION_VERSION,
+                )
                 .json(&body),
         );
         let response = req

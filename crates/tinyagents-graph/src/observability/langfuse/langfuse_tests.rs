@@ -477,7 +477,10 @@ fn otlp_export_is_a_v4_trace_with_trace_attributes_on_every_span() {
     assert_eq!(scope["scope"]["name"], "openhuman.graph");
     let spans = scope["spans"].as_array().unwrap();
     for span in spans {
-        assert_eq!(otlp_attr(span, "langfuse.trace.name"), Some("flow.run:demo"));
+        assert_eq!(
+            otlp_attr(span, "langfuse.trace.name"),
+            Some("flow.run:demo")
+        );
         assert_eq!(otlp_attr(span, "langfuse.session.id"), Some("flow:demo"));
         assert_eq!(otlp_attr(span, "langfuse.release"), Some("1.0.0"));
         assert_eq!(
@@ -488,7 +491,10 @@ fn otlp_export_is_a_v4_trace_with_trace_attributes_on_every_span() {
     }
 
     // One root: the structural graph-run span, everything else nests below it.
-    let roots: Vec<_> = spans.iter().filter(|s| s.get("parentSpanId").is_none()).collect();
+    let roots: Vec<_> = spans
+        .iter()
+        .filter(|s| s.get("parentSpanId").is_none())
+        .collect();
     assert_eq!(roots.len(), 1);
     assert_eq!(roots[0]["name"], "demo-graph");
 
@@ -496,11 +502,17 @@ fn otlp_export_is_a_v4_trace_with_trace_attributes_on_every_span() {
     let (step, node_b) = (by_name("step 1"), by_name("b"));
     assert_eq!(step["parentSpanId"], roots[0]["spanId"]);
     assert_eq!(node_b["parentSpanId"], step["spanId"]);
-    assert_eq!(otlp_attr(node_b, "langfuse.observation.level"), Some("ERROR"));
+    assert_eq!(
+        otlp_attr(node_b, "langfuse.observation.level"),
+        Some("ERROR")
+    );
     assert_eq!(
         otlp_attr(node_b, "langfuse.observation.metadata.langgraph_node"),
         Some("b")
     );
     let failed = by_name("run.failed");
-    assert_eq!(otlp_attr(failed, "langfuse.observation.type"), Some("event"));
+    assert_eq!(
+        otlp_attr(failed, "langfuse.observation.type"),
+        Some("event")
+    );
 }

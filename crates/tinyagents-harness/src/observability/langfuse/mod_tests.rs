@@ -712,7 +712,10 @@ async fn otlp_requests_select_the_langfuse_v4_ingestion_path() {
         } else {
             LangfuseClient::direct(base, "pk", "sk").unwrap()
         };
-        client.send_otlp(json!({"resourceSpans": []})).await.unwrap();
+        client
+            .send_otlp(json!({"resourceSpans": []}))
+            .await
+            .unwrap();
         let (_, _, version, _) = rx.recv().unwrap();
         assert_eq!(version, "4", "proxied={proxied}");
     }
@@ -737,7 +740,10 @@ async fn reports_spans_the_otlp_endpoint_partially_rejected() {
 async fn an_empty_partial_success_is_a_success() {
     let (base, _rx) = serve_once_with(200, r#"{"partialSuccess":{}}"#);
     let client = LangfuseClient::direct(base, "pk", "sk").unwrap();
-    client.send_otlp(json!({"resourceSpans": []})).await.unwrap();
+    client
+        .send_otlp(json!({"resourceSpans": []}))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

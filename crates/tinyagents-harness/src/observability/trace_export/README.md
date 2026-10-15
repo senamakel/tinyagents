@@ -27,8 +27,16 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
   first, with an omitted-messages marker), `truncate_chars`,
   `truncate_capture_text`, the small `json_*` value builders, `status_of`, and
   `spans_to_ndjson` with its `SpanEnvelope`.
-- `otlp`: `span_to_otlp`, `otlp_requests`, `prepare_subagent_root`,
-  `compact_internal_searches`.
+- `otlp`: `span_to_otlp`, `otlp_requests`, `chunk_otlp_spans`,
+  `prepare_subagent_root`, `compact_internal_searches`.
+- `ingestion_otlp`: `ingestion_batch_to_otlp_spans` and
+  `ingestion_batch_otlp_requests`, the Langfuse v4 projection of a locally
+  built ingestion batch. Trace name, user, session, tags, metadata,
+  environment, release and version go on every span (v4 filters observations
+  directly, so a root-only value is invisible on a child); trace input/output
+  move to the root observation; parents ride the OTEL span context with span
+  ids hashed from the batch's deterministic observation ids. Scores and other
+  non-trace events are skipped.
 - `ingestion_batch`: `split_ingestion_batch` (bounded by
   `LANGFUSE_MAX_BATCH_EVENTS`), `iso_millis`, `new_event_id`.
 - `journal_export` (feature `langfuse`): `RunTotals`,
@@ -48,5 +56,9 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
   exceeds the budget, a bounded preview of it is kept.
 - Langfuse caps the events per ingestion request, so payloads go through
   `split_ingestion_batch` before sending.
+- Langfuse v4 ingests traces only over OTLP (`/api/public/otel/v1/traces` with
+  `x-langfuse-ingestion-version: 4`); Langfuse Cloud removes the legacy
+  `/api/public/ingestion` trace path on 2026-11-16. v4 duplicates a span id it
+  receives twice instead of merging, so export each finished span once.
 - Callers decide whether content capture is on at all; these helpers do not
   redact secrets. Run them on events that already passed a `RedactingSink`.

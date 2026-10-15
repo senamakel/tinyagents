@@ -19,8 +19,8 @@ natural export boundary (end of run, end of turn, or on a timer).
   backend), or `::from_env` (reads `LANGFUSE_BASE_URL`/`LANGFUSE_PUBLIC_KEY`/
   `LANGFUSE_SECRET_KEY`, or `TINYHUMANS_LANGFUSE_PROXY_URL`/
   `TINYHUMANS_AUTH_TOKEN` when the proxy URL is set).
-- `LangfuseClient::send_observations` — builds and sends a trace's ingestion
-  batch; `build_ingestion_batch` does the same without sending, for callers
+- `LangfuseClient::send_observations` — builds and sends a trace's legacy
+  ingestion batch (not accepted for traces by Langfuse v4); `build_ingestion_batch` does the same without sending, for callers
   that want to inspect or batch the payload themselves.
 - `LangfuseClient::create_score` / `build_score_batch` — attaches a
   post-hoc evaluation (`LangfuseScore`) to an already-exported trace or
@@ -28,8 +28,15 @@ natural export boundary (end of run, end of turn, or on a timer).
 - `LangfuseClient::send_otlp` / `otlp_endpoint` — posts an OTLP/HTTP JSON
   trace request (for example from `trace_export::otlp::otlp_requests`) to
   `/api/public/otel/v1/traces`, or `/telemetry/langfuse/otel/v1/traces`
-  through the proxy. OTLP is Langfuse's supported trace path; the legacy
-  ingestion API is sunset on Langfuse Cloud on 2026-11-16.
+  through the proxy, with `x-langfuse-ingestion-version: 4`
+  (`LANGFUSE_INGESTION_VERSION_HEADER`) to select Langfuse v4's write path.
+  A 2xx answer whose OTLP `partialSuccess.rejectedSpans` is non-zero is an
+  error. OTLP is Langfuse's supported trace path; the legacy ingestion API is
+  sunset on Langfuse Cloud on 2026-11-16.
+- `LangfuseClient::send_observations_otlp` / `send_batch_otlp` — the v4
+  export: build the same trace as `build_ingestion_batch`, convert it with
+  `trace_export::ingestion_otlp` and send each request through `send_otlp`.
+  Use these instead of `send_observations`.
 - `LangfuseClient::send_batch` — the shared HTTP transport (auth header,
   endpoint normalization, `207 Multi-Status` handling); reused by other
   exporters (e.g. `graph::observability`) that build their own `{"batch":
