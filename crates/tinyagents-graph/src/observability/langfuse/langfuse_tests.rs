@@ -450,3 +450,57 @@ fn transport_free_batch_uses_root_identity_without_an_explicit_trace() {
     assert!(find(batch, "span-create", "root-1:run:root-1").is_some());
     assert!(find(batch, "span-create", "root-1:node:b:1").is_some());
 }
+
+/// The string value of OTLP span attribute `key`, if present.
+fn otlp_attr<'a>(span: &'a Value, key: &str) -> Option<&'a str> {
+    span["attributes"]
+        .as_array()?
+        .iter()
+        .find(|item| item["key"] == key)?["value"]["stringValue"]
+        .as_str()
+}
+
+#[test]
+fn otlp_export_is_a_v4_trace_with_trace_attributes_on_every_span() {
+    let trace = LangfuseTraceConfig {
+        name: Some("flow.run:demo".into()),
+        session_id: Some("flow:demo".into()),
+        release: Some("1.0.0".into()),
+        tags: vec!["run:flow".into()],
+        ..Default::default()
+    };
+    let requests = exporter()
+        .build_otlp_requests(trace, &sample_run(), "openhuman")
+        .unwrap();
+    assert_eq!(requests.len(), 1);
+    let scope = &requests[0]["resourceSpans"][0]["scopeSpans"][0];
+    assert_eq!(scope["scope"]["name"], "openhuman.graph");
+    let spans = scope["spans"].as_array().unwrap();
+    for span in spans {
+        assert_eq!(otlp_attr(span, "langfuse.trace.name"), Some("flow.run:demo"));
+        assert_eq!(otlp_attr(span, "langfuse.session.id"), Some("flow:demo"));
+        assert_eq!(otlp_attr(span, "langfuse.release"), Some("1.0.0"));
+        assert_eq!(
+            otlp_attr(span, "langfuse.trace.metadata.graph_id"),
+            Some("demo-graph")
+        );
+        assert!(otlp_attr(span, "langfuse.trace.metadata.health").is_some());
+    }
+
+    // One root: the structural graph-run span, everything else nests below it.
+    let roots: Vec<_> = spans.iter().filter(|s| s.get("parentSpanId").is_none()).collect();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0]["name"], "demo-graph");
+
+    let by_name = |name: &str| spans.iter().find(|s| s["name"] == name).unwrap();
+    let (step, node_b) = (by_name("step 1"), by_name("b"));
+    assert_eq!(step["parentSpanId"], roots[0]["spanId"]);
+    assert_eq!(node_b["parentSpanId"], step["spanId"]);
+    assert_eq!(otlp_attr(node_b, "langfuse.observation.level"), Some("ERROR"));
+    assert_eq!(
+        otlp_attr(node_b, "langfuse.observation.metadata.langgraph_node"),
+        Some("b")
+    );
+    let failed = by_name("run.failed");
+    assert_eq!(otlp_attr(failed, "langfuse.observation.type"), Some("event"));
+}
