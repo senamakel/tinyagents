@@ -763,7 +763,29 @@ async fn sends_observations_as_v4_otlp_spans() {
         ..Default::default()
     };
     let responses = client
-        .send_observations_otlp(trace, &sample_observations(), "tinyagents")
+        .send_observations_otlp(
+            trace,
+            &[
+                obs(
+                    0,
+                    AgentEvent::RunStarted {
+                        run_id: RunId::new("run-1"),
+                        thread_id: None,
+                    },
+                ),
+                obs(
+                    1,
+                    AgentEvent::ModelCompleted {
+                        call_id: CallId::new("model-call"),
+                        started_at_ms: None,
+                        usage: None,
+                        input: None,
+                        output: None,
+                    },
+                ),
+            ],
+            "tinyagents",
+        )
         .await
         .unwrap();
     assert_eq!(responses.len(), 1);
