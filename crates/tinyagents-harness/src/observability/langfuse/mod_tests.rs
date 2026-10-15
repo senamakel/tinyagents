@@ -631,9 +631,22 @@ fn derives_the_otlp_trace_endpoint_beside_the_ingestion_endpoint() {
     );
 }
 
-/// Accepts one HTTP request on a loopback port, answers `status`, and returns
-/// the request line, the authorization header and the decoded body.
-fn serve_once(status: u16) -> (String, std::sync::mpsc::Receiver<(String, String, Value)>) {
+/// One request captured by [`serve_once_with`]: the request line, the
+/// authorization header, the `x-langfuse-ingestion-version` header and the
+/// decoded body.
+type Captured = (String, String, String, Value);
+
+/// Accepts one HTTP request on a loopback port, answers `status` with an empty
+/// JSON object, and returns what it received.
+fn serve_once(status: u16) -> (String, std::sync::mpsc::Receiver<Captured>) {
+    serve_once_with(status, "{}")
+}
+
+/// [`serve_once`] answering with `response` as the JSON body.
+fn serve_once_with(
+    status: u16,
+    response: &'static str,
+) -> (String, std::sync::mpsc::Receiver<Captured>) {
     use std::io::{BufRead, BufReader, Read, Write};
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", socket.local_addr().unwrap());
@@ -643,7 +656,7 @@ fn serve_once(status: u16) -> (String, std::sync::mpsc::Receiver<(String, String
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        let (mut auth, mut len) = (String::new(), 0_usize);
+        let (mut auth, mut version, mut len) = (String::new(), String::new(), 0_usize);
         loop {
             let mut header = String::new();
             reader.read_line(&mut header).unwrap();
@@ -653,6 +666,7 @@ fn serve_once(status: u16) -> (String, std::sync::mpsc::Receiver<(String, String
             let (name, value) = header.split_once(':').unwrap();
             match name.trim().to_ascii_lowercase().as_str() {
                 "authorization" => auth = value.trim().to_owned(),
+                "x-langfuse-ingestion-version" => version = value.trim().to_owned(),
                 "content-length" => len = value.trim().parse().unwrap(),
                 _ => {}
             }
@@ -662,12 +676,14 @@ fn serve_once(status: u16) -> (String, std::sync::mpsc::Receiver<(String, String
         let mut stream = reader.into_inner();
         write!(
             stream,
-            "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+            "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{response}",
+            response.len()
         )
         .unwrap();
         tx.send((
             line.trim().to_owned(),
             auth,
+            version,
             serde_json::from_slice(&body).unwrap(),
         ))
         .unwrap();
@@ -681,10 +697,47 @@ async fn sends_otlp_json_to_the_trace_endpoint_with_basic_auth() {
     let client = LangfuseClient::direct(base, "pk-test", "sk-test").unwrap();
     let body = json!({"resourceSpans": []});
     client.send_otlp(body.clone()).await.unwrap();
-    let (line, auth, received) = rx.recv().unwrap();
+    let (line, auth, _, received) = rx.recv().unwrap();
     assert_eq!(line, "POST /api/public/otel/v1/traces HTTP/1.1");
     assert_eq!(auth, "Basic cGstdGVzdDpzay10ZXN0");
     assert_eq!(received, body);
+}
+
+#[tokio::test]
+async fn otlp_requests_select_the_langfuse_v4_ingestion_path() {
+    for proxied in [false, true] {
+        let (base, rx) = serve_once(200);
+        let client = if proxied {
+            LangfuseClient::proxy(base, "token").unwrap()
+        } else {
+            LangfuseClient::direct(base, "pk", "sk").unwrap()
+        };
+        client.send_otlp(json!({"resourceSpans": []})).await.unwrap();
+        let (_, _, version, _) = rx.recv().unwrap();
+        assert_eq!(version, "4", "proxied={proxied}");
+    }
+}
+
+#[tokio::test]
+async fn reports_spans_the_otlp_endpoint_partially_rejected() {
+    let (base, _rx) = serve_once_with(
+        200,
+        r#"{"partialSuccess":{"rejectedSpans":2,"errorMessage":"bad span"}}"#,
+    );
+    let client = LangfuseClient::direct(base, "pk", "sk").unwrap();
+    let err = client
+        .send_otlp(json!({"resourceSpans": []}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("rejected 2"), "{err}");
+}
+
+#[tokio::test]
+async fn an_empty_partial_success_is_a_success() {
+    let (base, _rx) = serve_once_with(200, r#"{"partialSuccess":{}}"#);
+    let client = LangfuseClient::direct(base, "pk", "sk").unwrap();
+    client.send_otlp(json!({"resourceSpans": []})).await.unwrap();
 }
 
 #[tokio::test]

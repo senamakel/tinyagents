@@ -7,6 +7,7 @@
 //! [`ExportBrand`] so product identity strings stay out of this crate.
 
 pub mod ingestion_batch;
+pub mod ingestion_otlp;
 #[cfg(feature = "langfuse")]
 pub mod journal_export;
 pub mod otlp;

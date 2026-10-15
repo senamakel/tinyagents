@@ -20,8 +20,8 @@
 //! The conversion is pure. Events of any other type (`score-create`,
 //! `*-update`, `sdk-log`) are not traces in v4 and are skipped; scores keep
 //! using the Langfuse scores API. Each observation in the batch must already be
-//! final: v4 rejects nothing on re-export, it duplicates, so a caller exports
-//! a span once.
+//! final: v4 does not merge a re-exported span id, it duplicates the
+//! observation, so a caller exports each span once.
 
 use serde_json::{Map, Value, json};
 

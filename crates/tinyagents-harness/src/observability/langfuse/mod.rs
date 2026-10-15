@@ -20,6 +20,11 @@ pub use types::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
 
+/// Header that selects Langfuse's ingestion write path for an OTLP request.
+pub const LANGFUSE_INGESTION_VERSION_HEADER: &str = "x-langfuse-ingestion-version";
+/// The Langfuse v4 (observations-first) ingestion version.
+pub const LANGFUSE_INGESTION_VERSION: &str = "4";
+
 impl LangfuseClient {
     /// Creates a client from a base URL and auth mode.
     ///
@@ -127,12 +132,22 @@ impl LangfuseClient {
     /// such as one built by `trace_export::otlp::otlp_requests`, to
     /// [`Self::otlp_endpoint`] with this client's authentication.
     ///
+    /// The request carries `x-langfuse-ingestion-version: 4`, which selects
+    /// Langfuse v4's observations-first write path (the header does not make a
+    /// span v4-shaped; the `trace_export` converters do that).
+    ///
     /// # Errors
     ///
-    /// Returns an error when the request cannot be sent or Langfuse answers
-    /// with a non-success status.
+    /// Returns an error when the request cannot be sent, Langfuse answers
+    /// with a non-success status, or a 2xx answer reports rejected spans in
+    /// its OTLP `partialSuccess`.
     pub async fn send_otlp(&self, body: Value) -> Result<Value> {
-        let req = self.authorized(self.client.post(self.otlp_endpoint()).json(&body));
+        let req = self.authorized(
+            self.client
+                .post(self.otlp_endpoint())
+                .header(LANGFUSE_INGESTION_VERSION_HEADER, LANGFUSE_INGESTION_VERSION)
+                .json(&body),
+        );
         let response = req
             .send()
             .await
@@ -145,6 +160,18 @@ impl LangfuseClient {
         if !status.is_success() {
             return Err(TinyAgentsError::Model(format!(
                 "Langfuse OTLP ingestion returned {status}: {parsed}"
+            )));
+        }
+        let partial = &parsed["partialSuccess"];
+        // OTLP/JSON encodes int64 as a string; accept either spelling.
+        let rejected = partial["rejectedSpans"]
+            .as_u64()
+            .or_else(|| partial["rejectedSpans"].as_str()?.parse().ok())
+            .unwrap_or(0);
+        if rejected > 0 {
+            let message = partial["errorMessage"].as_str().unwrap_or_default();
+            return Err(TinyAgentsError::Model(format!(
+                "Langfuse OTLP ingestion rejected {rejected} span(s): {message}"
             )));
         }
         Ok(parsed)
