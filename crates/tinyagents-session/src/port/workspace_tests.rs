@@ -100,8 +100,94 @@ fn legacy_generations_resume_through_the_port_and_a_new_generation_chains() {
 #[test]
 fn a_workspace_with_no_legacy_files_opens_empty() {
     let dir = tempfile::tempdir().unwrap();
+    #[allow(deprecated)]
     let opened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert!(opened.transcripts().latest_for_agent("agent").is_none());
+}
+
+#[test]
+fn supplied_backend_is_shared_across_handles_and_scoped_by_agent() {
+    use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let first = WorkspaceStores::from_backend(Arc::clone(&backend), "agent").unwrap();
+    let session = SessionRef::root("shared-backend-thread");
+    let handle = first.transcripts().open_session(&session, meta()).unwrap();
+    let messages = vec![
+        TranscriptMessage::user("persisted on the host backend"),
+        TranscriptMessage::assistant("resumed by another handle"),
+    ];
+    handle
+        .append_turn(TranscriptTurn {
+            prev: &[],
+            next: &messages,
+            meta: &meta(),
+            turn_usage: None,
+            request_id: None,
+            tools: None,
+        })
+        .unwrap();
+
+    let reopened = WorkspaceStores::from_backend(Arc::clone(&backend), "agent").unwrap();
+    assert_eq!(
+        reopened
+            .transcripts()
+            .read_session_transcript(&session)
+            .unwrap()
+            .read_session()
+            .unwrap()
+            .unwrap()
+            .messages[0]
+            .content,
+        "persisted on the host backend"
+    );
+    let other_agent = WorkspaceStores::from_backend(backend, "other-agent").unwrap();
+    assert!(!other_agent.transcripts().session_exists(&session));
+}
+
+#[test]
+#[allow(deprecated)]
+fn path_convenience_imports_existing_private_store_into_unified_storage() {
+    use tinystoragedrivers_core::{Scope, StorageBackend};
+
+    let dir = tempfile::tempdir().unwrap();
+    let old_backend: Arc<dyn StorageBackend> =
+        Arc::new(SqliteStorage::open(dir.path().join(STORE_DIR)).unwrap());
+    let old_provider = DriverSessionStores::new(old_backend, Scope::local()).unwrap();
+    let session = SessionRef::root("private-store-thread");
+    let handle = old_provider
+        .try_for_agent("agent")
+        .unwrap()
+        .transcripts
+        .open_session(&session, meta())
+        .unwrap();
+    let messages = vec![
+        TranscriptMessage::user("old private database"),
+        TranscriptMessage::assistant("copied into shared storage"),
+    ];
+    handle
+        .append_turn(TranscriptTurn {
+            prev: &[],
+            next: &messages,
+            meta: &meta(),
+            turn_usage: None,
+            request_id: None,
+            tools: None,
+        })
+        .unwrap();
+
+    let moved = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    let imported = moved
+        .transcripts()
+        .read_session_transcript(&session)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(imported.messages[0].content, "old private database");
+    assert_eq!(imported.messages[1].content, "copied into shared storage");
+    assert!(dir.path().join(STORAGE_DIR).join("storage.db").is_file());
+    assert!(dir.path().join(STORE_DIR).join("storage.db").is_file());
 }
 
 #[test]

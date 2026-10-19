@@ -37,6 +37,7 @@ Everything lives wherever the host's storage backend puts it:
 ```text
 {host storage backend}                          ← sessions, run ledger, transcripts, chat threads (collections)
 {workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once; rewritten in place only by legacy::rewrite_legacy_transcripts
+{workspace_dir}/session_store/storage.db        ← former private session backend; copied read-only into {workspace_dir}/storage/storage.db on the deprecated workspace path
 ```
 
 ## Public surface
@@ -63,6 +64,11 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
   `InMemorySessionStores`, `DriverSessionStores`, and `RebindableSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
+- **Workspace convenience** — `WorkspaceStores::from_backend` binds the same
+  driver stores to a host-supplied backend. The deprecated `WorkspaceStores::open`
+  opens `<workspace>/storage/`, imports the former private
+  `<workspace>/session_store/` records without modifying that source, and then
+  imports classic `session_raw/` transcripts once.
 - **Legacy import** — `legacy::import_workspace` and
   `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
