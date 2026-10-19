@@ -474,9 +474,9 @@ impl HarnessStatusStore for InMemoryStatusStore {
                 || current.lease_owner.is_none()
                 || current.lease_owner != status.lease_owner
                 || current.lease_epoch != status.lease_epoch
-                || !current
+                || current
                     .lease_expires_at
-                    .is_some_and(|deadline| deadline > std::time::SystemTime::now()))
+                    .is_none_or(|deadline| deadline <= std::time::SystemTime::now()))
         {
             return Err(crate::error::TinyAgentsError::Storage(
                 "status write rejected by active run lease".into(),
