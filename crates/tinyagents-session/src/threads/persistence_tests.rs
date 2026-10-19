@@ -265,9 +265,14 @@ async fn memory_store_preserves_channel_dedup_and_optional_upsert_fields() {
 async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_working() {
     let store = DriverConversationStore::in_memory().await;
     store.ensure_thread(thread("one")).await.unwrap();
-    for id in ["a", "b"] {
-        store.append_message("one", message(id, id)).await.unwrap();
-    }
+    store
+        .append_message("one", message("a", "alpha"))
+        .await
+        .unwrap();
+    store
+        .append_message("one", message("b", "beta"))
+        .await
+        .unwrap();
     let patched = store
         .update_message(
             "one",
@@ -284,7 +289,7 @@ async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_work
     assert_eq!(rows[1].extra_metadata, json!({"k": 1}));
     assert_eq!(
         store
-            .search_cross_thread_messages("b", 10, None)
+            .search_cross_thread_messages("beta", 10, None)
             .await
             .unwrap()
             .iter()

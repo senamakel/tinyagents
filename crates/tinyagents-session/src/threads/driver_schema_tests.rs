@@ -33,8 +33,7 @@ async fn prepared_fenced(backend: &dyn StorageBackend) {
     let cluster = Scope::new("cluster").unwrap();
     let profile = Scope::new("alice").unwrap();
     let raw = backend.for_scope(&profile).unwrap();
-    raw.documents()
-        .ensure_collection(&CollectionSpec::new(COLLECTION))
+    DriverConversationStore::prepare_schema(raw.documents().as_ref())
         .await
         .unwrap();
     let owner = backend.for_scope(&cluster).unwrap();
@@ -172,6 +171,9 @@ async fn native_required_feature_validation_accepts_compatible_superset_declarat
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let raw = backend.for_scope(&scope).unwrap();
+    DriverConversationStore::prepare_schema(raw.documents().as_ref())
+        .await
+        .unwrap();
     raw.documents()
         .ensure_collection(&CollectionSpec::new(COLLECTION).ttl("until"))
         .await
