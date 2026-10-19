@@ -1,11 +1,12 @@
-//! Transcripts for a host that only has a workspace directory.
+//! Session stores for a host that only has a workspace directory, or that
+//! already owns a storage backend.
 //!
-//! [`WorkspaceStores::open`] replaces `FileTranscriptLocator::new(workspace)`:
-//! it opens a SQLite storage backend at `<workspace>/session_store/` (an
-//! internal driver location, not part of the public surface), serves the
-//! agent's transcripts through [`DriverSessionStores`], and imports the
-//! workspace's classic `session_raw/*.jsonl` files once. Callers receive a
-//! `TranscriptLocator` port; they never name a transcript file.
+//! [`WorkspaceStores::from_backend`] builds the agent's stores on the supplied
+//! backend. The deprecated [`WorkspaceStores::open`] convenience opens SQLite
+//! at `<workspace>/storage/`, carries forward records from the former private
+//! `<workspace>/session_store/` backend, and imports classic
+//! `session_raw/*.jsonl` files once. Callers receive store ports; they never
+//! name a transcript file.
 //!
 //! Handles are cached per `(workspace, agent)` so a call site that used to
 //! construct a file locator on every use does not reopen the database.
@@ -14,7 +15,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use tinystoragedrivers_core::StorageBackend;
+use tinyagents_harness::store::SchemaAdmission;
+use tinystoragedrivers_core::{Scope, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 use super::AgentStores;
@@ -23,8 +25,13 @@ use super::{DriverSessionStores, WorkspaceStores};
 use crate::legacy::{OnceOutcome, import_transcripts_once};
 use crate::transcript::TranscriptLocator;
 
-/// Directory under the workspace holding the internal SQLite driver files.
+/// Former directory under the workspace holding the private SQLite store.
+/// Kept for detecting data to import from older releases.
 pub const STORE_DIR: &str = "session_store";
+
+const STORAGE_DIR: &str = "storage";
+#[path = "workspace_migration.rs"]
+mod workspace_migration;
 
 type Cache = Mutex<HashMap<(PathBuf, String), Weak<WorkspaceInner>>>;
 
@@ -52,13 +59,44 @@ fn cached(key: &(PathBuf, String)) -> Option<WorkspaceStores> {
 }
 
 impl WorkspaceStores {
-    /// Opens (or reuses) the stores of `agent_id` for `workspace_dir`, running
-    /// the one-time legacy JSONL import on first open.
+    /// Builds the stores for `agent_id` on the supplied backend.
+    ///
+    /// This constructor does not open a private database or import files. The
+    /// backend must already be configured for the tenant whose agent scope is
+    /// `local/agent:<agent_id>`.
     ///
     /// # Errors
     ///
-    /// The SQLite store cannot be opened, or the import is refused. Nothing is
-    /// cached then, so the next call retries.
+    /// The provider cannot be initialized or the agent scope cannot be bound.
+    pub fn from_backend(backend: Arc<dyn StorageBackend>, agent_id: &str) -> anyhow::Result<Self> {
+        let provider = Arc::new(DriverSessionStores::new(backend, Scope::local())?);
+        let stores = provider.try_for_agent(agent_id)?;
+        let inner = Arc::new(WorkspaceInner {
+            provider,
+            stores,
+            outcome: OnceOutcome::NotAttempted,
+        });
+        Ok(Self { inner })
+    }
+
+    /// Opens the stores of `agent_id` under `<workspace>/storage/` and imports
+    /// classic workspace transcripts on first open.
+    ///
+    /// Existing data written by earlier versions under `<workspace>/session_store/`
+    /// is copied into the shared backend before the classic file import. The
+    /// source database contents and schema and JSONL files remain unchanged.
+    /// SQLite may create or update WAL/SHM coordination files for the
+    /// read-only source, and they can remain after close. The copy is idempotent
+    /// so an interrupted open can be retried.
+    ///
+    /// Prefer [`Self::from_backend`] when the host already owns a storage
+    /// backend.
+    ///
+    /// # Errors
+    ///
+    /// SQLite cannot be opened, data cannot be copied, or the classic import
+    /// is refused. Nothing is cached then, so the next call retries.
+    #[deprecated(note = "use WorkspaceStores::from_backend with the host storage backend")]
     pub fn open(workspace_dir: &Path, agent_id: &str) -> anyhow::Result<Self> {
         let key = (workspace_dir.to_path_buf(), agent_id.to_string());
         if let Some(found) = cached(&key) {
@@ -70,12 +108,28 @@ impl WorkspaceStores {
             return Ok(found);
         }
         let backend: Arc<dyn StorageBackend> =
-            Arc::new(SqliteStorage::open(workspace_dir.join(STORE_DIR))?);
+            Arc::new(SqliteStorage::open(workspace_dir.join(STORAGE_DIR))?);
         let provider = Arc::new(DriverSessionStores::new(
-            backend,
-            tinystoragedrivers_core::Scope::local(),
+            Arc::clone(&backend),
+            Scope::local(),
         )?);
         let stores = provider.try_for_agent(agent_id)?;
+        let legacy_db = workspace_dir.join(STORE_DIR).join("storage.db");
+        if legacy_db.is_file() && !workspace_migration::import_is_complete(&provider, agent_id)? {
+            let legacy_backend: Arc<dyn StorageBackend> = Arc::new(
+                SqliteStorage::open_existing_read_only(workspace_dir.join(STORE_DIR))?,
+            );
+            let legacy_provider = DriverSessionStores::new_with_schema_admission(
+                legacy_backend,
+                Scope::local(),
+                SchemaAdmission::ValidateOnly,
+            )?;
+            // Older source stores may lack collections added after they were
+            // written. The migration enumerates exact existing owned
+            // collections and reads them without admitting a full current
+            // agent schema on the read-only backend.
+            workspace_migration::copy_agent_storage(&legacy_provider, &provider, agent_id)?;
+        }
         let outcome = import_transcripts_once(&provider, agent_id, workspace_dir)?;
         tracing::debug!(
             target: "tinyagents_session::port::workspace",
@@ -126,3 +180,7 @@ impl WorkspaceStores {
 #[cfg(test)]
 #[path = "workspace_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "workspace_migration_tests.rs"]
+mod migration_tests;

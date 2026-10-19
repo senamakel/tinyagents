@@ -47,8 +47,10 @@ pub struct LegacyWorkspaceReport {
 ///
 /// Calling this is the host's assertion that nothing is writing the workspace
 /// (see [`QuiescentSource`]) and that the workspace belongs to `agent_id`
-/// (see [`SourceOwner`]). Every file is read-only; every record keeps its id
-/// and is written only if the destination lacks it, so the call is safe to
+/// (see [`SourceOwner`]). The opened database's contents and schema and the
+/// classic input-file contents are unchanged; SQLite may create or update
+/// WAL/SHM coordination files for the read-only database handle. Every record
+/// keeps its id and is written only if the destination lacks it, so the call is safe to
 /// repeat and safe after a partial run. A missing database, raw directory or
 /// turn-state directory simply contributes nothing.
 ///
