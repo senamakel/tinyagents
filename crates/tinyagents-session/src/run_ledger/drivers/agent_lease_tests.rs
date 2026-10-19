@@ -140,7 +140,6 @@ async fn unfenced_status_transitions_cannot_revive_reaped_or_finished_leases() {
     let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     let now = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
 
-    ledger.upsert_agent_run(run("reaped")).await.unwrap();
     assert!(matches!(
         ledger
             .try_claim_agent_run(run("reaped"), "owner", now, chrono::Duration::seconds(1))
@@ -162,7 +161,6 @@ async fn unfenced_status_transitions_cannot_revive_reaped_or_finished_leases() {
             .is_err()
     );
 
-    ledger.upsert_agent_run(run("finished")).await.unwrap();
     let token = match ledger
         .try_claim_agent_run(run("finished"), "owner", now, chrono::Duration::seconds(10))
         .await
