@@ -26,8 +26,9 @@ use crate::retention::RetentionReport;
 ///
 /// Handles are selected by the host, never by a run's payload or tool arguments.
 /// Shared deployments must bind their tenant/agent namespace before returning a
-/// handle. The classic orphan sweep assumes exclusive process ownership; shared
-/// backends must not interrupt another live owner's work at startup.
+/// handle. The legacy unconditional orphan sweep assumes exclusive process
+/// ownership. Shared backends must use `interrupt_expired_agents`, which
+/// preserves unleased records and active lease owners.
 ///
 /// Storage operations are async so driver implementations can await their
 /// ports without blocking a caller runtime. Pure recovery classifiers remain
@@ -46,6 +47,8 @@ pub trait RunLedgerStore: Send + Sync {
     /// has already been promoted to a worker thread should not silently revert.
     /// Use `transition_agent_run_status` instead when a caller needs to
     /// *clear* `error` or `completed_at`.
+    /// A row with an active driver lease refuses this unfenced write; leased
+    /// drivers must use `renew_agent_run_lease` or `finish_agent_run`.
     async fn upsert_agent_run(&self, upsert: AgentRunUpsert) -> Result<AgentRun>;
 
     /// Atomically create an agent run under a driver lease, or take over only

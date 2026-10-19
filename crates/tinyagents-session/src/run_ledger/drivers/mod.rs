@@ -1078,6 +1078,10 @@ mod tests;
 mod agent_tests;
 
 #[cfg(test)]
+#[path = "agent_lease_tests.rs"]
+mod agent_lease_tests;
+
+#[cfg(test)]
 #[cfg(test)]
 #[path = "retention_tests.rs"]
 mod retention_tests;

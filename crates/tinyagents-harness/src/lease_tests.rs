@@ -1,10 +1,42 @@
 use super::*;
+use crate::context::RunConfig;
+use crate::runtime::AgentHarness;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 
 struct Lease {
     renewals: AtomicUsize,
     lose_after: usize,
+}
+
+struct BlockingModel {
+    entered: Arc<tokio::sync::Notify>,
+    released: Arc<tokio::sync::Notify>,
+    dropped: Arc<AtomicBool>,
+}
+
+struct ModelCallDrop(Arc<AtomicBool>);
+
+impl Drop for ModelCallDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for BlockingModel {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let _drop = ModelCallDrop(Arc::clone(&self.dropped));
+        self.entered.notify_one();
+        self.released.notified().await;
+        Ok(ModelResponse::assistant("done"))
+    }
 }
 
 #[async_trait]
@@ -61,9 +93,58 @@ async fn completed_or_cancelled_wrapper_does_not_leave_a_heartbeat_behind() {
             .unwrap(),
         7
     );
-    let cancelled = run_with_lease(std::future::pending::<()>(), &lease, Duration::from_secs(5));
-    tokio::pin!(cancelled);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let run_entered = Arc::clone(&entered);
+    let pending = async move {
+        run_entered.notify_one();
+        std::future::pending::<()>().await;
+    };
+    let mut cancelled = Box::pin(run_with_lease(pending, &lease, Duration::from_secs(5)));
+    entered.notified().await;
     drop(cancelled);
     tokio::time::advance(Duration::from_secs(20)).await;
+    tokio::task::yield_now().await;
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn agent_harness_renews_during_pending_model_call_and_cancels_on_lease_loss() {
+    tokio::time::pause();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let released = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(BlockingModel {
+            entered: Arc::clone(&entered),
+            released,
+            dropped: Arc::clone(&dropped),
+        }),
+    );
+    let lease = Lease {
+        renewals: AtomicUsize::new(0),
+        lose_after: 2,
+    };
+    let mut run = Box::pin(harness.invoke_with_lease(
+        &(),
+        (),
+        RunConfig::new("run"),
+        vec![Message::user("continue")],
+        &lease,
+        Duration::from_secs(10),
+    ));
+    tokio::select! {
+        _ = entered.notified() => {},
+        result = &mut run => panic!("model run ended before its await: {result:?}"),
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(10)).await;
+    assert!(run.await.is_err());
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "lease loss cancels model work"
+    );
 }

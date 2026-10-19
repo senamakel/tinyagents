@@ -13,7 +13,7 @@ use super::{HarnessEventJournal, HarnessStatusStore};
 /// Error recorded on a run reaped by the startup sweep. Stable and
 /// grep-friendly so an operator (or a test) can tell a reaped run from a
 /// genuinely failed one.
-pub const ORPHAN_REAP_REASON: &str = "run orphaned: core restarted while the run was in flight";
+pub const ORPHAN_REAP_REASON: &str = "run orphaned: its execution lease expired";
 
 /// Reap every run left non-terminal by a previous process.
 ///
