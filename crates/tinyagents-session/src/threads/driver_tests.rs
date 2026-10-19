@@ -1,7 +1,7 @@
 use super::*;
 use async_trait::async_trait;
 use serde_json::json;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tinystoragedrivers_core::{
     Capabilities, CollectionSpec, DocumentStore, Filter, MemoryStorage, Precondition, Query,
     ReadCheck, Scope, SearchHit, Sort, StorageBackend, StorageError, Version, Versioned, WriteOp,
@@ -207,6 +207,8 @@ async fn exhaustive_paged_search_matches_local_substrings_and_cjk_tied_groups() 
 struct SearchProbe {
     calls: AtomicUsize,
     thread_queries: AtomicUsize,
+    without_full_text: AtomicBool,
+    fail_search: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -218,7 +220,13 @@ struct ProbedDocuments {
 #[async_trait]
 impl DocumentStore for ProbedDocuments {
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        if self.probe.without_full_text.load(Ordering::Relaxed) {
+            self.inner
+                .capabilities()
+                .without(tinystoragedrivers_core::Capability::FullText)
+        } else {
+            self.inner.capabilities()
+        }
     }
 
     async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
@@ -307,6 +315,9 @@ impl DocumentStore for ProbedDocuments {
         limit: usize,
     ) -> Result<Vec<SearchHit>, StorageError> {
         self.probe.calls.fetch_add(1, Ordering::Relaxed);
+        if self.probe.fail_search.load(Ordering::Relaxed) {
+            return Err(StorageError::backend("injected full-text failure"));
+        }
         self.inner.search(collection, text, limit).await
     }
 
@@ -317,6 +328,63 @@ impl DocumentStore for ProbedDocuments {
     async fn collections(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
         self.inner.collections(prefix).await
     }
+}
+
+#[tokio::test]
+async fn stores_without_full_text_capability_keep_the_scan_fallback() {
+    let backend = MemoryStorage::new();
+    let mut store = scoped(&backend, "profile");
+    DriverConversationStore::prepare_schema(store.docs.as_ref())
+        .await
+        .unwrap();
+    seed(&store, "東京", &["東京で日本語"]).await;
+    let probe = Arc::new(SearchProbe {
+        without_full_text: AtomicBool::new(true),
+        ..SearchProbe::default()
+    });
+    store.docs = Arc::new(ProbedDocuments {
+        inner: store.docs.clone(),
+        probe: probe.clone(),
+    });
+
+    let hits = store
+        .search_cross_thread_messages("東京", 10, None)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].thread_id, "東京");
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 0);
+    assert!(probe.thread_queries.load(Ordering::Relaxed) > 0);
+}
+
+#[tokio::test]
+async fn full_text_failures_are_returned_without_scan_fallback() {
+    let backend = MemoryStorage::new();
+    let mut store = scoped(&backend, "profile");
+    DriverConversationStore::prepare_schema(store.docs.as_ref())
+        .await
+        .unwrap();
+    seed(&store, "one", &["東京で日本語"]).await;
+    store.backfill_search_index().await.unwrap();
+    let probe = Arc::new(SearchProbe {
+        fail_search: AtomicBool::new(true),
+        ..SearchProbe::default()
+    });
+    store.docs = Arc::new(ProbedDocuments {
+        inner: store.docs.clone(),
+        probe: probe.clone(),
+    });
+
+    let result = store
+        .search_cross_thread_messages("東京", 10, None)
+        .await;
+    assert!(matches!(
+        result,
+        Err(ConversationError::Driver(error))
+            if error.to_string().contains("injected full-text failure")
+    ));
+    assert_eq!(probe.calls.load(Ordering::Relaxed), 1);
+    assert_eq!(probe.thread_queries.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
