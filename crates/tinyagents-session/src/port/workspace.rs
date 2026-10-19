@@ -84,8 +84,10 @@ impl WorkspaceStores {
     ///
     /// Existing data written by earlier versions under `<workspace>/session_store/`
     /// is copied into the shared backend before the classic file import. The
-    /// source database and JSONL files remain untouched, and the copy is
-    /// idempotent so an interrupted open can be retried.
+    /// source database contents and schema and JSONL files remain unchanged.
+    /// SQLite may create or update WAL/SHM coordination files for the
+    /// read-only source, and they can remain after close. The copy is idempotent
+    /// so an interrupted open can be retried.
     ///
     /// Prefer [`Self::from_backend`] when the host already owns a storage
     /// backend.
