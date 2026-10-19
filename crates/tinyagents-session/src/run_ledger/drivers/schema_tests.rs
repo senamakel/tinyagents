@@ -1,6 +1,5 @@
 use super::super::DriverRunLedger;
 use super::*;
-use crate::entry_tree::Entry;
 use crate::run_ledger::types::*;
 use crate::run_ledger::{RunLedgerStore, SessionHistoryStore};
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
@@ -98,10 +97,6 @@ fn the_schemas_name_what_each_owner_declares() {
     names.sort_unstable();
     let mut expected = [
         "ledger.agent_runs",
-        "ledger.entries",
-        "ledger.entry_heads",
-        "ledger.entry_indexes",
-        "ledger.entry_labels",
         "ledger.event_heads",
         "ledger.event_outbox",
         "ledger.events",
@@ -313,78 +308,6 @@ async fn run_events_move_to_the_run_stream_and_sequences_continue() {
         .await
         .unwrap();
     assert_eq!(next.sequence, 3);
-}
-
-#[tokio::test]
-async fn entry_trees_move_with_their_timestamps_in_ms() {
-    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let storage = agent_storage(&backend);
-    let entry = json!({
-        "id": "s:0", "parent_id": null, "ordinal": 0,
-        "kind": {"type": "label", "name": "main"}, "ts": "2026-01-01T00:00:00Z"
-    });
-    let parsed: Entry = serde_json::from_value(entry.clone()).unwrap();
-    put_v1(
-        &storage,
-        "run_ledger_entries",
-        &["s", "s:0"],
-        json!({"sessionId": "s", "insertion": 0, "entry": entry}),
-    )
-    .await;
-    put_v1(
-        &storage,
-        "run_ledger_entry_heads",
-        &["s"],
-        json!({"sessionId": "s", "nextOrdinal": 1, "nextInsertion": 1, "tip": "s:0"}),
-    )
-    .await;
-    put_v1(
-        &storage,
-        "run_ledger_entry_labels",
-        &["s", "main"],
-        json!({"sessionId": "s", "branch": {"name": "main", "tip_id": "s:0"}}),
-    )
-    .await;
-    put_v1(
-        &storage,
-        "run_ledger_entry_indexes",
-        &["s", "s:0"],
-        json!({"sessionId": "s", "tip": "s:0", "chain": ["s:0"]}),
-    )
-    .await;
-    migrate(&storage).await;
-
-    let stored = storage
-        .documents()
-        .get("ledger.entries", "s/s:0")
-        .await
-        .unwrap()
-        .unwrap()
-        .doc;
-    assert_eq!(
-        stored["ts_ms"],
-        at("2026-01-01T00:00:00Z").timestamp_millis()
-    );
-    assert_eq!(stored["session_id"], "s");
-    let ledger = DriverRunLedger::new(storage);
-    assert_eq!(
-        ledger.entry_get("s", &"s:0".into()).await.unwrap(),
-        Some(parsed)
-    );
-    assert_eq!(ledger.entry_head("s").await.unwrap(), Some("s:0".into()));
-    assert_eq!(ledger.entry_branches("s").await.unwrap().len(), 1);
-    assert_eq!(
-        ledger
-            .entry_append_to_head(
-                "s",
-                crate::entry_tree::EntryKind::Label(crate::entry_tree::LabelEntry {
-                    name: "next".into()
-                })
-            )
-            .await
-            .unwrap(),
-        "s:1".into()
-    );
 }
 
 #[tokio::test]

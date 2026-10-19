@@ -7,7 +7,6 @@
 
 use super::dto::{EffectDto, from_ms};
 use super::dto::{Stored, to_ms};
-use super::entry_tree::{ENTRIES, HEADS, INDEXES, LABELS, ts_to_ms};
 use super::storage::{
     AGENTS, EFFECTS, EVENT_HEADS, EVENT_STREAM, EVENTS, MEMBERS, SCHEMA_VERSION, TASKS, TEAMS,
     TELEMETRY, WORKFLOWS, encode, event_stream, key,
@@ -15,7 +14,7 @@ use super::storage::{
 use crate::run_ledger::tool_effects::ToolEffectStatus;
 use crate::run_ledger::types::*;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tinystoragedrivers_core::{SourceRecord, Step, TargetRecord};
 
 /// The wire record inside a v1 envelope.
@@ -82,56 +81,6 @@ fn value_step(
 
 fn text<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     value.get(field)?.as_str()
-}
-
-fn entry_head(record: &Value) -> Option<(String, Value)> {
-    let session = text(record, "sessionId")?;
-    Some((
-        key(&[session]).ok()?,
-        json!({
-            "session_id": session,
-            "next_ordinal": record.get("nextOrdinal")?,
-            "next_insertion": record.get("nextInsertion")?,
-            "tip": record.get("tip").cloned().unwrap_or(Value::Null),
-        }),
-    ))
-}
-
-fn entry_node(record: &Value) -> Option<(String, Value)> {
-    let session = text(record, "sessionId")?;
-    let entry = record.get("entry")?;
-    let entry_id = text(entry, "id")?;
-    Some((
-        key(&[session, entry_id]).ok()?,
-        json!({
-            "session_id": session,
-            "insertion": record.get("insertion")?,
-            "id": entry_id,
-            "parent_id": entry.get("parent_id").cloned().unwrap_or(Value::Null),
-            "ordinal": entry.get("ordinal")?,
-            "kind": entry.get("kind")?,
-            "ts_ms": text(entry, "ts").and_then(ts_to_ms),
-        }),
-    ))
-}
-
-fn entry_label(record: &Value) -> Option<(String, Value)> {
-    let session = text(record, "sessionId")?;
-    let branch = record.get("branch")?;
-    let name = text(branch, "name")?;
-    Some((
-        key(&[session, name]).ok()?,
-        json!({"session_id": session, "name": name, "tip_id": branch.get("tip_id")?}),
-    ))
-}
-
-fn entry_index(record: &Value) -> Option<(String, Value)> {
-    let session = text(record, "sessionId")?;
-    let tip = text(record, "tip")?;
-    Some((
-        key(&[session, tip]).ok()?,
-        json!({"session_id": session, "tip": tip, "chain": record.get("chain")?}),
-    ))
 }
 
 /// `run_ledger_tool_effects`: the status string is kept verbatim.
@@ -219,25 +168,6 @@ pub(super) fn steps() -> Vec<Step> {
             EFFECTS,
             "run_ledger_tool_effects",
             tool_effect,
-        ),
-        value_step(
-            "entry_heads_v2",
-            HEADS,
-            "run_ledger_entry_heads",
-            entry_head,
-        ),
-        value_step("entries_v2", ENTRIES, "run_ledger_entries", entry_node),
-        value_step(
-            "entry_labels_v2",
-            LABELS,
-            "run_ledger_entry_labels",
-            entry_label,
-        ),
-        value_step(
-            "entry_indexes_v2",
-            INDEXES,
-            "run_ledger_entry_indexes",
-            entry_index,
         ),
         event_stream_step(),
     ]

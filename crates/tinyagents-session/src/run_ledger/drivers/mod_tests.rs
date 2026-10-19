@@ -923,7 +923,7 @@ async fn scoped_tool_effects_preserve_restarts_settle_and_unresolved_filter() {
 /// Team and history operations that need atomic batches write only through them: a refused
 /// batch (here: an unavailable dependency check) leaves every scoped record untouched.
 #[tokio::test]
-async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() {
+async fn scoped_ledger_collections_start_empty() {
     let (ledger, _) = ledgers();
     let before = ledger
         .upsert_workflow_run(workflow("workflow"))
@@ -950,8 +950,6 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
             .unwrap()
             .is_none()
     );
-    ledger.entry_import_legacy("session", &[]).await.unwrap();
-    ledger.entry_rebuild_index("session").await.unwrap();
     assert_eq!(ledger.apply_retention(now()).await.unwrap().total(), 0);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),

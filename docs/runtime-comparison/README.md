@@ -62,8 +62,8 @@ sub-agents, no structured output, no budgets.
    tool results are text/JSON only (no `ToolReturn`-style multimodal
    follow-up + metadata); no composable toolsets; no generic MCP client; no
    replay/idempotency classification for crash recovery.
-5. **Sessions and context.** Transcripts are linear (pi's entry tree with
-   forks, labels, compaction and branch-summary entries); compaction has
+5. **Sessions and context.** TinyAgents transcripts are linear; pi also has
+   a conversation entry tree with forks, labels, compaction and branch-summary entries. Compaction has
    policies but no cut-point rules, overflow detection, or durable record;
    no cross-provider handoff transform.
 6. **Models.** `ModelProfile` is capability data only (Pydantic's carries

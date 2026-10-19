@@ -6,5 +6,3 @@ verification evidence and remaining requirements.
 - [Conversation persistence prerequisite (#7424)](conversation-prerequisite-7424.md):
   retained source provenance, scoped metadata/prefix readers and explicit schema
   admission; native message writes, import and turn claims remain unsupported.
-- [Native entry-tree slice](native-entry-tree.md): existing run-ledger entry-tree
-  semantics, native transactions and implementation boundaries.

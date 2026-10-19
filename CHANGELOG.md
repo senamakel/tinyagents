@@ -234,6 +234,7 @@ drivers.
 | `JsonlTaskStore`, `JsonlCompletionStore` (tasks) | `DriverTaskStore`, `DriverCompletionStore` |
 | session SQLite functions (`record_session_start`, `search_sessions`, `apply_retention`, `with_connection`, ...), `run_ledger` free functions and `sqlite` ledger | `DriverRunLedger` through `SessionHistoryStore` and `RunLedgerStore` |
 | `session::transcript::import` (ledger import) | `session::legacy` |
+| `SessionCompactionSink` (session) | A host implementation of `tinyagents_harness::summarization::CompactionSink` attached with `RunContext::with_compaction_sink`; only compactions with trusted live boundaries are persisted, and the session crate no longer supplies a sink. |
 
 The `sqlite` cargo features on harness and graph remain as no-ops so existing
 manifests keep resolving, and `storage-drivers` is a no-op because the driver
@@ -242,8 +243,8 @@ stores are now unconditional.
 ### Signature changes
 
 - `JsonlSink::new` takes an `Arc<dyn AppendStore>`.
-- `SessionTeamLedger::new`, `SessionWorkflowStore::new` and
-  `SessionCompactionSink::new` take an `Arc<dyn RunLedgerStore>`.
+- `SessionTeamLedger::new` and `SessionWorkflowStore::new` take an
+  `Arc<dyn RunLedgerStore>`.
 - `testkit::conformance::run_ledger_conformance` is async and takes an
   `Arc<dyn RunLedgerStore>`.
 - Transcript view projection takes an optional `SpawnCallLookup` instead of a

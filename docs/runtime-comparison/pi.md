@@ -278,12 +278,12 @@ policy allowlist and provenance) — pi has nothing equivalent to policy-checked
 Best of both: keep `SteeringCommand` for control, adopt pi's two message lanes for content.
 
 **Session tree.** pi's in-place tree (`id/parentId`, labels, compaction and branch-summary entries as tree
-nodes, forks as path copies) is a clean, replay-only design, and the `AgentHarness` refinement (Branch vs
+nodes, forks as path copies) is a clean, replay-only design. Its `AgentHarness` refinement (Branch vs
 AgentLane, "context never reads past a compaction", append-only-context invariant for KV cache) is
-sharper than anything in TinyAgents' session crate. Worse: two coexisting designs (coding-agent v3 JSONL
-vs harness entry tree, plus pico v5 in `pi-durable`) and an admitted O(history) copy on first divergence
-of an uncompacted SQLite branch (§2.6). TinyAgents' graph checkpointer already has fork/time-travel; the
-gap is applying the same idea to conversation history.
+sharper than TinyAgents' linear session history. Worse: pi has two coexisting designs (coding-agent v3
+JSONL and the harness entry tree, plus pico v5 in `pi-durable`) and an admitted O(history) copy on first
+divergence of an uncompacted SQLite branch (§2.6). TinyAgents' graph checkpointer already has
+fork/time-travel; the gap is applying the same idea to conversation history.
 
 **Compaction.** pi's is more complete operationally (cut-point rules, split turns, iterative summaries,
 overflow-triggered compaction with retry, hook can decline/replace, usage attributed). TinyAgents is

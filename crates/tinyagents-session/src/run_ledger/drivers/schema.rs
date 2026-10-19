@@ -8,7 +8,6 @@
 //! | v1 | v2 |
 //! |---|---|
 //! | `run_ledger_{workflow_runs,telemetry,agent_runs,teams,members,tool_effects,event_outbox,event_heads,tasks}` | `ledger.{workflow_runs,telemetry,agent_runs,teams,members,tool_effects,event_outbox,event_heads,tasks}`, id `Key::of` of the record's ids, snake_case body with `*_ms` times, no `{schemaVersion, record, *Sql}` envelope |
-//! | `run_ledger_entry_{heads,entries,labels,indexes}` | `ledger.entry_{heads,labels,indexes}` and `ledger.entries` |
 //! | stream `run_events:<sha>` | stream `ledger.events/<run>` (the run id is read from the entries) |
 //! | `session_history_{sessions,messages,tool_calls}` | `history.{sessions,messages,tool_calls}` (µs sort keys dropped, times in ms) |
 //! | `session_history_fts` | `history.search`, rebuilt from the migrated records |

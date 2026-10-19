@@ -163,7 +163,7 @@ the member `stopped` — the bulk analogue of `release_agent_team_task`.
 `RunLedgerStore` is the object-safe, async form of the existing ledger
 API. A handle binds its workspace or namespace once; payloads never choose
 another namespace. It covers agent runs, workflow leases/revisions, events,
-telemetry, teams/members/tasks, effects, entry trees, recovery classification,
+telemetry, teams/members/tasks, effects, recovery classification,
 command-center controls, and the existing retention operations. The three pure
 recovery helpers remain synchronous. Storage methods can await driver ports
 directly; no blocking bridge or caller-runtime reentry is required. The SQLite
@@ -189,7 +189,7 @@ interrupt another live process.
 The SQLite adapter preserves current task completion semantics: completion is
 validated against the member identity, not a takeover claim token. Retention
 preserves its existing scope: sessions/messages/tool calls, events and telemetry;
-it does not add pruning of workflows, teams, effects or entry trees.
+it does not add pruning of workflows, teams or effects.
 
 ### Typed errors
 
@@ -235,7 +235,6 @@ provider actor factory propagates validation-only admission.
 | `ledger.tool_effects` | Run, status and start time |
 | `ledger.event_outbox` | Authoritative events, unique per-run sequence |
 | `ledger.event_heads` | Next per-run event ordinal (recomputed from the events when absent) |
-| `ledger.entry_heads`, `.entries`, `.entry_labels`, `.entry_indexes` | The entry tree |
 | stream `ledger.events/<run>` | The native projection of a run's events |
 | `tsd.migrations` (`ledger`, `agent_import/<operation id>`) | Agent-import receipt; the source fingerprint is its `cursor` |
 
@@ -271,33 +270,6 @@ from legacy event ordinals. Projection refusal preserves the successful
 document commit and returns a typed error only from the explicit reconciliation
 call. Reconstructed handles can replay outstanding receipts. Neither receipts
 nor projection currently implement retention.
-
-### Native entry trees
-
-The existing entry methods bind immutable entries, a session head/allocator,
-named labels and rebuildable chain indexes within the supplied scope. Public
-EntryId values and ordinals remain the classic values. A private insertion
-sequence preserves SQLite’s head/tip ordering for accepted duplicate imported
-ordinals. Null or missing parents and additional roots remain accepted on write;
-a dangling chain refuses on read. Repeated import skips an existing id without
-rewriting its body, matching the classic transaction.
-
-Append, relabel, copied forks, imports and index rebuilds commit in one checked
-native document batch. Head revision CAS serializes independent writers, and
-snapshot reads validate that revision after enumeration. Empty operations still
-require native admission. Native refusal changes none of the staged data; no
-postcommit read can turn success into a reported failure. Retired-generation
-handles cannot access a replacement tree. Native signed integer exhaustion is
-represented with a null allocator counter rather than an unsigned BSON sentinel.
-
-Context projection shares the classic pure projector, including summary role,
-newest compaction and pinned records. Indexes are checked against the live parent
-chain and are never authoritative. The first implementation enumerates the
-session’s entry records for coherent operations; it does not claim indexed
-append performance. Cyclic imported chains refuse rather than loop indefinitely.
-No legacy files are opened by entry_import_legacy: its caller supplies admitted
-Entry values and owns source provenance/quiescence. Whole-tree lifecycle and
-retention are separate from this record API.
 
 ### Explicit telemetry retention
 

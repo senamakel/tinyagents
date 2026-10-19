@@ -17,7 +17,6 @@ use tinystoragedrivers_core::{ErrorKind, StorageError};
 use tinystoragedrivers_sqlite::rusqlite::{self, Row, types::Type};
 
 use super::source::{LegacySourceSnapshot, source_sql_error};
-use crate::entry_tree::{Entry, EntryId, EntryKind};
 use crate::run_ledger::tool_effects::ToolEffectRow;
 use crate::run_ledger::{
     AgentRun, AgentRunKind, AgentRunStatus, AgentTeam, AgentTeamMember, AgentTeamMemberStatus,
@@ -548,75 +547,6 @@ pub(crate) fn tool_effects(snapshot: &LegacySourceSnapshot) -> LedgerResult<Vec<
     )
 }
 
-/// One session's entry tree as stored.
-#[derive(Debug, Default)]
-pub(crate) struct LegacyEntryTree {
-    /// Entries in ordinal order.
-    pub(crate) entries: Vec<Entry>,
-    /// `(name, entry id)` branch labels.
-    pub(crate) labels: Vec<(String, EntryId)>,
-}
-
-/// Every session's entry tree, keyed by session id (ordinal order within each).
-pub(crate) fn entry_trees(
-    snapshot: &LegacySourceSnapshot,
-) -> LedgerResult<std::collections::BTreeMap<String, LegacyEntryTree>> {
-    let mut trees: std::collections::BTreeMap<String, LegacyEntryTree> = Default::default();
-    let rows = read_all(
-        snapshot,
-        "entry_tree_entries",
-        &[
-            ("session_id", "NULL"),
-            ("id", "NULL"),
-            ("parent_id", "NULL"),
-            ("ordinal", "NULL"),
-            ("payload_json", "NULL"),
-            ("ts", "''"),
-        ],
-        "session_id, ordinal",
-        |row| {
-            let payload: String = row.get(4)?;
-            let kind: EntryKind = serde_json::from_str(&payload).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(4, Type::Text, Box::new(error))
-            })?;
-            Ok((
-                row.get::<_, String>(0)?,
-                Entry {
-                    id: EntryId(row.get(1)?),
-                    parent_id: row.get::<_, Option<String>>(2)?.map(EntryId),
-                    ordinal: unsigned(row, 3)?,
-                    kind,
-                    ts: row.get(5)?,
-                },
-            ))
-        },
-    )?;
-    for (session, entry) in rows {
-        trees.entry(session).or_default().entries.push(entry);
-    }
-    let labels = read_all(
-        snapshot,
-        "entry_tree_labels",
-        &[
-            ("session_id", "NULL"),
-            ("name", "NULL"),
-            ("entry_id", "NULL"),
-        ],
-        "session_id, name",
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                EntryId(row.get(2)?),
-            ))
-        },
-    )?;
-    for (session, name, entry) in labels {
-        trees.entry(session).or_default().labels.push((name, entry));
-    }
-    Ok(trees)
-}
-
 /// A source that is not a classic session database fails fast and typed.
 pub(crate) fn require_classic(snapshot: &LegacySourceSnapshot) -> LedgerResult<()> {
     let known = [
@@ -626,7 +556,6 @@ pub(crate) fn require_classic(snapshot: &LegacySourceSnapshot) -> LedgerResult<(
         "workflow_runs",
         "agent_teams",
         "tool_effects",
-        "entry_tree_entries",
     ];
     if known.iter().any(|table| snapshot.has_table(table)) {
         return Ok(());

@@ -16,15 +16,13 @@
 
 use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
-use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;
 
-/// Bound storage for runs, workflows, coordination, effects and entry trees.
+/// Bound storage for runs, workflows, coordination and effects.
 ///
 /// Handles are selected by the host, never by a run's payload or tool arguments.
 /// Shared deployments must bind their tenant/agent namespace before returning a
@@ -402,52 +400,6 @@ pub trait RunLedgerStore: Send + Sync {
         run_id: &str,
         call_id: &str,
     ) -> Result<Option<ToolEffectRow>>;
-
-    /// Appends `kind` as a new entry under `parent_id` and returns its id. `None`
-    /// is only valid for a session's first entry.
-    async fn entry_append(
-        &self,
-        session_id: &str,
-        parent_id: Option<&EntryId>,
-        kind: EntryKind,
-    ) -> Result<EntryId>;
-
-    /// Appends `kind` as a child of the current head (the entry with the greatest
-    /// ordinal), the "linear append still works" path.
-    async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId>;
-
-    /// The entry with the greatest ordinal, if any entry has been appended.
-    async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>>;
-
-    /// One entry by id.
-    async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>>;
-
-    /// The root-to-`tip` ancestor chain in chronological order.
-    async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>>;
-
-    /// Every current tip (an entry with no children), in ordinal order.
-    async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>>;
-
-    /// Every named branch label and the tip it names.
-    async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>>;
-
-    /// Names `tip` by appending a label entry under it; returns the label entry's id.
-    async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId>;
-
-    /// Creates a new tip without disturbing existing ones: `Branch` scope names an
-    /// existing entry, `Tree` scope copies the ancestor path.
-    async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId>;
-
-    /// Rebuilds the materialized ancestor-chain index from the immutable entries.
-    async fn entry_rebuild_index(&self, session_id: &str) -> Result<()>;
-
-    /// Imports legacy linear entries, skipping any id already present so a repeated
-    /// import of the same source is a no-op.
-    async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()>;
-
-    /// Projects `tip`'s ancestor chain to a model-ready message list, stopping at
-    /// the newest compaction on the path.
-    async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>>;
 
     /// Deletes every **finished** session that ended before `older_than`, together
     /// with its messages, tool calls and search-index entries.

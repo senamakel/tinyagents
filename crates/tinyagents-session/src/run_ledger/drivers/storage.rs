@@ -81,17 +81,6 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 /// metadata, so none declares a TTL.
 pub(super) fn ledger_specs() -> Vec<CollectionSpec> {
     vec![
-        CollectionSpec::new(super::entry_tree::HEADS),
-        CollectionSpec::new(super::entry_tree::ENTRIES)
-            .index(IndexSpec::new("session_ordinal", ["session_id", "ordinal"]))
-            .index(IndexSpec::new(
-                "session_parent",
-                ["session_id", "parent_id"],
-            )),
-        CollectionSpec::new(super::entry_tree::LABELS)
-            .index(IndexSpec::new("session", ["session_id"])),
-        CollectionSpec::new(super::entry_tree::INDEXES)
-            .index(IndexSpec::new("session", ["session_id"])),
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS)
             .index(IndexSpec::new("run_sequence", ["run_id", "sequence"]).unique()),

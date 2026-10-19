@@ -43,9 +43,8 @@ were all merged into `runtime-comparison`.
   `interrupt_after` + `DrainSignal`, and `durable_task` all exist and are
   exercised by tests in this worktree's `crates/`.
 - **Phase 5** (sessions, context, loop-as-graph) — landed (this worktree's
-  `HEAD` merges phase-5). `EntryTree` (id/parent, branches, labels, fork)
-  (E1), compaction (`find_cut_point`, `OverflowClassifier`, `CompactionRecord`)
-  (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
+  `HEAD` merges phase-5). Compaction (`find_cut_point`, `OverflowClassifier`,
+  `CompactionRecord`) (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
   ledger with idempotency keys (B5), and `Message::Custom` (E5) all shipped.
   The loop-as-graph piece (A5) landed only partially — see (b).
 - **Phase 6** (tool ecosystem) — landed. The `ToolSet` trait plus
@@ -218,7 +217,6 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 
 | Item | Effort | Refs | OpenHuman hand-off |
 |---|---|---|---|
-| Transcript entries with `id`/`parent_id`; `CompactionEntry`, `BranchSummaryEntry`, `LabelEntry`, `CustomEntry`; `build_context(tip)` stops at the newest compaction; fork = path copy; SQLite as rebuildable index | L | E1 | `/fork`, `/tree`, labels UI; `session_import` writes the tree |
 | Compaction rules: `find_cut_point`, split turns, iterative summaries, `CompactionRecord`, `OverflowClassifier`, `overflow → compact → retry` in `ContextCompressionMiddleware`; `before_compaction` hook may decline/replace | M | E2 | summary prompt text and `/compact` stay |
 | `AssistantMessage.origin{provider, api, model}`; `prepare_for_model(&[Message], &ModelProfile)` handoff pass | S | E3 | mid-session model switch just works |
 | Tool-effect ledger keyed by `CallId` with `ToolReplay::{Never, Safe}` on `ToolSchema`/policy; `list_unresolved_tool_effects(run_id)` | M | B5 | OpenHuman marks its tools' replay class |
