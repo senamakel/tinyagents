@@ -211,6 +211,15 @@ fn ok() -> Behaviour {
     Arc::new(|task| Ok(SubagentOutcome::completed(task, "all done")))
 }
 
+async fn resume_request(
+    key: SubagentTaskKey,
+    run_context: tinyagents_harness::context::RunContext<String>,
+) -> SubagentRequest<String> {
+    SubagentRequest::continue_with_key(key, run_context, (), "do work", None, None)
+        .await
+        .unwrap()
+}
+
 struct CountedExecutor {
     calls: Arc<std::sync::atomic::AtomicUsize>,
     first_entered: Arc<tokio::sync::Semaphore>,
@@ -248,7 +257,7 @@ async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
             key: key.clone(),
             replaces: None,
             outcome: SubagentOutcome {
-                status: SubagentOutcomeKind::AwaitingInput(super::super::SubagentPause {
+                status: SubagentOutcomeKind::AwaitingInput(SubagentPause {
                     reason: "answer?".into(),
                     resume: SubagentResume::default(),
                 }),
@@ -282,9 +291,8 @@ async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
     let first = make_driver();
     let second = make_driver();
     let first_request =
-        continuation_request(key.clone(), request("paused-task").run_context().clone()).await;
-    let second_request =
-        continuation_request(key, request("paused-task").run_context().clone()).await;
+        resume_request(key.clone(), request("paused-task").run_context().clone()).await;
+    let second_request = resume_request(key, request("paused-task").run_context().clone()).await;
 
     let mut first_run =
         tokio::spawn(async move { first.run(first_request, CancellationToken::new()).await });
