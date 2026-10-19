@@ -1,4 +1,5 @@
-//! In-memory inverted index for `search_cross_thread_messages`.
+//! In-memory candidate index for exact matching and ranking in
+//! `search_cross_thread_messages`.
 //!
 //! ## Architecture (v1)
 //!
@@ -40,8 +41,9 @@
 //!   Roaring Bitmaps + FST + LSM segments are the long-term destination
 //!   (Gemini Deep Research write-up); we defer that until corpus sizes
 //!   justify the complexity.
-//! - **Whole index lives in RAM**, rebuilt from JSONL on first access in
-//!   the process. The JSONL files remain the source of truth.
+//! - **Query-local index**: FullText-capable stores build this over durable
+//!   search candidates only; stores without FullText build it over a corpus
+//!   scan. The persistent derived index belongs to the driver.
 //! - **Scoring matches the previous linear scan**:
 //!   `score = matched_terms / total_terms` with a `created_at` tiebreaker.
 //! - **Pathological query short-circuit**: if Phase 1 produces a
@@ -173,8 +175,7 @@ impl InvertedIndex {
         self.by_message.insert(key, doc_id);
     }
 
-    /// Drop every document belonging to a thread. Only the incremental index
-    /// tests use it now that search rebuilds the index per query.
+    /// Drop every candidate document belonging to a thread.
     #[allow(dead_code)]
     pub fn remove_thread(&mut self, thread_id: &str) {
         let to_remove: Vec<u32> = self

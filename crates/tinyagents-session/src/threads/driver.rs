@@ -132,9 +132,8 @@ impl DriverConversationStore {
         Self::new(scoped)
     }
 
-    /// The `conversations.threads` declaration.
-    ///
-    /// Thread metadata and the derived search collection.
+    /// Thread metadata and the base derived-search collection declaration.
+    /// Trusted bootstrap adds its FullText field when the driver supports it.
     /// Native validation accepts compatible supersets, not exact equality.
     pub fn collection_specs() -> Vec<CollectionSpec> {
         vec![thread_spec(), search::collection_spec()]
