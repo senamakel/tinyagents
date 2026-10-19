@@ -145,6 +145,25 @@ fn supplied_backend_is_shared_across_handles_and_scoped_by_agent() {
     assert!(!other_agent.transcripts().session_exists(&session));
 }
 
+#[test]
+fn supplied_sqlite_backend_does_not_create_a_private_workspace_store() {
+    use tinystoragedrivers_core::StorageBackend;
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage_dir = dir.path().join(STORAGE_DIR);
+    let backend: Arc<dyn StorageBackend> =
+        Arc::new(SqliteStorage::open(&storage_dir).unwrap());
+    let stores = WorkspaceStores::from_backend(backend, "agent").unwrap();
+    let session = SessionRef::root("supplied-backend-thread");
+    stores
+        .transcripts()
+        .open_session(&session, meta())
+        .unwrap();
+
+    assert!(storage_dir.join("storage.db").is_file());
+    assert!(!dir.path().join(STORE_DIR).exists());
+}
+
 #[allow(deprecated)]
 #[tokio::test]
 async fn path_convenience_imports_existing_private_store_into_unified_storage() {
