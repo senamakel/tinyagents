@@ -148,3 +148,43 @@ async fn agent_harness_renews_during_pending_model_call_and_cancels_on_lease_los
         "lease loss cancels model work"
     );
 }
+
+#[tokio::test]
+async fn successful_agent_run_stops_renewing_after_model_completion() {
+    tokio::time::pause();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let released = Arc::new(tokio::sync::Notify::new());
+    let release_model = Arc::clone(&released);
+    let dropped = Arc::new(AtomicBool::new(false));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(BlockingModel {
+            entered: Arc::clone(&entered),
+            released,
+            dropped: Arc::clone(&dropped),
+        }),
+    );
+    let lease = Lease {
+        renewals: AtomicUsize::new(0),
+        lose_after: usize::MAX,
+    };
+    let mut run = Box::pin(harness.invoke_with_lease(
+        &(),
+        (),
+        RunConfig::new("run"),
+        vec![Message::user("continue")],
+        &lease,
+        Duration::from_secs(10),
+    ));
+    entered.notified().await;
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), 1);
+    release_model.notify_one();
+    assert!(run.await.is_ok());
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), 1);
+    assert!(dropped.load(Ordering::SeqCst));
+}
