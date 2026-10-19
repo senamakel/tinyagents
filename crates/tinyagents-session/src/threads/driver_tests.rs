@@ -53,6 +53,34 @@ async fn independent_handles_share_metadata_but_other_scope_does_not() {
 }
 
 #[tokio::test]
+async fn conversation_search_index_isolated_by_backend_scope() {
+    let backend = MemoryStorage::new();
+    let a = scoped(&backend, "profile-a");
+    let b = scoped(&backend, "profile-b");
+    DriverConversationStore::prepare_schema(a.docs.as_ref())
+        .await
+        .unwrap();
+    DriverConversationStore::prepare_schema(b.docs.as_ref())
+        .await
+        .unwrap();
+    seed(&a, "shared-id", &["private scope phrase"]).await;
+
+    assert_eq!(
+        a.search_cross_thread_messages("private", 10, None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        b.search_cross_thread_messages("private", 10, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn unprepared_append_never_approximates_a_committed_message() {
     let backend = MemoryStorage::new();
     let store = scoped(&backend, "profile");
