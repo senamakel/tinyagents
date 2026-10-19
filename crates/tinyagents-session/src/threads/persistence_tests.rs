@@ -285,7 +285,7 @@ async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_work
         .unwrap();
     assert_eq!(patched.extra_metadata, json!({"k": 1}));
     let rows = store.get_messages("one").await.unwrap();
-    assert_eq!(rows[0], message("a", "a"));
+    assert_eq!(rows[0], message("a", "alpha"));
     assert_eq!(rows[1].extra_metadata, json!({"k": 1}));
     assert_eq!(
         store
