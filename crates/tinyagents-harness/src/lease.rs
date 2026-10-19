@@ -13,6 +13,9 @@ use crate::error::{Result, TinyAgentsError};
 /// adapter implements this port using an owner/epoch conditional update.
 #[async_trait]
 pub trait RunLeaseHeartbeat: Send + Sync {
+    /// Duration granted by each successful renewal.
+    fn lease_duration(&self) -> Duration;
+
     /// Extends the current lease if this owner and fencing epoch still own it.
     /// Returns `false` when ownership was lost or the lease already expired.
     async fn renew(&self) -> Result<bool>;
@@ -20,12 +23,11 @@ pub trait RunLeaseHeartbeat: Send + Sync {
 
 /// Runs a future while periodically renewing its lease.
 ///
-/// The future is dropped immediately when renewal fails, and the renewal loop
-/// is dropped when the future completes or this function is cancelled. This
-/// covers pending model and tool calls; status/progress writes are not needed
-/// to keep ownership alive. A renewal operation is bounded by one heartbeat
-/// interval; callers must choose an interval whose two-interval worst case is
-/// shorter than the lease remaining at the start of a renewal.
+/// A successful renewal runs before the work future is first polled. The work
+/// future is dropped immediately when a later renewal fails, and the renewal
+/// loop is dropped when the future completes or this function is cancelled.
+/// Each renewal is bounded by one heartbeat interval; the interval and timeout
+/// must fit strictly inside the lease duration reported by the adapter.
 pub async fn run_with_lease<F, T>(
     future: F,
     lease: &dyn RunLeaseHeartbeat,
@@ -34,23 +36,22 @@ pub async fn run_with_lease<F, T>(
 where
     F: Future<Output = T>,
 {
-    if heartbeat_every.is_zero() {
+    if heartbeat_every.is_zero()
+        || lease.lease_duration().is_zero()
+        || heartbeat_every
+            .checked_mul(2)
+            .is_none_or(|budget| budget >= lease.lease_duration())
+    {
         return Err(TinyAgentsError::Validation(
-            "run lease heartbeat interval must be positive".into(),
+            "run lease duration must exceed two positive heartbeat intervals".into(),
         ));
     }
+    renew_once(lease, heartbeat_every).await?;
     tokio::pin!(future);
     let heartbeat = async {
         loop {
             tokio::time::sleep(heartbeat_every).await;
-            let renewed = tokio::time::timeout(heartbeat_every, lease.renew())
-                .await
-                .map_err(|_| TinyAgentsError::Storage("run lease heartbeat timed out".into()))??;
-            if !renewed {
-                return Err(TinyAgentsError::Storage(
-                    "run lease ownership was lost".into(),
-                ));
-            }
+            renew_once(lease, heartbeat_every).await?;
         }
         #[allow(unreachable_code)]
         Ok::<(), TinyAgentsError>(())
@@ -59,6 +60,19 @@ where
     tokio::select! {
         result = &mut future => Ok(result),
         result = &mut heartbeat => result.map(|()| unreachable!("heartbeat loop is infinite")),
+    }
+}
+
+async fn renew_once(lease: &dyn RunLeaseHeartbeat, budget: Duration) -> Result<()> {
+    let renewed = tokio::time::timeout(budget, lease.renew())
+        .await
+        .map_err(|_| TinyAgentsError::Storage("run lease heartbeat timed out".into()))??;
+    if renewed {
+        Ok(())
+    } else {
+        Err(TinyAgentsError::Storage(
+            "run lease ownership was lost".into(),
+        ))
     }
 }
 

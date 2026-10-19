@@ -50,6 +50,10 @@ impl AgentRunLeaseHeartbeat {
 
 #[async_trait::async_trait]
 impl RunLeaseHeartbeat for AgentRunLeaseHeartbeat {
+    fn lease_duration(&self) -> std::time::Duration {
+        self.lease_for.to_std().unwrap_or_default()
+    }
+
     async fn renew(&self) -> tinyagents_harness::Result<bool> {
         self.store
             .renew_agent_run_lease(&self.token, (self.clock)(), self.lease_for)

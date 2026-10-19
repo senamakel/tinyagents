@@ -41,6 +41,10 @@ impl ChatModel<()> for BlockingModel {
 
 #[async_trait]
 impl RunLeaseHeartbeat for Lease {
+    fn lease_duration(&self) -> Duration {
+        Duration::from_secs(120)
+    }
+
     async fn renew(&self) -> Result<bool> {
         let count = self.renewals.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(count < self.lose_after)
@@ -68,6 +72,10 @@ async fn pending_work_heartbeats_and_stops_when_lease_is_lost() {
     };
     let run = run_with_lease(pending, &lease, Duration::from_secs(10));
     tokio::pin!(run);
+    tokio::select! {
+        _ = tokio::task::yield_now() => {},
+        result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
+    }
     tokio::time::advance(Duration::from_secs(10)).await;
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(10)).await;
@@ -93,6 +101,7 @@ async fn completed_or_cancelled_wrapper_does_not_leave_a_heartbeat_behind() {
             .unwrap(),
         7
     );
+    let before_cancel = lease.renewals.load(Ordering::SeqCst);
     let entered = Arc::new(tokio::sync::Notify::new());
     let run_entered = Arc::clone(&entered);
     let pending = async move {
@@ -107,15 +116,36 @@ async fn completed_or_cancelled_wrapper_does_not_leave_a_heartbeat_behind() {
     drop(cancelled);
     tokio::time::advance(Duration::from_secs(20)).await;
     tokio::task::yield_now().await;
-    assert_eq!(lease.renewals.load(Ordering::SeqCst), 0);
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), before_cancel + 1);
 }
 
-struct StalledLease;
+struct StalledLease(AtomicUsize);
+
+struct NeverLease;
+
+#[async_trait]
+impl RunLeaseHeartbeat for NeverLease {
+    fn lease_duration(&self) -> Duration {
+        Duration::from_secs(60)
+    }
+
+    async fn renew(&self) -> Result<bool> {
+        std::future::pending().await
+    }
+}
 
 #[async_trait]
 impl RunLeaseHeartbeat for StalledLease {
+    fn lease_duration(&self) -> Duration {
+        Duration::from_secs(60)
+    }
+
     async fn renew(&self) -> Result<bool> {
-        std::future::pending().await
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(true)
+        } else {
+            std::future::pending().await
+        }
     }
 }
 
@@ -137,7 +167,8 @@ async fn stalled_renewal_is_bounded_and_cancels_in_flight_work() {
         task_entered.notify_one();
         std::future::pending::<()>().await;
     };
-    let mut run = Box::pin(run_with_lease(task, &StalledLease, Duration::from_secs(5)));
+    let lease = StalledLease(AtomicUsize::new(0));
+    let mut run = Box::pin(run_with_lease(task, &lease, Duration::from_secs(5)));
     tokio::select! {
         _ = entered.notified() => {},
         result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
@@ -148,6 +179,59 @@ async fn stalled_renewal_is_bounded_and_cancels_in_flight_work() {
     tokio::task::yield_now().await;
     assert!(run.await.is_err());
     assert!(dropped.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn invalid_timing_or_initial_lease_loss_never_starts_work() {
+    tokio::time::pause();
+    let invalid_lease = Lease {
+        renewals: AtomicUsize::new(0),
+        lose_after: usize::MAX,
+    };
+    let started = Arc::new(AtomicBool::new(false));
+    let work_started = Arc::clone(&started);
+    let invalid = run_with_lease(
+        async move {
+            work_started.store(true, Ordering::SeqCst);
+        },
+        &invalid_lease,
+        Duration::from_secs(60),
+    )
+    .await;
+    assert!(invalid.is_err());
+    assert_eq!(invalid_lease.renewals.load(Ordering::SeqCst), 0);
+    assert!(!started.load(Ordering::SeqCst));
+
+    let work_started = Arc::clone(&started);
+    let stalled = async move {
+        work_started.store(true, Ordering::SeqCst);
+    };
+    let mut initial_stall = Box::pin(run_with_lease(stalled, &NeverLease, Duration::from_secs(5)));
+    tokio::select! {
+        _ = tokio::task::yield_now() => {},
+        result = &mut initial_stall => panic!("stalled initial heartbeat unexpectedly ended: {result:?}"),
+    }
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    assert!(initial_stall.await.is_err());
+    assert!(!started.load(Ordering::SeqCst));
+
+    let expired_lease = Lease {
+        renewals: AtomicUsize::new(0),
+        lose_after: 0,
+    };
+    let work_started = Arc::clone(&started);
+    let lost = run_with_lease(
+        async move {
+            work_started.store(true, Ordering::SeqCst);
+        },
+        &expired_lease,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(lost.is_err());
+    assert_eq!(expired_lease.renewals.load(Ordering::SeqCst), 1);
+    assert!(!started.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
@@ -220,14 +304,17 @@ async fn successful_agent_run_stops_renewing_after_model_completion() {
         &lease,
         Duration::from_secs(10),
     ));
-    entered.notified().await;
+    tokio::select! {
+        _ = entered.notified() => {},
+        result = &mut run => panic!("model run ended before its await: {result:?}"),
+    }
     tokio::time::advance(Duration::from_secs(10)).await;
     tokio::task::yield_now().await;
-    assert_eq!(lease.renewals.load(Ordering::SeqCst), 1);
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
     release_model.notify_one();
     assert!(run.await.is_ok());
     tokio::time::advance(Duration::from_secs(30)).await;
     tokio::task::yield_now().await;
-    assert_eq!(lease.renewals.load(Ordering::SeqCst), 1);
+    assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
     assert!(dropped.load(Ordering::SeqCst));
 }
