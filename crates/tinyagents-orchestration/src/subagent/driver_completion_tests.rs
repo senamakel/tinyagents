@@ -11,6 +11,7 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueue, RunQueueHandle};
 use tinyagents_runtime::ToolSnapshot;
 use tinyagents_tasks::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use tinyinference_llm::message::Message;
+use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 use super::*;
 
@@ -208,6 +209,96 @@ fn router() -> Arc<CompletionRouter> {
 
 fn ok() -> Behaviour {
     Arc::new(|task| Ok(SubagentOutcome::completed(task, "all done")))
+}
+
+struct ResumeBarrierPlanner {
+    arrived: Arc<tokio::sync::Barrier>,
+}
+
+#[async_trait]
+impl SubagentPlanner<String> for ResumeBarrierPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<String>,
+    ) -> Result<PreparedSubagent<String>, SubagentError> {
+        let parts = request.into_parts();
+        self.arrived.wait().await;
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            parts.run_context,
+        ))
+    }
+}
+
+struct CountedExecutor(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl SubagentExecutor<String> for CountedExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<String>,
+    ) -> Result<SubagentOutcome, SubagentError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "done",
+        ))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let docs = Arc::clone(scoped.documents());
+    let persistence = Arc::new(DocumentSubagentPersistence::new(docs.clone()).unwrap());
+    let original = request("paused-task");
+    let key = original.task_key().clone();
+    persistence
+        .save_pause(PersistedSubagentPause {
+            key: key.clone(),
+            replaces: None,
+            outcome: SubagentOutcome {
+                status: SubagentOutcomeKind::AwaitingInput(super::super::SubagentPause {
+                    reason: "answer?".into(),
+                    resume: SubagentResume::default(),
+                }),
+                output: "paused".into(),
+                ..SubagentOutcome::cancelled(key.task_id.clone())
+            },
+        })
+        .await
+        .unwrap();
+
+    let arrivals = Arc::new(tokio::sync::Barrier::new(2));
+    let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let make_driver = || {
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(ResumeBarrierPlanner {
+                arrived: arrivals.clone(),
+            })),
+            executor: Some(Arc::new(CountedExecutor(executions.clone()))),
+            persistence: Some(Arc::new(
+                DocumentSubagentPersistence::new(docs.clone()).unwrap(),
+            )),
+        })
+        .unwrap()
+    };
+    let first = make_driver();
+    let second = make_driver();
+    let first_request = continuation_request(key.clone(), request("paused-task").run_context().clone()).await;
+    let second_request = continuation_request(key, request("paused-task").run_context().clone()).await;
+
+    let (first_result, second_result) = tokio::join!(
+        first.run(first_request, CancellationToken::new()),
+        second.run(second_request, CancellationToken::new()),
+    );
+    first_result.unwrap();
+    second_result.unwrap();
+    assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
