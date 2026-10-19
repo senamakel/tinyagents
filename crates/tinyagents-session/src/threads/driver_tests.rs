@@ -55,7 +55,7 @@ async fn independent_handles_share_metadata_but_other_scope_does_not() {
 #[tokio::test]
 async fn unprepared_append_never_approximates_a_committed_message() {
     let backend = MemoryStorage::new();
-    let store = scoped(&backend, "profile");
+    let mut store = scoped(&backend, "profile");
     store.ensure_thread(request("one")).await.unwrap();
     let message = ThreadMessage {
         id: "agent:r".into(),
