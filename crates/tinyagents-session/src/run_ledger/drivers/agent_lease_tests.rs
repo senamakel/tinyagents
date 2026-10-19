@@ -155,10 +155,12 @@ async fn unfenced_status_transitions_cannot_revive_reaped_or_finished_leases() {
             .unwrap(),
         1
     );
-    assert!(ledger
-        .transition_agent_run_status("reaped", AgentRunStatus::Running, None, None)
-        .await
-        .is_err());
+    assert!(
+        ledger
+            .transition_agent_run_status("reaped", AgentRunStatus::Running, None, None)
+            .await
+            .is_err()
+    );
 
     ledger.upsert_agent_run(run("finished")).await.unwrap();
     let token = match ledger
@@ -169,23 +171,27 @@ async fn unfenced_status_transitions_cannot_revive_reaped_or_finished_leases() {
         AgentRunLeaseClaim::Acquired { token, .. } => token,
         other => panic!("expected lease, got {other:?}"),
     };
-    assert!(ledger
-        .finish_agent_run(
-            AgentRunUpsert {
-                status: AgentRunStatus::Completed,
-                completed_at: Some(now + chrono::Duration::seconds(1)),
-                ..run("finished")
-            },
-            &token,
-            now + chrono::Duration::seconds(1),
-        )
-        .await
-        .unwrap()
-        .is_some());
-    assert!(ledger
-        .transition_agent_run_status("finished", AgentRunStatus::Running, None, None)
-        .await
-        .is_err());
+    assert!(
+        ledger
+            .finish_agent_run(
+                AgentRunUpsert {
+                    status: AgentRunStatus::Completed,
+                    completed_at: Some(now + chrono::Duration::seconds(1)),
+                    ..run("finished")
+                },
+                &token,
+                now + chrono::Duration::seconds(1),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ledger
+            .transition_agent_run_status("finished", AgentRunStatus::Running, None, None)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
