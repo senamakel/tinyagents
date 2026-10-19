@@ -81,7 +81,11 @@ async fn shared_reaper_preserves_active_runs_with_unknown_ownership() {
     unowned.mark_running(HarnessPhase::Model);
     owner.put_status(unowned).await.unwrap();
     assert_eq!(reap_orphaned_runs(&reaper).await, 0);
-    let status = owner.get_status(&run_id).await.unwrap().expect("present");
+    let status = owner
+        .get_status(run_id.as_str())
+        .await
+        .unwrap()
+        .expect("present");
     assert_eq!(status.status, ExecutionStatus::Running);
     assert_eq!(status.current_phase, HarnessPhase::Model);
     assert!(status.ended_at.is_none());
@@ -94,7 +98,7 @@ async fn shared_reaper_preserves_live_lease_and_settles_expired_lease() {
     let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
     let reaper = DriverStatusStore::new(Arc::clone(scoped.documents()));
     let live_id = mint_run_id();
-    let mut live = HarnessRunStatus::new(live_id.clone(), ComponentId::new("model".into()));
+    let mut live = HarnessRunStatus::new(live_id.clone(), ComponentId::new("model"));
     live.mark_running(HarnessPhase::Model);
     live.lease_owner = Some("healthy-owner".into());
     live.lease_epoch = 4;
@@ -123,7 +127,7 @@ async fn status_lease_epoch_fences_heartbeat_takeover_and_finish() {
     let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
     let expires = now + Duration::from_secs(5);
     let run_id = mint_run_id();
-    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
     initial.mark_running(HarnessPhase::Model);
     let first = store
         .claim_status(initial, "owner-a", now, expires)
@@ -156,7 +160,7 @@ async fn status_lease_epoch_fences_heartbeat_takeover_and_finish() {
             .unwrap()
     );
 
-    let mut takeover = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
+    let mut takeover = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
     takeover.mark_running(HarnessPhase::Model);
     let second = store
         .claim_status(
@@ -202,7 +206,7 @@ async fn stale_status_snapshot_cannot_roll_back_a_renewed_deadline() {
                 .as_millis() as u64,
         );
     let run_id = mint_run_id();
-    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
     initial.mark_running(HarnessPhase::Model);
     let stale_snapshot = owner
         .claim_status(initial, "owner-a", now, now + Duration::from_secs(30))
@@ -242,7 +246,7 @@ async fn in_memory_status_update_also_preserves_the_current_lease_deadline() {
     let store = crate::observability::InMemoryStatusStore::new();
     let now = SystemTime::now();
     let run_id = mint_run_id();
-    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
     initial.mark_running(HarnessPhase::Model);
     let stale = store
         .claim_status(initial, "owner-a", now, now + Duration::from_secs(10))
