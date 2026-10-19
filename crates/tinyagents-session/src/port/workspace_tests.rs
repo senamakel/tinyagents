@@ -90,7 +90,8 @@ fn legacy_generations_resume_through_the_port_and_a_new_generation_chains() {
     // Legacy files were only read.
     assert_eq!(std::fs::read(&sealed).unwrap(), sealed_bytes);
     assert_eq!(std::fs::read(&head).unwrap(), head_bytes);
-    assert!(dir.path().join(STORE_DIR).is_dir());
+    assert!(dir.path().join(STORAGE_DIR).join("storage.db").is_file());
+    assert!(!dir.path().join(STORE_DIR).exists());
 
     // The handle is cached per workspace and agent.
     let again = WorkspaceStores::open(dir.path(), "agent").unwrap();

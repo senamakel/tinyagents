@@ -1,5 +1,8 @@
 use super::*;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use tinyagents_harness::store::{DriverStore, Store};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStoreExt, MemoryStorage, Migrations, Precondition, StorageBackend,
+};
 
 fn provider() -> DriverSessionStores {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
@@ -133,5 +136,74 @@ async fn truncated_journal_with_matching_base_resumes_without_recreating_prefix(
             serde_json::json!({"value": "three"}),
             serde_json::json!({"value": "four"}),
         ]
+    );
+}
+
+#[tokio::test]
+async fn copy_imports_only_owned_documents_and_existing_collections() {
+    let source = provider();
+    let destination = provider();
+    let source_stores = source.try_for_agent("agent").unwrap();
+    let destination_stores = destination.try_for_agent("agent").unwrap();
+    let (source_scope, _) = source.scoped_for("agent").unwrap();
+    let (destination_scope, _) = destination.scoped_for("agent").unwrap();
+
+    source_stores
+        .kv
+        .put("session", "kept", serde_json::json!({"value": 1}))
+        .await
+        .unwrap();
+    let other_owner = DriverStore::with_owner(Arc::clone(source_scope.documents()), "other");
+    other_owner
+        .put("session", "private", serde_json::json!({"value": 2}))
+        .await
+        .unwrap();
+    source_scope
+        .documents()
+        .ensure_collection(&CollectionSpec::new("unrelated.collection"))
+        .await
+        .unwrap();
+    source_scope
+        .documents()
+        .put(
+            "unrelated.collection",
+            "document",
+            serde_json::json!({"value": 3}),
+            Precondition::Absent,
+        )
+        .await
+        .unwrap();
+    source_scope
+        .documents()
+        .ensure_collection(&CollectionSpec::new("tsd.migrations"))
+        .await
+        .unwrap();
+    Migrations::new(&source_scope)
+        .mark_done("other", "private_step")
+        .await
+        .unwrap();
+
+    workspace_migration::copy_agent_storage(&source, &destination, "agent").unwrap();
+
+    assert_eq!(
+        destination_stores.kv.get("session", "kept").await.unwrap(),
+        Some(serde_json::json!({"value": 1}))
+    );
+    let other_owner = DriverStore::with_owner(Arc::clone(destination_scope.documents()), "other");
+    assert_eq!(other_owner.get("session", "private").await.unwrap(), None);
+    assert!(
+        !Migrations::new(&destination_scope)
+            .done("other", "private_step")
+            .await
+            .unwrap(),
+    );
+    assert!(
+        !destination_scope
+            .documents()
+            .collections("")
+            .await
+            .unwrap()
+            .iter()
+            .any(|collection| collection == "unrelated.collection")
     );
 }

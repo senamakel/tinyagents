@@ -70,7 +70,14 @@ async fn copy_documents(
 ) -> Result<(), tinystoragedrivers_core::StorageError> {
     let source_documents = source.documents();
     let destination_documents = destination.documents();
+    let present_collections = source_documents.collections("").await?;
     for collection in OWNED_COLLECTIONS {
+        if !present_collections
+            .iter()
+            .any(|present| present == collection)
+        {
+            continue;
+        }
         let query = match collection {
             "tsd.kv" | "tsd.migrations" => Query::filter(Filter::eq("owner", "session")),
             _ => Query::all(),
