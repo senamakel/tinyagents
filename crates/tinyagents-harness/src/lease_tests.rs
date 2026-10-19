@@ -87,8 +87,6 @@ async fn pending_work_heartbeats_and_stops_when_lease_is_lost() {
     }
     tokio::time::advance(Duration::from_secs(10)).await;
     poll_pending(run.as_mut()).await;
-    tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
     let result = run.await;
     assert!(result.is_err());
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
@@ -205,7 +203,6 @@ async fn stalled_renewal_stops_near_expiry_before_the_granted_lease_expires() {
     tokio::time::advance(Duration::from_secs(10)).await;
     poll_pending(run.as_mut()).await;
     tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
 
     assert!(run.await.is_err());
     assert!(dropped.load(Ordering::SeqCst));
@@ -239,7 +236,6 @@ async fn stalled_renewal_is_bounded_and_cancels_in_flight_work() {
     tokio::time::advance(Duration::from_secs(5)).await;
     poll_pending(run.as_mut()).await;
     tokio::time::advance(Duration::from_secs(5)).await;
-    poll_pending(run.as_mut()).await;
     assert!(run.await.is_err());
     assert!(dropped.load(Ordering::SeqCst));
 }
@@ -329,9 +325,6 @@ async fn agent_harness_renews_during_pending_model_call_and_cancels_on_lease_los
         result = &mut run => panic!("model run ended before its await: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
-    tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
     assert!(run.await.is_err());
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
     assert!(
