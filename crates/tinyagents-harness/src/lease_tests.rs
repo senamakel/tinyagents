@@ -3,6 +3,7 @@ use crate::context::RunConfig;
 use crate::runtime::AgentHarness;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{future::Future, pin::Pin, task::Poll};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 
@@ -18,6 +19,14 @@ struct BlockingModel {
 }
 
 struct ModelCallDrop(Arc<AtomicBool>);
+
+async fn poll_pending<F: Future>(future: &mut Pin<Box<F>>) {
+    std::future::poll_fn(|context| {
+        assert!(future.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+}
 
 impl Drop for ModelCallDrop {
     fn drop(&mut self) {
@@ -77,8 +86,9 @@ async fn pending_work_heartbeats_and_stops_when_lease_is_lost() {
         result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::task::yield_now().await;
+    poll_pending(&mut run).await;
     tokio::time::advance(Duration::from_secs(10)).await;
+    poll_pending(&mut run).await;
     let result = run.await;
     assert!(result.is_err());
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
@@ -193,9 +203,9 @@ async fn stalled_renewal_stops_near_expiry_before_the_granted_lease_expires() {
         result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::task::yield_now().await;
+    poll_pending(&mut run).await;
     tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::task::yield_now().await;
+    poll_pending(&mut run).await;
 
     assert!(run.await.is_err());
     assert!(dropped.load(Ordering::SeqCst));
@@ -227,9 +237,9 @@ async fn stalled_renewal_is_bounded_and_cancels_in_flight_work() {
         result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(5)).await;
-    tokio::task::yield_now().await;
+    poll_pending(&mut run).await;
     tokio::time::advance(Duration::from_secs(5)).await;
-    tokio::task::yield_now().await;
+    poll_pending(&mut run).await;
     assert!(run.await.is_err());
     assert!(dropped.load(Ordering::SeqCst));
 }
