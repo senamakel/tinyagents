@@ -18,6 +18,24 @@ const STREAM_BATCH: usize = 256;
 const IMPORT_OWNER: &str = "tinyagents_session_workspace";
 const IMPORT_STEP: &str = "private_sqlite_v1";
 
+/// Whether the former private store was already copied into this agent scope.
+pub(super) fn import_is_complete(
+    destination: &DriverSessionStores,
+    agent_id: &str,
+) -> anyhow::Result<bool> {
+    let (destination_scope, _) = destination.scoped_for(agent_id)?;
+    let complete = destination.bridge().run(async move {
+        destination_scope
+            .documents()
+            .ensure_collection(&CollectionSpec::new("tsd.migrations"))
+            .await?;
+        Migrations::new(&destination_scope)
+            .done(IMPORT_OWNER, IMPORT_STEP)
+            .await
+    })??;
+    Ok(complete)
+}
+
 /// Copies only session-owned records through the storage ports. Documents
 /// enter only when absent; an existing document must match its source or the
 /// import fails without changing it. Existing journals must match the copied

@@ -110,8 +110,9 @@ impl WorkspaceStores {
             Arc::clone(&backend),
             Scope::local(),
         )?);
+        let stores = provider.try_for_agent(agent_id)?;
         let legacy_db = workspace_dir.join(STORE_DIR).join("storage.db");
-        if legacy_db.is_file() {
+        if legacy_db.is_file() && !workspace_migration::import_is_complete(&provider, agent_id)? {
             let legacy_backend: Arc<dyn StorageBackend> = Arc::new(
                 SqliteStorage::open_existing_read_only(workspace_dir.join(STORE_DIR))?,
             );
@@ -121,10 +122,8 @@ impl WorkspaceStores {
                 SchemaAdmission::ValidateOnly,
             )?;
             legacy_provider.try_for_agent(agent_id)?;
-            provider.try_for_agent(agent_id)?;
             workspace_migration::copy_agent_storage(&legacy_provider, &provider, agent_id)?;
         }
-        let stores = provider.try_for_agent(agent_id)?;
         let outcome = import_transcripts_once(&provider, agent_id, workspace_dir)?;
         tracing::debug!(
             target: "tinyagents_session::port::workspace",

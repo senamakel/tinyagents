@@ -229,6 +229,7 @@ async fn path_convenience_imports_existing_private_store_into_unified_storage() 
         .await
         .unwrap();
     drop(moved);
+    std::fs::write(&source_database, b"legacy database is no longer readable").unwrap();
     let reopened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert_eq!(
         reopened

@@ -73,7 +73,8 @@ reachable under `session::`, `session::run_ledger::`, and
   `harness.journal/` streams. Existing destination documents must match their
   source; a journal can resume only when its ordered copied prefix matches.
   A completion marker is written after every family succeeds, so later opens
-  preserve destination state that has since evolved.
+  skip the old database entirely and preserve destination state that has since
+  evolved.
 - **Legacy import** — `legacy::import_workspace` and
   `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
