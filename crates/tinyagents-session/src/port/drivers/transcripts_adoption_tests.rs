@@ -232,6 +232,7 @@ fn a_reserved_stem_reports_nothing_adopted() {
 
 #[cfg(feature = "legacy-import")]
 #[test]
+#[allow(deprecated)]
 fn an_imported_file_workspace_is_adopted_and_resumes_the_folded_history() {
     use crate::port::WorkspaceStores;
     use crate::transcript::write_transcript;
