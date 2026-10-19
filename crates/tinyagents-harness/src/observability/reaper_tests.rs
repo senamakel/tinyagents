@@ -63,6 +63,24 @@ async fn reap_on_empty_store_is_a_noop() {
     assert_eq!(reap_orphaned_runs(&store).await, 0);
 }
 
+#[tokio::test]
+async fn shared_reaper_preserves_active_runs_with_unknown_ownership() {
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let reaper = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let run_id = seed_status(&owner, ExecutionStatus::Running).await;
+
+    // A row written by another process (or by a pre-lease version) has no
+    // trustworthy owner/expiry. A shared startup reaper must fail closed and
+    // preserve it; only an explicit exclusive legacy sweep may reap such rows.
+    assert_eq!(reap_orphaned_runs(&reaper).await, 0);
+    let status = owner.get_status(&run_id).await.unwrap().expect("present");
+    assert_eq!(status.status, ExecutionStatus::Running);
+    assert_eq!(status.current_phase, HarnessPhase::Model);
+    assert!(status.ended_at.is_none());
+}
+
 #[test]
 fn mark_cancelled_sets_terminal_fields() {
     let mut status = HarnessRunStatus::new(mint_run_id(), ComponentId::new("m".to_string()));
