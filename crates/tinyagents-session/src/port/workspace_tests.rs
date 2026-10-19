@@ -151,14 +151,10 @@ fn supplied_sqlite_backend_does_not_create_a_private_workspace_store() {
 
     let dir = tempfile::tempdir().unwrap();
     let storage_dir = dir.path().join(STORAGE_DIR);
-    let backend: Arc<dyn StorageBackend> =
-        Arc::new(SqliteStorage::open(&storage_dir).unwrap());
+    let backend: Arc<dyn StorageBackend> = Arc::new(SqliteStorage::open(&storage_dir).unwrap());
     let stores = WorkspaceStores::from_backend(backend, "agent").unwrap();
     let session = SessionRef::root("supplied-backend-thread");
-    stores
-        .transcripts()
-        .open_session(&session, meta())
-        .unwrap();
+    stores.transcripts().open_session(&session, meta()).unwrap();
 
     assert!(storage_dir.join("storage.db").is_file());
     assert!(!dir.path().join(STORE_DIR).exists());
