@@ -78,6 +78,12 @@ pub(super) struct AgentRunDto {
     pub(super) started_ms: i64,
     pub(super) updated_ms: i64,
     pub(super) completed_ms: Option<i64>,
+    #[serde(default)]
+    pub(super) lease_owner: Option<String>,
+    #[serde(default)]
+    pub(super) lease_expires_ms: Option<i64>,
+    #[serde(default)]
+    pub(super) lease_epoch: u64,
 }
 
 impl Stored for AgentRun {
@@ -101,6 +107,9 @@ impl Stored for AgentRun {
             started_ms: to_ms(self.started_at),
             updated_ms: to_ms(self.updated_at),
             completed_ms: self.completed_at.map(to_ms),
+            lease_owner: self.lease_owner.clone(),
+            lease_expires_ms: self.lease_expires_at.map(to_ms),
+            lease_epoch: self.lease_epoch,
         }
     }
 
@@ -123,6 +132,9 @@ impl Stored for AgentRun {
             started_at: from_ms(dto.started_ms)?,
             updated_at: from_ms(dto.updated_ms)?,
             completed_at: from_ms_opt(dto.completed_ms)?,
+            lease_owner: dto.lease_owner,
+            lease_expires_at: from_ms_opt(dto.lease_expires_ms)?,
+            lease_epoch: dto.lease_epoch,
         })
     }
 }

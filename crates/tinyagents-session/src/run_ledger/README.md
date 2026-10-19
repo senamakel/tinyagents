@@ -214,8 +214,14 @@ document batch and return the committed body without a fallible postcommit read.
 
 Dependency-aware team claims/completion, bulk member shutdown and retention
 across sessions/messages/events still return typed Unsupported before writing.
-The orphan sweep is explicitly for an exclusive owner; it is not a shared-process
-lease reaper.
+Agent-run driver leases support conditional claim, heartbeat, terminal finish,
+and expired-owner interruption. Shared reapers must preserve active records
+whose owner or expiry is unknown; legacy unleased rows remain readable and are
+not eligible for shared interruption. The older unconditional agent interrupt
+operation remains an explicit exclusive-owner API. Harness execution must wrap
+the actual run future in `tinyagents_harness::run_with_lease` so pending model
+and tool operations renew ownership; progress snapshots alone are not a lease
+heartbeat.
 Existing host callers are not routed to this adapter automatically.
 
 DriverSessionStores caches one optional native ledger handle per logical agent.

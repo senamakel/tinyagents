@@ -35,6 +35,9 @@ surface and operational constraints.
 - `HarnessStatusStore` (trait) — a compact "what is running now?" surface
   (phase, counters, last-updated) distinct from the full journal.
   - `InMemoryStatusStore` — in-process implementation.
+  - Lease claims, renewals, finishes, and `reap_expired` are conditional
+    operations. Shared reaping preserves unleased legacy rows and seals only
+    runs the store atomically transitioned after their lease deadline.
 - **Sinks**, each implementing `harness::events::EventListener`:
   - `FanOutSink` — broadcasts one event to multiple inner listeners.
   - `RedactingSink` — masks secrets in event payloads before forwarding.

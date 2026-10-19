@@ -27,6 +27,7 @@
 mod journal_entry;
 #[cfg(feature = "langfuse")]
 mod langfuse;
+mod leases;
 mod profile;
 mod types;
 mod worker;
@@ -415,7 +416,7 @@ fn decode_entry(run_id: &str, value: serde_json::Value) -> Result<AgentObservati
 
 /// Returns `true` for statuses that are still in flight and must never be
 /// evicted to make room for new runs.
-fn is_active_status(status: &HarnessRunStatus) -> bool {
+pub(super) fn is_active_status(status: &HarnessRunStatus) -> bool {
     use crate::ids::ExecutionStatus;
     matches!(
         status.status,
@@ -461,12 +462,33 @@ impl InMemoryStatusStore {
 
 #[async_trait]
 impl HarnessStatusStore for InMemoryStatusStore {
-    async fn put_status(&self, status: HarnessRunStatus) -> Result<()> {
+    async fn put_status(&self, mut status: HarnessRunStatus) -> Result<()> {
         let mut state = self
             .state
             .lock()
             .map_err(|e| poisoned("InMemoryStatusStore", e))?;
         let run_id = status.run_id.as_str().to_string();
+        if let Some(current) = state.statuses.get(&run_id)
+            && current.lease_epoch > 0
+            && (!is_active_status(current)
+                || current.lease_owner.is_none()
+                || current.lease_owner != status.lease_owner
+                || current.lease_epoch != status.lease_epoch
+                || current
+                    .lease_expires_at
+                    .is_none_or(|deadline| deadline <= std::time::SystemTime::now()))
+        {
+            return Err(crate::error::TinyAgentsError::Storage(
+                "status write rejected by active run lease".into(),
+            ));
+        }
+        if let Some(current) = state.statuses.get(&run_id)
+            && current.lease_epoch > 0
+        {
+            status.lease_owner = current.lease_owner.clone();
+            status.lease_expires_at = current.lease_expires_at;
+            status.lease_epoch = current.lease_epoch;
+        }
         if !state.statuses.contains_key(&run_id) {
             state.order.push_back(run_id.clone());
         }
@@ -547,6 +569,60 @@ impl HarnessStatusStore for InMemoryStatusStore {
             .filter(|s| is_active_status(s))
             .cloned()
             .collect())
+    }
+
+    async fn reap_expired(&self, now: std::time::SystemTime) -> Result<Vec<HarnessRunStatus>> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|e| poisoned("InMemoryStatusStore", e))?;
+        let mut reaped = Vec::new();
+        for status in state.statuses.values_mut() {
+            if is_active_status(status)
+                && status.lease_owner.is_some()
+                && status
+                    .lease_expires_at
+                    .is_some_and(|deadline| deadline <= now)
+            {
+                status.mark_cancelled(crate::observability::reaper::ORPHAN_REAP_REASON);
+                status.lease_owner = None;
+                status.lease_expires_at = None;
+                reaped.push(status.clone());
+            }
+        }
+        Ok(reaped)
+    }
+
+    async fn claim_status(
+        &self,
+        status: HarnessRunStatus,
+        owner: &str,
+        now: std::time::SystemTime,
+        expires_at: std::time::SystemTime,
+    ) -> Result<Option<HarnessRunStatus>> {
+        self.claim_status(status, owner, now, expires_at).await
+    }
+
+    async fn renew_status_lease(
+        &self,
+        run_id: &str,
+        owner: &str,
+        epoch: u64,
+        now: std::time::SystemTime,
+        expires_at: std::time::SystemTime,
+    ) -> Result<bool> {
+        self.renew_status_lease(run_id, owner, epoch, now, expires_at)
+            .await
+    }
+
+    async fn finish_status_lease(
+        &self,
+        status: HarnessRunStatus,
+        owner: &str,
+        epoch: u64,
+        now: std::time::SystemTime,
+    ) -> Result<bool> {
+        self.finish_status_lease(status, owner, epoch, now).await
     }
 }
 

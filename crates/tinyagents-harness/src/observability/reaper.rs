@@ -1,12 +1,10 @@
 //! Startup reconciliation for orphaned runs.
 //!
 //! When a host process exits (a crash, a restart, a deploy) any run still in a
-//! non-terminal state (`Pending` / `Running` / `Interrupted`) in the durable
-//! status store is *orphaned*: no executor will ever advance it, yet it lingers
-//! in the "active runs" listing. [`reap_orphaned_runs`] sweeps every
-//! still-active run to the terminal `Cancelled` state with an explanatory error
-//! so the listing reflects reality. [`reap_orphaned_runs_and_seal`] also seals
-//! each reaped run's journal, since nothing will append to it again.
+//! non-terminal state with an expired, owned lease is eligible for reaping.
+//! Unleased or legacy records have unknown ownership and are retained. Stores
+//! must implement the conditional transition atomically; the default is a safe
+//! no-op. [`reap_orphaned_runs_and_seal`] seals only runs actually settled.
 
 use std::time::SystemTime;
 
@@ -15,7 +13,7 @@ use super::{HarnessEventJournal, HarnessStatusStore};
 /// Error recorded on a run reaped by the startup sweep. Stable and
 /// grep-friendly so an operator (or a test) can tell a reaped run from a
 /// genuinely failed one.
-pub const ORPHAN_REAP_REASON: &str = "run orphaned: core restarted while the run was in flight";
+pub const ORPHAN_REAP_REASON: &str = "run orphaned: its execution lease expired";
 
 /// Reap every run left non-terminal by a previous process.
 ///
@@ -25,7 +23,7 @@ pub const ORPHAN_REAP_REASON: &str = "run orphaned: core restarted while the run
 /// failure is logged and does not abort the sweep, and a failure to list logs
 /// and yields `0`. Returns the number of runs reaped.
 pub async fn reap_orphaned_runs(store: &dyn HarnessStatusStore) -> usize {
-    sweep(store, None).await
+    sweep(store, None, SystemTime::now()).await
 }
 
 /// [`reap_orphaned_runs`], and seal the journal of every run it reaped.
@@ -40,10 +38,14 @@ pub async fn reap_orphaned_runs_and_seal(
     store: &dyn HarnessStatusStore,
     journal: &dyn HarnessEventJournal,
 ) -> usize {
-    sweep(store, Some(journal)).await
+    sweep(store, Some(journal), SystemTime::now()).await
 }
 
-async fn sweep(store: &dyn HarnessStatusStore, journal: Option<&dyn HarnessEventJournal>) -> usize {
+async fn sweep(
+    store: &dyn HarnessStatusStore,
+    journal: Option<&dyn HarnessEventJournal>,
+    now: SystemTime,
+) -> usize {
     // One id for the whole sweep so every line can be tied to the same boot.
     // Derived from the clock rather than a uuid so it stays ordered in a tail.
     let sweep_id = SystemTime::now()
@@ -52,70 +54,46 @@ async fn sweep(store: &dyn HarnessStatusStore, journal: Option<&dyn HarnessEvent
         .unwrap_or(0);
     tracing::debug!("[agent] startup run sweep entry sweep_id={sweep_id}");
 
-    let active = match store.list_active().await {
+    let reaped = match store.reap_expired(now).await {
         Ok(runs) => runs,
         Err(err) => {
             tracing::warn!(
-                "[agent] startup run sweep exit sweep_id={sweep_id} branch=list-failed: {err}"
+                "[agent] startup run sweep exit sweep_id={sweep_id} branch=reap-failed: {err}"
             );
             return 0;
         }
     };
 
-    if active.is_empty() {
+    if reaped.is_empty() {
         tracing::debug!("[agent] startup run sweep exit sweep_id={sweep_id} branch=none-active");
         return 0;
     }
     tracing::debug!(
-        "[agent] startup run sweep sweep_id={sweep_id} active={} to reap",
-        active.len()
+        "[agent] startup run sweep sweep_id={sweep_id} expired={} reaped",
+        reaped.len()
     );
 
-    let mut reaped = 0usize;
-    for mut status in active {
+    let count = reaped.len();
+    for status in reaped {
         let run_id = status.run_id.as_str().to_string();
-        // Read the source state before the mutation: `list_active` returns
-        // whatever non-terminal state a run was left in.
-        let from_status = format!("{:?}", status.status);
-        status.mark_cancelled(ORPHAN_REAP_REASON);
-        let to_status = format!("{:?}", status.status);
-        tracing::debug!(
-            "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
-             transition={from_status}->{to_status} phase=Done persisting"
-        );
-        match store.put_status(status).await {
-            Ok(()) => {
-                reaped += 1;
-                tracing::debug!(
-                    "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
-                     transition={from_status}->{to_status} persisted"
-                );
-                if let Some(journal) = journal
-                    && let Err(err) = journal.seal_run(&run_id).await
-                {
-                    tracing::warn!(
-                        "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
-                         journal seal failed: {err}"
-                    );
-                }
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
-                     transition={from_status}->{to_status} failed: {err}"
-                );
-            }
+        if let Some(journal) = journal
+            && let Err(err) = journal.seal_run(&run_id).await
+        {
+            tracing::warn!(
+                "[agent] startup run sweep sweep_id={sweep_id} run_id={run_id} \
+                 journal seal failed: {err}"
+            );
         }
     }
     // One operator-visible line, and only when the sweep did something.
-    if reaped > 0 {
+    if count > 0 {
         tracing::info!(
-            "[agent] startup run sweep sweep_id={sweep_id} reaped {reaped} orphaned run(s)"
+            "[agent] startup run sweep sweep_id={sweep_id} reaped {count} expired run(s)"
         );
     } else {
         tracing::debug!("[agent] startup run sweep exit sweep_id={sweep_id} branch=nothing-reaped");
     }
-    reaped
+    count
 }
 
 #[cfg(test)]
