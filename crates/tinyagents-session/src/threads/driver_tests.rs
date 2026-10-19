@@ -120,6 +120,9 @@ async fn tombstone_and_recreated_incarnation_hide_old_stream_and_search_rows() {
     let backend = MemoryStorage::new();
     let a = scoped(&backend, "profile");
     let b = scoped(&backend, "profile");
+    DriverConversationStore::prepare_schema(a.docs.as_ref())
+        .await
+        .unwrap();
     seed(&a, "same", &["old secret 東京"]).await;
     let old = a.load("same").await.unwrap().unwrap();
     assert!(b.delete_thread("same", "now").await.unwrap());
@@ -145,6 +148,9 @@ async fn tombstone_and_recreated_incarnation_hide_old_stream_and_search_rows() {
 async fn exhaustive_paged_search_matches_local_substrings_and_cjk_tied_groups() {
     let backend = MemoryStorage::new();
     let store = scoped(&backend, "profile");
+    DriverConversationStore::prepare_schema(store.docs.as_ref())
+        .await
+        .unwrap();
     let mut index = inverted_index::InvertedIndex::new();
     for n in 0..(PAGE_SIZE + 3) {
         let id = format!("thread{n}");
@@ -317,6 +323,9 @@ impl DocumentStore for ProbedDocuments {
 async fn full_text_search_uses_index_without_reading_thread_corpus() {
     let backend = MemoryStorage::new();
     let mut store = scoped(&backend, "profile");
+    DriverConversationStore::prepare_schema(store.docs.as_ref())
+        .await
+        .unwrap();
     let mut expected = inverted_index::InvertedIndex::new();
     for (thread_id, content) in [
         ("tokyo", "東京で日本語を話す"),
