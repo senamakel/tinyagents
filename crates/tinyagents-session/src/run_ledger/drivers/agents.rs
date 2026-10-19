@@ -67,12 +67,9 @@ impl DriverRunLedger {
         let now = now();
         for _ in 0..CAS_ATTEMPTS {
             let previous = self.read::<AgentRun>(AGENTS, &upsert.id).await?;
-            if previous
-                .as_ref()
-                .is_some_and(|row| row.doc.lease_owner.is_some())
-            {
+            if previous.as_ref().is_some_and(|row| row.doc.lease_epoch > 0) {
                 return Err(StorageError::conflict(
-                    "agent run is leased; use its owner-fenced operation",
+                    "agent run has a lease history; use its owner-fenced operation",
                 )
                 .into());
             }

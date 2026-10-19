@@ -68,9 +68,7 @@ async fn pending_work_heartbeats_and_stops_when_lease_is_lost() {
     };
     let run = run_with_lease(pending, &lease, Duration::from_secs(10));
     tokio::pin!(run);
-    tokio::time::advance(Duration::from_secs(5)).await;
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::time::advance(Duration::from_secs(10)).await;
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(10)).await;
     let result = run.await;
@@ -144,7 +142,9 @@ async fn stalled_renewal_is_bounded_and_cancels_in_flight_work() {
         _ = entered.notified() => {},
         result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
     }
-    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
     tokio::task::yield_now().await;
     assert!(run.await.is_err());
     assert!(dropped.load(Ordering::SeqCst));

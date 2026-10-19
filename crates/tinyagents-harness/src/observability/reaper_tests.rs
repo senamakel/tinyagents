@@ -188,6 +188,87 @@ async fn status_lease_epoch_fences_heartbeat_takeover_and_finish() {
     );
 }
 
+#[tokio::test]
+async fn stale_status_snapshot_cannot_roll_back_a_renewed_deadline() {
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let heartbeat = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let now = SystemTime::now();
+    let run_id = mint_run_id();
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
+    initial.mark_running(HarnessPhase::Model);
+    let stale_snapshot = owner
+        .claim_status(initial, "owner-a", now, now + Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        heartbeat
+            .renew_status_lease(
+                run_id.as_str(),
+                "owner-a",
+                stale_snapshot.lease_epoch,
+                now + Duration::from_secs(1),
+                now + Duration::from_secs(90),
+            )
+            .await
+            .unwrap()
+    );
+
+    let mut progress = stale_snapshot;
+    progress.model_calls = 1;
+    owner.put_status(progress).await.unwrap();
+    let current = heartbeat
+        .get_status(run_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.model_calls, 1);
+    assert_eq!(
+        current.lease_expires_at,
+        Some(now + Duration::from_secs(90))
+    );
+}
+
+#[tokio::test]
+async fn in_memory_status_update_also_preserves_the_current_lease_deadline() {
+    let store = crate::observability::InMemoryStatusStore::new();
+    let now = SystemTime::now();
+    let run_id = mint_run_id();
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
+    initial.mark_running(HarnessPhase::Model);
+    let stale = store
+        .claim_status(initial, "owner-a", now, now + Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        store
+            .renew_status_lease(
+                run_id.as_str(),
+                "owner-a",
+                stale.lease_epoch,
+                now + Duration::from_secs(1),
+                now + Duration::from_secs(50),
+            )
+            .await
+            .unwrap()
+    );
+    let mut progress = stale;
+    progress.tool_calls = 1;
+    store.put_status(progress).await.unwrap();
+    assert_eq!(
+        store
+            .get_status(run_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .lease_expires_at,
+        Some(now + Duration::from_secs(50))
+    );
+}
+
 #[test]
 fn mark_cancelled_sets_terminal_fields() {
     let mut status = HarnessRunStatus::new(mint_run_id(), ComponentId::new("m".to_string()));

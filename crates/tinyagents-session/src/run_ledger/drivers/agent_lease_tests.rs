@@ -99,6 +99,38 @@ async fn agent_lease_takeover_fences_old_heartbeat_finish_and_expiry_reap() {
             .unwrap()
             .is_none()
     );
+    assert!(second.upsert_agent_run(run("leased")).await.is_err());
+}
+
+#[tokio::test]
+async fn ordinary_agent_upsert_cannot_overwrite_a_finished_leased_run() {
+    let backend = MemoryStorage::new();
+    let ledger = DriverRunLedger::new(backend.for_scope(&Scope::new("shared").unwrap()).unwrap());
+    let now = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+    let token = match ledger
+        .try_claim_agent_run(run("finished"), "owner", now, chrono::Duration::seconds(10))
+        .await
+        .unwrap()
+    {
+        AgentRunLeaseClaim::Acquired { token, .. } => token,
+        other => panic!("expected lease, got {other:?}"),
+    };
+    assert!(
+        ledger
+            .finish_agent_run(
+                AgentRunUpsert {
+                    status: AgentRunStatus::Completed,
+                    completed_at: Some(now + chrono::Duration::seconds(1)),
+                    ..run("finished")
+                },
+                &token,
+                now + chrono::Duration::seconds(1),
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(ledger.upsert_agent_run(run("finished")).await.is_err());
 }
 
 #[tokio::test]

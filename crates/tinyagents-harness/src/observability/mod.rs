@@ -462,7 +462,7 @@ impl InMemoryStatusStore {
 
 #[async_trait]
 impl HarnessStatusStore for InMemoryStatusStore {
-    async fn put_status(&self, status: HarnessRunStatus) -> Result<()> {
+    async fn put_status(&self, mut status: HarnessRunStatus) -> Result<()> {
         let mut state = self
             .state
             .lock()
@@ -481,6 +481,13 @@ impl HarnessStatusStore for InMemoryStatusStore {
             return Err(crate::error::TinyAgentsError::Storage(
                 "status write rejected by active run lease".into(),
             ));
+        }
+        if let Some(current) = state.statuses.get(&run_id)
+            && current.lease_epoch > 0
+        {
+            status.lease_owner = current.lease_owner.clone();
+            status.lease_expires_at = current.lease_expires_at;
+            status.lease_epoch = current.lease_epoch;
         }
         if !state.statuses.contains_key(&run_id) {
             state.order.push_back(run_id.clone());

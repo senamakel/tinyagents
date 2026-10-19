@@ -158,7 +158,7 @@ impl DriverStatusStore {
 
 #[async_trait]
 impl HarnessStatusStore for DriverStatusStore {
-    async fn put_status(&self, status: HarnessRunStatus) -> Result<()> {
+    async fn put_status(&self, mut status: HarnessRunStatus) -> Result<()> {
         self.declared().await?;
         for _ in 0..8 {
             let id = Self::id(status.run_id.as_str())?;
@@ -183,6 +183,11 @@ impl HarnessStatusStore for DriverStatusStore {
                     return Err(crate::error::TinyAgentsError::Storage(
                         "status write rejected by run lease".into(),
                     ));
+                }
+                if current.lease_epoch > 0 {
+                    status.lease_owner = current.lease_owner;
+                    status.lease_expires_at = current.lease_expires_at;
+                    status.lease_epoch = current.lease_epoch;
                 }
             }
             let body = serde_json::to_value(RunStatusRecord::from(&status))?;

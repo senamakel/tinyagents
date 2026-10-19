@@ -45,9 +45,7 @@ where
             tokio::time::sleep(heartbeat_every).await;
             let renewed = tokio::time::timeout(heartbeat_every, lease.renew())
                 .await
-                .map_err(|_| {
-                    TinyAgentsError::Storage("run lease heartbeat timed out".into())
-                })??;
+                .map_err(|_| TinyAgentsError::Storage("run lease heartbeat timed out".into()))??;
             if !renewed {
                 return Err(TinyAgentsError::Storage(
                     "run lease ownership was lost".into(),
