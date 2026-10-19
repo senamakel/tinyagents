@@ -2008,6 +2008,19 @@ dependencies = [
 
 [[package]]
 name = "rustix"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+dependencies = [
+ "bitflags 2.13.2",
+ "errno",
+ "libc",
+ "linux-raw-sys 0.12.1",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "rustix"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
@@ -2684,7 +2697,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-secrets"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "async-trait",
  "atomicwrites",
@@ -2692,7 +2705,7 @@ dependencies = [
  "clack-private-fs",
  "fs4",
  "hkdf",
- "rustix 1.1.5",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2707,7 +2720,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-sqlite"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "rusqlite",
  "serde_json",
