@@ -109,6 +109,8 @@ impl DriverConversationStore {
     /// Drop a retired incarnation's stream and append intent. Failures leave
     /// unreachable garbage only, so they are logged and not surfaced.
     async fn retire(&self, thread: &ThreadDoc) {
+        self.remove_search_incarnation(&thread.thread.id, &thread.incarnation)
+            .await;
         match thread.stream() {
             Ok(stream) => {
                 if let Err(error) = self.streams.delete_stream(&stream).await {
