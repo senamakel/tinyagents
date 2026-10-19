@@ -55,7 +55,7 @@ async fn independent_handles_share_metadata_but_other_scope_does_not() {
 #[tokio::test]
 async fn unprepared_append_never_approximates_a_committed_message() {
     let backend = MemoryStorage::new();
-    let mut store = scoped(&backend, "profile");
+    let store = scoped(&backend, "profile");
     store.ensure_thread(request("one")).await.unwrap();
     let message = ThreadMessage {
         id: "agent:r".into(),
@@ -316,7 +316,7 @@ impl DocumentStore for ProbedDocuments {
 #[tokio::test]
 async fn full_text_search_uses_index_without_reading_thread_corpus() {
     let backend = MemoryStorage::new();
-    let store = scoped(&backend, "profile");
+    let mut store = scoped(&backend, "profile");
     let mut expected = inverted_index::InvertedIndex::new();
     for (thread_id, content) in [
         ("tokyo", "東京で日本語を話す"),
