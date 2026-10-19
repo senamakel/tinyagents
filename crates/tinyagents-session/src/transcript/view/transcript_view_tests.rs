@@ -154,15 +154,16 @@ fn user_message_display_item_preserves_host_metadata_for_voice_note_duration() {
         dir.path(),
         "200_orchestrator",
         "thr_voice_note",
-        &[r#"{"role":"user","content":"Remember the dentist","extra_metadata":{"voiceNote":{"noteId":"vn-1","durationMs":12000}}}"#],
+        &[
+            r#"{"role":"user","content":"Remember the dentist","extra_metadata":{"voiceNote":{"noteId":"vn-1","durationMs":12000}}}"#,
+        ],
     );
     let display = read_transcript_display(&path).unwrap();
     let items = project_records(&display.records);
 
     let value = serde_json::to_value(&items[0]).unwrap();
     assert_eq!(
-        value["extraMetadata"]["voiceNote"]["durationMs"],
-        12000,
+        value["extraMetadata"]["voiceNote"]["durationMs"], 12000,
         "the host needs the recorded duration to render its voice-note row after reload"
     );
 }
