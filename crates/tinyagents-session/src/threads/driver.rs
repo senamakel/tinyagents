@@ -375,6 +375,7 @@ impl ConversationPersistence for DriverConversationStore {
         self.admit().await?;
         let key = Self::key(thread_id)?;
         let mut deleted = false;
+        let mut deleted_incarnation = None;
         self.threads()?
             .update(&key, |current| {
                 deleted = false;
@@ -385,13 +386,14 @@ impl ConversationPersistence for DriverConversationStore {
                 if doc.deleted {
                     return Ok(None);
                 }
+                deleted_incarnation = Some(doc.incarnation.clone());
                 doc.deleted = true;
                 deleted = true;
                 Ok(Some(doc.to_dto()?))
             })
             .await?;
-        if deleted {
-            self.remove_search_thread(thread_id).await;
+        if let Some(incarnation) = deleted_incarnation.filter(|_| deleted) {
+            self.remove_search_incarnation(thread_id, &incarnation).await;
         }
         Ok(deleted)
     }

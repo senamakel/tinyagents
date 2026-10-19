@@ -140,11 +140,37 @@ impl DriverConversationStore {
         }
         for row in self.live_rows().await? {
             let thread_id = row.doc.thread.id.as_str();
-            let incarnation = row.doc.incarnation.as_str();
-            let messages = self.messages(thread_id).await?;
+            let mut stable_messages = None;
+            let mut stable_incarnation = String::new();
+            for _ in 0..RETRIES {
+                let Some(current) = self.load(thread_id).await?.filter(|row| !row.doc.deleted) else {
+                    stable_messages = Some(Vec::new());
+                    break;
+                };
+                let messages = self.messages(thread_id).await?;
+                let Some(revalidated) = self.load(thread_id).await? else {
+                    stable_messages = Some(Vec::new());
+                    break;
+                };
+                if revalidated.doc.deleted {
+                    stable_messages = Some(Vec::new());
+                    break;
+                }
+                if revalidated.version != current.version
+                    || revalidated.doc.incarnation != current.doc.incarnation
+                {
+                    continue;
+                }
+                stable_incarnation = current.doc.incarnation;
+                stable_messages = Some(messages);
+                break;
+            }
+            let messages = stable_messages.ok_or_else(|| {
+                StorageError::conflict("conversation changed repeatedly during search-index backfill")
+            })?;
             for (offset, message) in messages.iter().enumerate() {
-                let id = entry_id(thread_id, incarnation, offset as u64);
-                let entry = SearchEntry::new(thread_id, incarnation, offset as u64, message);
+                let id = entry_id(thread_id, &stable_incarnation, offset as u64);
+                let entry = SearchEntry::new(thread_id, &stable_incarnation, offset as u64, message);
                 let body = serde_json::to_value(entry).map_err(|error| {
                     StorageError::serialization("encode conversation search entry")
                         .with_source(error)
@@ -193,16 +219,6 @@ impl DriverConversationStore {
         }
     }
 
-    pub(super) async fn remove_search_thread(&self, thread_id: &str) {
-        if !self.docs.capabilities().contains(Capability::FullText) {
-            return;
-        }
-        let filter = Filter::eq("thread_id", thread_id);
-        if let Err(error) = self.docs.delete_where(SEARCH_COLLECTION, &filter).await {
-            tracing::debug!(target: "tinyagents_session::threads", %error, "conversation search entries not removed");
-        }
-    }
-
     pub(super) async fn search_indexed(
         &self,
         query: &str,
@@ -214,45 +230,74 @@ impl DriverConversationStore {
             return Ok(Vec::new());
         }
         self.backfill_search_index().await?;
-        let candidate_hits = self
-            .docs
-            .search(SEARCH_COLLECTION, &features.join(" "), usize::MAX)
-            .await?;
-        let mut cache: HashMap<String, Option<ThreadDoc>> = HashMap::new();
-        let mut index = inverted_index::InvertedIndex::new();
-        for hit in candidate_hits {
-            if hit.id == SEARCH_READY {
-                continue;
+        for _ in 0..RETRIES {
+            let candidate_hits = self
+                .docs
+                .search(SEARCH_COLLECTION, &features.join(" "), usize::MAX)
+                .await?;
+            let mut cache: HashMap<String, Option<Versioned<ThreadDoc>>> = HashMap::new();
+            let mut entries = Vec::new();
+            for hit in candidate_hits {
+                if hit.id == SEARCH_READY {
+                    continue;
+                }
+                let Some(row) = self.docs.get(SEARCH_COLLECTION, &hit.id).await? else {
+                    continue;
+                };
+                let entry: SearchEntry = serde_json::from_value(row.doc).map_err(|error| {
+                    StorageError::serialization("invalid conversation search entry")
+                        .with_source(error)
+                })?;
+                if exclude_thread_id == Some(entry.thread_id.as_str()) {
+                    continue;
+                }
+                let live = if let Some(cached) = cache.get(&entry.thread_id) {
+                    cached.clone()
+                } else {
+                    let current = self
+                        .load(&entry.thread_id)
+                        .await?
+                        .filter(|current| !current.doc.deleted);
+                    cache.insert(entry.thread_id.clone(), current.clone());
+                    current
+                };
+                let Some(live) = live else {
+                    continue;
+                };
+                if entry.incarnation != live.doc.incarnation
+                    || entry.offset >= live.doc.visible_end
+                {
+                    continue;
+                }
+                entries.push(entry);
             }
-            let Some(row) = self.docs.get(SEARCH_COLLECTION, &hit.id).await? else {
-                continue;
-            };
-            let entry: SearchEntry = serde_json::from_value(row.doc).map_err(|error| {
-                StorageError::serialization("invalid conversation search entry").with_source(error)
-            })?;
-            if exclude_thread_id == Some(entry.thread_id.as_str()) {
-                continue;
+            entries.sort_by(|a, b| {
+                a.thread_id
+                    .cmp(&b.thread_id)
+                    .then(a.offset.cmp(&b.offset))
+            });
+            let mut index = inverted_index::InvertedIndex::new();
+            for entry in entries {
+                index.insert(&entry.thread_id, entry.into_message());
             }
-            let live = if let Some(cached) = cache.get(&entry.thread_id) {
-                cached.clone()
-            } else {
+            let mut changed = false;
+            for (thread_id, snapshot) in &cache {
                 let current = self
-                    .load(&entry.thread_id)
+                    .load(thread_id)
                     .await?
-                    .filter(|current| !current.doc.deleted)
-                    .map(|current| current.doc);
-                cache.insert(entry.thread_id.clone(), current.clone());
-                current
-            };
-            let Some(live) = live else {
-                continue;
-            };
-            if entry.incarnation != live.incarnation || entry.offset >= live.visible_end {
-                continue;
+                    .filter(|current| !current.doc.deleted);
+                if current.as_ref().map(|row| row.version)
+                    != snapshot.as_ref().map(|row| row.version)
+                {
+                    changed = true;
+                    break;
+                }
             }
-            index.insert(&entry.thread_id, entry.into_message());
+            if !changed {
+                return Ok(index.search(query, limit, exclude_thread_id));
+            }
         }
-        Ok(index.search(query, limit, exclude_thread_id))
+        Err(StorageError::conflict("conversation changed repeatedly during indexed search").into())
     }
 }
 
