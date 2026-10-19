@@ -1,6 +1,12 @@
 use super::*;
+use async_trait::async_trait;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tinystoragedrivers_core::{
+    Capabilities, CollectionSpec, DocumentStore, ErrorKind, Filter, Key, MemoryStorage,
+    Precondition, Query, ReadCheck, Scope, SearchHit, Sort, StorageBackend, StorageError, Version,
+    Versioned, WriteOp, WriteResult,
+};
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -188,6 +194,171 @@ async fn exhaustive_paged_search_matches_local_substrings_and_cjk_tied_groups() 
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[derive(Debug, Default)]
+struct SearchProbe {
+    calls: AtomicUsize,
+    document_reads: AtomicUsize,
+}
+
+#[derive(Debug)]
+struct ProbedDocuments {
+    inner: Arc<dyn DocumentStore>,
+    probe: Arc<SearchProbe>,
+}
+
+#[async_trait]
+impl DocumentStore for ProbedDocuments {
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    async fn ensure_collection(&self, spec: &CollectionSpec) -> Result<(), StorageError> {
+        self.inner.ensure_collection(spec).await
+    }
+
+    async fn validate_collection_spec(
+        &self,
+        required: &CollectionSpec,
+    ) -> Result<(), StorageError> {
+        self.inner.validate_collection_spec(required).await
+    }
+
+    async fn get(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<Versioned<serde_json::Value>>, StorageError> {
+        self.probe.document_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner.get(collection, id).await
+    }
+
+    async fn put(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        precondition: Precondition,
+    ) -> Result<Version, StorageError> {
+        self.inner.put(collection, id, doc, precondition).await
+    }
+
+    async fn delete(
+        &self,
+        collection: &str,
+        id: &str,
+        precondition: Precondition,
+    ) -> Result<bool, StorageError> {
+        self.inner.delete(collection, id, precondition).await
+    }
+
+    async fn query(
+        &self,
+        collection: &str,
+        query: &Query,
+    ) -> Result<tinystoragedrivers_core::Page<Versioned<serde_json::Value>>, StorageError> {
+        self.probe.document_reads.fetch_add(1, Ordering::Relaxed);
+        self.inner.query(collection, query).await
+    }
+
+    async fn count(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
+        self.inner.count(collection, filter).await
+    }
+
+    async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64, StorageError> {
+        self.inner.delete_where(collection, filter).await
+    }
+
+    async fn claim(
+        &self,
+        collection: &str,
+        filter: &Filter,
+        sort: &[Sort],
+        patch: &serde_json::Value,
+    ) -> Result<Option<Versioned<serde_json::Value>>, StorageError> {
+        self.inner.claim(collection, filter, sort, patch).await
+    }
+
+    async fn atomic_batch(&self, ops: Vec<WriteOp>) -> Result<Vec<WriteResult>, StorageError> {
+        self.inner.atomic_batch(ops).await
+    }
+
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<ReadCheck>,
+        ops: Vec<WriteOp>,
+    ) -> Result<Vec<WriteResult>, StorageError> {
+        self.inner.atomic_batch_checked(checks, ops).await
+    }
+
+    async fn search(
+        &self,
+        collection: &str,
+        text: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, StorageError> {
+        self.probe.calls.fetch_add(1, Ordering::Relaxed);
+        self.inner.search(collection, text, limit).await
+    }
+
+    async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
+        self.inner.drop_collection(collection).await
+    }
+
+    async fn collections(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        self.inner.collections(prefix).await
+    }
+}
+
+#[tokio::test]
+async fn full_text_search_uses_index_without_reading_thread_corpus() {
+    let backend = MemoryStorage::new();
+    let store = scoped(&backend, "profile");
+    let mut expected = inverted_index::InvertedIndex::new();
+    for (thread_id, content) in [
+        ("tokyo", "東京で日本語を話す"),
+        ("kyoto", "京都は美しい"),
+        ("other", "a short unrelated note"),
+    ] {
+        seed(&store, thread_id, &[content]).await;
+        for message in store.get_messages(thread_id).await.unwrap() {
+            expected.insert(thread_id, message);
+        }
+    }
+
+    let probe = Arc::new(SearchProbe::default());
+    store.docs = Arc::new(ProbedDocuments {
+        inner: store.docs.clone(),
+        probe: probe.clone(),
+    });
+    let mut actual = store
+        .search_cross_thread_messages("東京", 20, None)
+        .await
+        .unwrap();
+    let mut reference = expected.search("東京", 20, None);
+    let normalize = |hits: &mut Vec<CrossThreadHit>| {
+        hits.sort_by(|a, b| {
+            a.thread_id
+                .cmp(&b.thread_id)
+                .then(a.message_id.cmp(&b.message_id))
+        });
+    };
+    normalize(&mut actual);
+    normalize(&mut reference);
+    assert_eq!(
+        actual, reference,
+        "indexed search must preserve CJK search results"
+    );
+    assert!(
+        probe.calls.load(Ordering::Relaxed) > 0,
+        "FullText-capable stores must query DocumentStore::search"
+    );
+    assert_eq!(
+        probe.document_reads.load(Ordering::Relaxed),
+        0,
+        "steady-state search must not scan thread documents"
     );
 }
 
