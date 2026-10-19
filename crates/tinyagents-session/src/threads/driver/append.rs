@@ -28,12 +28,18 @@ impl DriverConversationStore {
         for spec in Self::append_collection_specs() {
             documents.ensure_collection(&spec).await?;
         }
+        Self::prepare_search_schema(documents).await?;
         Ok(())
     }
 
     async fn admit_append(&self) -> ConversationResult<()> {
         for spec in Self::append_collection_specs() {
             self.docs.validate_collection_spec(&spec).await?;
+        }
+        if self.docs.capabilities().contains(Capability::FullText) {
+            self.docs
+                .validate_collection_spec(&super::search::full_text_collection_spec())
+                .await?;
         }
         for capability in [
             Capability::ValidatedBatch,
