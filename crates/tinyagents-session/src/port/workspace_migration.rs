@@ -48,7 +48,7 @@ pub(super) fn copy_agent_storage(
     let (source_scope, _) = source.scoped_for(agent_id)?;
     let (destination_scope, _) = destination.scoped_for(agent_id)?;
     source.bridge().run(async move {
-        DriverSessionStores::prepare_schema(destination_scope.documents()).await?;
+        DriverSessionStores::prepare_schema(destination_scope.documents().as_ref()).await?;
         destination_scope
             .documents()
             .ensure_collection(&CollectionSpec::new("tsd.migrations"))
