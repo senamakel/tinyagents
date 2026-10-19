@@ -117,6 +117,11 @@ pub(crate) struct InvertedIndex {
     role_pool: HashMap<String, Arc<str>>,
 }
 
+pub(crate) enum SearchOutcome {
+    Hits(Vec<CrossThreadHit>),
+    RecencyFallback,
+}
+
 impl InvertedIndex {
     pub fn new() -> Self {
         Self::default()
@@ -235,12 +240,24 @@ impl InvertedIndex {
         limit: usize,
         exclude_thread_id: Option<&str>,
     ) -> Vec<CrossThreadHit> {
+        match self.search_outcome(query, limit, exclude_thread_id) {
+            SearchOutcome::Hits(hits) => hits,
+            SearchOutcome::RecencyFallback => self.recency_fallback(exclude_thread_id, limit),
+        }
+    }
+
+    pub(crate) fn search_outcome(
+        &self,
+        query: &str,
+        limit: usize,
+        exclude_thread_id: Option<&str>,
+    ) -> SearchOutcome {
         if limit == 0 {
-            return Vec::new();
+            return SearchOutcome::Hits(Vec::new());
         }
         let terms = query_terms(query);
         if terms.is_empty() {
-            return Vec::new();
+            return SearchOutcome::Hits(Vec::new());
         }
 
         // Phase 1: collect candidate doc-ids per term. Short-circuit to
@@ -253,7 +270,7 @@ impl InvertedIndex {
             let candidates = match self.candidates_for_term(term) {
                 Some(v) => {
                     if v.len() > LARGE_CANDIDATE_LIMIT {
-                        return self.recency_fallback(exclude_thread_id, limit);
+                        return SearchOutcome::RecencyFallback;
                     }
                     v
                 }
@@ -309,7 +326,7 @@ impl InvertedIndex {
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
         ranked.truncate(limit);
 
-        ranked
+        SearchOutcome::Hits(ranked
             .into_iter()
             .map(|(doc_id, matched, _)| {
                 let entry = self.docs[doc_id as usize]
@@ -324,7 +341,7 @@ impl InvertedIndex {
                     score: matched as f64 / total_terms,
                 }
             })
-            .collect()
+            .collect())
     }
 
     /// Build the Phase 1 candidate set for one query term.
