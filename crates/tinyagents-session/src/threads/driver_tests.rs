@@ -403,6 +403,13 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
             expected.insert(thread_id, message);
         }
     }
+    let normalize = |hits: &mut Vec<CrossThreadHit>| {
+        hits.sort_by(|a, b| {
+            a.thread_id
+                .cmp(&b.thread_id)
+                .then(a.message_id.cmp(&b.message_id))
+        });
+    };
     // These messages were seeded directly into the existing thread/stream
     // schema, so there are no derived rows yet. The first ordinary search
     // must backfill them before serving the query.
@@ -425,13 +432,6 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
         .await
         .unwrap();
     let mut reference = expected.search("東京", 20, None);
-    let normalize = |hits: &mut Vec<CrossThreadHit>| {
-        hits.sort_by(|a, b| {
-            a.thread_id
-                .cmp(&b.thread_id)
-                .then(a.message_id.cmp(&b.message_id))
-        });
-    };
     normalize(&mut actual);
     normalize(&mut reference);
     assert_eq!(
@@ -447,6 +447,66 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
         0,
         "steady-state search must not list the conversation thread corpus"
     );
+}
+
+#[tokio::test]
+async fn pathological_full_text_queries_keep_the_global_recency_fallback() {
+    let backend = MemoryStorage::new();
+    let store = scoped(&backend, "profile");
+    DriverConversationStore::prepare_schema(store.docs.as_ref())
+        .await
+        .unwrap();
+    seed(&store, "popular", &vec!["popularterm"; 10_050]).await;
+    store.ensure_thread(request("recent")).await.unwrap();
+    let mut recent = store.load("recent").await.unwrap().unwrap();
+    let recent_message = ThreadMessage {
+        id: "message:0".into(),
+        content: "unrelated recent message".into(),
+        message_type: "text".into(),
+        extra_metadata: json!({}),
+        sender: "user".into(),
+        created_at: "2030-01-01T00:00:00Z".into(),
+    };
+    let stream = recent.doc.stream().unwrap();
+    store
+        .streams
+        .append(
+            &stream,
+            serde_json::to_value(MessageDto::from_message(&recent_message, to_ms).unwrap())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    recent.doc.visible_end = 1;
+    recent.doc.thread.message_count = 1;
+    recent.doc.thread.last_message_at = recent_message.created_at.clone();
+    store
+        .docs
+        .put(
+            COLLECTION,
+            &recent.id,
+            serde_json::to_value(recent.doc.to_dto().unwrap()).unwrap(),
+            recent.unchanged(),
+        )
+        .await
+        .unwrap();
+
+    let mut scan = inverted_index::InvertedIndex::new();
+    for thread_id in ["popular", "recent"] {
+        for message in store.get_messages(thread_id).await.unwrap() {
+            scan.insert(thread_id, message);
+        }
+    }
+    for excluded in [None, Some("recent")] {
+        assert_eq!(
+            store
+                .search_cross_thread_messages("popularterm", 2, excluded)
+                .await
+                .unwrap(),
+            scan.search("popularterm", 2, excluded),
+            "the large-candidate fallback preserves global recency and exclusion"
+        );
+    }
 }
 
 #[tokio::test]
@@ -559,10 +619,9 @@ async fn sqlite_reopen_reads_same_committed_profile_fixture() {
 #[tokio::test]
 async fn sqlite_full_text_search_matches_scan_for_backfilled_cjk_messages() {
     let dir = tempfile::tempdir().unwrap();
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(
-        dir.path().join("conversation-search.db"),
-    )
-    .unwrap();
+    let backend =
+        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation-search.db"))
+            .unwrap();
     let scope = Scope::new("profile").unwrap();
     let store = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
     DriverConversationStore::prepare_schema(store.docs.as_ref())
