@@ -289,6 +289,7 @@ impl Projector {
                     display_content: sanitized,
                     request_id: msg.request_id.clone(),
                     ts: msg.ts.clone(),
+                    extra_metadata: msg.message.extra_metadata.clone(),
                 });
             }
             "assistant" => self.assistant(msg),
@@ -304,6 +305,7 @@ impl Projector {
                     model: msg.turn_usage.as_ref().map(|tu| tu.model.clone()),
                     iteration: msg.iteration,
                     ts: msg.ts.clone(),
+                    extra_metadata: msg.message.extra_metadata.clone(),
                 });
             }
         }
@@ -389,6 +391,7 @@ impl Projector {
                 model: msg.turn_usage.as_ref().map(|tu| tu.model.clone()),
                 iteration: Some(iteration),
                 ts: msg.ts.clone(),
+                extra_metadata: msg.message.extra_metadata.clone(),
             });
         }
 
