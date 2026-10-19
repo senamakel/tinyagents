@@ -126,6 +126,12 @@ impl DriverRunLedger {
             let Some(previous) = self.read::<AgentRun>(AGENTS, id).await? else {
                 return Ok(RunTransition::NotFound);
             };
+            if previous.doc.lease_owner.is_some() {
+                return Err(StorageError::conflict(
+                    "agent run is leased; status changes require its owner fencing token",
+                )
+                .into());
+            }
             let (telemetry, check) = self.telemetry_dependency(id).await?;
             if expected.is_some_and(|expected| previous.doc.status != expected) {
                 let checks = vec![

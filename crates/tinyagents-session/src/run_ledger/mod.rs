@@ -35,8 +35,8 @@ pub use tool_effects::{
     RunLedgerToolEffects, ToolEffectRow, ToolEffectSettle, ToolEffectStart, ToolEffectStatus,
 };
 pub use types::{
-    AgentRun, AgentRunKind, AgentRunListRequest, AgentRunListResponse, AgentRunStatus,
-    AgentRunUpsert, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
+    AgentRun, AgentRunKind, AgentRunLeaseClaim, AgentRunLeaseToken, AgentRunListRequest,
+    AgentRunListResponse, AgentRunStatus, AgentRunUpsert, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
     AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
     AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
     CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse,

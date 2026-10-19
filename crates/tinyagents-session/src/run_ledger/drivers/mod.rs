@@ -273,6 +273,34 @@ impl RunLedgerStore for DriverRunLedger {
         self.upsert_agent(upsert).await
     }
 
+    async fn try_claim_agent_run(
+        &self,
+        upsert: AgentRunUpsert,
+        owner: &str,
+        now: DateTime<Utc>,
+        lease_for: chrono::Duration,
+    ) -> Result<AgentRunLeaseClaim> {
+        self.claim_agent(upsert, owner, now, lease_for).await
+    }
+
+    async fn renew_agent_run_lease(
+        &self,
+        token: &AgentRunLeaseToken,
+        now: DateTime<Utc>,
+        lease_for: chrono::Duration,
+    ) -> Result<bool> {
+        self.renew_agent(token, now, lease_for).await
+    }
+
+    async fn finish_agent_run(
+        &self,
+        upsert: AgentRunUpsert,
+        token: &AgentRunLeaseToken,
+        now: DateTime<Utc>,
+    ) -> Result<Option<AgentRun>> {
+        self.finish_agent(upsert, token, now).await
+    }
+
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
         let now = now();
@@ -493,6 +521,10 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::interrupt_orphaned_agent_runs`] without a weaker fallback.
     async fn interrupt_orphaned_agent_runs(&self) -> Result<usize> {
         self.interrupt_agents().await
+    }
+
+    async fn interrupt_expired_agents(&self, now: DateTime<Utc>) -> Result<usize> {
+        DriverRunLedger::interrupt_expired_agents(self, now).await
     }
 
     /// Implement [`RunLedgerStore::list_agent_runs`] without a weaker fallback.
