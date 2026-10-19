@@ -194,6 +194,18 @@ impl DriverConversationStore {
                     .put(SEARCH_COLLECTION, &id, body, Precondition::None)
                     .await?;
             }
+            let indexed_incarnation = if stable_incarnation.is_empty() {
+                row.doc.incarnation.as_str()
+            } else {
+                stable_incarnation.as_str()
+            };
+            let still_live = self.load(thread_id).await?.is_some_and(|current| {
+                !current.doc.deleted && current.doc.incarnation == indexed_incarnation
+            });
+            if !still_live {
+                self.remove_search_incarnation(thread_id, indexed_incarnation)
+                    .await;
+            }
         }
         self.docs
             .put(
