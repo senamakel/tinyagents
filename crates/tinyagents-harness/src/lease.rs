@@ -26,8 +26,10 @@ pub trait RunLeaseHeartbeat: Send + Sync {
 /// A successful renewal runs before the work future is first polled. The work
 /// future is dropped immediately when a later renewal fails, and the renewal
 /// loop is dropped when the future completes or this function is cancelled.
-/// Each renewal is bounded by one heartbeat interval; the interval and timeout
-/// must fit strictly inside the lease duration reported by the adapter.
+/// Each renewal is bounded by one heartbeat interval. Since a granted expiry
+/// is calculated before the async persistence write, three intervals must fit
+/// strictly inside the adapter-reported lease duration: initial renewal,
+/// cadence wait, and the next bounded renewal.
 pub async fn run_with_lease<F, T>(
     future: F,
     lease: &dyn RunLeaseHeartbeat,
@@ -39,11 +41,11 @@ where
     if heartbeat_every.is_zero()
         || lease.lease_duration().is_zero()
         || heartbeat_every
-            .checked_mul(2)
+            .checked_mul(3)
             .is_none_or(|budget| budget >= lease.lease_duration())
     {
         return Err(TinyAgentsError::Validation(
-            "run lease duration must exceed two positive heartbeat intervals".into(),
+            "run lease duration must exceed three positive heartbeat intervals".into(),
         ));
     }
     renew_once(lease, heartbeat_every).await?;

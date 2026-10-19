@@ -121,6 +121,8 @@ async fn completed_or_cancelled_wrapper_does_not_leave_a_heartbeat_behind() {
 
 struct StalledLease(AtomicUsize);
 
+struct NearExpiryLease(AtomicUsize);
+
 struct NeverLease;
 
 #[async_trait]
@@ -147,6 +149,57 @@ impl RunLeaseHeartbeat for StalledLease {
             std::future::pending().await
         }
     }
+}
+
+#[async_trait]
+impl RunLeaseHeartbeat for NearExpiryLease {
+    fn lease_duration(&self) -> Duration {
+        Duration::from_secs(31)
+    }
+
+    async fn renew(&self) -> Result<bool> {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_secs(9)).await;
+            Ok(true)
+        } else {
+            std::future::pending().await
+        }
+    }
+}
+
+#[tokio::test]
+async fn stalled_renewal_stops_near_expiry_before_the_granted_lease_expires() {
+    tokio::time::pause();
+    let lease = NearExpiryLease(AtomicUsize::new(0));
+    let started_at = tokio::time::Instant::now();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let work_entered = Arc::clone(&entered);
+    let dropped = Arc::new(AtomicBool::new(false));
+    struct DropOnCancel(Arc<AtomicBool>);
+    impl Drop for DropOnCancel {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let work_dropped = Arc::clone(&dropped);
+    let work = async move {
+        let _guard = DropOnCancel(work_dropped);
+        work_entered.notify_one();
+        std::future::pending::<()>().await;
+    };
+    let mut run = Box::pin(run_with_lease(work, &lease, Duration::from_secs(10)));
+    tokio::select! {
+        _ = entered.notified() => {},
+        result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+
+    assert!(run.await.is_err());
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(tokio::time::Instant::now().duration_since(started_at) < lease.lease_duration());
 }
 
 #[tokio::test]
@@ -195,7 +248,7 @@ async fn invalid_timing_or_initial_lease_loss_never_starts_work() {
             work_started.store(true, Ordering::SeqCst);
         },
         &invalid_lease,
-        Duration::from_secs(60),
+        Duration::from_secs(40),
     )
     .await;
     assert!(invalid.is_err());
