@@ -68,7 +68,12 @@ reachable under `session::`, `session::run_ledger::`, and
   driver stores to a host-supplied backend. The deprecated `WorkspaceStores::open`
   opens `<workspace>/storage/`, imports the former private
   `<workspace>/session_store/` records without modifying that source, and then
-  imports classic `session_raw/` transcripts once.
+  imports classic `session_raw/` transcripts once. The private-store copy is
+  limited to session collections, session-owned KV and migration records, and
+  `harness.journal/` streams. Existing destination documents must match their
+  source; a journal can resume only when its ordered copied prefix matches.
+  A completion marker is written after every family succeeds, so later opens
+  preserve destination state that has since evolved.
 - **Legacy import** — `legacy::import_workspace` and
   `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
