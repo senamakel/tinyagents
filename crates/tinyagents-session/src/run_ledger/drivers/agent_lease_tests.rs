@@ -134,6 +134,61 @@ async fn ordinary_agent_upsert_cannot_overwrite_a_finished_leased_run() {
 }
 
 #[tokio::test]
+async fn unfenced_status_transitions_cannot_revive_reaped_or_finished_leases() {
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("shared").unwrap();
+    let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    let now = chrono::DateTime::from_timestamp(1_000, 0).unwrap();
+
+    ledger.upsert_agent_run(run("reaped")).await.unwrap();
+    assert!(matches!(
+        ledger
+            .try_claim_agent_run(run("reaped"), "owner", now, chrono::Duration::seconds(1))
+            .await
+            .unwrap(),
+        AgentRunLeaseClaim::Acquired { .. }
+    ));
+    assert_eq!(
+        ledger
+            .interrupt_expired_agents(now + chrono::Duration::seconds(2))
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(ledger
+        .transition_agent_run_status("reaped", AgentRunStatus::Running, None, None)
+        .await
+        .is_err());
+
+    ledger.upsert_agent_run(run("finished")).await.unwrap();
+    let token = match ledger
+        .try_claim_agent_run(run("finished"), "owner", now, chrono::Duration::seconds(10))
+        .await
+        .unwrap()
+    {
+        AgentRunLeaseClaim::Acquired { token, .. } => token,
+        other => panic!("expected lease, got {other:?}"),
+    };
+    assert!(ledger
+        .finish_agent_run(
+            AgentRunUpsert {
+                status: AgentRunStatus::Completed,
+                completed_at: Some(now + chrono::Duration::seconds(1)),
+                ..run("finished")
+            },
+            &token,
+            now + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap()
+        .is_some());
+    assert!(ledger
+        .transition_agent_run_status("finished", AgentRunStatus::Running, None, None)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn shared_agent_reaper_preserves_legacy_unleased_runs() {
     let backend = MemoryStorage::new();
     let scope = Scope::new("shared").unwrap();
