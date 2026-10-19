@@ -328,7 +328,7 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
         .unwrap();
     let mut expected = inverted_index::InvertedIndex::new();
     for (thread_id, content) in [
-        ("tokyo", "東京で日本語を話す"),
+        ("tokyo", "東京tokyo"),
         ("kyoto", "京都は美しい"),
         ("other", "a short unrelated note"),
     ] {
@@ -337,6 +337,9 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
             expected.insert(thread_id, message);
         }
     }
+    // The first search may backfill old persisted conversations. Measure only
+    // the steady-state query path after that migration has completed.
+    store.backfill_search_index().await.unwrap();
 
     let probe = Arc::new(SearchProbe::default());
     store.docs = Arc::new(ProbedDocuments {
