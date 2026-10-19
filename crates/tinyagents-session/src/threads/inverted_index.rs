@@ -61,7 +61,7 @@ use super::types::{CrossThreadHit, ThreadMessage};
 /// callers (and tests) see no change. Single-byte ASCII tokens like "a"
 /// or "is" are filtered out; a single CJK character (3 bytes in UTF-8)
 /// passes through.
-const MIN_TERM_BYTES: usize = 3;
+pub(super) const MIN_TERM_BYTES: usize = 3;
 
 /// When Phase 1 returns more than this many candidates we skip Phase 2
 /// verification and fall back to a pure recency-ranked truncation. This
@@ -237,14 +237,7 @@ impl InvertedIndex {
         if limit == 0 {
             return Vec::new();
         }
-        let query_lower = normalize(query);
-        // Filter terms by raw byte length (matches the historical
-        // 3-byte threshold; single CJK chars are 3 bytes and pass).
-        let terms: Vec<String> = query_lower
-            .split_whitespace()
-            .filter(|t| t.len() >= MIN_TERM_BYTES)
-            .map(|s| s.to_string())
-            .collect();
+        let terms = query_terms(query);
         if terms.is_empty() {
             return Vec::new();
         }
@@ -419,6 +412,15 @@ impl InvertedIndex {
             })
             .collect()
     }
+}
+
+/// Query substrings that participate in the existing cross-thread contract.
+pub(super) fn query_terms(query: &str) -> Vec<String> {
+    normalize(query)
+        .split_whitespace()
+        .filter(|term| term.len() >= MIN_TERM_BYTES)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Two-pointer sort-merge intersect. `acc` and `other` are both sorted
