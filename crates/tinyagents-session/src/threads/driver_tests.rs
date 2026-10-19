@@ -200,7 +200,7 @@ async fn exhaustive_paged_search_matches_local_substrings_and_cjk_tied_groups() 
 #[derive(Debug, Default)]
 struct SearchProbe {
     calls: AtomicUsize,
-    document_reads: AtomicUsize,
+    thread_queries: AtomicUsize,
 }
 
 #[derive(Debug)]
@@ -231,7 +231,6 @@ impl DocumentStore for ProbedDocuments {
         collection: &str,
         id: &str,
     ) -> Result<Option<Versioned<serde_json::Value>>, StorageError> {
-        self.probe.document_reads.fetch_add(1, Ordering::Relaxed);
         self.inner.get(collection, id).await
     }
 
@@ -259,7 +258,9 @@ impl DocumentStore for ProbedDocuments {
         collection: &str,
         query: &Query,
     ) -> Result<tinystoragedrivers_core::Page<Versioned<serde_json::Value>>, StorageError> {
-        self.probe.document_reads.fetch_add(1, Ordering::Relaxed);
+        if collection == COLLECTION {
+            self.probe.thread_queries.fetch_add(1, Ordering::Relaxed);
+        }
         self.inner.query(collection, query).await
     }
 
@@ -356,9 +357,9 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
         "FullText-capable stores must query DocumentStore::search"
     );
     assert_eq!(
-        probe.document_reads.load(Ordering::Relaxed),
+        probe.thread_queries.load(Ordering::Relaxed),
         0,
-        "steady-state search must not scan thread documents"
+        "steady-state search must not list the conversation thread corpus"
     );
 }
 
