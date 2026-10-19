@@ -5,6 +5,7 @@ use crate::events::HarnessRunStatus;
 use crate::ids::{ComponentId, ExecutionStatus, HarnessPhase};
 use crate::observability::{DriverStatusStore, mint_run_id};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn store() -> DriverStatusStore {
@@ -22,6 +23,9 @@ async fn seed_status(store: &DriverStatusStore, kind: ExecutionStatus) -> String
         ExecutionStatus::Interrupted => status.mark_interrupted(),
         other => panic!("seed_status only seeds non-terminal states, got {other:?}"),
     }
+    status.lease_owner = Some("dead-process".into());
+    status.lease_expires_at = Some(SystemTime::UNIX_EPOCH);
+    status.lease_epoch = 1;
     store.put_status(status).await.unwrap();
     run_id.as_str().to_string()
 }
@@ -61,6 +65,218 @@ async fn reap_cancels_every_active_run_and_spares_terminal_ones() {
 async fn reap_on_empty_store_is_a_noop() {
     let store = store();
     assert_eq!(reap_orphaned_runs(&store).await, 0);
+}
+
+#[tokio::test]
+async fn shared_reaper_preserves_active_runs_with_unknown_ownership() {
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let reaper = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    // A row written by another process (or by a pre-lease version) has no
+    // trustworthy owner/expiry, so the shared reaper must preserve it.
+    let run_id = mint_run_id();
+    let mut unowned =
+        HarnessRunStatus::new(run_id.clone(), ComponentId::new("mock-model".to_string()));
+    unowned.mark_running(HarnessPhase::Model);
+    owner.put_status(unowned).await.unwrap();
+    assert_eq!(reap_orphaned_runs(&reaper).await, 0);
+    let status = owner
+        .get_status(run_id.as_str())
+        .await
+        .unwrap()
+        .expect("present");
+    assert_eq!(status.status, ExecutionStatus::Running);
+    assert_eq!(status.current_phase, HarnessPhase::Model);
+    assert!(status.ended_at.is_none());
+}
+
+#[tokio::test]
+async fn shared_reaper_preserves_live_lease_and_settles_expired_lease() {
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let reaper = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let live_id = mint_run_id();
+    let mut live = HarnessRunStatus::new(live_id.clone(), ComponentId::new("model"));
+    live.mark_running(HarnessPhase::Model);
+    live.lease_owner = Some("healthy-owner".into());
+    live.lease_epoch = 4;
+    live.lease_expires_at = Some(SystemTime::now() + Duration::from_secs(60));
+    owner.put_status(live).await.unwrap();
+    let expired_id = seed_status(&owner, ExecutionStatus::Running).await;
+
+    assert_eq!(reap_orphaned_runs(&reaper).await, 1);
+    assert_eq!(
+        owner
+            .get_status(live_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ExecutionStatus::Running
+    );
+    let expired = owner.get_status(&expired_id).await.unwrap().unwrap();
+    assert_eq!(expired.status, ExecutionStatus::Cancelled);
+    assert_eq!(expired.lease_owner, None);
+}
+
+#[tokio::test]
+async fn status_lease_epoch_fences_heartbeat_takeover_and_finish() {
+    let store = store();
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+    let expires = now + Duration::from_secs(5);
+    let run_id = mint_run_id();
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
+    initial.mark_running(HarnessPhase::Model);
+    let first = store
+        .claim_status(initial, "owner-a", now, expires)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.lease_epoch, 1);
+    assert!(
+        store
+            .renew_status_lease(
+                run_id.as_str(),
+                "owner-a",
+                1,
+                now + Duration::from_secs(1),
+                now + Duration::from_secs(8),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .renew_status_lease(
+                run_id.as_str(),
+                "owner-a",
+                1,
+                now + Duration::from_secs(9),
+                now + Duration::from_secs(12),
+            )
+            .await
+            .unwrap()
+    );
+
+    let mut takeover = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
+    takeover.mark_running(HarnessPhase::Model);
+    let second = store
+        .claim_status(
+            takeover,
+            "owner-b",
+            now + Duration::from_secs(9),
+            now + Duration::from_secs(20),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.lease_epoch, 2);
+
+    let mut stale_finish = first;
+    stale_finish.mark_completed();
+    assert!(
+        !store
+            .finish_status_lease(stale_finish, "owner-a", 1, now + Duration::from_secs(9))
+            .await
+            .unwrap()
+    );
+    let mut current_finish = second;
+    current_finish.mark_completed();
+    assert!(
+        store
+            .finish_status_lease(current_finish, "owner-b", 2, now + Duration::from_secs(10))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn stale_status_snapshot_cannot_roll_back_a_renewed_deadline() {
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let heartbeat = DriverStatusStore::new(Arc::clone(scoped.documents()));
+    let now = SystemTime::UNIX_EPOCH
+        + Duration::from_millis(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        );
+    let run_id = mint_run_id();
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
+    initial.mark_running(HarnessPhase::Model);
+    let stale_snapshot = owner
+        .claim_status(initial, "owner-a", now, now + Duration::from_secs(30))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        heartbeat
+            .renew_status_lease(
+                run_id.as_str(),
+                "owner-a",
+                stale_snapshot.lease_epoch,
+                now + Duration::from_secs(1),
+                now + Duration::from_secs(90),
+            )
+            .await
+            .unwrap()
+    );
+
+    let mut progress = stale_snapshot;
+    progress.model_calls = 1;
+    owner.put_status(progress).await.unwrap();
+    let current = heartbeat
+        .get_status(run_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.model_calls, 1);
+    assert_eq!(
+        current.lease_expires_at,
+        Some(now + Duration::from_secs(90))
+    );
+}
+
+#[tokio::test]
+async fn in_memory_status_update_also_preserves_the_current_lease_deadline() {
+    let store = crate::observability::InMemoryStatusStore::new();
+    let now = SystemTime::now();
+    let run_id = mint_run_id();
+    let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
+    initial.mark_running(HarnessPhase::Model);
+    let stale = store
+        .claim_status(initial, "owner-a", now, now + Duration::from_secs(10))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        store
+            .renew_status_lease(
+                run_id.as_str(),
+                "owner-a",
+                stale.lease_epoch,
+                now + Duration::from_secs(1),
+                now + Duration::from_secs(50),
+            )
+            .await
+            .unwrap()
+    );
+    let mut progress = stale;
+    progress.tool_calls = 1;
+    store.put_status(progress).await.unwrap();
+    assert_eq!(
+        store
+            .get_status(run_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .lease_expires_at,
+        Some(now + Duration::from_secs(50))
+    );
 }
 
 #[test]

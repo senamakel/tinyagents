@@ -78,6 +78,7 @@ mod finish_reason;
 pub mod handoff;
 pub mod host;
 pub mod ids;
+pub mod lease;
 pub mod limits;
 #[cfg(feature = "media")]
 pub mod media;
@@ -137,6 +138,7 @@ pub use capability::{
 pub use cost::CostTotals;
 pub use error::{Result, TinyAgentsError};
 pub use ids::*;
+pub use lease::{RunLeaseHeartbeat, run_with_lease};
 pub use model_registry::{ModelRegistry, ModelSelection, ResolvedModelBinding};
 pub use no_progress::{
     ArgumentChurnDetector, CallGate, ClassifiedFailure, ClassifiedFailureTracker,

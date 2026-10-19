@@ -32,6 +32,9 @@ fn run_with(id: &str, status: AgentRunStatus, updated_secs: i64) -> AgentRun {
         started_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
         updated_at: Utc.timestamp_opt(1_700_000_000 + updated_secs, 0).unwrap(),
         completed_at: None,
+        lease_owner: None,
+        lease_expires_at: None,
+        lease_epoch: 0,
     }
 }
 

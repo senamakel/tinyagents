@@ -1358,6 +1358,22 @@ pub struct HarnessRunStatus {
     /// Coarse lifecycle status.
     pub status: ExecutionStatus,
 
+    /// Process currently owning this run, when protected by a lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_owner: Option<String>,
+
+    /// Deadline after which a different process may reap this run.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_system_time_opt"
+    )]
+    pub lease_expires_at: Option<SystemTime>,
+
+    /// Monotonically increasing lease generation that fences stale writers.
+    #[serde(default)]
+    pub lease_epoch: u64,
+
     /// Active harness operation within the current status.
     pub current_phase: HarnessPhase,
 

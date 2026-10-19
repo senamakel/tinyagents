@@ -282,6 +282,9 @@ pub(crate) fn agent_runs(snapshot: &LegacySourceSnapshot) -> LedgerResult<Vec<Ag
                 started_at: time(row, 13)?,
                 updated_at: time(row, 14)?,
                 completed_at: time_opt(row, 15)?,
+                lease_owner: None,
+                lease_expires_at: None,
+                lease_epoch: 0,
             })
         },
     )
