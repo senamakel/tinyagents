@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use tinystoragedrivers_core::{DocumentStoreExt, Precondition, Query, Scope, StorageBackend};
+use tinystoragedrivers_core::{Scope, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 use super::AgentStores;
@@ -29,14 +29,7 @@ use crate::transcript::TranscriptLocator;
 pub const STORE_DIR: &str = "session_store";
 
 const STORAGE_DIR: &str = "storage";
-const LEGACY_COLLECTIONS: [&str; 5] = [
-    "session.transcripts",
-    "session.transcript_entries",
-    "session.turn_states",
-    "tsd.kv",
-    "tsd.migrations",
-];
-const JOURNAL_PREFIX: &str = "harness.journal/";
+mod workspace_migration;
 
 type Cache = Mutex<HashMap<(PathBuf, String), Weak<WorkspaceInner>>>;
 
@@ -123,7 +116,7 @@ impl WorkspaceStores {
             let legacy_provider = DriverSessionStores::new(legacy_backend, Scope::local())?;
             legacy_provider.try_for_agent(agent_id)?;
             provider.try_for_agent(agent_id)?;
-            copy_agent_storage(&legacy_provider, &provider, agent_id)?;
+            workspace_migration::copy_agent_storage(&legacy_provider, &provider, agent_id)?;
         }
         let stores = provider.try_for_agent(agent_id)?;
         let outcome = import_transcripts_once(&provider, agent_id, workspace_dir)?;
@@ -171,113 +164,6 @@ impl WorkspaceStores {
     pub fn import_outcome(&self) -> &OnceOutcome {
         &self.inner.outcome
     }
-}
-
-/// Copies the old private SQLite store through the storage ports. Documents
-/// are copied only when absent; streams resume from the destination's next
-/// offset. Keeping the source intact makes retries safe after a partial copy.
-fn copy_agent_storage(
-    source: &DriverSessionStores,
-    destination: &DriverSessionStores,
-    agent_id: &str,
-) -> anyhow::Result<()> {
-    let (source_scope, _) = source.scoped_for(agent_id)?;
-    let (destination_scope, _) = destination.scoped_for(agent_id)?;
-    source.bridge().run(async move {
-        let source_documents = source_scope.documents();
-        let destination_documents = destination_scope.documents();
-        for collection in LEGACY_COLLECTIONS {
-            for row in source_documents
-                .query_all(collection, &Query::all())
-                .await?
-            {
-                if destination_documents
-                    .get(collection, &row.id)
-                    .await?
-                    .is_none()
-                {
-                    destination_documents
-                        .put(collection, &row.id, row.doc, Precondition::Absent)
-                        .await?;
-                }
-            }
-        }
-
-        let source_streams = source_scope.streams();
-        let destination_streams = destination_scope.streams();
-        for stream in source_streams.streams(JOURNAL_PREFIX).await? {
-            let Some(info) = source_streams.info(&stream).await? else {
-                continue;
-            };
-            let destination_info = destination_streams.info(&stream).await?;
-            let mut next = destination_info.map_or(0, |found| found.len);
-            if let Some(found) = destination_info {
-                if found.base != 0 && found.base != info.base {
-                    return Err(tinystoragedrivers_core::StorageError::backend(format!(
-                        "cannot safely import journal {stream}: source and destination retain different offsets"
-                    )));
-                }
-                // A matching retained prefix identifies an interrupted copy;
-                // a different prefix is newer or unrelated destination data.
-                if next > info.base {
-                    let overlap_end = next.min(info.len);
-                    let old = source_streams
-                        .read_window(&stream, info.base, (overlap_end - info.base) as usize)
-                        .await?;
-                    let copied = destination_streams
-                        .read_window(&stream, info.base, (overlap_end - info.base) as usize)
-                        .await?;
-                    if old != copied {
-                        return Err(tinystoragedrivers_core::StorageError::backend(format!(
-                            "cannot safely import journal {stream}: destination prefix differs"
-                        )));
-                    }
-                } else if next > 0 {
-                    let placeholders = destination_streams.read_window(&stream, 0, next as usize).await?;
-                    if placeholders.len() != next as usize
-                        || placeholders
-                            .iter()
-                            .any(|entry| !entry.value.is_null())
-                    {
-                        return Err(tinystoragedrivers_core::StorageError::backend(format!(
-                            "cannot safely resume journal {stream}: destination prefix differs"
-                        )));
-                    }
-                }
-            }
-
-            // Truncated streams retain their original next offset. Null
-            // placeholders recreate only the already-discarded prefix, which
-            // is immediately truncated after the retained events are copied.
-            while next < info.base {
-                let count = (info.base - next).min(256) as usize;
-                destination_streams
-                    .append_batch(&stream, vec![serde_json::Value::Null; count])
-                    .await?;
-                next += count as u64;
-            }
-            while next < info.len {
-                let entries = source_streams
-                    .read_window(&stream, next, 256)
-                    .await?;
-                if entries.is_empty() {
-                    break;
-                }
-                let values = entries.into_iter().map(|entry| entry.value).collect();
-                let count = values.len() as u64;
-                destination_streams.append_batch(&stream, values).await?;
-                next += count;
-            }
-            if info.base > 0 {
-                destination_streams.truncate_before(&stream, info.base).await?;
-            }
-            if info.is_sealed() {
-                destination_streams.seal(&stream).await?;
-            }
-        }
-        Ok::<(), tinystoragedrivers_core::StorageError>(())
-    })??;
-    Ok(())
 }
 
 #[cfg(test)]

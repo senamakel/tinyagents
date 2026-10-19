@@ -145,9 +145,9 @@ fn supplied_backend_is_shared_across_handles_and_scoped_by_agent() {
     assert!(!other_agent.transcripts().session_exists(&session));
 }
 
-#[test]
 #[allow(deprecated)]
-fn path_convenience_imports_existing_private_store_into_unified_storage() {
+#[tokio::test]
+async fn path_convenience_imports_existing_private_store_into_unified_storage() {
     use tinystoragedrivers_core::{Scope, StorageBackend};
 
     let dir = tempfile::tempdir().unwrap();
@@ -155,9 +155,8 @@ fn path_convenience_imports_existing_private_store_into_unified_storage() {
         Arc::new(SqliteStorage::open(dir.path().join(STORE_DIR)).unwrap());
     let old_provider = DriverSessionStores::new(old_backend, Scope::local()).unwrap();
     let session = SessionRef::root("private-store-thread");
-    let handle = old_provider
-        .try_for_agent("agent")
-        .unwrap()
+    let old_stores = old_provider.try_for_agent("agent").unwrap();
+    let handle = old_stores
         .transcripts
         .open_session(&session, meta())
         .unwrap();
@@ -175,6 +174,19 @@ fn path_convenience_imports_existing_private_store_into_unified_storage() {
             tools: None,
         })
         .unwrap();
+    old_stores
+        .kv
+        .put("session", "old-key", serde_json::json!({"value": 7}))
+        .await
+        .unwrap();
+    old_stores
+        .journal
+        .append(
+            "harness.journal/old-run",
+            serde_json::json!({"event": "kept"}),
+        )
+        .await
+        .unwrap();
 
     let moved = WorkspaceStores::open(dir.path(), "agent").unwrap();
     let imported = moved
@@ -186,6 +198,20 @@ fn path_convenience_imports_existing_private_store_into_unified_storage() {
         .unwrap();
     assert_eq!(imported.messages[0].content, "old private database");
     assert_eq!(imported.messages[1].content, "copied into shared storage");
+    assert_eq!(
+        moved.stores().kv.get("session", "old-key").await.unwrap(),
+        Some(serde_json::json!({"value": 7}))
+    );
+    assert_eq!(
+        moved
+            .stores()
+            .journal
+            .read_from("harness.journal/old-run", 0)
+            .await
+            .unwrap()[0]
+            .1,
+        serde_json::json!({"event": "kept"})
+    );
     assert!(dir.path().join(STORAGE_DIR).join("storage.db").is_file());
     assert!(dir.path().join(STORE_DIR).join("storage.db").is_file());
 }
