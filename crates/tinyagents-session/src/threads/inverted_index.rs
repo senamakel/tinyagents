@@ -326,22 +326,24 @@ impl InvertedIndex {
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
         ranked.truncate(limit);
 
-        SearchOutcome::Hits(ranked
-            .into_iter()
-            .map(|(doc_id, matched, _)| {
-                let entry = self.docs[doc_id as usize]
-                    .as_ref()
-                    .expect("doc_id from hit_counts must be live");
-                CrossThreadHit {
-                    thread_id: entry.thread_id.to_string(),
-                    message_id: entry.message_id.clone(),
-                    role: entry.role.to_string(),
-                    content: entry.content.clone(),
-                    created_at: entry.created_at.clone(),
-                    score: matched as f64 / total_terms,
-                }
-            })
-            .collect())
+        SearchOutcome::Hits(
+            ranked
+                .into_iter()
+                .map(|(doc_id, matched, _)| {
+                    let entry = self.docs[doc_id as usize]
+                        .as_ref()
+                        .expect("doc_id from hit_counts must be live");
+                    CrossThreadHit {
+                        thread_id: entry.thread_id.to_string(),
+                        message_id: entry.message_id.clone(),
+                        role: entry.role.to_string(),
+                        content: entry.content.clone(),
+                        created_at: entry.created_at.clone(),
+                        score: matched as f64 / total_terms,
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Build the Phase 1 candidate set for one query term.

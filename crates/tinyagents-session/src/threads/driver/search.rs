@@ -421,10 +421,7 @@ impl DriverConversationStore {
                 return Ok(hits);
             }
         }
-        Err(StorageError::conflict(
-            "conversation changed repeatedly during recency search",
-        )
-        .into())
+        Err(StorageError::conflict("conversation changed repeatedly during recency search").into())
     }
 }
 
