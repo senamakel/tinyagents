@@ -191,6 +191,9 @@ fn merge_agent(
         started_at: upsert.started_at.map(trunc).unwrap_or(now),
         updated_at: now,
         completed_at: None,
+        lease_owner: None,
+        lease_expires_at: None,
+        lease_epoch: 0,
     });
     if !(row.kind == AgentRunKind::WorkerThread && upsert.kind == AgentRunKind::Subagent) {
         row.kind = upsert.kind;
