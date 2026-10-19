@@ -11,7 +11,6 @@ const OPENHUMAN_DOMAIN_TYPES: &[&str] = &[
     "AgentDefinitionModel",
     "AgentProfile",
     "AgentProfileStore",
-    "AgentProgress",
     "ApprovalDecision",
     "ChatMessage",
     "ConversationMessage",
@@ -715,6 +714,10 @@ fn whitespace_and_inventory_cannot_hide_openhuman_domain_references() {
     assert!(!source_names_openhuman(
         "// openhuman :: AgentProgress\nlet label = \"ConversationMessage\";"
     ));
+    assert!(!source_names_openhuman(
+        "use crate::progress::AgentProgress;"
+    ));
+    assert!(source_names_openhuman("use openhuman::AgentProgress;"));
 }
 
 #[test]
