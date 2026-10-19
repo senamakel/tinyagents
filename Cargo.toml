@@ -62,3 +62,12 @@ strip = "debuginfo"
 tinytools-agent = { path = "vendor/tinytools/crates/tinytools-agent" }
 tinytools = { path = "vendor/tinytools/crates/tinytools" }
 
+# tinyinference still names the canonical TSD source. Redirect those requests
+# to the same merged fork revision as the session crate so storage port types
+# are not duplicated in this workspace.
+[patch."https://github.com/tinyhumansai/tinystoragedrivers"]
+tinystoragedrivers-core = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-file = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-secrets = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-sqlite = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+
