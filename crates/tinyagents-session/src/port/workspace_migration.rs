@@ -30,6 +30,7 @@ pub(super) fn copy_agent_storage(
     let (source_scope, _) = source.scoped_for(agent_id)?;
     let (destination_scope, _) = destination.scoped_for(agent_id)?;
     source.bridge().run(async move {
+        DriverSessionStores::prepare_schema(destination_scope.documents()).await?;
         destination_scope
             .documents()
             .ensure_collection(&CollectionSpec::new("tsd.migrations"))
@@ -52,13 +53,8 @@ async fn copy_documents(
     let source_documents = source.documents();
     let destination_documents = destination.documents();
     for collection in OWNED_COLLECTIONS {
-        destination_documents
-            .ensure_collection(&CollectionSpec::new(collection))
-            .await?;
         let query = match collection {
-            "tsd.kv" | "tsd.migrations" => {
-                Query::filter(Filter::eq("owner", "session"))
-            }
+            "tsd.kv" | "tsd.migrations" => Query::filter(Filter::eq("owner", "session")),
             _ => Query::all(),
         };
         for row in source_documents.query_all(collection, &query).await? {
@@ -121,13 +117,12 @@ async fn copy_journals(
         }
         while next < source_info.len {
             let count = (source_info.len - next).min(STREAM_BATCH as u64) as usize;
-            let entries = source_streams
-                .read_window(&stream, next, count)
-                .await?;
+            let entries = source_streams.read_window(&stream, next, count).await?;
             if entries.len() != count
-                || entries.iter().enumerate().any(|(index, entry)| {
-                    entry.offset != next + index as u64
-                })
+                || entries
+                    .iter()
+                    .enumerate()
+                    .any(|(index, entry)| entry.offset != next + index as u64)
             {
                 return Err(storage_conflict(
                     &stream,
@@ -200,12 +195,14 @@ async fn verify_copied_prefix(
             let copied = destination.read_window(stream, offset, count).await?;
             if old.len() != count
                 || copied.len() != count
-                || old.iter().enumerate().any(|(index, entry)| {
-                    entry.offset != offset + index as u64
-                })
-                || copied.iter().enumerate().any(|(index, entry)| {
-                    entry.offset != offset + index as u64
-                })
+                || old
+                    .iter()
+                    .enumerate()
+                    .any(|(index, entry)| entry.offset != offset + index as u64)
+                || copied
+                    .iter()
+                    .enumerate()
+                    .any(|(index, entry)| entry.offset != offset + index as u64)
                 || old != copied
             {
                 return Err(storage_conflict(stream, "destination prefix differs"));

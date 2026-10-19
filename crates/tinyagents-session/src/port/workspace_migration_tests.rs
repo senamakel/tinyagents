@@ -35,7 +35,10 @@ async fn partial_journal_copy_resumes_after_matching_ordered_prefix() {
         .await
         .unwrap();
     assert_eq!(
-        entries.into_iter().map(|(_, value)| value).collect::<Vec<_>>(),
+        entries
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>(),
         [
             serde_json::json!({"value": "one"}),
             serde_json::json!({"value": "two"}),

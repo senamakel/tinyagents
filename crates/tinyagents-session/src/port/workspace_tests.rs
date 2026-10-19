@@ -231,7 +231,12 @@ async fn path_convenience_imports_existing_private_store_into_unified_storage() 
     drop(moved);
     let reopened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert_eq!(
-        reopened.stores().kv.get("session", "old-key").await.unwrap(),
+        reopened
+            .stores()
+            .kv
+            .get("session", "old-key")
+            .await
+            .unwrap(),
         Some(serde_json::json!({"value": 8}))
     );
 }
@@ -242,9 +247,8 @@ async fn path_import_refuses_conflicting_destination_documents_without_overwriti
     use tinystoragedrivers_core::{Scope, StorageBackend};
 
     let dir = tempfile::tempdir().unwrap();
-    let destination_backend: Arc<dyn StorageBackend> = Arc::new(
-        SqliteStorage::open(dir.path().join(STORAGE_DIR)).unwrap(),
-    );
+    let destination_backend: Arc<dyn StorageBackend> =
+        Arc::new(SqliteStorage::open(dir.path().join(STORAGE_DIR)).unwrap());
     let destination = DriverSessionStores::new(destination_backend, Scope::local()).unwrap();
     let destination_stores = destination.try_for_agent("agent").unwrap();
     destination_stores
