@@ -1,7 +1,7 @@
 use super::*;
 use tinyagents_harness::store::{DriverStore, Store};
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStoreExt, MemoryStorage, Migrations, Precondition, StorageBackend,
+    CollectionSpec, MemoryStorage, Migrations, Precondition, StorageBackend,
 };
 
 fn provider() -> DriverSessionStores {
@@ -82,8 +82,6 @@ async fn differing_journal_history_refuses_import_without_overwriting_target() {
 
 #[tokio::test]
 async fn truncated_journal_with_matching_base_resumes_without_recreating_prefix() {
-    use tinystoragedrivers_core::StreamStore;
-
     let source = provider();
     let destination = provider();
     let (source_scope, _) = source.scoped_for("agent").unwrap();

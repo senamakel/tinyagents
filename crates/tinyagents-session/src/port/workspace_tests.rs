@@ -28,6 +28,7 @@ fn meta() -> TranscriptMeta {
 }
 
 #[test]
+#[allow(deprecated)]
 fn legacy_generations_resume_through_the_port_and_a_new_generation_chains() {
     let dir = tempfile::tempdir().unwrap();
     let raw = dir.path().join("session_raw");
@@ -99,6 +100,7 @@ fn legacy_generations_resume_through_the_port_and_a_new_generation_chains() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn a_workspace_with_no_legacy_files_opens_empty() {
     let dir = tempfile::tempdir().unwrap();
     #[allow(deprecated)]
@@ -296,6 +298,7 @@ async fn path_import_refuses_conflicting_destination_documents_without_overwriti
 }
 
 #[test]
+#[allow(deprecated)]
 fn a_dropped_handle_releases_its_backend_and_reopens_fresh() {
     let dir = tempfile::tempdir().unwrap();
     let first = WorkspaceStores::open(dir.path(), "agent").unwrap();
@@ -309,6 +312,7 @@ fn a_dropped_handle_releases_its_backend_and_reopens_fresh() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn an_incomplete_import_is_retried_on_the_next_open() {
     let dir = tempfile::tempdir().unwrap();
     let raw = dir.path().join("session_raw");
