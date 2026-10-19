@@ -396,6 +396,7 @@ async fn successful_agent_run_stops_renewing_after_model_completion() {
             )
             .await
     });
+    assert_eq!(renewal_started.recv().await, Some(1));
     entered.notified().await;
     tokio::time::advance(Duration::from_secs(10)).await;
     assert_eq!(renewal_started.recv().await, Some(2));
