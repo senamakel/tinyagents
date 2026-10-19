@@ -211,29 +211,11 @@ fn ok() -> Behaviour {
     Arc::new(|task| Ok(SubagentOutcome::completed(task, "all done")))
 }
 
-struct ResumeBarrierPlanner {
-    arrived: Arc<tokio::sync::Barrier>,
+struct CountedExecutor {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    first_entered: Arc<tokio::sync::Semaphore>,
+    release_first: Arc<tokio::sync::Semaphore>,
 }
-
-#[async_trait]
-impl SubagentPlanner<String> for ResumeBarrierPlanner {
-    async fn prepare(
-        &self,
-        request: SubagentRequest<String>,
-    ) -> Result<PreparedSubagent<String>, SubagentError> {
-        let parts = request.into_parts();
-        self.arrived.wait().await;
-        Ok(PreparedSubagent::new(
-            parts.task_key.task_id,
-            "worker",
-            vec![Message::user(parts.input)],
-            ToolSnapshot::new(vec![]).unwrap(),
-            parts.run_context,
-        ))
-    }
-}
-
-struct CountedExecutor(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait]
 impl SubagentExecutor<String> for CountedExecutor {
@@ -241,7 +223,11 @@ impl SubagentExecutor<String> for CountedExecutor {
         &self,
         execution: SubagentExecution<String>,
     ) -> Result<SubagentOutcome, SubagentError> {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            self.first_entered.add_permits(1);
+            self.release_first.acquire().await.unwrap().forget();
+        }
         Ok(SubagentOutcome::completed(
             execution.prepared.task_id,
             "done",
@@ -273,14 +259,20 @@ async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
         .await
         .unwrap();
 
-    let arrivals = Arc::new(tokio::sync::Barrier::new(2));
     let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let first_entered = Arc::new(tokio::sync::Semaphore::new(0));
+    let release_first = Arc::new(tokio::sync::Semaphore::new(0));
     let make_driver = || {
         SubagentDriver::new(SubagentCapabilities {
-            planner: Some(Arc::new(ResumeBarrierPlanner {
-                arrived: arrivals.clone(),
+            planner: Some(Arc::new(Planner {
+                mode: None,
+                parent: None,
             })),
-            executor: Some(Arc::new(CountedExecutor(executions.clone()))),
+            executor: Some(Arc::new(CountedExecutor {
+                calls: executions.clone(),
+                first_entered: first_entered.clone(),
+                release_first: release_first.clone(),
+            })),
             persistence: Some(Arc::new(
                 DocumentSubagentPersistence::new(docs.clone()).unwrap(),
             )),
@@ -294,12 +286,13 @@ async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
     let second_request =
         continuation_request(key, request("paused-task").run_context().clone()).await;
 
-    let (first_result, second_result) = tokio::join!(
-        first.run(first_request, CancellationToken::new()),
-        second.run(second_request, CancellationToken::new()),
-    );
-    first_result.unwrap();
+    let first_run =
+        tokio::spawn(async move { first.run(first_request, CancellationToken::new()).await });
+    first_entered.acquire().await.unwrap().forget();
+    let second_result = second.run(second_request, CancellationToken::new()).await;
     second_result.unwrap();
+    release_first.add_permits(1);
+    first_run.await.unwrap().unwrap();
     assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
