@@ -36,5 +36,12 @@ tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-ll
 tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools" }
 
+[patch."https://github.com/tinyhumansai/tinystoragedrivers"]
+tinystoragedrivers-core = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-file = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-mongodb = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-secrets = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-sqlite = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+
 [lints.rust]
 unsafe_code = "deny"
