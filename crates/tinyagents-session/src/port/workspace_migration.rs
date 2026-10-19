@@ -85,19 +85,19 @@ async fn copy_journals(
     let destination_streams = destination.streams();
     let source_names = source_streams.streams(JOURNAL_PREFIX).await?;
     for stream in &source_names {
-        let Some(source_info) = source_streams.info(&stream).await? else {
+        let Some(source_info) = source_streams.info(stream).await? else {
             continue;
         };
-        let destination_info = destination_streams.info(&stream).await?;
-        let mut next = destination_info.map_or(0, |found| found.len);
+        let destination_info = destination_streams.info(stream).await?;
+        let mut next = destination_info.as_ref().map_or(0, |found| found.len);
         if let Some(found) = destination_info {
             if found.base != 0 && found.base != source_info.base {
-                return Err(storage_conflict(&stream, "retained offsets differ"));
+                return Err(storage_conflict(stream, "retained offsets differ"));
             }
             verify_copied_prefix(
                 source_streams.as_ref(),
                 destination_streams.as_ref(),
-                &stream,
+                stream,
                 source_info.base,
                 next,
                 source_info.len,
@@ -111,13 +111,13 @@ async fn copy_journals(
         while next < source_info.base {
             let count = (source_info.base - next).min(STREAM_BATCH as u64) as usize;
             destination_streams
-                .append_batch_if_offset(&stream, next, vec![serde_json::Value::Null; count])
+                .append_batch_if_offset(stream, next, vec![serde_json::Value::Null; count])
                 .await?;
             next += count as u64;
         }
         while next < source_info.len {
             let count = (source_info.len - next).min(STREAM_BATCH as u64) as usize;
-            let entries = source_streams.read_window(&stream, next, count).await?;
+            let entries = source_streams.read_window(stream, next, count).await?;
             if entries.len() != count
                 || entries
                     .iter()
@@ -125,7 +125,7 @@ async fn copy_journals(
                     .any(|(index, entry)| entry.offset != next + index as u64)
             {
                 return Err(storage_conflict(
-                    &stream,
+                    stream,
                     "source stream changed during copy",
                 ));
             }
@@ -135,21 +135,21 @@ async fn copy_journals(
                 .collect::<Vec<_>>();
             let count = values.len() as u64;
             destination_streams
-                .append_batch_if_offset(&stream, next, values)
+                .append_batch_if_offset(stream, next, values)
                 .await?;
             next += count;
         }
         if source_info.base > 0 {
             destination_streams
-                .truncate_before(&stream, source_info.base)
+                .truncate_before(stream, source_info.base)
                 .await?;
         }
         if source_info.is_sealed() && next == source_info.len {
-            destination_streams.seal(&stream).await?;
+            destination_streams.seal(stream).await?;
         }
-        if source_streams.info(&stream).await? != Some(source_info) {
+        if source_streams.info(stream).await? != Some(source_info) {
             return Err(storage_conflict(
-                &stream,
+                stream,
                 "source stream changed during copy",
             ));
         }
