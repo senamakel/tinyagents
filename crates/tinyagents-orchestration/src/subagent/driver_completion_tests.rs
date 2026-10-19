@@ -289,8 +289,10 @@ async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
     };
     let first = make_driver();
     let second = make_driver();
-    let first_request = continuation_request(key.clone(), request("paused-task").run_context().clone()).await;
-    let second_request = continuation_request(key, request("paused-task").run_context().clone()).await;
+    let first_request =
+        continuation_request(key.clone(), request("paused-task").run_context().clone()).await;
+    let second_request =
+        continuation_request(key, request("paused-task").run_context().clone()).await;
 
     let (first_result, second_result) = tokio::join!(
         first.run(first_request, CancellationToken::new()),
