@@ -123,8 +123,10 @@ impl DriverRunLedger {
                 None => merge_agent(None, &upsert, now),
                 Some(found) => {
                     let mut row = found.doc.clone();
-                    let reclaimable = matches!(row.status, AgentRunStatus::Running | AgentRunStatus::Pending)
-                        && row.lease_owner.is_some()
+                    let reclaimable = matches!(
+                        row.status,
+                        AgentRunStatus::Running | AgentRunStatus::Pending
+                    ) && row.lease_owner.is_some()
                         && row.lease_expires_at.is_some_and(|expires| expires <= now);
                     if !reclaimable {
                         row.telemetry = self
@@ -137,9 +139,9 @@ impl DriverRunLedger {
                 }
             };
             let epoch = if previous.is_some() {
-                row.lease_epoch.checked_add(1).ok_or_else(|| {
-                    StorageError::conflict("agent lease epoch exhausted")
-                })?
+                row.lease_epoch
+                    .checked_add(1)
+                    .ok_or_else(|| StorageError::conflict("agent lease epoch exhausted"))?
             } else {
                 1
             };
@@ -396,11 +398,7 @@ impl DriverRunLedger {
     }
 }
 
-fn agent_lease_matches(
-    row: &AgentRun,
-    token: &AgentRunLeaseToken,
-    now: DateTime<Utc>,
-) -> bool {
+fn agent_lease_matches(row: &AgentRun, token: &AgentRunLeaseToken, now: DateTime<Utc>) -> bool {
     row.id == token.run_id
         && row.lease_owner.as_deref() == Some(token.owner.as_str())
         && row.lease_epoch == token.epoch

@@ -12,6 +12,7 @@
 pub mod command_center;
 pub mod drivers;
 pub mod error;
+mod heartbeat;
 pub mod history;
 pub mod port;
 pub mod recovery;
@@ -21,6 +22,7 @@ pub mod types;
 
 pub use drivers::DriverRunLedger;
 pub use error::{LedgerError, LedgerResult};
+pub use heartbeat::AgentRunLeaseHeartbeat;
 pub use history::{
     MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
     SessionStart,
@@ -36,12 +38,13 @@ pub use tool_effects::{
 };
 pub use types::{
     AgentRun, AgentRunKind, AgentRunLeaseClaim, AgentRunLeaseToken, AgentRunListRequest,
-    AgentRunListResponse, AgentRunStatus, AgentRunUpsert, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
-    AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
-    AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
-    CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse,
-    RunTelemetry, RunTelemetryUpsert, RunTransition, WorkflowLeaseClaim, WorkflowRun,
-    WorkflowRunListRequest, WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
+    AgentRunListResponse, AgentRunStatus, AgentRunUpsert, AgentTeam, AgentTeamListRequest,
+    AgentTeamListResponse, AgentTeamMember, AgentTeamMemberRunAdmission, AgentTeamMemberStatus,
+    AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskStatus,
+    AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome, RunEvent,
+    RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry, RunTelemetryUpsert,
+    RunTransition, WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest,
+    WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
 };
 
 #[cfg(test)]

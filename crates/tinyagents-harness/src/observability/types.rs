@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -364,6 +365,50 @@ pub trait HarnessStatusStore: Send + Sync {
     /// empty `Vec`; enumerable backends override it.
     async fn list_active(&self) -> Result<Vec<HarnessRunStatus>> {
         Ok(Vec::new())
+    }
+
+    /// Atomically cancels only active runs whose recorded lease has expired.
+    ///
+    /// Backends that cannot perform a conditional transition safely return an
+    /// empty result. Runs without a known owner and deadline are retained, so
+    /// legacy records cannot be mistaken for dead work in a shared store.
+    async fn reap_expired(&self, _now: SystemTime) -> Result<Vec<HarnessRunStatus>> {
+        Ok(Vec::new())
+    }
+
+    /// Atomically creates a leased active status or takes over an expired one.
+    /// Unknown/unleased active records are busy, preserving legacy ownership.
+    async fn claim_status(
+        &self,
+        _status: HarnessRunStatus,
+        _owner: &str,
+        _now: SystemTime,
+        _expires_at: SystemTime,
+    ) -> Result<Option<HarnessRunStatus>> {
+        Ok(None)
+    }
+
+    /// Renews only a still-live matching owner and epoch.
+    async fn renew_status_lease(
+        &self,
+        _run_id: &str,
+        _owner: &str,
+        _epoch: u64,
+        _now: SystemTime,
+        _expires_at: SystemTime,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Settles a status only while the matching lease remains live.
+    async fn finish_status_lease(
+        &self,
+        _status: HarnessRunStatus,
+        _owner: &str,
+        _epoch: u64,
+        _now: SystemTime,
+    ) -> Result<bool> {
+        Ok(false)
     }
 }
 

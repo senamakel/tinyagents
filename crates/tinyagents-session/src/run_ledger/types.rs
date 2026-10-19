@@ -245,7 +245,10 @@ pub struct AgentRunLeaseToken {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentRunLeaseClaim {
     /// This caller owns the run and may drive it until its lease expires.
-    Acquired { run: AgentRun, token: AgentRunLeaseToken },
+    Acquired {
+        run: AgentRun,
+        token: AgentRunLeaseToken,
+    },
     /// The row exists but its ownership is live or unknown; do not start a second driver.
     Busy(AgentRun),
     /// No row was available to claim.
