@@ -30,6 +30,7 @@ use crate::transcript::TranscriptLocator;
 pub const STORE_DIR: &str = "session_store";
 
 const STORAGE_DIR: &str = "storage";
+#[path = "workspace_migration.rs"]
 mod workspace_migration;
 
 type Cache = Mutex<HashMap<(PathBuf, String), Weak<WorkspaceInner>>>;
