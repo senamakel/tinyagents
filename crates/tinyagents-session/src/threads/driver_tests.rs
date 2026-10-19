@@ -403,9 +403,17 @@ async fn full_text_search_uses_index_without_reading_thread_corpus() {
             expected.insert(thread_id, message);
         }
     }
-    // The first search may backfill old persisted conversations. Measure only
-    // the steady-state query path after that migration has completed.
-    store.backfill_search_index().await.unwrap();
+    // These messages were seeded directly into the existing thread/stream
+    // schema, so there are no derived rows yet. The first ordinary search
+    // must backfill them before serving the query.
+    let mut migrated = store
+        .search_cross_thread_messages("東京", 20, None)
+        .await
+        .unwrap();
+    let mut migration_reference = expected.search("東京", 20, None);
+    normalize(&mut migrated);
+    normalize(&mut migration_reference);
+    assert_eq!(migrated, migration_reference);
 
     let probe = Arc::new(SearchProbe::default());
     store.docs = Arc::new(ProbedDocuments {
@@ -546,6 +554,49 @@ async fn sqlite_reopen_reads_same_committed_profile_fixture() {
         b.get_messages("one").await.unwrap()[0].content,
         "東京 persisted"
     );
+}
+
+#[tokio::test]
+async fn sqlite_full_text_search_matches_scan_for_backfilled_cjk_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(
+        dir.path().join("conversation-search.db"),
+    )
+    .unwrap();
+    let scope = Scope::new("profile").unwrap();
+    let store = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
+    DriverConversationStore::prepare_schema(store.docs.as_ref())
+        .await
+        .unwrap();
+    let mut expected = inverted_index::InvertedIndex::new();
+    for (thread_id, content) in [
+        ("tokyo", "東京tokyo"),
+        ("kyoto", "京都は美しい日本語"),
+        ("mixed", "Café 東京 substring"),
+        ("other", "unrelated note"),
+    ] {
+        seed(&store, thread_id, &[content]).await;
+        for message in store.get_messages(thread_id).await.unwrap() {
+            expected.insert(thread_id, message);
+        }
+    }
+    for query in ["東京", "日", "cafe 東京", "not-found"] {
+        let mut actual = store
+            .search_cross_thread_messages(query, 20, Some("other"))
+            .await
+            .unwrap();
+        let mut reference = expected.search(query, 20, Some("other"));
+        let normalize = |hits: &mut Vec<CrossThreadHit>| {
+            hits.sort_by(|a, b| {
+                a.thread_id
+                    .cmp(&b.thread_id)
+                    .then(a.message_id.cmp(&b.message_id))
+            });
+        };
+        normalize(&mut actual);
+        normalize(&mut reference);
+        assert_eq!(actual, reference, "SQLite parity for {query:?}");
+    }
 }
 
 #[path = "driver_fixtures.rs"]
