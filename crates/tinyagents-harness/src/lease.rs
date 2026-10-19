@@ -23,7 +23,9 @@ pub trait RunLeaseHeartbeat: Send + Sync {
 /// The future is dropped immediately when renewal fails, and the renewal loop
 /// is dropped when the future completes or this function is cancelled. This
 /// covers pending model and tool calls; status/progress writes are not needed
-/// to keep ownership alive.
+/// to keep ownership alive. A renewal operation is bounded by one heartbeat
+/// interval; callers must choose an interval whose two-interval worst case is
+/// shorter than the lease remaining at the start of a renewal.
 pub async fn run_with_lease<F, T>(
     future: F,
     lease: &dyn RunLeaseHeartbeat,
@@ -41,7 +43,12 @@ where
     let heartbeat = async {
         loop {
             tokio::time::sleep(heartbeat_every).await;
-            if !lease.renew().await? {
+            let renewed = tokio::time::timeout(heartbeat_every, lease.renew())
+                .await
+                .map_err(|_| {
+                    TinyAgentsError::Storage("run lease heartbeat timed out".into())
+                })??;
+            if !renewed {
                 return Err(TinyAgentsError::Storage(
                     "run lease ownership was lost".into(),
                 ));

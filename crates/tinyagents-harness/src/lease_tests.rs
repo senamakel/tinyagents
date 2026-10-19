@@ -68,7 +68,9 @@ async fn pending_work_heartbeats_and_stops_when_lease_is_lost() {
     };
     let run = run_with_lease(pending, &lease, Duration::from_secs(10));
     tokio::pin!(run);
-    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(10)).await;
     let result = run.await;
@@ -100,11 +102,52 @@ async fn completed_or_cancelled_wrapper_does_not_leave_a_heartbeat_behind() {
         std::future::pending::<()>().await;
     };
     let mut cancelled = Box::pin(run_with_lease(pending, &lease, Duration::from_secs(5)));
-    entered.notified().await;
+    tokio::select! {
+        _ = entered.notified() => {},
+        result = &mut cancelled => panic!("pending work ended unexpectedly: {result:?}"),
+    }
     drop(cancelled);
     tokio::time::advance(Duration::from_secs(20)).await;
     tokio::task::yield_now().await;
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 0);
+}
+
+struct StalledLease;
+
+#[async_trait]
+impl RunLeaseHeartbeat for StalledLease {
+    async fn renew(&self) -> Result<bool> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn stalled_renewal_is_bounded_and_cancels_in_flight_work() {
+    tokio::time::pause();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let task_entered = Arc::clone(&entered);
+    let dropped = Arc::new(AtomicBool::new(false));
+    struct DropOnCancel(Arc<AtomicBool>);
+    impl Drop for DropOnCancel {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let dropped_by_task = Arc::clone(&dropped);
+    let task = async move {
+        let _guard = DropOnCancel(dropped_by_task);
+        task_entered.notify_one();
+        std::future::pending::<()>().await;
+    };
+    let mut run = Box::pin(run_with_lease(task, &StalledLease, Duration::from_secs(5)));
+    tokio::select! {
+        _ = entered.notified() => {},
+        result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+    assert!(run.await.is_err());
+    assert!(dropped.load(Ordering::SeqCst));
 }
 
 #[tokio::test]
