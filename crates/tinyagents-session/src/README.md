@@ -67,9 +67,11 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Workspace convenience** — `WorkspaceStores::from_backend` binds the same
   driver stores to a host-supplied backend. The deprecated `WorkspaceStores::open`
   opens `<workspace>/storage/`, imports the former private
-  `<workspace>/session_store/` records without modifying that source, and then
-  imports classic `session_raw/` transcripts once. The private-store copy is
-  limited to session collections, session-owned KV and migration records, and
+  `<workspace>/session_store/` records without changing its database contents
+  or schema, and then imports classic `session_raw/` transcripts once. SQLite
+  may create or update WAL/SHM coordination files for the read-only source, and
+  they can remain after close. The private-store copy is limited to session
+  collections, session-owned KV and migration records, and
   `harness.journal/` streams. Existing destination documents must match their
   source; a journal can resume only when its ordered copied prefix matches.
   A completion marker is written after every family succeeds, so later opens
