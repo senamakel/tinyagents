@@ -1,7 +1,7 @@
 //! Durable full-text candidates and safe one-time backfill for conversations.
 
 use super::*;
-use crate::threads::inverted_index::{MIN_TERM_BYTES, query_terms};
+use crate::threads::inverted_index::query_terms;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
@@ -125,17 +125,6 @@ fn write_op(thread_id: &str, incarnation: &str, offset: u64, message: &ThreadMes
 }
 
 impl DriverConversationStore {
-    pub(super) fn specs_for_capabilities(&self, mut specs: Vec<CollectionSpec>) -> Vec<CollectionSpec> {
-        if !self.docs.capabilities().contains(Capability::FullText) {
-            for spec in &mut specs {
-                if spec.name == SEARCH_COLLECTION {
-                    *spec = collection_spec();
-                }
-            }
-        }
-        specs
-    }
-
     pub(super) async fn prepare_search_schema(documents: &dyn DocumentStore) -> Result<(), StorageError> {
         let spec = if documents.capabilities().contains(Capability::FullText) {
             full_text_spec()
@@ -256,11 +245,9 @@ impl DriverConversationStore {
                 current
             };
             let Some(live) = live else {
-                self.remove_search_incarnation(&entry.thread_id, &entry.incarnation).await;
                 continue;
             };
             if entry.incarnation != live.incarnation || entry.offset >= live.visible_end {
-                self.remove_search_incarnation(&entry.thread_id, &entry.incarnation).await;
                 continue;
             }
             index.insert(&entry.thread_id, entry.into_message());
@@ -282,6 +269,3 @@ pub(super) fn full_text_collection_spec() -> CollectionSpec {
     full_text_spec()
 }
 
-pub(super) fn candidate_query_has_terms(query: &str) -> bool {
-    !query_terms(query).is_empty() && query_terms(query).iter().any(|term| term.len() >= MIN_TERM_BYTES)
-}

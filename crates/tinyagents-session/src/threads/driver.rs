@@ -24,7 +24,7 @@ mod append;
 mod pending;
 mod reader;
 mod rewrite;
-mod search;
+pub(super) mod search;
 
 const PAGE_SIZE: usize = 64;
 /// Attempts of the loops that reconcile more than one document or stream.

@@ -232,7 +232,8 @@ impl DriverConversationStore {
             current.doc.visible_end = offset
                 .checked_add(1)
                 .ok_or_else(|| StorageError::invalid_input("conversation prefix overflow"))?;
-            current.doc.thread.last_message_at = intent.message()?.created_at;
+            let message = intent.message()?;
+            current.doc.thread.last_message_at = message.created_at.clone();
             let body = serde_json::to_value(current.doc.to_dto()?).map_err(|error| {
                 StorageError::serialization("encode committed conversation metadata")
                     .with_source(error)
@@ -241,7 +242,7 @@ impl DriverConversationStore {
                 Self::check(COLLECTION, &current.id, current.version),
                 Self::check(APPENDS, &pending.id, pending.version),
             ];
-            let writes = vec![
+            let mut writes = vec![
                 WriteOp::Put {
                     collection: COLLECTION.into(),
                     id: current.id.clone(),
@@ -254,6 +255,14 @@ impl DriverConversationStore {
                     precondition: pending.unchanged(),
                 },
             ];
+            if self.docs.capabilities().contains(Capability::FullText) {
+                writes.push(super::search::append_write_op(
+                    &intent.thread_id,
+                    &intent.incarnation,
+                    offset,
+                    &message,
+                )?);
+            }
             match self.docs.atomic_batch_checked(checks, writes).await {
                 Ok(_) => return intent.message(),
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
