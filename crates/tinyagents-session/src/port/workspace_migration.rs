@@ -1,6 +1,8 @@
 //! Resumable copy from the former private workspace database.
 
-use tinystoragedrivers_core::{CollectionSpec, DocumentStoreExt, Precondition, Query};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStoreExt, Filter, Migrations, Precondition, Query,
+};
 
 use super::DriverSessionStores;
 
@@ -13,6 +15,8 @@ const OWNED_COLLECTIONS: [&str; 5] = [
 ];
 const JOURNAL_PREFIX: &str = "harness.journal/";
 const STREAM_BATCH: usize = 256;
+const IMPORT_OWNER: &str = "tinyagents_session_workspace";
+const IMPORT_STEP: &str = "private_sqlite_v1";
 
 /// Copies only session-owned records through the storage ports. Documents
 /// enter only when absent; an existing document must match its source or the
@@ -26,8 +30,17 @@ pub(super) fn copy_agent_storage(
     let (source_scope, _) = source.scoped_for(agent_id)?;
     let (destination_scope, _) = destination.scoped_for(agent_id)?;
     source.bridge().run(async move {
+        destination_scope
+            .documents()
+            .ensure_collection(&CollectionSpec::new("tsd.migrations"))
+            .await?;
+        let migrations = Migrations::new(&destination_scope);
+        if migrations.done(IMPORT_OWNER, IMPORT_STEP).await? {
+            return Ok(());
+        }
         copy_documents(&source_scope, &destination_scope).await?;
-        copy_journals(&source_scope, &destination_scope).await
+        copy_journals(&source_scope, &destination_scope).await?;
+        migrations.mark_done(IMPORT_OWNER, IMPORT_STEP).await
     })??;
     Ok(())
 }
@@ -42,10 +55,13 @@ async fn copy_documents(
         destination_documents
             .ensure_collection(&CollectionSpec::new(collection))
             .await?;
-        for row in source_documents
-            .query_all(collection, &Query::all())
-            .await?
-        {
+        let query = match collection {
+            "tsd.kv" | "tsd.migrations" => {
+                Query::filter(Filter::eq("owner", "session"))
+            }
+            _ => Query::all(),
+        };
+        for row in source_documents.query_all(collection, &query).await? {
             match destination_documents.get(collection, &row.id).await? {
                 Some(existing) if existing.doc != row.doc => {
                     return Err(tinystoragedrivers_core::StorageError::backend(format!(
@@ -103,10 +119,15 @@ async fn copy_journals(
             next += count as u64;
         }
         while next < source_info.len {
+            let count = (source_info.len - next).min(STREAM_BATCH as u64) as usize;
             let entries = source_streams
-                .read_window(&stream, next, STREAM_BATCH)
+                .read_window(&stream, next, count)
                 .await?;
-            if entries.is_empty() {
+            if entries.len() != count
+                || entries.iter().enumerate().any(|(index, entry)| {
+                    entry.offset != next + index as u64
+                })
+            {
                 return Err(storage_conflict(
                     &stream,
                     "source stream changed during copy",
@@ -142,22 +163,56 @@ async fn verify_copied_prefix(
     destination_len: u64,
     source_len: u64,
 ) -> Result<(), tinystoragedrivers_core::StorageError> {
+    if destination_len > 0 && source_base > 0 {
+        let placeholder_end = destination_len.min(source_base);
+        let mut offset = 0;
+        while offset < placeholder_end {
+            let count = (placeholder_end - offset).min(STREAM_BATCH as u64) as usize;
+            let placeholders = destination.read_window(stream, offset, count).await?;
+            if placeholders.len() != count
+                || placeholders.iter().enumerate().any(|(index, entry)| {
+                    entry.offset != offset + index as u64 || !entry.value.is_null()
+                })
+            {
+                return Err(storage_conflict(stream, "destination prefix differs"));
+            }
+            offset += count as u64;
+        }
+    }
     if destination_len > source_base {
         let overlap_end = destination_len.min(source_len);
-        let count = (overlap_end - source_base) as usize;
-        let old = source.read_window(stream, source_base, count).await?;
-        let copied = destination.read_window(stream, source_base, count).await?;
-        if old != copied {
-            return Err(storage_conflict(stream, "destination prefix differs"));
+        let mut offset = source_base;
+        while offset < overlap_end {
+            let count = (overlap_end - offset).min(STREAM_BATCH as u64) as usize;
+            let old = source.read_window(stream, offset, count).await?;
+            let copied = destination.read_window(stream, offset, count).await?;
+            if old.len() != count
+                || copied.len() != count
+                || old.iter().enumerate().any(|(index, entry)| {
+                    entry.offset != offset + index as u64
+                })
+                || copied.iter().enumerate().any(|(index, entry)| {
+                    entry.offset != offset + index as u64
+                })
+                || old != copied
+            {
+                return Err(storage_conflict(stream, "destination prefix differs"));
+            }
+            offset += count as u64;
         }
-    } else if destination_len > 0 {
-        let placeholders = destination
-            .read_window(stream, 0, destination_len as usize)
-            .await?;
-        if placeholders.len() != destination_len as usize
-            || placeholders.iter().any(|entry| !entry.value.is_null())
-        {
-            return Err(storage_conflict(stream, "destination prefix differs"));
+    } else if destination_len > 0 && source_base == 0 {
+        let mut offset = 0;
+        while offset < destination_len {
+            let count = (destination_len - offset).min(STREAM_BATCH as u64) as usize;
+            let placeholders = destination.read_window(stream, offset, count).await?;
+            if placeholders.len() != count
+                || placeholders.iter().enumerate().any(|(index, entry)| {
+                    entry.offset != offset + index as u64 || !entry.value.is_null()
+                })
+            {
+                return Err(storage_conflict(stream, "destination prefix differs"));
+            }
+            offset += count as u64;
         }
     }
     Ok(())

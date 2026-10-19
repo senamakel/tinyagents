@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
+use tinyagents_harness::store::SchemaAdmission;
 use tinystoragedrivers_core::{Scope, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
@@ -111,9 +112,14 @@ impl WorkspaceStores {
         )?);
         let legacy_db = workspace_dir.join(STORE_DIR).join("storage.db");
         if legacy_db.is_file() {
-            let legacy_backend: Arc<dyn StorageBackend> =
-                Arc::new(SqliteStorage::open(workspace_dir.join(STORE_DIR))?);
-            let legacy_provider = DriverSessionStores::new(legacy_backend, Scope::local())?;
+            let legacy_backend: Arc<dyn StorageBackend> = Arc::new(
+                SqliteStorage::open_existing_read_only(workspace_dir.join(STORE_DIR))?,
+            );
+            let legacy_provider = DriverSessionStores::new_with_schema_admission(
+                legacy_backend,
+                Scope::local(),
+                SchemaAdmission::ValidateOnly,
+            )?;
             legacy_provider.try_for_agent(agent_id)?;
             provider.try_for_agent(agent_id)?;
             workspace_migration::copy_agent_storage(&legacy_provider, &provider, agent_id)?;
