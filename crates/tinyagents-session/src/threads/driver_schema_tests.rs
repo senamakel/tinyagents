@@ -186,7 +186,10 @@ async fn native_required_feature_validation_accepts_compatible_superset_declarat
     assert!(store.get_thread("missing").await.unwrap().is_none());
     assert_eq!(
         DriverConversationStore::collection_specs(),
-        vec![CollectionSpec::new(COLLECTION)]
+        vec![
+            CollectionSpec::new(COLLECTION),
+            super::search::collection_spec(),
+        ]
     );
 }
 

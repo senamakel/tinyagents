@@ -1,11 +1,12 @@
 //! What the conversation store keeps, for the host's `Registry::compose`:
 //! [`conversations_storage_schema`] (owner `conversations`, scope class Tenant).
 //!
-//! | v1 | v2 |
+//! | Legacy | Current |
 //! |---|---|
 //! | `conversation_threads_v1` (id: hex SHA-256 of the thread id; `{schema, incarnation, deleted, visible_end, thread: {camelCase}}`) | `conversations.threads`, id `Key::of([thread_id])`, flat snake_case body with `created_ms` / `last_message_ms`; no `schema` field (the record's `_schema`), no stored count (`visible_end`) |
 //! | `conversation_appends_v1` (id `<sha>:<incarnation>`; every field a string, `record` a JSON string) | `conversations.appends`, id `Key::of([thread_id, incarnation])`, `offset` a number, `record` an object |
 //! | stream `conversation_messages_v1:<sha>:<incarnation>` (`{schema, incarnation, message: {camelCase}}`) | stream `conversations.messages/<thread>/<incarnation>`, entries `{id, content, message_type, extra_metadata, sender, created_ms}` |
+//! | existing visible message prefixes | derived rows in `conversations.search`, backfilled once before indexed search |
 //!
 //! The conversation store is shared by a tenant's agents, so every item has
 //! scope class Tenant. A host binds it to the tenant scope.
@@ -47,7 +48,7 @@ pub(super) const APPENDS: &str = "conversations.appends";
 /// The per-incarnation message stream family: `conversations.messages/<thread>/<incarnation>`.
 pub(super) const MESSAGES: &str = "conversations.messages";
 
-/// The thread collection's declaration (no secondary indexes).
+/// The thread collection's declaration.
 pub(super) fn thread_spec() -> CollectionSpec {
     CollectionSpec::new(THREADS)
 }
@@ -74,6 +75,11 @@ pub fn conversations_storage_schema() -> Schema {
     let owner = Owner::new(OWNER).expect("`conversations` is a valid owner");
     let mut schema = Schema::new(owner)
         .collection_with(SCHEMA_VERSION, thread_spec(), ScopeClass::Tenant)
+        .collection_with(
+            super::driver::search::spec_version(),
+            super::driver::search::collection_spec(),
+            ScopeClass::Tenant,
+        )
         .collection_with(SCHEMA_VERSION, append_spec(), ScopeClass::Tenant)
         .stream(MESSAGES, ScopeClass::Tenant);
     for step in schema_steps::steps() {

@@ -132,6 +132,7 @@ fn the_schema_names_what_the_conversations_owner_declares() {
         [
             "conversations.appends",
             "conversations.messages",
+            "conversations.search",
             "conversations.threads"
         ]
     );
