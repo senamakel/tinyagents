@@ -76,3 +76,62 @@ async fn differing_journal_history_refuses_import_without_overwriting_target() {
         serde_json::json!({"value": "newer"})
     );
 }
+
+#[tokio::test]
+async fn truncated_journal_with_matching_base_resumes_without_recreating_prefix() {
+    use tinystoragedrivers_core::StreamStore;
+
+    let source = provider();
+    let destination = provider();
+    let (source_scope, _) = source.scoped_for("agent").unwrap();
+    let (destination_scope, _) = destination.scoped_for("agent").unwrap();
+    let stream = "harness.journal/run";
+    for value in ["one", "two", "three", "four"] {
+        source_scope
+            .streams()
+            .append(stream, serde_json::json!({"value": value}))
+            .await
+            .unwrap();
+    }
+    source_scope
+        .streams()
+        .truncate_before(stream, 2)
+        .await
+        .unwrap();
+    for value in ["one", "two", "three"] {
+        destination_scope
+            .streams()
+            .append(stream, serde_json::json!({"value": value}))
+            .await
+            .unwrap();
+    }
+    destination_scope
+        .streams()
+        .truncate_before(stream, 2)
+        .await
+        .unwrap();
+
+    workspace_migration::copy_agent_storage(&source, &destination, "agent").unwrap();
+    let info = destination_scope
+        .streams()
+        .info(stream)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(info.base, 2);
+    assert_eq!(info.len, 4);
+    assert_eq!(
+        destination_scope
+            .streams()
+            .read_window(stream, 2, 2)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.value)
+            .collect::<Vec<_>>(),
+        [
+            serde_json::json!({"value": "three"}),
+            serde_json::json!({"value": "four"}),
+        ]
+    );
+}

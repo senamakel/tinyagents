@@ -117,6 +117,7 @@ async fn copy_journals(
                 destination_streams.as_ref(),
                 stream,
                 source_info.base,
+                found.base,
                 next,
                 source_info.len,
             )
@@ -185,10 +186,11 @@ async fn verify_copied_prefix(
     destination: &dyn tinystoragedrivers_core::StreamStore,
     stream: &str,
     source_base: u64,
+    destination_base: u64,
     destination_len: u64,
     source_len: u64,
 ) -> Result<(), tinystoragedrivers_core::StorageError> {
-    if destination_len > 0 && source_base > 0 {
+    if destination_len > 0 && source_base > 0 && destination_base == 0 {
         let placeholder_end = destination_len.min(source_base);
         let mut offset = 0;
         while offset < placeholder_end {
