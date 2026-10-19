@@ -2,7 +2,24 @@ use super::*;
 use crate::run_ledger::LedgerError;
 use chrono::Duration;
 use serde_json::json;
-use tinystoragedrivers_core::{ErrorKind, MemoryStorage, StorageBackend};
+use std::sync::Arc;
+use tinystoragedrivers_core::{
+    DocumentStoreExt, ErrorKind, MemoryStorage, Query, Scope, ScopedStorage, StorageBackend,
+    Versioned,
+};
+
+async fn collection_snapshot(
+    storage: &ScopedStorage,
+    collection: &str,
+) -> Vec<Versioned<serde_json::Value>> {
+    let mut rows = storage
+        .documents()
+        .query_all(collection, &Query::default())
+        .await
+        .unwrap();
+    rows.sort_by(|left, right| left.id.cmp(&right.id));
+    rows
+}
 
 /// Explicit handles share a backend while retaining separate tenant namespaces.
 pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
@@ -19,6 +36,259 @@ pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
                 .unwrap(),
         ),
     )
+}
+
+#[tokio::test]
+async fn file_workflow_records_round_trip_and_stay_in_their_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    let a = DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-a").unwrap())
+            .unwrap(),
+    );
+    let b = DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-b").unwrap())
+            .unwrap(),
+    );
+
+    let written = a.upsert_workflow_run(workflow("workflow")).await.unwrap();
+    assert_eq!(a.get_workflow_run("workflow").await.unwrap(), Some(written));
+    assert!(b.get_workflow_run("workflow").await.unwrap().is_none());
+    assert_eq!(
+        a.list_workflow_runs(&WorkflowRunListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        1
+    );
+    assert_eq!(
+        b.list_workflow_runs(&WorkflowRunListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        0
+    );
+}
+
+/// FileStorage supports atomic lease primitives even though its document store
+/// cannot execute validated multi-document batches. Exercise the complete
+/// workflow lease path, including a race and a revision-fenced transition.
+#[tokio::test]
+async fn file_workflow_lease_race_and_revision_fencing() {
+    use crate::run_ledger::WorkflowLeaseClaim;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    let ledger = Arc::new(DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-a").unwrap())
+            .unwrap(),
+    ));
+    let created = ledger
+        .upsert_workflow_run(workflow("leased"))
+        .await
+        .unwrap();
+
+    let start = Arc::new(tokio::sync::Barrier::new(3));
+    let mut claimers = tokio::task::JoinSet::new();
+    for owner in ["first", "second", "third"] {
+        let ledger = ledger.clone();
+        let start = start.clone();
+        claimers.spawn(async move {
+            start.wait().await;
+            ledger
+                .try_claim_workflow_run("leased", owner, Duration::minutes(1))
+                .await
+                .unwrap()
+        });
+    }
+    let mut acquired = Vec::new();
+    let mut busy = Vec::new();
+    while let Some(result) = claimers.join_next().await {
+        match result.unwrap() {
+            WorkflowLeaseClaim::Acquired(run) => acquired.push(run),
+            WorkflowLeaseClaim::Busy(run) => busy.push(run),
+            WorkflowLeaseClaim::Missing => panic!("the seeded workflow remains present"),
+        }
+    }
+    assert_eq!(acquired.len(), 1, "one live workflow lease owner wins");
+    assert_eq!(busy.len(), 2, "every losing live claimant reports Busy");
+    let owner = acquired[0].lease_owner.as_deref().unwrap();
+    assert!(
+        busy.iter()
+            .all(|run| run.lease_owner.as_deref() == Some(owner))
+    );
+    assert!(
+        ledger
+            .renew_workflow_run_lease("leased", owner, Duration::minutes(1))
+            .await
+            .unwrap()
+    );
+
+    let current = ledger.get_workflow_run("leased").await.unwrap().unwrap();
+    let mut transition = workflow("leased");
+    transition.summary = Some("committed by lease owner".into());
+    let committed = ledger
+        .compare_and_swap_workflow_run(
+            transition.clone(),
+            current.revision,
+            owner,
+            Duration::minutes(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        committed.summary.as_deref(),
+        Some("committed by lease owner")
+    );
+    assert!(
+        ledger
+            .compare_and_swap_workflow_run(
+                transition,
+                current.revision,
+                owner,
+                Duration::minutes(1)
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "a stale revision cannot overwrite the committed workflow"
+    );
+
+    let not_owner = if owner == "first" { "second" } else { "first" };
+    assert!(
+        !ledger
+            .renew_workflow_run_lease("leased", not_owner, Duration::minutes(1))
+            .await
+            .unwrap()
+    );
+    assert_eq!(created.id, committed.id);
+}
+
+/// Unsupported validated-batch operations must fail before changing any rows.
+/// This pins FileStorage's capability boundary while still exercising the
+/// single-record telemetry path that agents depend on.
+#[tokio::test]
+async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
+    use crate::run_ledger::RunEventAppend;
+    use tinystoragedrivers_core::Capability;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    let storage = backend
+        .for_scope(&Scope::new("profile-a").unwrap())
+        .unwrap();
+    let ledger = DriverRunLedger::new(storage.clone());
+    let telemetry = ledger
+        .upsert_run_telemetry(RunTelemetryUpsert {
+            run_id: "atomic-agent".into(),
+            input_tokens: Some(17),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(telemetry.input_tokens, 17);
+
+    let agents_before = collection_snapshot(&storage, "ledger.agent_runs").await;
+    let telemetry_before = collection_snapshot(&storage, "ledger.telemetry").await;
+    let error = ledger
+        .upsert_agent_run(crate::run_ledger::AgentRunUpsert {
+            id: "atomic-agent".into(),
+            kind: crate::run_ledger::AgentRunKind::Subagent,
+            parent_run_id: None,
+            parent_thread_id: None,
+            agent_id: None,
+            status: crate::run_ledger::AgentRunStatus::Running,
+            prompt_ref: None,
+            worker_thread_id: None,
+            checkpoint_path: None,
+            checkpoint: None,
+            summary: None,
+            error: None,
+            metadata: json!({}),
+            started_at: None,
+            completed_at: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.agent_runs").await,
+        agents_before,
+        "failed atomic agent upsert leaves every agent record unchanged"
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.telemetry").await,
+        telemetry_before,
+        "failed atomic agent upsert leaves every telemetry record unchanged"
+    );
+
+    let event_heads_before = collection_snapshot(&storage, "ledger.event_heads").await;
+    let events_before = collection_snapshot(&storage, "ledger.event_outbox").await;
+    let error = ledger
+        .append_run_event(RunEventAppend {
+            run_id: "atomic-agent".into(),
+            event_type: "created".into(),
+            payload: json!({}),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.event_heads").await,
+        event_heads_before,
+        "failed event append leaves every event head unchanged"
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.event_outbox").await,
+        events_before,
+        "failed event append leaves every event record unchanged"
+    );
+
+    ledger
+        .upsert_agent_team_task(crate::run_ledger::AgentTeamTaskUpsert {
+            id: "atomic-task".into(),
+            team_id: "atomic-team".into(),
+            title: "must remain unclaimed".into(),
+            objective: None,
+            status: crate::run_ledger::AgentTeamTaskStatus::Todo,
+            owner_member_id: None,
+            depends_on: vec![],
+            gate_status: None,
+            gate_reason: None,
+            evidence: vec![],
+            source_run_id: None,
+            order_index: 0,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    let tasks_before = collection_snapshot(&storage, "ledger.tasks").await;
+    let members_before = collection_snapshot(&storage, "ledger.members").await;
+    let error = ledger
+        .claim_agent_team_task("atomic-team", "atomic-task", "member", "token")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.tasks").await,
+        tasks_before,
+        "failed atomic claim leaves every task record unchanged"
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.members").await,
+        members_before,
+        "failed atomic claim leaves every member record unchanged"
+    );
 }
 
 /// A known workflow input whose first SQL revision is zero.
@@ -653,7 +923,7 @@ async fn scoped_tool_effects_preserve_restarts_settle_and_unresolved_filter() {
 /// Team and history operations that need atomic batches write only through them: a refused
 /// batch (here: an unavailable dependency check) leaves every scoped record untouched.
 #[tokio::test]
-async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() {
+async fn scoped_ledger_collections_start_empty() {
     let (ledger, _) = ledgers();
     let before = ledger
         .upsert_workflow_run(workflow("workflow"))
@@ -680,8 +950,6 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
             .unwrap()
             .is_none()
     );
-    ledger.entry_import_legacy("session", &[]).await.unwrap();
-    ledger.entry_rebuild_index("session").await.unwrap();
     assert_eq!(ledger.apply_retention(now()).await.unwrap().total(), 0);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),

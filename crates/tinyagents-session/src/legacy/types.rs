@@ -5,6 +5,8 @@ use super::transcripts::TranscriptImportReport;
 /// How a one-time import ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OnceOutcome {
+    /// No workspace path was supplied, so no file import was attempted.
+    NotAttempted,
     /// A marker from an earlier launch says the import already ran.
     AlreadyImported,
     /// This pass ran. `marked` is false when some file did not parse, so the

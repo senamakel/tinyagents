@@ -41,8 +41,17 @@ impl DriverConversationStore {
                 let _ = self.streams.delete_stream(&stream).await;
                 return Err(error);
             }
+            if let Err(error) = self
+                .index_rewritten_messages(thread_id, &incarnation, &next)
+                .await
+            {
+                let _ = self.streams.delete_stream(&stream).await;
+                self.remove_search_incarnation(thread_id, &incarnation)
+                    .await;
+                return Err(error);
+            }
             let mut doc = row.doc.clone();
-            doc.incarnation = incarnation;
+            doc.incarnation = incarnation.clone();
             doc.visible_end = next.len() as u64;
             doc.messages_key = None;
             doc.thread.message_count = next.len();
@@ -70,6 +79,8 @@ impl DriverConversationStore {
                 }
                 Err(error) => {
                     let _ = self.streams.delete_stream(&stream).await;
+                    self.remove_search_incarnation(thread_id, &incarnation)
+                        .await;
                     if error.kind() == ErrorKind::Conflict {
                         continue;
                     }
@@ -98,6 +109,8 @@ impl DriverConversationStore {
     /// Drop a retired incarnation's stream and append intent. Failures leave
     /// unreachable garbage only, so they are logged and not surfaced.
     async fn retire(&self, thread: &ThreadDoc) {
+        self.remove_search_incarnation(&thread.thread.id, &thread.incarnation)
+            .await;
         match thread.stream() {
             Ok(stream) => {
                 if let Err(error) = self.streams.delete_stream(&stream).await {
@@ -183,7 +196,12 @@ impl DriverConversationStore {
             // the head until the collection is empty.
             match page.next {
                 Some(_) => query = Query::filter(Filter::All).limit(PAGE_SIZE),
-                None => return Ok(stats),
+                None => {
+                    self.docs
+                        .delete_where(super::search::SEARCH_COLLECTION, &Filter::All)
+                        .await?;
+                    return Ok(stats);
+                }
             }
         }
     }

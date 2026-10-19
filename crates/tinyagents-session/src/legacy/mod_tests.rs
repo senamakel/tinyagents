@@ -74,14 +74,7 @@ fn populate(db: &Connection) {
                  'pending', NULL, '[\"pr#1\"]', NULL, 2, '{T0}', '{T1}');
          INSERT INTO tool_effects (run_id, call_id, tool, status, idempotency_key, effect_summary,
                                    started_at, settled_at)
-         VALUES ('run-1', 'call-1', 'send_email', 'started', 'idem-1', 'to bob', '{T0}', NULL);
-         INSERT INTO entry_tree_entries (session_id, id, parent_id, ordinal, kind, payload_json, ts)
-         VALUES ('s-root', 's-root:0', NULL, 0, 'custom',
-                 '{{\"type\":\"custom\",\"kind\":\"note\",\"payload\":{{\"a\":1}}}}', '{T0}'),
-                ('s-root', 's-root:1', 's-root:0', 1, 'label',
-                 '{{\"type\":\"label\",\"name\":\"keep\"}}', '{T1}');
-         INSERT INTO entry_tree_labels (session_id, name, entry_id)
-         VALUES ('s-root', 'keep', 's-root:1');"
+         VALUES ('run-1', 'call-1', 'send_email', 'started', 'idem-1', 'to bob', '{T0}', NULL);"
     ))
     .expect("populate classic database");
 }
@@ -90,6 +83,18 @@ fn classic(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("sessions.db");
     classic_database(&path, 7, populate);
     path
+}
+
+/// Adds retired entry-table names with sentinel rows to an existing classic database.
+fn add_retired_tables(path: &Path) {
+    let entries = ["entry", "_tree", "_entries"].concat();
+    let labels = ["entry", "_tree", "_labels"].concat();
+    let sql = format!(
+        "CREATE TABLE {entries} (id TEXT); CREATE TABLE {labels} (id TEXT); \
+         INSERT INTO {entries} VALUES ('kept-entry'); \
+         INSERT INTO {labels} VALUES ('kept-label');"
+    );
+    Connection::open(path).unwrap().execute_batch(&sql).unwrap();
 }
 
 fn directory_bytes(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
@@ -135,7 +140,6 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     assert_eq!(report.members.imported, 1);
     assert_eq!(report.tasks.imported, 1);
     assert_eq!(report.tool_effects.imported, 1);
-    assert_eq!(report.entries.imported, 2);
     // 2 sessions + 3 messages + 2 tool calls.
     assert_eq!(report.fts_rows, 7);
 
@@ -252,13 +256,38 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     let unresolved = ledger.list_unresolved_tool_effects("run-1").await.unwrap();
     assert_eq!(unresolved.len(), 1);
     assert_eq!(unresolved[0].idempotency_key.as_deref(), Some("idem-1"));
+}
 
-    // The entry tree keeps ids, ordinals and labels.
-    let head = ledger.entry_head("s-root").await.unwrap();
-    assert_eq!(head.map(|id| id.0), Some("s-root:1".to_string()));
-    let branches = ledger.entry_branches("s-root").await.unwrap();
-    assert_eq!(branches.len(), 1);
-    assert_eq!(branches[0].name, "keep");
+/// Importing a classic database leaves rows in retired tables untouched.
+#[tokio::test]
+async fn importing_a_store_with_retired_tables_leaves_them_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = classic(dir.path());
+    add_retired_tables(&path);
+    let backend = MemoryStorage::new();
+    let ledger = ledger_on(&backend, "agent");
+
+    let report = ledger
+        .import_legacy_database(&source_for(&path, &ledger))
+        .await
+        .unwrap();
+
+    assert_eq!(report.sessions.imported, 2);
+    let db = Connection::open(&path).unwrap();
+    let entries = ["entry", "_tree", "_entries"].concat();
+    let labels = ["entry", "_tree", "_labels"].concat();
+    assert_eq!(
+        db.query_row(&format!("SELECT id FROM {entries}"), [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "kept-entry"
+    );
+    assert_eq!(
+        db.query_row(&format!("SELECT id FROM {labels}"), [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "kept-label"
+    );
 }
 
 #[tokio::test]
@@ -308,7 +337,6 @@ async fn a_second_run_changes_nothing_and_never_overwrites_edits() {
         again.members,
         again.tasks,
         again.tool_effects,
-        again.entries,
     ] {
         assert_eq!(counts.imported, 0, "{counts:?}");
         assert_eq!(counts.already_present, counts.read);
@@ -360,7 +388,7 @@ async fn an_interrupted_pass_is_finished_by_running_again() {
 async fn an_old_schema_without_later_columns_imports_with_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
-    // Version 2: no reasoning_content, no workflow leases, no entry tree, no effects.
+    // Version 2: no reasoning_content, workflow leases or tool effects.
     classic_database(&path, 2, |db| {
         db.execute_batch(&format!(
             "INSERT INTO sessions (id, agent_definition_id, agent_definition_name, session_key,
@@ -381,7 +409,6 @@ async fn an_old_schema_without_later_columns_imports_with_defaults() {
         .unwrap();
     assert_eq!(report.messages.imported, 1);
     assert_eq!(report.workflow_runs.imported, 1);
-    assert_eq!(report.entries.read, 0);
     let message = &ledger.list_messages("old", None).await.unwrap()[0];
     assert_eq!(message.reasoning_content, None);
     let workflow = ledger.get_workflow_run("wf").await.unwrap().unwrap();

@@ -870,10 +870,11 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
-    /// Attaches a durable [`crate::summarization::CompactionSink`] so every
-    /// [`crate::summarization::CompactionRecord`] a compaction produces on
-    /// this run is persisted (typically into a session's entry tree),
-    /// instead of only living in
+    /// Attaches a durable [`crate::summarization::CompactionSink`] for
+    /// [`crate::summarization::CompactionRecord`]s produced by compactions with
+    /// a trusted live boundary. Compactions without such a boundary are not
+    /// persisted. Eligible records are sent to the host-provided store instead
+    /// of only living in
     /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
     /// in-process buffer. `None` (the default) disables persistence.
     #[must_use]

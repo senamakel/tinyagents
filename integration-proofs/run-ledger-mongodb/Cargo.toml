@@ -27,14 +27,21 @@ serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
-tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", optional = true }
-tinystoragedrivers-mongodb = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", optional = true }
+tinystoragedrivers-core = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442", optional = true }
+tinystoragedrivers-mongodb = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442", optional = true }
 tinyagents-session = { path = "../../crates/tinyagents-session", features = ["storage-drivers"], optional = true }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", optional = true }
 
 [patch."https://github.com/tinyhumansai/tinytools"]
 tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools" }
+
+[patch."https://github.com/tinyhumansai/tinystoragedrivers"]
+tinystoragedrivers-core = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-file = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-mongodb = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-secrets = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-sqlite = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
 
 [lints.rust]
 unsafe_code = "deny"

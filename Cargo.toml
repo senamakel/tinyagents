@@ -34,11 +34,12 @@ tempfile = "3"
 rustix = { version = "1.1", features = ["fs"] }
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
-# Storage ports from tinystoragedrivers, taken by git tag: the same source every
-# module (tinyflows, tinybox, tinychannels, ...) and tinyinference names, so a
-# host's graph holds one set of port types with no [patch] to reconcile them.
-tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-sqlite = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+# Storage ports from one TinyStorageDrivers source for every adapter and port
+# type. Pin the merged fork-epic revision that adds read-only SQLite opening;
+# the public v1.0.0 tag does not contain that API yet.
+tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-file = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-sqlite = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]
@@ -60,4 +61,13 @@ strip = "debuginfo"
 [patch."https://github.com/tinyhumansai/tinytools"]
 tinytools-agent = { path = "vendor/tinytools/crates/tinytools-agent" }
 tinytools = { path = "vendor/tinytools/crates/tinytools" }
+
+# tinyinference still names the canonical TSD source. Redirect those requests
+# to the same merged fork revision as the session crate so storage port types
+# are not duplicated in this workspace.
+[patch."https://github.com/tinyhumansai/tinystoragedrivers"]
+tinystoragedrivers-core = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-file = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-secrets = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
+tinystoragedrivers-sqlite = { git = "https://github.com/senamakel/tinystoragedrivers", rev = "d507a31d5b08cb61f08636a6886fd5dbc18b9442" }
 

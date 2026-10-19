@@ -606,8 +606,8 @@ pub struct RunContext<Ctx = ()> {
     /// [`RunContext::with_compaction_sink`]; a child context inherits its
     /// parent's sink, matching how `stores`/`events`/`tool_effect_ledger`
     /// propagate. `tinyagents-harness` cannot depend on
-    /// `tinyagents-session` (the dependency runs the other way), so this is
-    /// a trait object rather than a concrete `Arc<EntryTree>` — see
+    /// `tinyagents-session` (the dependency runs the other way), so persistence
+    /// remains a host-provided trait object — see
     /// [`crate::summarization::CompactionSink`]'s docs.
     pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
 }

@@ -1,8 +1,8 @@
 //! Import of a classic `sessions.db` into the ledger's document collections.
 //!
 //! Read-only, id-preserving and only-if-absent: every row keeps the id it had
-//! (session ids, dense message and tool-call ids, event sequences, entry ids
-//! and ordinals), a record already present in the target is never overwritten
+//! (session ids, dense message and tool-call ids and event sequences), a
+//! record already present in the target is never overwritten
 //! (so an edit made after an earlier import survives a re-run), and the source
 //! file is never written. The import is not one transaction; it is idempotent,
 //! so a pass that stops partway is finished by running it again. Once every
@@ -69,8 +69,6 @@ pub struct LegacyDatabaseReport {
     pub tasks: ImportCounts,
     /// `tool_effects` rows.
     pub tool_effects: ImportCounts,
-    /// Entry-tree entries across every session.
-    pub entries: ImportCounts,
     /// Full-text rows written by the rebuild that ends the pass.
     pub fts_rows: usize,
 }
@@ -170,7 +168,6 @@ impl DriverRunLedger {
                 members: rows::members(&snapshot)?,
                 tasks: rows::team_tasks(&snapshot)?,
                 effects: rows::tool_effects(&snapshot)?,
-                trees: rows::entry_trees(&snapshot)?,
             }
         };
         tracing::debug!(
@@ -301,22 +298,6 @@ impl DriverRunLedger {
         }
         report.tool_effects = ImportCounts::tally(loaded.effects.len(), imported);
 
-        let mut read = 0;
-        let mut imported = 0;
-        for (session, tree) in &loaded.trees {
-            read += tree.entries.len();
-            imported += self
-                .tree_mutate(session, |tree_state| {
-                    let added = tree_state.import(&tree.entries)?;
-                    for (name, tip) in &tree.labels {
-                        tree_state.import_label(name, tip);
-                    }
-                    Ok(added)
-                })
-                .await?;
-        }
-        report.entries = ImportCounts::tally(read, imported);
-
         report.fts_rows = self.history_reindex().await?;
         tracing::info!(
             "{LOG_PREFIX} imported sessions={}/{} messages={}/{} tool_calls={}/{} agent_runs={}/{} \
@@ -349,5 +330,4 @@ struct Loaded {
     members: Vec<AgentTeamMember>,
     tasks: Vec<AgentTeamTask>,
     effects: Vec<ToolEffectRow>,
-    trees: std::collections::BTreeMap<String, rows::LegacyEntryTree>,
 }

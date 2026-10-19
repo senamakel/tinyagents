@@ -162,6 +162,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         self.drive(state, ctx, input, false).await
     }
 
+    /// Runs an agent loop while renewing a host-owned run lease for the full
+    /// lifetime of model and tool awaits.
+    ///
+    /// A renewal failure drops the in-flight loop and returns a storage error.
+    /// Hosts using shared durable run state should use this entry point (or
+    /// wrap an equivalent run future with [`crate::run_with_lease`]); status
+    /// observation writes do not renew ownership.
+    pub async fn invoke_with_lease(
+        &self,
+        state: &State,
+        ctx_data: Ctx,
+        config: RunConfig,
+        input: Vec<Message>,
+        lease: &dyn crate::RunLeaseHeartbeat,
+        heartbeat_every: std::time::Duration,
+    ) -> Result<AgentLoopResult> {
+        crate::run_with_lease(
+            self.invoke_with_status(state, ctx_data, config, input),
+            lease,
+            heartbeat_every,
+        )
+        .await?
+    }
+
     /// Runs the default agent loop inside a caller-supplied [`RunContext`],
     /// returning the accumulated [`AgentRun`].
     ///

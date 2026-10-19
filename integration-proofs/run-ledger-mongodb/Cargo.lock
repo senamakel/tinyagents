@@ -35,6 +35,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambient-authority"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9d4ee0d472d1cd2e28c97dfa124b3d8d992e10eb0a035f33f5d12e3a177ba3b"
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -171,6 +177,36 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "cap-primitives"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b5f74729fd2f44701d1a8eb47e906cdb3ccd9ec0f02baad85a744b791940b18"
+dependencies = [
+ "ambient-authority",
+ "fs-set-times",
+ "io-extras",
+ "io-lifetimes 3.0.1",
+ "ipnet",
+ "maybe-owned",
+ "rustix 1.1.5",
+ "rustix-linux-procfs",
+ "windows-sys 0.61.2",
+ "winx",
+]
+
+[[package]]
+name = "cap-std"
+version = "4.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ec78e242cfa2cfe276807ac2ecc00315a6c97786977414bcd1c3963b6c91b8"
+dependencies = [
+ "cap-primitives",
+ "io-extras",
+ "io-lifetimes 3.0.1",
+ "rustix 1.1.5",
+]
 
 [[package]]
 name = "cc"
@@ -559,7 +595,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -599,6 +635,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs-set-times"
+version = "0.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
+dependencies = [
+ "io-lifetimes 2.0.4",
+ "rustix 1.1.5",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1153,6 +1200,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-extras"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20fd6de4ccfcc187e38bc21cfa543cb5a302cb86a8b114eb7f0bf0dc9f8ac00f"
+dependencies = [
+ "io-lifetimes 3.0.1",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "io-lifetimes"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983"
+
+[[package]]
+name = "io-lifetimes"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f0fb0570afe1fed943c5c3d4102d5358592d8625fda6a0007fdbe65a92fba96"
+
+[[package]]
 name = "ipconfig"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1353,6 +1422,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "maybe-owned"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
 name = "md-5"
@@ -1675,7 +1750,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1941,7 +2016,17 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rustix-linux-procfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
+dependencies = [
+ "once_cell",
+ "rustix 1.1.5",
 ]
 
 [[package]]
@@ -2330,7 +2415,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2394,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-definition"
-version = "2.1.4"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2407,14 +2492,17 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-harness"
-version = "2.1.4"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "cap-std",
  "chrono",
  "futures",
+ "libc",
  "regex",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2424,7 +2512,7 @@ dependencies = [
  "tinyinference-core",
  "tinyinference-embeddings",
  "tinyinference-llm",
- "tinystoragedrivers-core 1.0.0",
+ "tinystoragedrivers-core",
  "tinytools",
  "tinytools-agent",
  "tokio",
@@ -2443,7 +2531,7 @@ dependencies = [
  "tempfile",
  "tinyagents-session",
  "tinyinference-llm",
- "tinystoragedrivers-core 1.0.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-mongodb",
  "tokio",
  "uuid",
@@ -2451,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-session"
-version = "2.1.4"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2465,7 +2553,7 @@ dependencies = [
  "thiserror",
  "tinyagents-harness",
  "tinyagents-tasks",
- "tinystoragedrivers-core 1.0.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools-agent",
  "tokio",
@@ -2475,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "tinyagents-tasks"
-version = "2.1.4"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2483,7 +2571,7 @@ dependencies = [
  "serde_json",
  "tinyagents-harness",
  "tinyinference-llm",
- "tinystoragedrivers-core 1.0.0",
+ "tinystoragedrivers-core",
  "tinytools",
  "tokio",
  "tracing",
@@ -2554,27 +2642,15 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-core"
-version = "0.11.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "tinystoragedrivers-core"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "async-trait",
  "data-encoding",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror",
+ "tinystoragedrivers-schema",
  "tokio",
  "ulid",
  "zstd",
@@ -2583,7 +2659,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-mongodb"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2591,14 +2667,24 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tinystoragedrivers-core 1.0.0",
+ "tinystoragedrivers-core",
  "tokio",
 ]
 
 [[package]]
+name = "tinystoragedrivers-schema"
+version = "1.0.0"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "tinystoragedrivers-secrets"
-version = "0.11.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
+version = "1.0.0"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "async-trait",
  "atomicwrites",
@@ -2610,7 +2696,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tinystoragedrivers-core 0.11.0",
+ "tinystoragedrivers-core",
  "tokio",
  "winapi-util",
  "windows-permissions",
@@ -2621,12 +2707,12 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-sqlite"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "rusqlite",
  "serde_json",
  "sha2 0.10.9",
- "tinystoragedrivers-core 1.0.0",
+ "tinystoragedrivers-core",
  "tokio",
  "zstd",
 ]
@@ -3135,7 +3221,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3322,6 +3408,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ef0ffc427f045c0cc9ebffd6f4f91153dcd2a1547b5c3c29ee3f541e16e95c6"
 
 [[package]]
+name = "winx"
+version = "0.36.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
+dependencies = [
+ "bitflags 2.13.2",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3478,3 +3574,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "tinystoragedrivers-file"
+version = "1.0.0"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"

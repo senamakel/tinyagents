@@ -526,7 +526,7 @@ impl ContextCompressionMiddleware {
 
         let from_tokens = total_message_tokens(&request.messages);
         // The record's `first_kept_index` is in live-transcript coordinates —
-        // what a session-backed `CompactionSink` maps to an entry id — see
+        // the coordinate system exposed to a host `CompactionSink` — see
         // `compaction::CompactionRecord::first_kept_index`. The plan's indices
         // are into `[prior pin?, live[folded..]...]`; a pinned message out of
         // the middle of the head means the tail does not start at

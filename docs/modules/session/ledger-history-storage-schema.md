@@ -9,7 +9,6 @@ agent scope.
 | v1 | v2 |
 |---|---|
 | `run_ledger_{workflow_runs,telemetry,agent_runs,teams,members,tool_effects,event_outbox,event_heads,tasks}` | `ledger.{...}`: id `Key::of`, snake_case body, `*_ms` times, no `{schemaVersion, record, *Sql}` envelope |
-| `run_ledger_entry_{heads,entries,labels,indexes}` | `ledger.entry_heads`, `ledger.entries`, `ledger.entry_labels`, `ledger.entry_indexes` (`ts_ms` for the entry's RFC 3339 `ts`) |
 | stream `run_events:<sha>` | stream `ledger.events/<run>`; entries `{sequence, event_type, payload, ts_ms}` |
 | `session_history_{sessions,messages,tool_calls}` | `history.{sessions,messages,tool_calls}`; `startedUs`/`createdUs` keys replaced by `started_ms` / `ended_ms` / `created_ms` |
 | `session_history_fts` | `history.search`, rebuilt by the session, message and tool-call steps |

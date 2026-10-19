@@ -16,20 +16,19 @@
 
 use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
-use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;
 
-/// Bound storage for runs, workflows, coordination, effects and entry trees.
+/// Bound storage for runs, workflows, coordination and effects.
 ///
 /// Handles are selected by the host, never by a run's payload or tool arguments.
 /// Shared deployments must bind their tenant/agent namespace before returning a
-/// handle. The classic orphan sweep assumes exclusive process ownership; shared
-/// backends must not interrupt another live owner's work at startup.
+/// handle. The legacy unconditional orphan sweep assumes exclusive process
+/// ownership. Shared backends must use `interrupt_expired_agents`, which
+/// preserves unleased records and active lease owners.
 ///
 /// Storage operations are async so driver implementations can await their
 /// ports without blocking a caller runtime. Pure recovery classifiers remain
@@ -48,7 +47,56 @@ pub trait RunLedgerStore: Send + Sync {
     /// has already been promoted to a worker thread should not silently revert.
     /// Use `transition_agent_run_status` instead when a caller needs to
     /// *clear* `error` or `completed_at`.
+    /// A row with an active driver lease refuses this unfenced write; leased
+    /// drivers must use `renew_agent_run_lease` or `finish_agent_run`.
     async fn upsert_agent_run(&self, upsert: AgentRunUpsert) -> Result<AgentRun>;
+
+    /// Atomically create an agent run under a driver lease, or take over only
+    /// an existing run whose recorded lease has expired. Unleased active rows
+    /// are treated as legacy/unknown ownership and returned as `Busy`.
+    async fn try_claim_agent_run(
+        &self,
+        upsert: AgentRunUpsert,
+        owner: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        lease_for: chrono::Duration,
+    ) -> Result<AgentRunLeaseClaim> {
+        let _ = (upsert, owner, now, lease_for);
+        Err(tinyagents_harness::TinyAgentsError::Storage(
+            "agent run leases are unsupported by this store".into(),
+        )
+        .into())
+    }
+
+    /// Renew a lease only while its owner/epoch still match and its current
+    /// expiry is in the future. An expired driver cannot resurrect its lease.
+    async fn renew_agent_run_lease(
+        &self,
+        token: &AgentRunLeaseToken,
+        now: chrono::DateTime<chrono::Utc>,
+        lease_for: chrono::Duration,
+    ) -> Result<bool> {
+        let _ = (token, now, lease_for);
+        Err(tinyagents_harness::TinyAgentsError::Storage(
+            "agent run leases are unsupported by this store".into(),
+        )
+        .into())
+    }
+
+    /// Finish a run only while its owner/epoch lease is still live. Returns
+    /// `None` when a takeover, expiry, or earlier settlement fenced the caller.
+    async fn finish_agent_run(
+        &self,
+        upsert: AgentRunUpsert,
+        token: &AgentRunLeaseToken,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<AgentRun>> {
+        let _ = (upsert, token, now);
+        Err(tinyagents_harness::TinyAgentsError::Storage(
+            "agent run leases are unsupported by this store".into(),
+        )
+        .into())
+    }
 
     /// Inserts a new [`WorkflowRun`] or merges fields into an existing one with
     /// the same id, returning the row as stored.
@@ -184,6 +232,18 @@ pub trait RunLedgerStore: Send + Sync {
     ///
     /// Only valid under exclusive process ownership; never sweep live shared owners.
     async fn interrupt_orphaned_agent_runs(&self) -> Result<usize>;
+
+    /// Settle only `running`/`pending` rows with a recorded lease expired at
+    /// `now`. Unleased and malformed legacy rows have unknown ownership and
+    /// are retained. Implementations must update rows conditionally so a
+    /// concurrent heartbeat or takeover wins without being overwritten.
+    async fn interrupt_expired_agents(&self, now: chrono::DateTime<chrono::Utc>) -> Result<usize> {
+        let _ = now;
+        Err(tinyagents_harness::TinyAgentsError::Storage(
+            "agent run expiry reaping is unsupported by this store".into(),
+        )
+        .into())
+    }
 
     /// Lists agent runs, most-recently-updated first, with optional filters
     /// (status, kind, parent run, parent thread) and pagination.
@@ -402,52 +462,6 @@ pub trait RunLedgerStore: Send + Sync {
         run_id: &str,
         call_id: &str,
     ) -> Result<Option<ToolEffectRow>>;
-
-    /// Appends `kind` as a new entry under `parent_id` and returns its id. `None`
-    /// is only valid for a session's first entry.
-    async fn entry_append(
-        &self,
-        session_id: &str,
-        parent_id: Option<&EntryId>,
-        kind: EntryKind,
-    ) -> Result<EntryId>;
-
-    /// Appends `kind` as a child of the current head (the entry with the greatest
-    /// ordinal), the "linear append still works" path.
-    async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId>;
-
-    /// The entry with the greatest ordinal, if any entry has been appended.
-    async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>>;
-
-    /// One entry by id.
-    async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>>;
-
-    /// The root-to-`tip` ancestor chain in chronological order.
-    async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>>;
-
-    /// Every current tip (an entry with no children), in ordinal order.
-    async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>>;
-
-    /// Every named branch label and the tip it names.
-    async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>>;
-
-    /// Names `tip` by appending a label entry under it; returns the label entry's id.
-    async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId>;
-
-    /// Creates a new tip without disturbing existing ones: `Branch` scope names an
-    /// existing entry, `Tree` scope copies the ancestor path.
-    async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId>;
-
-    /// Rebuilds the materialized ancestor-chain index from the immutable entries.
-    async fn entry_rebuild_index(&self, session_id: &str) -> Result<()>;
-
-    /// Imports legacy linear entries, skipping any id already present so a repeated
-    /// import of the same source is a no-op.
-    async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()>;
-
-    /// Projects `tip`'s ancestor chain to a model-ready message list, stopping at
-    /// the newest compaction on the path.
-    async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>>;
 
     /// Deletes every **finished** session that ended before `older_than`, together
     /// with its messages, tool calls and search-index entries.

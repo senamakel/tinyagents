@@ -30,6 +30,12 @@ pub(crate) struct RunStatusRecord {
     pub(crate) active: bool,
     pub(crate) component: ComponentId,
     pub(crate) status: ExecutionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lease_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lease_expires_ms: Option<i64>,
+    #[serde(default)]
+    pub(crate) lease_epoch: u64,
     pub(crate) current_phase: HarnessPhase,
     pub(crate) model_calls: usize,
     pub(crate) tool_calls: usize,
@@ -73,6 +79,9 @@ impl From<&HarnessRunStatus> for RunStatusRecord {
             active: is_active(status),
             component: status.component.clone(),
             status: status.status,
+            lease_owner: status.lease_owner.clone(),
+            lease_expires_ms: status.lease_expires_at.map(to_ms),
+            lease_epoch: status.lease_epoch,
             current_phase: status.current_phase,
             model_calls: status.model_calls,
             tool_calls: status.tool_calls,
@@ -99,6 +108,9 @@ impl From<RunStatusRecord> for HarnessRunStatus {
             thread_id: record.thread_id,
             component: record.component,
             status: record.status,
+            lease_owner: record.lease_owner,
+            lease_expires_at: record.lease_expires_ms.map(from_ms),
+            lease_epoch: record.lease_epoch,
             current_phase: record.current_phase,
             model_calls: record.model_calls,
             tool_calls: record.tool_calls,

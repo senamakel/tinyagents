@@ -418,7 +418,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -451,7 +451,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1681,7 +1681,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1900,7 +1900,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1995,7 +1995,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2240,6 +2240,7 @@ dependencies = [
  "tinyagents-session",
  "tinyagents-tasks",
  "tinystoragedrivers-core",
+ "tinystoragedrivers-file",
  "tinystoragedrivers-sqlite",
  "tinytools-agent",
  "tokio",
@@ -2379,23 +2380,46 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-core"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "async-trait",
  "data-encoding",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror",
+ "tinystoragedrivers-schema",
  "tokio",
  "ulid",
  "zstd",
 ]
 
 [[package]]
+name = "tinystoragedrivers-file"
+version = "1.0.0"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
+dependencies = [
+ "async-trait",
+ "libc",
+ "serde",
+ "serde_json",
+ "tinystoragedrivers-core",
+ "tokio",
+]
+
+[[package]]
+name = "tinystoragedrivers-schema"
+version = "1.0.0"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "tinystoragedrivers-secrets"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "async-trait",
  "atomicwrites",
@@ -2418,7 +2442,7 @@ dependencies = [
 [[package]]
 name = "tinystoragedrivers-sqlite"
 version = "1.0.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v1.0.0#141fd9ed0ad5d14a8fb5a1b3e837a719e81ac08d"
+source = "git+https://github.com/senamakel/tinystoragedrivers?rev=d507a31d5b08cb61f08636a6886fd5dbc18b9442#d507a31d5b08cb61f08636a6886fd5dbc18b9442"
 dependencies = [
  "rusqlite",
  "serde_json",
@@ -2961,7 +2985,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

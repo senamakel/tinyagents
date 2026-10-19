@@ -8,7 +8,6 @@ mod agents;
 mod dto;
 mod dto_history;
 mod effects;
-mod entry_tree;
 mod events;
 mod history;
 mod history_retention;
@@ -42,14 +41,12 @@ use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::port::RunLedgerStore;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::RunTransition;
 use super::types::*;
-use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;
 
 /// Ledger storage bound to the supplied tenant/agent scope.
@@ -276,6 +273,34 @@ impl RunLedgerStore for DriverRunLedger {
         self.upsert_agent(upsert).await
     }
 
+    async fn try_claim_agent_run(
+        &self,
+        upsert: AgentRunUpsert,
+        owner: &str,
+        now: DateTime<Utc>,
+        lease_for: chrono::Duration,
+    ) -> Result<AgentRunLeaseClaim> {
+        self.claim_agent(upsert, owner, now, lease_for).await
+    }
+
+    async fn renew_agent_run_lease(
+        &self,
+        token: &AgentRunLeaseToken,
+        now: DateTime<Utc>,
+        lease_for: chrono::Duration,
+    ) -> Result<bool> {
+        self.renew_agent(token, now, lease_for).await
+    }
+
+    async fn finish_agent_run(
+        &self,
+        upsert: AgentRunUpsert,
+        token: &AgentRunLeaseToken,
+        now: DateTime<Utc>,
+    ) -> Result<Option<AgentRun>> {
+        self.finish_agent(upsert, token, now).await
+    }
+
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
         let now = now();
@@ -496,6 +521,10 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::interrupt_orphaned_agent_runs`] without a weaker fallback.
     async fn interrupt_orphaned_agent_runs(&self) -> Result<usize> {
         self.interrupt_agents().await
+    }
+
+    async fn interrupt_expired_agents(&self, now: DateTime<Utc>) -> Result<usize> {
+        DriverRunLedger::interrupt_expired_agents(self, now).await
     }
 
     /// Implement [`RunLedgerStore::list_agent_runs`] without a weaker fallback.
@@ -967,79 +996,6 @@ impl RunLedgerStore for DriverRunLedger {
         .await
     }
 
-    async fn entry_append(
-        &self,
-        session_id: &str,
-        parent_id: Option<&EntryId>,
-        kind: EntryKind,
-    ) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| {
-            tree.append(parent_id.cloned(), kind.clone())
-        })
-        .await
-        .map_err(Into::into)
-    }
-    async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| {
-            tree.append(tree.head.tip.clone(), kind.clone())
-        })
-        .await
-        .map_err(Into::into)
-    }
-    async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>> {
-        Ok(self.tree_snapshot(session_id).await?.head.tip)
-    }
-    async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>> {
-        Ok(self
-            .tree_snapshot(session_id)
-            .await?
-            .entries
-            .get(id)
-            .cloned())
-    }
-    async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>> {
-        self.tree_snapshot(session_id)
-            .await?
-            .chain(tip)
-            .map_err(Into::into)
-    }
-    async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>> {
-        Ok(self.tree_snapshot(session_id).await?.tips())
-    }
-    async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>> {
-        Ok(self
-            .tree_snapshot(session_id)
-            .await?
-            .labels
-            .into_iter()
-            .map(|(name, tip_id)| Branch { name, tip_id })
-            .collect())
-    }
-    async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| tree.label(tip, name))
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId> {
-        self.tree_mutate(session_id, |tree| tree.fork(tip, fork))
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_rebuild_index(&self, session_id: &str) -> Result<()> {
-        self.tree_mutate(session_id, |tree| tree.rebuild_index())
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()> {
-        self.tree_mutate(session_id, |tree| tree.import(entries).map(drop))
-            .await
-            .map_err(Into::into)
-    }
-    async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>> {
-        let tree = self.tree_snapshot(session_id).await?;
-        Ok(crate::entry_tree::project_chain(&tree.context_chain(tip)?))
-    }
-
     /// Implement [`RunLedgerStore::prune_sessions_before`] without a weaker fallback.
     async fn prune_sessions_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
         self.history_prune_sessions(older_than).await
@@ -1122,9 +1078,10 @@ mod tests;
 mod agent_tests;
 
 #[cfg(test)]
-#[path = "entry_tree_tests.rs"]
-mod entry_tree_tests;
+#[path = "agent_lease_tests.rs"]
+mod agent_lease_tests;
 
+#[cfg(test)]
 #[cfg(test)]
 #[path = "retention_tests.rs"]
 mod retention_tests;

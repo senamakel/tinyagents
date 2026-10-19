@@ -2,6 +2,7 @@ use super::*;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
 use tinystoragedrivers_core::MemoryStorage;
+use tinystoragedrivers_file::FileStorage;
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 fn memory() -> DriverSessionStores {
@@ -115,6 +116,18 @@ async fn sqlite_backed_stores_meet_the_session_store_contract() {
 async fn sqlite_backed_stores_keep_agents_apart() {
     let dir = tempfile::tempdir().unwrap();
     session_store_isolation_conformance(&sqlite(&dir)).await;
+}
+
+#[tokio::test]
+async fn file_backed_stores_meet_the_contract_and_keep_agents_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = DriverSessionStores::new(
+        Arc::new(FileStorage::open(dir.path()).unwrap()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .unwrap();
+    session_store_conformance(&stores).await;
+    session_store_isolation_conformance(&stores).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

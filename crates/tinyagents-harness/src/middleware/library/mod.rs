@@ -137,10 +137,10 @@ pub use output_cap::{
 };
 pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
-    ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
-    PolicyDecision, SessionToolCeiling, SessionToolListing, StructuredDenialParts,
-    StructuredDenialRenderOptions, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware,
-    ToolPolicyPostGate, record_approved, structured_denial_renderer,
+    ApprovalExecutionOutcome, ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver,
+    DenialRenderer, GateVerdict, PolicyDecision, SessionToolCeiling, SessionToolListing,
+    StructuredDenialParts, StructuredDenialRenderOptions, ToolCallPolicy, ToolPolicyGate,
+    ToolPolicyGateMiddleware, ToolPolicyPostGate, record_approved, structured_denial_renderer,
 };
 pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 pub use repeat_progress::{

@@ -1,4 +1,5 @@
-//! In-memory inverted index for `search_cross_thread_messages`.
+//! In-memory candidate index for exact matching and ranking in
+//! `search_cross_thread_messages`.
 //!
 //! ## Architecture (v1)
 //!
@@ -40,8 +41,9 @@
 //!   Roaring Bitmaps + FST + LSM segments are the long-term destination
 //!   (Gemini Deep Research write-up); we defer that until corpus sizes
 //!   justify the complexity.
-//! - **Whole index lives in RAM**, rebuilt from JSONL on first access in
-//!   the process. The JSONL files remain the source of truth.
+//! - **Query-local index**: FullText-capable stores build this over durable
+//!   search candidates only; stores without FullText build it over a corpus
+//!   scan. The persistent derived index belongs to the driver.
 //! - **Scoring matches the previous linear scan**:
 //!   `score = matched_terms / total_terms` with a `created_at` tiebreaker.
 //! - **Pathological query short-circuit**: if Phase 1 produces a
@@ -61,7 +63,7 @@ use super::types::{CrossThreadHit, ThreadMessage};
 /// callers (and tests) see no change. Single-byte ASCII tokens like "a"
 /// or "is" are filtered out; a single CJK character (3 bytes in UTF-8)
 /// passes through.
-const MIN_TERM_BYTES: usize = 3;
+pub(super) const MIN_TERM_BYTES: usize = 3;
 
 /// When Phase 1 returns more than this many candidates we skip Phase 2
 /// verification and fall back to a pure recency-ranked truncation. This
@@ -113,6 +115,11 @@ pub(crate) struct InvertedIndex {
     /// 16-byte `Arc` clone instead of a 24-byte `String`.
     thread_id_pool: HashMap<String, Arc<str>>,
     role_pool: HashMap<String, Arc<str>>,
+}
+
+pub(crate) enum SearchOutcome {
+    Hits(Vec<CrossThreadHit>),
+    RecencyFallback,
 }
 
 impl InvertedIndex {
@@ -173,8 +180,7 @@ impl InvertedIndex {
         self.by_message.insert(key, doc_id);
     }
 
-    /// Drop every document belonging to a thread. Only the incremental index
-    /// tests use it now that search rebuilds the index per query.
+    /// Drop every candidate document belonging to a thread.
     #[allow(dead_code)]
     pub fn remove_thread(&mut self, thread_id: &str) {
         let to_remove: Vec<u32> = self
@@ -234,19 +240,24 @@ impl InvertedIndex {
         limit: usize,
         exclude_thread_id: Option<&str>,
     ) -> Vec<CrossThreadHit> {
-        if limit == 0 {
-            return Vec::new();
+        match self.search_outcome(query, limit, exclude_thread_id) {
+            SearchOutcome::Hits(hits) => hits,
+            SearchOutcome::RecencyFallback => self.recency_fallback(exclude_thread_id, limit),
         }
-        let query_lower = normalize(query);
-        // Filter terms by raw byte length (matches the historical
-        // 3-byte threshold; single CJK chars are 3 bytes and pass).
-        let terms: Vec<String> = query_lower
-            .split_whitespace()
-            .filter(|t| t.len() >= MIN_TERM_BYTES)
-            .map(|s| s.to_string())
-            .collect();
+    }
+
+    pub(crate) fn search_outcome(
+        &self,
+        query: &str,
+        limit: usize,
+        exclude_thread_id: Option<&str>,
+    ) -> SearchOutcome {
+        if limit == 0 {
+            return SearchOutcome::Hits(Vec::new());
+        }
+        let terms = query_terms(query);
         if terms.is_empty() {
-            return Vec::new();
+            return SearchOutcome::Hits(Vec::new());
         }
 
         // Phase 1: collect candidate doc-ids per term. Short-circuit to
@@ -259,7 +270,7 @@ impl InvertedIndex {
             let candidates = match self.candidates_for_term(term) {
                 Some(v) => {
                     if v.len() > LARGE_CANDIDATE_LIMIT {
-                        return self.recency_fallback(exclude_thread_id, limit);
+                        return SearchOutcome::RecencyFallback;
                     }
                     v
                 }
@@ -315,22 +326,24 @@ impl InvertedIndex {
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
         ranked.truncate(limit);
 
-        ranked
-            .into_iter()
-            .map(|(doc_id, matched, _)| {
-                let entry = self.docs[doc_id as usize]
-                    .as_ref()
-                    .expect("doc_id from hit_counts must be live");
-                CrossThreadHit {
-                    thread_id: entry.thread_id.to_string(),
-                    message_id: entry.message_id.clone(),
-                    role: entry.role.to_string(),
-                    content: entry.content.clone(),
-                    created_at: entry.created_at.clone(),
-                    score: matched as f64 / total_terms,
-                }
-            })
-            .collect()
+        SearchOutcome::Hits(
+            ranked
+                .into_iter()
+                .map(|(doc_id, matched, _)| {
+                    let entry = self.docs[doc_id as usize]
+                        .as_ref()
+                        .expect("doc_id from hit_counts must be live");
+                    CrossThreadHit {
+                        thread_id: entry.thread_id.to_string(),
+                        message_id: entry.message_id.clone(),
+                        role: entry.role.to_string(),
+                        content: entry.content.clone(),
+                        created_at: entry.created_at.clone(),
+                        score: matched as f64 / total_terms,
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Build the Phase 1 candidate set for one query term.
@@ -419,6 +432,15 @@ impl InvertedIndex {
             })
             .collect()
     }
+}
+
+/// Query substrings that participate in the existing cross-thread contract.
+pub(super) fn query_terms(query: &str) -> Vec<String> {
+    normalize(query)
+        .split_whitespace()
+        .filter(|term| term.len() >= MIN_TERM_BYTES)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Two-pointer sort-merge intersect. `acc` and `other` are both sorted

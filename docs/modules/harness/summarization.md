@@ -142,6 +142,4 @@ See [`compaction.md`](./compaction.md) for the full contract.
 `tinyinference_llm::model::ModelProfile::max_input_tokens`.
 `token_estimation::estimate_slice_tokens` backs whole-slice estimates.
 Consumers are `middleware::library::context` (`ContextCompressionMiddleware`,
-`MicrocompactMiddleware`) and, when a session is attached, a
-`tinyagents_session::entry_tree::SessionCompactionSink` persisting
-`CompactionRecord`s as `CompactionEntry`s.
+`MicrocompactMiddleware`) and any host-provided `CompactionSink`.

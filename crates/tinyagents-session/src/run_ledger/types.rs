@@ -219,6 +219,40 @@ pub struct AgentRun {
     pub updated_at: DateTime<Utc>,
     /// When the run reached a terminal status, if it has.
     pub completed_at: Option<DateTime<Utc>>,
+    /// The driver currently responsible for this run, when it is leased.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_owner: Option<String>,
+    /// When the current driver lease expires and may be claimed by another driver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    /// Monotonic fencing epoch. Increments whenever an expired lease is taken over.
+    #[serde(default)]
+    pub lease_epoch: u64,
+}
+
+/// Fencing token issued when a driver starts or takes over an agent run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentRunLeaseToken {
+    /// Run protected by this lease.
+    pub run_id: String,
+    /// Unique identity of the driver holding the lease.
+    pub owner: String,
+    /// Monotonic fencing epoch for this ownership tenure.
+    pub epoch: u64,
+}
+
+/// Result of atomically starting or claiming an agent run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentRunLeaseClaim {
+    /// This caller owns the run and may drive it until its lease expires.
+    Acquired {
+        run: AgentRun,
+        token: AgentRunLeaseToken,
+    },
+    /// The row exists but its ownership is live or unknown; do not start a second driver.
+    Busy(AgentRun),
+    /// No row was available to claim.
+    Missing,
 }
 
 /// A persisted workflow run: durable state for a multi-phase workflow

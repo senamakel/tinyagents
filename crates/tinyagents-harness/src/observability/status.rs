@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Key, Precondition, Query,
-    WriteOptions,
+    CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec, Key,
+    Precondition, Query, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -158,20 +158,61 @@ impl DriverStatusStore {
 
 #[async_trait]
 impl HarnessStatusStore for DriverStatusStore {
-    async fn put_status(&self, status: HarnessRunStatus) -> Result<()> {
+    async fn put_status(&self, mut status: HarnessRunStatus) -> Result<()> {
         self.declared().await?;
-        let body = serde_json::to_value(RunStatusRecord::from(&status))?;
-        self.docs
-            .put_with(
-                Self::COLLECTION,
-                &Self::id(status.run_id.as_str())?,
-                body,
-                Precondition::None,
-                WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
-            )
-            .await
-            .map(|_| ())
-            .map_err(map_error)
+        for _ in 0..8 {
+            let id = Self::id(status.run_id.as_str())?;
+            let previous = self
+                .docs
+                .get(Self::COLLECTION, &id)
+                .await
+                .map_err(map_error)?;
+            if let Some(found) = previous.as_ref() {
+                let record = serde_json::from_value::<RunStatusRecord>(found.doc.clone())
+                    .map_err(|error| crate::error::TinyAgentsError::Storage(error.to_string()))?;
+                let current = HarnessRunStatus::from(record);
+                if current.lease_epoch > 0
+                    && (!is_active(&current)
+                        || current.lease_owner.is_none()
+                        || current.lease_owner != status.lease_owner
+                        || current.lease_epoch != status.lease_epoch
+                        || current
+                            .lease_expires_at
+                            .is_none_or(|deadline| deadline <= std::time::SystemTime::now()))
+                {
+                    return Err(crate::error::TinyAgentsError::Storage(
+                        "status write rejected by run lease".into(),
+                    ));
+                }
+                if current.lease_epoch > 0 {
+                    status.lease_owner = current.lease_owner;
+                    status.lease_expires_at = current.lease_expires_at;
+                    status.lease_epoch = current.lease_epoch;
+                }
+            }
+            let body = serde_json::to_value(RunStatusRecord::from(&status))?;
+            let condition = previous.map_or(Precondition::Absent, |found| {
+                Precondition::Version(found.version)
+            });
+            match self
+                .docs
+                .put_with(
+                    Self::COLLECTION,
+                    &id,
+                    body,
+                    condition,
+                    WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(err) if err.kind() == ErrorKind::Conflict => continue,
+                Err(err) => return Err(map_error(err)),
+            }
+        }
+        Err(crate::error::TinyAgentsError::Storage(
+            "status write contention budget exhausted".into(),
+        ))
     }
 
     async fn get_status(&self, run_id: &str) -> Result<Option<HarnessRunStatus>> {
@@ -199,6 +240,243 @@ impl HarnessStatusStore for DriverStatusStore {
 
     async fn list_active(&self) -> Result<Vec<HarnessRunStatus>> {
         self.matching(Filter::eq("active", true)).await
+    }
+
+    async fn reap_expired(&self, now: std::time::SystemTime) -> Result<Vec<HarnessRunStatus>> {
+        self.declared().await?;
+        let rows = self
+            .docs
+            .query_all(Self::COLLECTION, &Query::filter(Filter::eq("active", true)))
+            .await
+            .map_err(map_error)?;
+        let mut settled = Vec::new();
+        for row in rows {
+            let Ok(record) = serde_json::from_value::<RunStatusRecord>(row.doc.clone()) else {
+                continue;
+            };
+            let mut status = HarnessRunStatus::from(record);
+            if status.lease_owner.is_none()
+                || status
+                    .lease_expires_at
+                    .is_none_or(|deadline| deadline > now)
+                || !is_active(&status)
+            {
+                continue;
+            }
+            status.mark_cancelled(super::ORPHAN_REAP_REASON);
+            status.lease_owner = None;
+            status.lease_expires_at = None;
+            let body = serde_json::to_value(RunStatusRecord::from(&status))?;
+            match self
+                .docs
+                .put_with(
+                    Self::COLLECTION,
+                    &row.id,
+                    body,
+                    Precondition::Version(row.version),
+                    WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => settled.push(status),
+                Err(err) => tracing::debug!("[journal] expired run changed during reap: {err}"),
+            }
+        }
+        Ok(settled)
+    }
+
+    async fn claim_status(
+        &self,
+        mut status: HarnessRunStatus,
+        owner: &str,
+        now: std::time::SystemTime,
+        expires_at: std::time::SystemTime,
+    ) -> Result<Option<HarnessRunStatus>> {
+        if owner.trim().is_empty() || expires_at <= now || !is_active(&status) {
+            return Err(crate::error::TinyAgentsError::Validation(
+                "status lease requires an owner, future expiry, and active status".into(),
+            ));
+        }
+        self.declared().await?;
+        for _ in 0..8 {
+            let id = Self::id(status.run_id.as_str())?;
+            let previous = self
+                .docs
+                .get(Self::COLLECTION, &id)
+                .await
+                .map_err(map_error)?;
+            let epoch = match previous.as_ref() {
+                None => 1,
+                Some(found) => {
+                    let Ok(record) = serde_json::from_value::<RunStatusRecord>(found.doc.clone())
+                    else {
+                        return Ok(None);
+                    };
+                    let current = HarnessRunStatus::from(record);
+                    if !is_active(&current)
+                        || current.lease_owner.is_none()
+                        || current
+                            .lease_expires_at
+                            .is_none_or(|deadline| deadline > now)
+                    {
+                        return Ok(None);
+                    }
+                    let Some(epoch) = current.lease_epoch.checked_add(1) else {
+                        return Err(crate::error::TinyAgentsError::Storage(
+                            "status lease epoch exhausted".into(),
+                        ));
+                    };
+                    epoch
+                }
+            };
+            status.lease_owner = Some(owner.to_owned());
+            status.lease_expires_at = Some(expires_at);
+            status.lease_epoch = epoch;
+            status.updated_at = now;
+            let body = serde_json::to_value(RunStatusRecord::from(&status))?;
+            let condition = previous.map_or(Precondition::Absent, |found| {
+                Precondition::Version(found.version)
+            });
+            match self
+                .docs
+                .put_with(
+                    Self::COLLECTION,
+                    &id,
+                    body,
+                    condition,
+                    WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => return Ok(Some(status)),
+                Err(err) if err.kind() == ErrorKind::Conflict => continue,
+                Err(err) => return Err(map_error(err)),
+            }
+        }
+        Err(crate::error::TinyAgentsError::Storage(
+            "status lease claim contention budget exhausted".into(),
+        ))
+    }
+
+    async fn renew_status_lease(
+        &self,
+        run_id: &str,
+        owner: &str,
+        epoch: u64,
+        now: std::time::SystemTime,
+        expires_at: std::time::SystemTime,
+    ) -> Result<bool> {
+        if expires_at <= now {
+            return Err(crate::error::TinyAgentsError::Validation(
+                "status lease expiry must be in the future".into(),
+            ));
+        }
+        self.declared().await?;
+        for _ in 0..8 {
+            let Some(found) = self
+                .docs
+                .get(Self::COLLECTION, &Self::id(run_id)?)
+                .await
+                .map_err(map_error)?
+            else {
+                return Ok(false);
+            };
+            let Ok(record) = serde_json::from_value::<RunStatusRecord>(found.doc) else {
+                return Ok(false);
+            };
+            let mut status = HarnessRunStatus::from(record);
+            if !is_active(&status)
+                || status.lease_owner.as_deref() != Some(owner)
+                || status.lease_epoch != epoch
+                || status
+                    .lease_expires_at
+                    .is_none_or(|deadline| deadline <= now)
+            {
+                return Ok(false);
+            }
+            status.lease_expires_at = Some(expires_at);
+            status.updated_at = now;
+            let body = serde_json::to_value(RunStatusRecord::from(&status))?;
+            match self
+                .docs
+                .put_with(
+                    Self::COLLECTION,
+                    &found.id,
+                    body,
+                    Precondition::Version(found.version),
+                    WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(err) if err.kind() == ErrorKind::Conflict => continue,
+                Err(err) => return Err(map_error(err)),
+            }
+        }
+        Err(crate::error::TinyAgentsError::Storage(
+            "status lease heartbeat contention budget exhausted".into(),
+        ))
+    }
+
+    async fn finish_status_lease(
+        &self,
+        mut status: HarnessRunStatus,
+        owner: &str,
+        epoch: u64,
+        now: std::time::SystemTime,
+    ) -> Result<bool> {
+        self.declared().await?;
+        if is_active(&status) {
+            return Err(crate::error::TinyAgentsError::Validation(
+                "status lease finish requires terminal status".into(),
+            ));
+        }
+        for _ in 0..8 {
+            let Some(found) = self
+                .docs
+                .get(Self::COLLECTION, &Self::id(status.run_id.as_str())?)
+                .await
+                .map_err(map_error)?
+            else {
+                return Ok(false);
+            };
+            let Ok(record) = serde_json::from_value::<RunStatusRecord>(found.doc) else {
+                return Ok(false);
+            };
+            let current = HarnessRunStatus::from(record);
+            if !is_active(&current)
+                || current.lease_owner.as_deref() != Some(owner)
+                || current.lease_epoch != epoch
+                || current
+                    .lease_expires_at
+                    .is_none_or(|deadline| deadline <= now)
+            {
+                return Ok(false);
+            }
+            status.lease_owner = None;
+            status.lease_expires_at = None;
+            status.lease_epoch = epoch;
+            status.updated_at = now;
+            let body = serde_json::to_value(RunStatusRecord::from(&status))?;
+            match self
+                .docs
+                .put_with(
+                    Self::COLLECTION,
+                    &found.id,
+                    body,
+                    Precondition::Version(found.version),
+                    WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => return Ok(true),
+                Err(err) if err.kind() == ErrorKind::Conflict => continue,
+                Err(err) => return Err(map_error(err)),
+            }
+        }
+        Err(crate::error::TinyAgentsError::Storage(
+            "status lease finish contention budget exhausted".into(),
+        ))
     }
 }
 
