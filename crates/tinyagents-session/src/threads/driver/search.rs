@@ -22,6 +22,7 @@ struct SearchEntry {
     content: String,
     sender: String,
     created_at: String,
+    created_at_ms: i64,
     terms: String,
 }
 
@@ -35,6 +36,9 @@ impl SearchEntry {
             content: message.content.clone(),
             sender: message.sender.clone(),
             created_at: message.created_at.clone(),
+            created_at_ms: chrono::DateTime::parse_from_rfc3339(&message.created_at)
+                .map(|value| value.timestamp_millis())
+                .unwrap_or(i64::MIN),
             terms: indexed_terms(&message.content),
         }
     }
@@ -97,10 +101,15 @@ fn query_features(query: &str) -> Vec<String> {
 /// The base declaration registered with the storage schema. Trusted bootstrap
 /// adds the full-text field only when the selected driver supports it.
 pub(super) fn collection_spec() -> CollectionSpec {
-    CollectionSpec::new(SEARCH_COLLECTION).index(tinystoragedrivers_core::IndexSpec::new(
-        "thread_incarnation",
-        ["thread_id", "incarnation"],
-    ))
+    CollectionSpec::new(SEARCH_COLLECTION)
+        .index(tinystoragedrivers_core::IndexSpec::new(
+            "thread_incarnation",
+            ["thread_id", "incarnation"],
+        ))
+        .index(tinystoragedrivers_core::IndexSpec::new(
+            "recency",
+            ["created_at_ms", "thread_id", "offset"],
+        ))
 }
 
 fn full_text_spec() -> CollectionSpec {
@@ -279,9 +288,6 @@ impl DriverConversationStore {
                     StorageError::serialization("invalid conversation search entry")
                         .with_source(error)
                 })?;
-                if exclude_thread_id == Some(entry.thread_id.as_str()) {
-                    continue;
-                }
                 let live = if let Some(cached) = cache.get(&entry.thread_id) {
                     cached.clone()
                 } else {
@@ -320,10 +326,105 @@ impl DriverConversationStore {
                 }
             }
             if !changed {
-                return Ok(index.search(query, limit, exclude_thread_id));
+                return match index.search_outcome(query, limit, exclude_thread_id) {
+                    inverted_index::SearchOutcome::Hits(hits) => Ok(hits),
+                    inverted_index::SearchOutcome::RecencyFallback => {
+                        self.search_recency_fallback(limit, exclude_thread_id).await
+                    }
+                };
             }
         }
         Err(StorageError::conflict("conversation changed repeatedly during indexed search").into())
+    }
+
+    async fn search_recency_fallback(
+        &self,
+        limit: usize,
+        exclude_thread_id: Option<&str>,
+    ) -> ConversationResult<Vec<CrossThreadHit>> {
+        for _ in 0..RETRIES {
+            let mut query = Query::filter(Filter::exists("created_at_ms", true))
+                .sort(tinystoragedrivers_core::Sort::desc("created_at_ms"))
+                .sort(tinystoragedrivers_core::Sort::asc("thread_id"))
+                .sort(tinystoragedrivers_core::Sort::asc("offset"))
+                .limit(PAGE_SIZE);
+            let mut cache: HashMap<String, Option<Versioned<ThreadDoc>>> = HashMap::new();
+            let mut hits = Vec::new();
+            loop {
+                let page = self.docs.query(SEARCH_COLLECTION, &query).await?;
+                for row in page.items {
+                    let entry: SearchEntry = serde_json::from_value(row.doc).map_err(|error| {
+                        StorageError::serialization("invalid conversation search entry")
+                            .with_source(error)
+                    })?;
+                    if exclude_thread_id == Some(entry.thread_id.as_str()) {
+                        continue;
+                    }
+                    let live = if let Some(cached) = cache.get(&entry.thread_id) {
+                        cached.clone()
+                    } else {
+                        let current = self
+                            .load(&entry.thread_id)
+                            .await?
+                            .filter(|current| !current.doc.deleted);
+                        cache.insert(entry.thread_id.clone(), current.clone());
+                        current
+                    };
+                    let Some(live) = live else {
+                        continue;
+                    };
+                    if entry.incarnation != live.doc.incarnation
+                        || entry.offset >= live.doc.visible_end
+                    {
+                        continue;
+                    }
+                    hits.push(CrossThreadHit {
+                        thread_id: entry.thread_id,
+                        message_id: entry.message_id,
+                        role: entry.sender,
+                        content: entry.content,
+                        created_at: entry.created_at,
+                        score: 0.0,
+                    });
+                    if hits.len() == limit {
+                        break;
+                    }
+                }
+                if hits.len() == limit {
+                    break;
+                }
+                let Some(next) = page.next else {
+                    break;
+                };
+                if query.cursor.as_ref() == Some(&next) {
+                    return Err(StorageError::backend(
+                        "nonadvancing conversation search recency cursor",
+                    )
+                    .into());
+                }
+                query.cursor = Some(next);
+            }
+            let mut changed = false;
+            for (thread_id, snapshot) in &cache {
+                let current = self
+                    .load(thread_id)
+                    .await?
+                    .filter(|current| !current.doc.deleted);
+                if current.as_ref().map(|row| row.version)
+                    != snapshot.as_ref().map(|row| row.version)
+                {
+                    changed = true;
+                    break;
+                }
+            }
+            if !changed {
+                return Ok(hits);
+            }
+        }
+        Err(StorageError::conflict(
+            "conversation changed repeatedly during recency search",
+        )
+        .into())
     }
 }
 
