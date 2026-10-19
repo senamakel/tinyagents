@@ -286,13 +286,37 @@ async fn independent_drivers_do_not_execute_the_same_paused_task_twice() {
     let second_request =
         continuation_request(key, request("paused-task").run_context().clone()).await;
 
-    let first_run =
+    let mut first_run =
         tokio::spawn(async move { first.run(first_request, CancellationToken::new()).await });
-    first_entered.acquire().await.unwrap().forget();
-    let second_result = second.run(second_request, CancellationToken::new()).await;
-    second_result.unwrap();
+    if tokio::time::timeout(std::time::Duration::from_secs(20), first_entered.acquire())
+        .await
+        .is_err()
+    {
+        release_first.add_permits(1);
+        first_run.abort();
+        panic!("first resume did not reach its executor before the watchdog");
+    }
+    first_entered.close();
+    let second_result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        second.run(second_request, CancellationToken::new()),
+    )
+    .await;
+    if second_result.is_err() {
+        release_first.add_permits(1);
+        first_run.abort();
+        panic!("second resume did not resolve before the watchdog");
+    }
     release_first.add_permits(1);
-    first_run.await.unwrap().unwrap();
+    let first_result = tokio::time::timeout(std::time::Duration::from_secs(20), &mut first_run)
+        .await
+        .unwrap_or_else(|_| {
+            first_run.abort();
+            panic!("first resume did not finish before the watchdog");
+        });
+    if first_result.unwrap().is_err() {
+        panic!("first resume returned an error");
+    }
     assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
