@@ -51,7 +51,7 @@ impl DriverConversationStore {
                 return Err(error);
             }
             let mut doc = row.doc.clone();
-            doc.incarnation = incarnation;
+            doc.incarnation = incarnation.clone();
             doc.visible_end = next.len() as u64;
             doc.messages_key = None;
             doc.thread.message_count = next.len();
