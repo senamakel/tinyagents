@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tinystoragedrivers_core::primitives::Repo;
 use tinystoragedrivers_core::{
-    Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
-    StorageError, StreamStore, Versioned, WriteOptions,
+    Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query,
+    ScopedStorage, StorageError, StreamStore, Versioned, WriteOptions,
 };
 mod append;
 mod pending;
@@ -393,7 +393,8 @@ impl ConversationPersistence for DriverConversationStore {
             })
             .await?;
         if let Some(incarnation) = deleted_incarnation.filter(|_| deleted) {
-            self.remove_search_incarnation(thread_id, &incarnation).await;
+            self.remove_search_incarnation(thread_id, &incarnation)
+                .await;
         }
         Ok(deleted)
     }
@@ -408,9 +409,7 @@ impl ConversationPersistence for DriverConversationStore {
             return Ok(Vec::new());
         }
         if self.docs.capabilities().contains(Capability::FullText) {
-            return self
-                .search_indexed(query, limit, exclude_thread_id)
-                .await;
+            return self.search_indexed(query, limit, exclude_thread_id).await;
         }
         let mut index = inverted_index::InvertedIndex::new();
         for row in self.live_rows().await? {

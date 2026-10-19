@@ -46,7 +46,8 @@ impl DriverConversationStore {
                 .await
             {
                 let _ = self.streams.delete_stream(&stream).await;
-                self.remove_search_incarnation(thread_id, &incarnation).await;
+                self.remove_search_incarnation(thread_id, &incarnation)
+                    .await;
                 return Err(error);
             }
             let mut doc = row.doc.clone();
@@ -78,7 +79,8 @@ impl DriverConversationStore {
                 }
                 Err(error) => {
                     let _ = self.streams.delete_stream(&stream).await;
-                    self.remove_search_incarnation(thread_id, &incarnation).await;
+                    self.remove_search_incarnation(thread_id, &incarnation)
+                        .await;
                     if error.kind() == ErrorKind::Conflict {
                         continue;
                     }

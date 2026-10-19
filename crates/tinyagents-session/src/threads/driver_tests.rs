@@ -375,9 +375,7 @@ async fn full_text_failures_are_returned_without_scan_fallback() {
         probe: probe.clone(),
     });
 
-    let result = store
-        .search_cross_thread_messages("東京", 10, None)
-        .await;
+    let result = store.search_cross_thread_messages("東京", 10, None).await;
     assert!(matches!(
         result,
         Err(ConversationError::Driver(error))

@@ -97,11 +97,10 @@ fn query_features(query: &str) -> Vec<String> {
 /// The base declaration registered with the storage schema. Trusted bootstrap
 /// adds the full-text field only when the selected driver supports it.
 pub(super) fn collection_spec() -> CollectionSpec {
-    CollectionSpec::new(SEARCH_COLLECTION)
-        .index(tinystoragedrivers_core::IndexSpec::new(
-            "thread_incarnation",
-            ["thread_id", "incarnation"],
-        ))
+    CollectionSpec::new(SEARCH_COLLECTION).index(tinystoragedrivers_core::IndexSpec::new(
+        "thread_incarnation",
+        ["thread_id", "incarnation"],
+    ))
 }
 
 fn full_text_spec() -> CollectionSpec {
@@ -112,7 +111,12 @@ pub(super) fn spec_version() -> u32 {
     SEARCH_SCHEMA_VERSION
 }
 
-fn write_op(thread_id: &str, incarnation: &str, offset: u64, message: &ThreadMessage) -> Result<WriteOp, StorageError> {
+fn write_op(
+    thread_id: &str,
+    incarnation: &str,
+    offset: u64,
+    message: &ThreadMessage,
+) -> Result<WriteOp, StorageError> {
     let entry = SearchEntry::new(thread_id, incarnation, offset, message);
     Ok(WriteOp::Put {
         collection: SEARCH_COLLECTION.into(),
@@ -125,7 +129,9 @@ fn write_op(thread_id: &str, incarnation: &str, offset: u64, message: &ThreadMes
 }
 
 impl DriverConversationStore {
-    pub(super) async fn prepare_search_schema(documents: &dyn DocumentStore) -> Result<(), StorageError> {
+    pub(super) async fn prepare_search_schema(
+        documents: &dyn DocumentStore,
+    ) -> Result<(), StorageError> {
         let spec = if documents.capabilities().contains(Capability::FullText) {
             full_text_spec()
         } else {
@@ -135,7 +141,12 @@ impl DriverConversationStore {
     }
 
     pub(super) async fn backfill_search_index(&self) -> ConversationResult<()> {
-        if self.docs.get(SEARCH_COLLECTION, SEARCH_READY).await?.is_some() {
+        if self
+            .docs
+            .get(SEARCH_COLLECTION, SEARCH_READY)
+            .await?
+            .is_some()
+        {
             return Ok(());
         }
         for row in self.live_rows().await? {
@@ -143,7 +154,8 @@ impl DriverConversationStore {
             let mut stable_messages = None;
             let mut stable_incarnation = String::new();
             for _ in 0..RETRIES {
-                let Some(current) = self.load(thread_id).await?.filter(|row| !row.doc.deleted) else {
+                let Some(current) = self.load(thread_id).await?.filter(|row| !row.doc.deleted)
+                else {
                     stable_messages = Some(Vec::new());
                     break;
                 };
@@ -166,16 +178,21 @@ impl DriverConversationStore {
                 break;
             }
             let messages = stable_messages.ok_or_else(|| {
-                StorageError::conflict("conversation changed repeatedly during search-index backfill")
+                StorageError::conflict(
+                    "conversation changed repeatedly during search-index backfill",
+                )
             })?;
             for (offset, message) in messages.iter().enumerate() {
                 let id = entry_id(thread_id, &stable_incarnation, offset as u64);
-                let entry = SearchEntry::new(thread_id, &stable_incarnation, offset as u64, message);
+                let entry =
+                    SearchEntry::new(thread_id, &stable_incarnation, offset as u64, message);
                 let body = serde_json::to_value(entry).map_err(|error| {
                     StorageError::serialization("encode conversation search entry")
                         .with_source(error)
                 })?;
-                self.docs.put(SEARCH_COLLECTION, &id, body, Precondition::None).await?;
+                self.docs
+                    .put(SEARCH_COLLECTION, &id, body, Precondition::None)
+                    .await?;
             }
         }
         self.docs
@@ -204,7 +221,9 @@ impl DriverConversationStore {
             let body = serde_json::to_value(entry).map_err(|error| {
                 StorageError::serialization("encode conversation search entry").with_source(error)
             })?;
-            self.docs.put(SEARCH_COLLECTION, &id, body, Precondition::Absent).await?;
+            self.docs
+                .put(SEARCH_COLLECTION, &id, body, Precondition::Absent)
+                .await?;
         }
         Ok(())
     }
@@ -264,18 +283,13 @@ impl DriverConversationStore {
                 let Some(live) = live else {
                     continue;
                 };
-                if entry.incarnation != live.doc.incarnation
-                    || entry.offset >= live.doc.visible_end
+                if entry.incarnation != live.doc.incarnation || entry.offset >= live.doc.visible_end
                 {
                     continue;
                 }
                 entries.push(entry);
             }
-            entries.sort_by(|a, b| {
-                a.thread_id
-                    .cmp(&b.thread_id)
-                    .then(a.offset.cmp(&b.offset))
-            });
+            entries.sort_by(|a, b| a.thread_id.cmp(&b.thread_id).then(a.offset.cmp(&b.offset)));
             let mut index = inverted_index::InvertedIndex::new();
             for entry in entries {
                 index.insert(&entry.thread_id, entry.into_message());
@@ -313,4 +327,3 @@ pub(super) fn append_write_op(
 pub(super) fn full_text_collection_spec() -> CollectionSpec {
     full_text_spec()
 }
-
