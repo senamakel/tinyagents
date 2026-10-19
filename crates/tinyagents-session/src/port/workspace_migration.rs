@@ -71,7 +71,6 @@ async fn copy_documents(
     let source_documents = source.documents();
     let destination_documents = destination.documents();
     let present_collections = source_documents.collections("").await?;
-    eprintln!("present source collections: {present_collections:?}");
     for collection in OWNED_COLLECTIONS {
         if !present_collections
             .iter()
@@ -83,7 +82,6 @@ async fn copy_documents(
             "tsd.kv" | "tsd.migrations" => Query::filter(Filter::eq("owner", "session")),
             _ => Query::all(),
         };
-        eprintln!("copying source collection: {collection}");
         for row in source_documents.query_all(collection, &query).await? {
             match destination_documents.get(collection, &row.id).await? {
                 Some(existing) if existing.doc != row.doc => {

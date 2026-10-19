@@ -124,7 +124,10 @@ impl WorkspaceStores {
                 Scope::local(),
                 SchemaAdmission::ValidateOnly,
             )?;
-            legacy_provider.try_for_agent(agent_id)?;
+            // Older source stores may lack collections added after they were
+            // written. The migration enumerates exact existing owned
+            // collections and reads them without admitting a full current
+            // agent schema on the read-only backend.
             workspace_migration::copy_agent_storage(&legacy_provider, &provider, agent_id)?;
         }
         let outcome = import_transcripts_once(&provider, agent_id, workspace_dir)?;
