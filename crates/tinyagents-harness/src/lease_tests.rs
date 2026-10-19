@@ -86,7 +86,6 @@ async fn pending_work_heartbeats_and_stops_when_lease_is_lost() {
         result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
     let result = run.await;
     assert!(result.is_err());
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
