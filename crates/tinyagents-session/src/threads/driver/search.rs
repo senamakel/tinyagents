@@ -43,15 +43,26 @@ impl SearchEntry {
         }
     }
 
-    fn into_message(self) -> ThreadMessage {
-        ThreadMessage {
-            id: self.message_id,
-            content: self.content,
-            message_type: "text".into(),
-            extra_metadata: serde_json::Value::Null,
-            sender: self.sender,
-            created_at: self.created_at,
-        }
+    fn into_index_entry(self) -> (String, ThreadMessage) {
+        let SearchEntry {
+            thread_id,
+            message_id,
+            content,
+            sender,
+            created_at,
+            ..
+        } = self;
+        (
+            thread_id,
+            ThreadMessage {
+                id: message_id,
+                content,
+                message_type: "text".into(),
+                extra_metadata: serde_json::Value::Null,
+                sender,
+                created_at,
+            },
+        )
     }
 }
 
@@ -310,7 +321,8 @@ impl DriverConversationStore {
             entries.sort_by(|a, b| a.thread_id.cmp(&b.thread_id).then(a.offset.cmp(&b.offset)));
             let mut index = inverted_index::InvertedIndex::new();
             for entry in entries {
-                index.insert(&entry.thread_id, entry.into_message());
+                let (thread_id, message) = entry.into_index_entry();
+                index.insert(&thread_id, message);
             }
             let mut changed = false;
             for (thread_id, snapshot) in &cache {

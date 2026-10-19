@@ -76,8 +76,8 @@ pub fn conversations_storage_schema() -> Schema {
     let mut schema = Schema::new(owner)
         .collection_with(SCHEMA_VERSION, thread_spec(), ScopeClass::Tenant)
         .collection_with(
-            super::driver::search::spec_version(),
-            super::driver::search::collection_spec(),
+            super::driver::DriverConversationStore::search_schema_version(),
+            super::driver::DriverConversationStore::search_collection_spec(),
             ScopeClass::Tenant,
         )
         .collection_with(SCHEMA_VERSION, append_spec(), ScopeClass::Tenant)

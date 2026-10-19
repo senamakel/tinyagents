@@ -139,6 +139,14 @@ impl DriverConversationStore {
         vec![thread_spec(), search::collection_spec()]
     }
 
+    pub(super) fn search_collection_spec() -> CollectionSpec {
+        search::collection_spec()
+    }
+
+    pub(super) fn search_schema_version() -> u32 {
+        search::spec_version()
+    }
+
     /// Declare application metadata under explicitly trusted bootstrap authority.
     ///
     /// This does not prepare native internal schemas, bind an actor, migrate
