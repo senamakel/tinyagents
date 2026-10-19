@@ -194,7 +194,13 @@ async fn stale_status_snapshot_cannot_roll_back_a_renewed_deadline() {
     let scoped = backend.for_scope(&Scope::local()).unwrap();
     let owner = DriverStatusStore::new(Arc::clone(scoped.documents()));
     let heartbeat = DriverStatusStore::new(Arc::clone(scoped.documents()));
-    let now = SystemTime::now();
+    let now = SystemTime::UNIX_EPOCH
+        + Duration::from_millis(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        );
     let run_id = mint_run_id();
     let mut initial = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model".into()));
     initial.mark_running(HarnessPhase::Model);

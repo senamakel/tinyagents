@@ -329,8 +329,9 @@ async fn agent_harness_renews_during_pending_model_call_and_cancels_on_lease_los
         result = &mut run => panic!("model run ended before its await: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::task::yield_now().await;
+    poll_pending(run.as_mut()).await;
     tokio::time::advance(Duration::from_secs(10)).await;
+    poll_pending(run.as_mut()).await;
     assert!(run.await.is_err());
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
     assert!(
@@ -372,7 +373,7 @@ async fn successful_agent_run_stops_renewing_after_model_completion() {
         result = &mut run => panic!("model run ended before its await: {result:?}"),
     }
     tokio::time::advance(Duration::from_secs(10)).await;
-    tokio::task::yield_now().await;
+    poll_pending(run.as_mut()).await;
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
     release_model.notify_one();
     assert!(run.await.is_ok());
