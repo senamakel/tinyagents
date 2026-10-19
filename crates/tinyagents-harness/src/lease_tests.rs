@@ -128,7 +128,15 @@ async fn completed_or_cancelled_wrapper_does_not_leave_a_heartbeat_behind() {
 
 struct StalledLease(AtomicUsize);
 
-struct NearExpiryLease(AtomicUsize);
+struct NearExpiryLease {
+    renewals: AtomicUsize,
+    started: tokio::sync::mpsc::UnboundedSender<usize>,
+}
+
+struct ObservableLease {
+    renewals: AtomicUsize,
+    started: tokio::sync::mpsc::UnboundedSender<usize>,
+}
 
 struct NeverLease;
 
@@ -165,7 +173,9 @@ impl RunLeaseHeartbeat for NearExpiryLease {
     }
 
     async fn renew(&self) -> Result<bool> {
-        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+        let count = self.renewals.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.started.send(count);
+        if count == 1 {
             tokio::time::sleep(Duration::from_secs(9)).await;
             Ok(true)
         } else {
@@ -174,10 +184,27 @@ impl RunLeaseHeartbeat for NearExpiryLease {
     }
 }
 
+#[async_trait]
+impl RunLeaseHeartbeat for ObservableLease {
+    fn lease_duration(&self) -> Duration {
+        Duration::from_secs(120)
+    }
+
+    async fn renew(&self) -> Result<bool> {
+        let count = self.renewals.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.started.send(count);
+        Ok(true)
+    }
+}
+
 #[tokio::test]
 async fn stalled_renewal_stops_near_expiry_before_the_granted_lease_expires() {
     tokio::time::pause();
-    let lease = NearExpiryLease(AtomicUsize::new(0));
+    let (renewals, mut renewal_started) = tokio::sync::mpsc::unbounded_channel();
+    let lease = Arc::new(NearExpiryLease {
+        renewals: AtomicUsize::new(0),
+        started: renewals,
+    });
     let started_at = tokio::time::Instant::now();
     let entered = Arc::new(tokio::sync::Notify::new());
     let work_entered = Arc::clone(&entered);
@@ -194,16 +221,19 @@ async fn stalled_renewal_stops_near_expiry_before_the_granted_lease_expires() {
         work_entered.notify_one();
         std::future::pending::<()>().await;
     };
-    let mut run = Box::pin(run_with_lease(work, &lease, Duration::from_secs(10)));
-    tokio::select! {
-        _ = entered.notified() => {},
-        result = &mut run => panic!("pending work ended unexpectedly: {result:?}"),
-    }
+    let run_lease = Arc::clone(&lease);
+    let run = tokio::spawn(async move {
+        run_with_lease(work, run_lease.as_ref(), Duration::from_secs(10)).await
+    });
+    assert_eq!(renewal_started.recv().await, Some(1));
+    tokio::time::advance(Duration::from_secs(9)).await;
+    entered.notified().await;
+    let second_renewal_started = renewal_started.recv();
     tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
+    assert_eq!(second_renewal_started.await, Some(2));
     tokio::time::advance(Duration::from_secs(10)).await;
 
-    assert!(run.await.is_err());
+    assert!(run.await.unwrap().is_err());
     assert!(dropped.load(Ordering::SeqCst));
     assert!(tokio::time::Instant::now().duration_since(started_at) < lease.lease_duration());
 }
@@ -348,27 +378,30 @@ async fn successful_agent_run_stops_renewing_after_model_completion() {
             dropped: Arc::clone(&dropped),
         }),
     );
-    let lease = Lease {
+    let (renewals, mut renewal_started) = tokio::sync::mpsc::unbounded_channel();
+    let lease = Arc::new(ObservableLease {
         renewals: AtomicUsize::new(0),
-        lose_after: usize::MAX,
-    };
-    let mut run = Box::pin(harness.invoke_with_lease(
-        &(),
-        (),
-        RunConfig::new("run"),
-        vec![Message::user("continue")],
-        &lease,
-        Duration::from_secs(10),
-    ));
-    tokio::select! {
-        _ = entered.notified() => {},
-        result = &mut run => panic!("model run ended before its await: {result:?}"),
-    }
+        started: renewals,
+    });
+    let run_lease = Arc::clone(&lease);
+    let run = tokio::spawn(async move {
+        harness
+            .invoke_with_lease(
+                &(),
+                (),
+                RunConfig::new("run"),
+                vec![Message::user("continue")],
+                run_lease.as_ref(),
+                Duration::from_secs(10),
+            )
+            .await
+    });
+    entered.notified().await;
     tokio::time::advance(Duration::from_secs(10)).await;
-    poll_pending(run.as_mut()).await;
+    assert_eq!(renewal_started.recv().await, Some(2));
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
     release_model.notify_one();
-    assert!(run.await.is_ok());
+    assert!(run.await.unwrap().is_ok());
     tokio::time::advance(Duration::from_secs(30)).await;
     tokio::task::yield_now().await;
     assert_eq!(lease.renewals.load(Ordering::SeqCst), 2);
