@@ -15,8 +15,9 @@ const JOURNAL_PREFIX: &str = "harness.journal/";
 const STREAM_BATCH: usize = 256;
 
 /// Copies only session-owned records through the storage ports. Documents
-/// enter only when absent. Existing journals must match the copied prefix
-/// before a partial copy can resume; the source database stays intact.
+/// enter only when absent; an existing document must match its source or the
+/// import fails without changing it. Existing journals must match the copied
+/// prefix before a partial copy can resume; the source database stays intact.
 pub(super) fn copy_agent_storage(
     source: &DriverSessionStores,
     destination: &DriverSessionStores,
@@ -45,14 +46,19 @@ async fn copy_documents(
             .query_all(collection, &Query::all())
             .await?
         {
-            if destination_documents
-                .get(collection, &row.id)
-                .await?
-                .is_none()
-            {
-                destination_documents
-                    .put(collection, &row.id, row.doc, Precondition::Absent)
-                    .await?;
+            match destination_documents.get(collection, &row.id).await? {
+                Some(existing) if existing.doc != row.doc => {
+                    return Err(tinystoragedrivers_core::StorageError::backend(format!(
+                        "cannot safely import {collection}/{}: destination document differs",
+                        row.id
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    destination_documents
+                        .put(collection, &row.id, row.doc, Precondition::Absent)
+                        .await?;
+                }
             }
         }
     }

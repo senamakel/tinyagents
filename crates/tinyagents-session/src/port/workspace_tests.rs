@@ -216,6 +216,44 @@ async fn path_convenience_imports_existing_private_store_into_unified_storage() 
     assert!(dir.path().join(STORE_DIR).join("storage.db").is_file());
 }
 
+#[allow(deprecated)]
+#[tokio::test]
+async fn path_import_refuses_conflicting_destination_documents_without_overwriting() {
+    use tinystoragedrivers_core::{Scope, StorageBackend};
+
+    let dir = tempfile::tempdir().unwrap();
+    let destination_backend: Arc<dyn StorageBackend> = Arc::new(
+        SqliteStorage::open(dir.path().join(STORAGE_DIR)).unwrap(),
+    );
+    let destination = DriverSessionStores::new(destination_backend, Scope::local()).unwrap();
+    let destination_stores = destination.try_for_agent("agent").unwrap();
+    destination_stores
+        .kv
+        .put("session", "same-key", serde_json::json!({"value": "new"}))
+        .await
+        .unwrap();
+
+    let old_backend: Arc<dyn StorageBackend> =
+        Arc::new(SqliteStorage::open(dir.path().join(STORE_DIR)).unwrap());
+    let old = DriverSessionStores::new(old_backend, Scope::local()).unwrap();
+    old.try_for_agent("agent")
+        .unwrap()
+        .kv
+        .put("session", "same-key", serde_json::json!({"value": "old"}))
+        .await
+        .unwrap();
+
+    assert!(WorkspaceStores::open(dir.path(), "agent").is_err());
+    assert_eq!(
+        destination_stores
+            .kv
+            .get("session", "same-key")
+            .await
+            .unwrap(),
+        Some(serde_json::json!({"value": "new"}))
+    );
+}
+
 #[test]
 fn a_dropped_handle_releases_its_backend_and_reopens_fresh() {
     let dir = tempfile::tempdir().unwrap();
