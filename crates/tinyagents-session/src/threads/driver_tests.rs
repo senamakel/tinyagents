@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tinystoragedrivers_core::{
-    Capabilities, CollectionSpec, DocumentStore, ErrorKind, Filter, Key, MemoryStorage,
-    Precondition, Query, ReadCheck, Scope, SearchHit, Sort, StorageBackend, StorageError, Version,
-    Versioned, WriteOp, WriteResult,
+    Capabilities, CollectionSpec, DocumentStore, Filter, MemoryStorage, Precondition, Query,
+    ReadCheck, Scope, SearchHit, Sort, StorageBackend, StorageError, Version, Versioned, WriteOp,
+    WriteResult,
 };
 
 fn request(id: &str) -> CreateConversationThread {
