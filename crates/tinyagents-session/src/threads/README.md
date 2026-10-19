@@ -42,8 +42,8 @@ for the v1 -> v2 mapping and `conversations_storage_schema()` for the steps.
 
 ### Explicit schema preparation and actor admission
 
-`DriverConversationStore::collection_specs()` publishes the bare
-`conversations.threads` declaration. Trusted bootstrap calls
+`DriverConversationStore::collection_specs()` publishes the thread and derived
+search collection declarations. Trusted bootstrap calls
 `DriverConversationStore::prepare_schema(documents)` on its raw native document
 port. Native internal stream/database preparation remains a separate host step.
 Restricted native handles refuse this declaration helper.
@@ -108,9 +108,18 @@ importer, provider selection or legacy source-ownership grant is added.
 
 ## Search
 
-Search rebuilds a temporary owning inverted index (trigram and CJK bigram) from
-exhaustive live backend reads. It does not use capped FullText or a process
-cache.
+Search maintains a derived, scoped `conversations.search` collection for
+FullText-capable stores. Its opaque ASCII tokens encode the existing normalized
+trigram/CJK terms (plus code-point tokens for the legacy short-term cases), so
+backend-specific text parsers do not change matching semantics. Appends publish
+the message row atomically with thread metadata; edits and tail cuts write rows
+for the replacement incarnation before publishing it. Searches use FullText
+only to find candidates, then validate their live thread incarnation and
+visible prefix and apply the existing exact substring ranking and pagination.
+Old persisted conversations are backfilled once before the readiness marker is
+published. No corpus scan is done on steady-state FullText searches. Stores
+without FullText retain the exhaustive scan fallback, and FullText errors are
+returned to the caller.
 
 ## Public surface
 
@@ -147,5 +156,6 @@ ambiguity.
 | `schema.rs` | `conversations_storage_schema()`, names and the stream-name rule |
 | `schema_steps.rs` | the v1 -> v2 migration steps |
 | `tokenize.rs` | normalization and n-gram tokenizer |
-| `inverted_index.rs` | in-memory search index |
+| `inverted_index.rs` | exact matching, ranking and pagination for search candidates |
+| `driver/search.rs` | derived search rows, FullText query path and legacy backfill |
 | `*_tests.rs` | unit tests |

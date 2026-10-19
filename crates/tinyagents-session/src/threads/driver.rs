@@ -1,6 +1,6 @@
 //! Admitted scoped conversation metadata and immutable committed-prefix readers.
 //!
-//! No host paths/backend lookup, FullText shortcut, or persistent process cache.
+//! No host paths/backend lookup; FullText candidates live in the scoped search collection.
 //! Plain append uses a recoverable intent; edits and distributed leases remain unsupported.
 //!
 //! Threads are `conversations.threads` documents (schema v2, see [`super::dto`]).
@@ -17,13 +17,14 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tinystoragedrivers_core::primitives::Repo;
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
-    StorageError, StreamStore, Versioned, WriteOptions,
+    Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query,
+    ScopedStorage, StorageError, StreamStore, Versioned, WriteOptions,
 };
 mod append;
 mod pending;
 mod reader;
 mod rewrite;
+pub(super) mod search;
 
 const PAGE_SIZE: usize = 64;
 /// Attempts of the loops that reconcile more than one document or stream.
@@ -131,12 +132,19 @@ impl DriverConversationStore {
         Self::new(scoped)
     }
 
-    /// The `conversations.threads` declaration.
-    ///
-    /// There are no required secondary indexes, TTL or full-text fields.
+    /// Thread metadata and the base derived-search collection declaration.
+    /// Trusted bootstrap adds its FullText field when the driver supports it.
     /// Native validation accepts compatible supersets, not exact equality.
     pub fn collection_specs() -> Vec<CollectionSpec> {
-        vec![thread_spec()]
+        vec![thread_spec(), search::collection_spec()]
+    }
+
+    pub(super) fn search_collection_spec() -> CollectionSpec {
+        search::collection_spec()
+    }
+
+    pub(super) fn search_schema_version() -> u32 {
+        search::spec_version()
     }
 
     /// Declare application metadata under explicitly trusted bootstrap authority.
@@ -152,6 +160,7 @@ impl DriverConversationStore {
         for spec in Self::collection_specs() {
             documents.ensure_collection(&spec).await?;
         }
+        Self::prepare_search_schema(documents).await?;
         Ok(())
     }
 
@@ -159,6 +168,11 @@ impl DriverConversationStore {
         if self.validate_only {
             for spec in Self::collection_specs() {
                 self.docs.validate_collection_spec(&spec).await?;
+            }
+            if self.docs.capabilities().contains(Capability::FullText) {
+                self.docs
+                    .validate_collection_spec(&search::full_text_collection_spec())
+                    .await?;
             }
         }
         Ok(())
@@ -368,6 +382,7 @@ impl ConversationPersistence for DriverConversationStore {
         self.admit().await?;
         let key = Self::key(thread_id)?;
         let mut deleted = false;
+        let mut deleted_incarnation = None;
         self.threads()?
             .update(&key, |current| {
                 deleted = false;
@@ -378,11 +393,16 @@ impl ConversationPersistence for DriverConversationStore {
                 if doc.deleted {
                     return Ok(None);
                 }
+                deleted_incarnation = Some(doc.incarnation.clone());
                 doc.deleted = true;
                 deleted = true;
                 Ok(Some(doc.to_dto()?))
             })
             .await?;
+        if let Some(incarnation) = deleted_incarnation.filter(|_| deleted) {
+            self.remove_search_incarnation(thread_id, &incarnation)
+                .await;
+        }
         Ok(deleted)
     }
     async fn search_cross_thread_messages(
@@ -394,6 +414,9 @@ impl ConversationPersistence for DriverConversationStore {
         self.admit().await?;
         if limit == 0 {
             return Ok(Vec::new());
+        }
+        if self.docs.capabilities().contains(Capability::FullText) {
+            return self.search_indexed(query, limit, exclude_thread_id).await;
         }
         let mut index = inverted_index::InvertedIndex::new();
         for row in self.live_rows().await? {

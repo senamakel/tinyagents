@@ -91,6 +91,9 @@ async fn migrate(storage: &ScopedStorage) {
     for spec in tinystoragedrivers_core::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
+    DriverConversationStore::prepare_schema(storage.documents().as_ref())
+        .await
+        .unwrap();
     Registry::compose([conversations_storage_schema()])
         .unwrap()
         .migrate(storage, &MigrateOptions::new())
@@ -132,6 +135,7 @@ fn the_schema_names_what_the_conversations_owner_declares() {
         [
             "conversations.appends",
             "conversations.messages",
+            "conversations.search",
             "conversations.threads"
         ]
     );
