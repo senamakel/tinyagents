@@ -175,3 +175,7 @@ impl WorkspaceStores {
 #[cfg(test)]
 #[path = "workspace_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "workspace_migration_tests.rs"]
+mod migration_tests;

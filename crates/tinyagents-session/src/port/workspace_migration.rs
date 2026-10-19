@@ -87,7 +87,8 @@ async fn copy_journals(
 ) -> Result<(), tinystoragedrivers_core::StorageError> {
     let source_streams = source.streams();
     let destination_streams = destination.streams();
-    for stream in source_streams.streams(JOURNAL_PREFIX).await? {
+    let source_names = source_streams.streams(JOURNAL_PREFIX).await?;
+    for stream in &source_names {
         let Some(source_info) = source_streams.info(&stream).await? else {
             continue;
         };
@@ -148,9 +149,20 @@ async fn copy_journals(
                 .truncate_before(&stream, source_info.base)
                 .await?;
         }
-        if source_info.is_sealed() {
+        if source_info.is_sealed() && next == source_info.len {
             destination_streams.seal(&stream).await?;
         }
+        if source_streams.info(&stream).await? != Some(source_info) {
+            return Err(storage_conflict(
+                &stream,
+                "source stream changed during copy",
+            ));
+        }
+    }
+    if source_streams.streams(JOURNAL_PREFIX).await? != source_names {
+        return Err(tinystoragedrivers_core::StorageError::backend(
+            "cannot safely import journals: source stream set changed during copy",
+        ));
     }
     Ok(())
 }

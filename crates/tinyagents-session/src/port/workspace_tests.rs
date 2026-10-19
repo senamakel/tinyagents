@@ -187,6 +187,10 @@ async fn path_convenience_imports_existing_private_store_into_unified_storage() 
         )
         .await
         .unwrap();
+    drop(old_stores);
+    drop(old_provider);
+    let source_database = dir.path().join(STORE_DIR).join("storage.db");
+    let source_bytes = std::fs::read(&source_database).unwrap();
 
     let moved = WorkspaceStores::open(dir.path(), "agent").unwrap();
     let imported = moved
@@ -214,6 +218,22 @@ async fn path_convenience_imports_existing_private_store_into_unified_storage() 
     );
     assert!(dir.path().join(STORAGE_DIR).join("storage.db").is_file());
     assert!(dir.path().join(STORE_DIR).join("storage.db").is_file());
+    assert_eq!(std::fs::read(&source_database).unwrap(), source_bytes);
+
+    // A completed import is skipped on later launches, so evolved destination
+    // state does not conflict with the unchanged legacy source.
+    moved
+        .stores()
+        .kv
+        .put("session", "old-key", serde_json::json!({"value": 8}))
+        .await
+        .unwrap();
+    drop(moved);
+    let reopened = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    assert_eq!(
+        reopened.stores().kv.get("session", "old-key").await.unwrap(),
+        Some(serde_json::json!({"value": 8}))
+    );
 }
 
 #[allow(deprecated)]
