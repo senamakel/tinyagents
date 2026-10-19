@@ -70,9 +70,7 @@ impl InMemoryStatusStore {
         if !is_active_status(status)
             || status.lease_owner.as_deref() != Some(owner)
             || status.lease_epoch != epoch
-            || !status
-                .lease_expires_at
-                .is_some_and(|deadline| deadline > now)
+            || status.lease_expires_at.is_none_or(|deadline| deadline <= now)
         {
             return Ok(false);
         }
@@ -99,9 +97,7 @@ impl InMemoryStatusStore {
             || !is_active_status(current)
             || current.lease_owner.as_deref() != Some(owner)
             || current.lease_epoch != epoch
-            || !current
-                .lease_expires_at
-                .is_some_and(|deadline| deadline > now)
+            || current.lease_expires_at.is_none_or(|deadline| deadline <= now)
         {
             return Ok(false);
         }

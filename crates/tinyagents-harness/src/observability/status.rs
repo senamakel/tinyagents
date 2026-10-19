@@ -176,9 +176,9 @@ impl HarnessStatusStore for DriverStatusStore {
                         || current.lease_owner.is_none()
                         || current.lease_owner != status.lease_owner
                         || current.lease_epoch != status.lease_epoch
-                        || !current
+                        || current
                             .lease_expires_at
-                            .is_some_and(|deadline| deadline > std::time::SystemTime::now()))
+                            .is_none_or(|deadline| deadline <= std::time::SystemTime::now()))
                 {
                     return Err(crate::error::TinyAgentsError::Storage(
                         "status write rejected by run lease".into(),
@@ -256,9 +256,7 @@ impl HarnessStatusStore for DriverStatusStore {
             };
             let mut status = HarnessRunStatus::from(record);
             if status.lease_owner.is_none()
-                || !status
-                    .lease_expires_at
-                    .is_some_and(|deadline| deadline <= now)
+                || status.lease_expires_at.is_none_or(|deadline| deadline > now)
                 || !is_active(&status)
             {
                 continue;
@@ -315,9 +313,7 @@ impl HarnessStatusStore for DriverStatusStore {
                     let current = HarnessRunStatus::from(record);
                     if !is_active(&current)
                         || current.lease_owner.is_none()
-                        || !current
-                            .lease_expires_at
-                            .is_some_and(|deadline| deadline <= now)
+                        || current.lease_expires_at.is_none_or(|deadline| deadline > now)
                     {
                         return Ok(None);
                     }
@@ -388,9 +384,7 @@ impl HarnessStatusStore for DriverStatusStore {
             if !is_active(&status)
                 || status.lease_owner.as_deref() != Some(owner)
                 || status.lease_epoch != epoch
-                || !status
-                    .lease_expires_at
-                    .is_some_and(|deadline| deadline > now)
+                || status.lease_expires_at.is_none_or(|deadline| deadline <= now)
             {
                 return Ok(false);
             }
@@ -447,9 +441,7 @@ impl HarnessStatusStore for DriverStatusStore {
             if !is_active(&current)
                 || current.lease_owner.as_deref() != Some(owner)
                 || current.lease_epoch != epoch
-                || !current
-                    .lease_expires_at
-                    .is_some_and(|deadline| deadline > now)
+                || current.lease_expires_at.is_none_or(|deadline| deadline <= now)
             {
                 return Ok(false);
             }
