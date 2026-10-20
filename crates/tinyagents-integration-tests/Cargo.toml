@@ -22,12 +22,19 @@ tinyagents-orchestration = { path = "../tinyagents-orchestration" }
 tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-registry = { path = "../tinyagents-registry" }
 tinyagents-session = { path = "../tinyagents-session" }
-tinystoragedrivers-core = { workspace = true }
-tinystoragedrivers-sqlite = { workspace = true }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.4.1" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
+
+[dev-dependencies]
+tinyagents-storage-kit = { path = "../tinyagents-storage-kit" }
+tinyagents-session = { path = "../tinyagents-session", features = ["testkit"] }
+tinystoragedrivers-api = { workspace = true }
+tinystoragedrivers-connect = { workspace = true }
+tinystoragedrivers-document = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
+tinystoragedrivers-types = { workspace = true }
 
 [features]
 default = []

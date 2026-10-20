@@ -8,20 +8,18 @@
 //! an optional bound [`crate::run_ledger::RunLedgerStore`] independently of this
 //! bundle, through [`SessionStoreProvider::run_ledger_for_agent`].
 //!
-//! That is what lets one process serve many users from a shared database: a
-//! cloud host implements the provider over its own store (MongoDB, Postgres,
-//! …) and scopes every query by agent id, while a desktop host keeps today's
-//! on-disk layout behind the same traits.
+//! Hosts resolve each identity and supply a [`tinyagents_storage_kit::ScopedStorage`]
+//! already bound to the authorized scope. The session library does not choose
+//! scope labels or open a backend.
 //!
 //! # Isolation
 //!
-//! [`SessionStoreProvider`] provides handles bound to one agent. With the
-//! `storage-drivers` feature, hosts that must propagate store-opening or
-//! recovery errors should use `try_for_agent`; the legacy `for_agent` accessor
-//! can return refusing handles instead. A provider that serves several users
+//! [`SessionStoreProvider`] provides handles bound to one agent. Hosts that
+//! must propagate store-opening or recovery errors should use `try_for_agent`;
+//! the legacy `for_agent` accessor can return refusing handles instead. A provider that serves several users
 //! from one backend must make it impossible for one agent's
-//! handles to read or write another's data; [`InMemorySessionStores`] does,
-//! and the conformance suite
+//! handles to read or write another's data; the explicitly enabled
+//! `testkit::InMemorySessionStores` does, and the conformance suite
 //! ([`crate::testkit::conformance::session_store_isolation_conformance`])
 //! checks it. A single-user host (the desktop app) may legitimately share one
 //! store between its agents, and simply does not claim isolation. The optional
@@ -38,35 +36,44 @@
 //!
 //! # Bundled implementations
 //!
-//! - [`InMemorySessionStores`]: per-agent, process-lifetime storage, for
-//!   tests and for hosts that deliberately keep nothing.
-//! - `DriverSessionStores` (feature `storage-drivers`): every agent's stores
-//!   in one `tinystoragedrivers` backend (SQLite, MongoDB, ...), each agent
-//!   under its own storage scope.
-//! - The on-disk layout (`session_raw/`, `tinyagents_store/`, turn-state
-//!   files) is wrapped by the host that owns it, not here: this crate keeps
-//!   the file and SQLite building blocks, and a host crate decides to use them.
+//! - `testkit::InMemorySessionStores`: per-agent, process-lifetime storage for
+//!   tests and explicit test-only hosts.
+//! - `DriverSessionStores`: opens each agent's stores from the host-supplied
+//!   bound-storage factory and runs the session crate's owner migrations
+//!   before exposing them. Hosts may use
+//!   [`collections`] for declaration-only backend preparation.
+//! - Workspace files, JSONL transcripts and database engines belong to the
+//!   host; `docs/legacy-import-handoff.md` records the source migration handoff.
 
 mod drivers;
+mod helpers;
+#[cfg(any(test, feature = "testkit"))]
 mod memory;
 mod types;
-#[cfg(feature = "legacy-import")]
-mod workspace;
 
 use std::sync::Arc;
 
 pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
-    RebindableSessionStores, SessionStoreRegistry, storage_schema,
+    RebindableSessionStores, SessionStoreRegistry, collections, open_agent_storage, storage_schema,
 };
+#[cfg(any(test, feature = "testkit"))]
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use types::AgentStores;
-#[cfg(feature = "legacy-import")]
-pub use types::WorkspaceStores;
-#[cfg(feature = "legacy-import")]
-pub use workspace::STORE_DIR;
 
 pub use tinyagents_harness::store::{AppendStore, Store};
+
+/// Host-owned mapping from an agent identity to its already-bound storage.
+/// The session library does not choose tenants, construct scopes, or bind a
+/// backend. Hosts resolve identity and authorization before returning storage.
+pub type AgentStorageFactory = Arc<
+    dyn Fn(
+            &str,
+        )
+            -> Result<tinyagents_storage_kit::ScopedStorage, tinystoragedrivers_types::StorageError>
+        + Send
+        + Sync,
+>;
 
 use crate::turn_state::{TurnLifecycle, TurnState};
 
@@ -90,7 +97,7 @@ pub trait SessionStoreProvider: Send + Sync {
     fn try_for_agent(
         &self,
         agent_id: &str,
-    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+    ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
         Ok(self.for_agent(agent_id))
     }
 
@@ -108,8 +115,8 @@ pub trait SessionStoreProvider: Send + Sync {
     /// retain their native sources; hosts must propagate a configured refusal.
     fn bind_actor(
         &self,
-        _backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        _factory: AgentStorageFactory,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         Ok(None)
     }
 
@@ -117,10 +124,10 @@ pub trait SessionStoreProvider: Send + Sync {
     ///
     /// Defaults to absent so existing providers retain their behavior. Absence
     /// is not permission to create a local database: hosts decide whether and
-    /// how to supply a classic `SqliteRunLedger` or another implementation.
+    /// how to supply a driver-backed implementation.
     /// Multi-tenant providers must resolve identity before returning the handle
     /// and must not derive scope from ledger payloads. This seam alone neither
-    /// routes existing workspace-based callers nor migrates session tables.
+    /// routes existing workspace-based callers nor imports workspace data.
     ///
     /// Scope/admission or backend errors must be returned as errors, distinct
     /// from an unsupported ledger (`Ok(None)`), so callers can fail closed.
@@ -143,11 +150,11 @@ pub trait SessionStoreProvider: Send + Sync {
     /// Native actor admission errors, retaining their sources.
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        factory: AgentStorageFactory,
         admission: tinyagents_harness::store::SchemaAdmission,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         match admission {
-            tinyagents_harness::store::SchemaAdmission::Declare => self.bind_actor(backend),
+            tinyagents_harness::store::SchemaAdmission::Declare => self.bind_actor(factory),
             tinyagents_harness::store::SchemaAdmission::ValidateOnly => Ok(None),
         }
     }
@@ -295,15 +302,15 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
     fn try_for_agent(
         &self,
         agent_id: &str,
-    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+    ) -> Result<AgentStores, tinystoragedrivers_types::StorageError> {
         (**self).try_for_agent(agent_id)
     }
 
     fn bind_actor(
         &self,
-        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
-        (**self).bind_actor(backend)
+        factory: AgentStorageFactory,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
+        (**self).bind_actor(factory)
     }
 
     fn conversations_for_agent(
@@ -323,10 +330,10 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        factory: AgentStorageFactory,
         admission: tinyagents_harness::store::SchemaAdmission,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
-        (**self).bind_actor_with_schema_admission(backend, admission)
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
+        (**self).bind_actor_with_schema_admission(factory, admission)
     }
 
     fn for_agent(&self, agent_id: &str) -> AgentStores {

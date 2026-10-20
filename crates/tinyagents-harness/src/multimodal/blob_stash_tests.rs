@@ -1,5 +1,6 @@
 use super::*;
-use tinystoragedrivers_core::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
@@ -17,7 +18,7 @@ fn stash_on(storage: &ScopedStorage, max: u64, ttl: Duration) -> BlobAttachmentS
 }
 
 fn stash(max: u64, ttl: Duration) -> BlobAttachmentStash {
-    stash_on(&scoped(&MemoryStorage::new(), "local"), max, ttl)
+    stash_on(&scoped(&MemoryBackend::new(), "local"), max, ttl)
 }
 
 fn image_uri(fill: u8, len: usize) -> String {
@@ -105,7 +106,7 @@ async fn sweep_removes_only_attachments_older_than_the_ttl() {
 
 #[tokio::test]
 async fn tenants_do_not_see_each_others_attachments() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = stash_on(
         &scoped(&storage, "alice"),
         u64::MAX,
@@ -118,11 +119,9 @@ async fn tenants_do_not_see_each_others_attachments() {
 }
 
 #[tokio::test]
-async fn attachments_survive_a_reopened_sqlite_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("stash.sqlite");
+async fn attachments_survive_a_reopened_driver_handle() {
+    let storage = MemoryBackend::new();
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         stash_on(
             &scoped(&storage, "local"),
             u64::MAX,
@@ -132,7 +131,6 @@ async fn attachments_survive_a_reopened_sqlite_file() {
         .await
         .unwrap();
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = stash_on(
         &scoped(&storage, "local"),
         u64::MAX,
@@ -175,7 +173,7 @@ async fn concurrent_writes_under_a_tight_cap_leave_the_stash_within_its_cap() {
 /// `harness.attachment_stash` row per id with its last use as `touched_ms`.
 #[tokio::test]
 async fn bytes_and_index_use_the_v2_names() {
-    let storage = scoped(&MemoryStorage::new(), "local");
+    let storage = scoped(&MemoryBackend::new(), "local");
     let s = stash_on(&storage, u64::MAX, Duration::from_secs(3600));
     s.write("abc123", TINY_PNG).await.unwrap();
 

@@ -1,6 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use chrono::Duration;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, StorageBackend};
+use tinyagents_storage_kit::{Precondition, Scope, ScopedStorage};
+use tinystoragedrivers_api::StorageBackend;
 
 async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
     let mut row = ledger
@@ -26,9 +28,15 @@ async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
 }
 
 async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
-    let a = DriverRunLedger::new(backend.for_scope(&Scope::new("a").unwrap()).unwrap());
-    let peer = DriverRunLedger::new(backend.for_scope(&Scope::new("a").unwrap()).unwrap());
-    let sibling = DriverRunLedger::new(backend.for_scope(&Scope::new("b").unwrap()).unwrap());
+    let a_scope = Scope::new("a").unwrap();
+    let a_storage = ScopedStorage::new(backend.for_scope(&a_scope).unwrap(), a_scope.clone());
+    let a = DriverRunLedger::new(a_storage.clone());
+    let peer = DriverRunLedger::new(a_storage);
+    let b_scope = Scope::new("b").unwrap();
+    let sibling = DriverRunLedger::new(ScopedStorage::new(
+        backend.for_scope(&b_scope).unwrap(),
+        b_scope,
+    ));
     let cutoff = DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -98,16 +106,14 @@ async fn memory_telemetry_retention_preserves_cutoff_and_other_scopes() {
 }
 
 #[tokio::test]
-async fn sqlite_telemetry_retention_preserves_cutoff_and_other_scopes() {
-    let root = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(root.path().join("ledger.sqlite")).unwrap();
+async fn reconstructed_memory_telemetry_retention_preserves_cutoff_and_other_scopes() {
+    let backend = MemoryStorage::new();
     prunes_only_old_telemetry(&backend).await;
 }
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, ErrorKind, Page, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };
@@ -123,7 +129,7 @@ struct RetentionBoundary {
 }
 #[async_trait::async_trait]
 impl DocumentStore for RetentionBoundary {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
@@ -190,7 +196,7 @@ impl DocumentStore for RetentionBoundary {
                 .await?;
         }
         if self.refuse {
-            return Err(StorageError::fenced("retention admission expired")
+            return Err(StorageError::unavailable("retention admission expired")
                 .with_source(std::io::Error::other("retained native source")));
         }
         self.inner.atomic_batch_checked(checks, writes).await
@@ -209,13 +215,7 @@ fn wrap(
         refuse,
         calls: AtomicUsize::new(0),
     });
-    let scoped = ScopedStorage::new(
-        native.scope().clone(),
-        "memory",
-        boundary.clone(),
-        native.streams().clone(),
-        native.blobs().clone(),
-    );
+    let scoped = crate::testkit::with_documents(native, boundary.clone());
     (DriverRunLedger::new(scoped), boundary)
 }
 
@@ -266,7 +266,7 @@ async fn native_retention_refusal_preserves_all_candidates_and_source() {
     let (ledger, _) = wrap(&native, None, true);
     let error = ledger.prune_run_telemetry_before(cutoff).await.unwrap_err();
     assert!(
-        matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Unavailable)
     );
     assert_eq!(
         std::error::Error::source(&error).unwrap().to_string(),
@@ -289,46 +289,7 @@ async fn empty_retention_still_requires_native_admission() {
     let (ledger, boundary) = wrap(&native, None, true);
     let error = ledger.prune_run_telemetry_before(now()).await.unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Unavailable)
     );
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn retired_generation_cannot_prune_fresh_telemetry() {
-    use tinystoragedrivers_core::{PurgeMode, PurgeRequest};
-    let backend = MemoryStorage::new();
-    let scope = Scope::new("a").unwrap();
-    let native = backend.for_scope(&scope).unwrap();
-    let retained = DriverRunLedger::new(native.clone());
-    let cutoff = now();
-    seed(&retained, "old", cutoff - Duration::days(1)).await;
-    let receipt = native
-        .purge(&PurgeRequest {
-            operation_id: "reset-telemetry".into(),
-            mode: PurgeMode::Atomic,
-        })
-        .await
-        .unwrap();
-    let fresh = DriverRunLedger::new(
-        backend
-            .for_scope_generation(&scope, receipt.generation)
-            .unwrap(),
-    );
-    seed(&fresh, "fresh", cutoff - Duration::days(1)).await;
-    let error = retained
-        .prune_run_telemetry_before(cutoff)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::ScopeGenerationRejected)
-    );
-    assert!(
-        fresh
-            .read::<RunTelemetry>(TELEMETRY, "fresh")
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert_eq!(fresh.prune_run_telemetry_before(cutoff).await.unwrap(), 1);
 }

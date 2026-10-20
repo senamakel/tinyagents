@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{Blocking, DocumentStore, Key, Kv, Repo, RetryPolicy, StorageError};
+use tinyagents_storage_kit::{Blocking, DocumentStore, Key, Kv, Repo, RetryPolicy, StorageError};
 use tokio::sync::OnceCell;
 
 use super::{
@@ -103,11 +103,9 @@ impl DocumentSubagentPersistence {
     async fn declare(&self) -> std::result::Result<(), StorageError> {
         self.declared
             .get_or_try_init(|| async {
-                for spec in tinystoragedrivers_core::primitives::collection_specs() {
-                    if spec.name == tinystoragedrivers_core::primitives::KV {
-                        self.docs.ensure_collection(&spec).await?;
-                    }
-                }
+                self.docs
+                    .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+                    .await?;
                 Ok(())
             })
             .await
@@ -145,7 +143,7 @@ impl DocumentSubagentPersistence {
         let this = self.clone();
         self.run(async move {
             this.declare().await?;
-            let repo = Repo::<KvEntry>::new(&this.docs, tinystoragedrivers_core::primitives::KV)?
+            let repo = Repo::<KvEntry>::new(&this.docs, tinyagents_storage_kit::primitives::KV)?
                 .with_retry(RetryPolicy::default());
             let id = Key::of([OWNER, NS, &name])?;
             let mut result = None;

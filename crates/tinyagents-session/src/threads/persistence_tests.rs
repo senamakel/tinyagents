@@ -1,6 +1,18 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::ErrorKind;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_types::ErrorKind;
+
+async fn memory_store() -> DriverConversationStore {
+    let backend = tinystoragedrivers_testkit::memory_backend();
+    let scoped = backend
+        .for_scope(&Scope::new("session-fixture-planner").unwrap())
+        .unwrap();
+    DriverConversationStore::prepare_append_schema(scoped.documents().as_ref())
+        .await
+        .unwrap();
+    DriverConversationStore::new(scoped)
+}
 
 fn thread(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -26,8 +38,7 @@ fn message(id: &str, content: &str) -> ThreadMessage {
 
 #[tokio::test(flavor = "current_thread")]
 async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior() {
-    let store: Box<dyn ConversationPersistence> =
-        Box::new(DriverConversationStore::in_memory().await);
+    let store: Box<dyn ConversationPersistence> = Box::new(memory_store().await);
     assert!(store.get_thread("missing").await.unwrap().is_none());
     assert!(store.get_messages("missing").await.unwrap().is_empty());
     assert!(matches!(
@@ -61,7 +72,7 @@ async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior
 
 #[tokio::test]
 async fn memory_store_preserves_title_labels_and_metadata_patch() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     store
         .update_thread_labels("one", vec!["work".into(), "general".into()], "2026-01-03")
@@ -120,7 +131,7 @@ async fn memory_store_preserves_title_labels_and_metadata_patch() {
 
 #[tokio::test]
 async fn memory_store_tail_delete_recreate_and_purge() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     for id in ["a", "b", "c"] {
         store.append_message("one", message(id, id)).await.unwrap();
@@ -152,7 +163,7 @@ async fn memory_store_tail_delete_recreate_and_purge() {
 
 #[tokio::test]
 async fn memory_store_substring_and_cjk_search_find_expected_threads() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     for (id, content) in [
         ("a", "Café substring alphabet"),
         ("b", "東京で日本語"),
@@ -193,7 +204,7 @@ async fn memory_store_substring_and_cjk_search_find_expected_threads() {
 
 #[tokio::test]
 async fn memory_store_refuses_authoritative_turn_claim_() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -239,7 +250,7 @@ async fn memory_store_refuses_authoritative_turn_claim_() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn memory_store_preserves_channel_dedup_and_optional_upsert_fields() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     let mut first = thread("one");
     first.labels = Some(vec!["worker".into()]);
     first.personality_id = Some("persona".into());
@@ -263,7 +274,7 @@ async fn memory_store_preserves_channel_dedup_and_optional_upsert_fields() {
 
 #[tokio::test]
 async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_working() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     for id in ["a", "b"] {
         store.append_message("one", message(id, id)).await.unwrap();
@@ -312,7 +323,7 @@ async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_work
 
 #[tokio::test]
 async fn truncation_resets_counts_and_timestamps_and_the_search_index() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     let mut first = message("a", "keepsake");
     first.created_at = "2026-01-02T00:00:00Z".into();
@@ -349,7 +360,7 @@ async fn truncation_resets_counts_and_timestamps_and_the_search_index() {
 
 #[tokio::test]
 async fn purge_removes_live_and_deleted_threads_and_counts_only_live_ones() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     for id in ["one", "two", "gone"] {
         store.ensure_thread(thread(id)).await.unwrap();
         store.append_message(id, message("m", id)).await.unwrap();
@@ -368,7 +379,7 @@ async fn purge_removes_live_and_deleted_threads_and_counts_only_live_ones() {
 
 #[tokio::test]
 async fn a_rewrite_retires_a_stale_append_intent_instead_of_resurrecting_it() {
-    let store = DriverConversationStore::in_memory().await;
+    let store = memory_store().await;
     store.ensure_thread(thread("one")).await.unwrap();
     store
         .append_message("one", message("a", "a"))

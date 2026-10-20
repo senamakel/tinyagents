@@ -6,7 +6,7 @@ use super::dto::{StreamEvent, stored_as_is};
 use super::storage::{AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, event_stream, key, put_op};
 use super::*;
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
+use tinyagents_storage_kit::{ErrorKind, Precondition, Versioned, WriteOp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct EventHead {
@@ -130,10 +130,10 @@ impl DriverRunLedger {
             if expected.is_some_and(|expected| previous.doc.status != expected) {
                 let checks = vec![
                     check,
-                    tinystoragedrivers_core::ReadCheck {
+                    tinystoragedrivers_types::ReadCheck {
                         collection: AGENTS.into(),
                         id: key(&[id])?,
-                        expected: tinystoragedrivers_core::ExpectedDocument::Version(
+                        expected: tinystoragedrivers_types::ExpectedDocument::Version(
                             previous.version,
                         ),
                     },

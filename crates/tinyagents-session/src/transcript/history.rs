@@ -402,7 +402,7 @@ pub trait TranscriptLocator: Send + Sync {
     /// set through the ordinary turn path (`prev: &[]`), so usage, request ids
     /// and display partials are recorded exactly as on any other turn.
     ///
-    /// Bounded by [`MAX_GENERATIONS`] — the same limit [`Self::head_generation`]
+    /// Bounded by the maximum generation count — the same limit [`Self::head_generation`]
     /// and [`Self::session_chain`] stop probing at. Enforcing it here, at the
     /// only place a new generation is minted, is what keeps those two bounded
     /// scans complete: without it a chain could grow past what they are

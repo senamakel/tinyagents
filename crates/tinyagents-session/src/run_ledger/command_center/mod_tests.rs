@@ -1,6 +1,7 @@
+use crate::testkit::MemoryStorage;
 use chrono::{TimeZone, Utc};
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::Scope;
 
 use super::control::plan_transition;
 use super::*;
@@ -143,7 +144,7 @@ fn project_row_defaults_telemetry_to_zero_when_absent() {
 fn ledger() -> DriverRunLedger {
     DriverRunLedger::new(
         MemoryStorage::new()
-            .for_scope(&Scope::local())
+            .for_scope(&Scope::new("local").unwrap())
             .expect("local scope"),
     )
 }

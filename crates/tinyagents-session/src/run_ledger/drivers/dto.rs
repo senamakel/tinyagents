@@ -15,7 +15,7 @@ use super::super::types::*;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use tinystoragedrivers_core::StorageError;
+use tinystoragedrivers_types::StorageError;
 
 /// A wire type and the body the ledger stores for it.
 pub(super) trait Stored: Sized {
@@ -37,7 +37,7 @@ macro_rules! stored_as_is {
             fn to_dto(&self) -> Self::Dto {
                 self.clone()
             }
-            fn from_dto(dto: Self::Dto) -> ::std::result::Result<Self, tinystoragedrivers_core::StorageError> {
+            fn from_dto(dto: Self::Dto) -> ::std::result::Result<Self, tinystoragedrivers_types::StorageError> {
                 Ok(dto)
             }
         }

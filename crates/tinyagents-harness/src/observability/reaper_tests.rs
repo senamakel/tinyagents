@@ -5,10 +5,13 @@ use crate::events::HarnessRunStatus;
 use crate::ids::{ComponentId, ExecutionStatus, HarnessPhase};
 use crate::observability::{DriverStatusStore, mint_run_id};
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn store() -> DriverStatusStore {
-    let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let scoped = MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap();
     DriverStatusStore::new(Arc::clone(scoped.documents()))
 }
 
@@ -99,7 +102,9 @@ mod sealing {
 
     #[tokio::test]
     async fn reaping_seals_the_journal_of_each_reaped_run_only() {
-        let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+        let scoped = MemoryBackend::new()
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap();
         let status = DriverStatusStore::new(Arc::clone(scoped.documents()));
         let journal = StoreEventJournal::new(Arc::new(DriverAppendStore::journal(Arc::clone(
             scoped.streams(),

@@ -1,216 +1,243 @@
-//! Unit tests for `SessionStore` persistence and UUID v4 validation.
+//! Contract tests for Claude Code storage-port persistence and imports.
 
 use super::*;
-use tempfile::tempdir;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
+use tinystoragedrivers_types::ErrorKind;
+
+fn new_store() -> (tinyagents_storage_kit::ScopedStorage, Arc<SessionStore>) {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new("claude-code-tests").unwrap())
+        .unwrap();
+    let store = Arc::new(SessionStore::new(storage.documents()).unwrap());
+    (storage, store)
+}
+
+fn another_scope(name: &str) -> (tinyagents_storage_kit::ScopedStorage, Arc<SessionStore>) {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new(name).unwrap())
+        .unwrap();
+    let store = Arc::new(SessionStore::new(storage.documents()).unwrap());
+    (storage, store)
+}
 
 #[test]
 fn uuid_v4_format() {
     let id = generate_uuid_v4();
-    assert!(is_uuid_v4(&id), "generated id should be v4: {id}");
+    assert!(is_uuid_v4(&id));
 }
 
 #[test]
 fn rejects_non_v4() {
     assert!(!is_uuid_v4("not-a-uuid"));
     assert!(!is_uuid_v4("cc_abc123"));
-    // version 1 uuid (nibble at 14 is '1')
     assert!(!is_uuid_v4("00000000-0000-1000-8000-000000000000"));
 }
 
-#[test]
-fn roundtrip_set_and_get() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    assert!(store.get("thread_a").is_none());
-    store.set("thread_a", "abc").unwrap();
-    let reopened = SessionStore::open(dir.path());
-    assert_eq!(reopened.get("thread_a").as_deref(), Some("abc"));
-}
-
-#[test]
-fn remove_if_forgets_matching_mapping_across_reopen() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    store.set("thread_a", "session-a").unwrap();
-
-    assert!(store.remove_if("thread_a", "session-a").unwrap());
-
-    assert!(store.get("thread_a").is_none());
-    assert!(SessionStore::open(dir.path()).get("thread_a").is_none());
-}
-
-#[test]
-fn remove_if_keeps_a_newer_mapping() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    store.set("thread_a", "session-new").unwrap();
-
-    assert!(!store.remove_if("thread_a", "session-old").unwrap());
-    assert_eq!(store.get("thread_a").as_deref(), Some("session-new"));
-}
-
-#[test]
-fn remove_if_keeps_mapping_when_persistence_fails() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    store.set("thread_a", "session-a").unwrap();
-    // Make the store file unwritable by replacing it with a directory.
-    let path = dir.path().join("claude-code-sessions.json");
-    std::fs::remove_file(&path).unwrap();
-    std::fs::create_dir(&path).unwrap();
-
-    assert!(store.remove_if("thread_a", "session-a").is_err());
-    assert_eq!(store.get("thread_a").as_deref(), Some("session-a"));
-}
-
-#[test]
-fn delivered_turns_persist_and_reset_with_a_new_session() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    store.set("t", "uuid-1").unwrap();
+#[tokio::test]
+async fn session_and_delivered_turns_roundtrip_through_host_storage() {
+    let (_storage, store) = new_store();
+    assert_eq!(store.get("thread").await.unwrap(), None);
+    store.set("thread", "session-a").await.unwrap();
     store
-        .record_delivered("t", &["a".into(), "b".into()])
+        .record_delivered("thread", &["one".into(), "two".into()])
+        .await
         .unwrap();
+    assert_eq!(
+        store.get("thread").await.unwrap().as_deref(),
+        Some("session-a")
+    );
+    assert_eq!(
+        store.delivered("thread").await.unwrap(),
+        ["one", "two"].into_iter().map(str::to_owned).collect()
+    );
+}
+
+#[tokio::test]
+async fn replacement_session_clears_delivered_fingerprints() {
+    let (_storage, store) = new_store();
+    store.set("thread", "old").await.unwrap();
     store
-        .record_delivered("t", &["b".into(), "c".into()])
+        .record_delivered("thread", &["turn".into()])
+        .await
         .unwrap();
-
-    let reopened = SessionStore::open(dir.path());
-    assert_eq!(reopened.delivered("t").len(), 3);
-
-    // Same uuid keeps the record; a replacement session starts empty.
-    reopened.set("t", "uuid-1").unwrap();
-    assert_eq!(reopened.delivered("t").len(), 3);
-    reopened.set("t", "uuid-2").unwrap();
-    assert!(reopened.delivered("t").is_empty());
+    store.set("thread", "old").await.unwrap();
+    assert!(store.delivered("thread").await.unwrap().contains("turn"));
+    store.set("thread", "new").await.unwrap();
+    assert!(store.delivered("thread").await.unwrap().is_empty());
 }
 
-#[test]
-fn delivered_record_is_bounded() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    for i in 0..MAX_DELIVERED_PER_THREAD + 10 {
-        store.record_delivered("t", &[i.to_string()]).unwrap();
-    }
-    let kept = store.delivered("t");
-    assert_eq!(kept.len(), MAX_DELIVERED_PER_THREAD);
-    assert!(kept.contains(&(MAX_DELIVERED_PER_THREAD + 9).to_string()));
-    assert!(!kept.contains("0"));
+#[tokio::test]
+async fn remove_if_only_clears_the_expected_session_and_its_deliveries() {
+    let (_storage, store) = new_store();
+    store.set("thread", "session-a").await.unwrap();
+    store
+        .record_delivered("thread", &["turn".into()])
+        .await
+        .unwrap();
+    assert!(!store.remove_if("thread", "session-b").await.unwrap());
+    assert_eq!(
+        store.get("thread").await.unwrap().as_deref(),
+        Some("session-a")
+    );
+    assert!(store.remove_if("thread", "session-a").await.unwrap());
+    assert_eq!(store.get("thread").await.unwrap(), None);
+    assert!(store.delivered("thread").await.unwrap().is_empty());
 }
 
-#[test]
-fn delivered_record_never_forgets_the_batch_just_recorded() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    let many: Vec<String> = (0..MAX_DELIVERED_PER_THREAD + 10)
-        .map(|i| i.to_string())
-        .collect();
-    store.record_delivered("t", &many).unwrap();
-    assert_eq!(store.delivered("t").len(), many.len());
-}
-
-#[test]
-fn instances_on_one_workspace_see_each_others_deliveries() {
-    let dir = tempdir().unwrap();
-    let a = SessionStore::open(dir.path());
-    let b = SessionStore::open(dir.path());
-    a.set("t", "uuid-1").unwrap();
-    a.record_delivered("t", &["x".into()]).unwrap();
-    assert!(b.delivered("t").contains("x"));
-    b.record_delivered("t", &["y".into()]).unwrap();
-    let both = a.delivered("t");
-    assert!(both.contains("x") && both.contains("y"));
-}
-
-#[test]
-fn claim_is_exclusive_and_released_on_failure() {
-    let dir = tempdir().unwrap();
-    let store = Arc::new(SessionStore::open(dir.path()));
-    let fps = vec!["turn".to_string()];
-
-    let (already, first) = store.claim_delivered("t", &fps);
+#[tokio::test]
+async fn claim_is_exclusive_released_on_failure_and_committed_after_acceptance() {
+    let (_storage, store) = new_store();
+    let fingerprints = vec!["turn".to_owned()];
+    let (already, first) = store.claim_delivered("t", &fingerprints).await.unwrap();
     assert!(already.is_empty());
-    let (already, second) = store.claim_delivered("t", &fps);
-    assert!(already.contains("turn"), "second caller must not re-send");
-    drop(second); // owns nothing, releases nothing
-
-    drop(first); // failed turn: reservation released
-    let (already, again) = store.claim_delivered("t", &fps);
-    assert!(already.is_empty(), "failed turn must stay retryable");
-
-    store.record_delivered("t", &fps).unwrap();
-    again.commit();
-    assert!(store.delivered("t").contains("turn"));
+    let (already, second) = store.claim_delivered("t", &fingerprints).await.unwrap();
+    assert!(already.contains("turn"));
+    drop(second);
+    drop(first);
+    assert!(
+        store
+            .claim_delivered("t", &fingerprints)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    store.record_delivered("t", &fingerprints).await.unwrap();
+    assert!(store.delivered("t").await.unwrap().contains("turn"));
 }
 
-#[test]
-fn a_claim_is_never_written_to_disk() {
-    let dir = tempdir().unwrap();
-    let store = Arc::new(SessionStore::open(dir.path()));
-    let (_, _claim) = store.claim_delivered("t", &["turn".to_string()]);
-    // A restarted process reads only the file: the reservation is not there.
-    assert!(SessionStore::open(dir.path()).delivered("t").is_empty());
+#[tokio::test]
+async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
+    let (storage_a, a) = new_store();
+    let b = Arc::new(SessionStore::new(storage_a.documents()).unwrap());
+    let (_storage_other, other) = another_scope("separate-claude-code-scope");
+    let fp = ["same-fingerprint".to_owned()];
+    let (_, claim) = a.claim_delivered("thread", &fp).await.unwrap();
+    assert!(
+        b.claim_delivered("thread", &fp)
+            .await
+            .unwrap()
+            .0
+            .contains(&fp[0])
+    );
+    assert!(
+        other
+            .claim_delivered("thread", &fp)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    drop(claim);
 }
 
-#[test]
-fn concurrent_claimers_on_separate_instances_get_exactly_one_winner() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().to_path_buf();
-    let barrier = Arc::new(std::sync::Barrier::new(8));
-    let handles: Vec<_> = (0..8)
-        .map(|_| {
-            let path = path.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let store = Arc::new(SessionStore::open(&path));
-                let (already, claim) = store.claim_delivered("t", &["turn".to_string()]);
-                // Hold the claim until every thread has tried.
-                barrier.wait();
-                drop(claim);
-                already.is_empty()
-            })
-        })
-        .collect();
-    let winners = handles
-        .into_iter()
-        .map(|h| h.join().unwrap())
-        .filter(|won| *won)
-        .count();
-    assert_eq!(winners, 1);
+#[tokio::test]
+async fn failed_session_removal_keeps_the_mapping_and_delivered_turns() {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new("claude-code-remove-failure").unwrap())
+        .unwrap();
+    let faults = FaultPlan::new();
+    let documents: Arc<dyn DocumentStore> = Arc::new(Failing::with_plan(
+        Arc::clone(storage.documents()),
+        faults.clone(),
+    ));
+    let store = SessionStore::new(&documents).unwrap();
+    store.set("thread", "session-a").await.unwrap();
+    store
+        .record_delivered("thread", &["turn".to_owned()])
+        .await
+        .unwrap();
+
+    faults.fail_operation_nth("documents.put_with", 1, ErrorKind::Backend);
+    assert!(store.remove_if("thread", "session-a").await.is_err());
+    faults.clear();
+
+    assert_eq!(
+        store.get("thread").await.unwrap().as_deref(),
+        Some("session-a")
+    );
+    assert!(store.delivered("thread").await.unwrap().contains("turn"));
 }
 
-#[test]
-fn concurrent_writers_on_separate_instances_lose_no_updates() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().to_path_buf();
-    let handles: Vec<_> = (0..8)
-        .map(|i| {
-            let path = path.clone();
-            std::thread::spawn(move || {
-                let store = SessionStore::open(&path);
-                store.record_delivered("t", &[format!("fp-{i}")]).unwrap();
-            })
-        })
-        .collect();
-    for h in handles {
-        h.join().unwrap();
-    }
-    assert_eq!(SessionStore::open(&path).delivered("t").len(), 8);
+#[tokio::test]
+async fn failed_delivery_write_releases_the_reservation_for_retry() {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new("claude-code-delivery-failure").unwrap())
+        .unwrap();
+    let faults = FaultPlan::new();
+    let documents: Arc<dyn DocumentStore> = Arc::new(Failing::with_plan(
+        Arc::clone(storage.documents()),
+        faults.clone(),
+    ));
+    let store = Arc::new(SessionStore::new(&documents).unwrap());
+    let fingerprint = ["turn".to_owned()];
+    let (already, claim) = store.claim_delivered("thread", &fingerprint).await.unwrap();
+    assert!(already.is_empty());
+
+    faults.fail_operation_nth("documents.put_with", 1, ErrorKind::Backend);
+    assert!(
+        store
+            .record_delivered("thread", &fingerprint)
+            .await
+            .is_err()
+    );
+    drop(claim);
+    faults.clear();
+
+    let (already, retry) = store.claim_delivered("thread", &fingerprint).await.unwrap();
+    assert!(already.is_empty());
+    assert!(store.delivered("thread").await.unwrap().is_empty());
+    drop(retry);
 }
 
-#[test]
-fn remove_if_also_forgets_the_delivered_record() {
-    let dir = tempdir().unwrap();
-    let store = SessionStore::open(dir.path());
-    store.set("t", "uuid-1").unwrap();
-    store.record_delivered("t", &["a".into()]).unwrap();
+#[tokio::test]
+async fn legacy_import_merges_matching_session_and_never_overwrites_newer_state() {
+    let (_storage, store) = new_store();
+    let old_release_fixture = include_bytes!("fixtures/claude-code-sessions.json");
+    store.set("same", "uuid-a").await.unwrap();
+    store
+        .record_delivered("same", &["new-turn".into()])
+        .await
+        .unwrap();
+    store.set("different", "uuid-current").await.unwrap();
+    assert_eq!(
+        import_legacy_sessions(&store, old_release_fixture)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        store.get("different").await.unwrap().as_deref(),
+        Some("uuid-current")
+    );
+    assert_eq!(store.get("new").await.unwrap().as_deref(), Some("uuid-new"));
+    assert!(store.delivered("same").await.unwrap().contains("old-turn"));
+    assert!(store.delivered("same").await.unwrap().contains("new-turn"));
+    assert_eq!(store.get("orphan").await.unwrap(), None);
+    assert!(
+        store
+            .delivered("orphan")
+            .await
+            .unwrap()
+            .contains("orphan-turn")
+    );
+    import_legacy_sessions(&store, old_release_fixture)
+        .await
+        .unwrap();
+    assert_eq!(
+        import_legacy_sessions(&store, old_release_fixture)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(store.delivered("same").await.unwrap().len(), 2);
+}
 
-    assert!(store.remove_if("t", "uuid-1").unwrap());
-    assert!(store.get("t").is_none());
-    assert!(store.delivered("t").is_empty());
-
-    // The removal is persisted for both the mapping and the record.
-    let reopened = SessionStore::open(dir.path());
-    assert!(reopened.get("t").is_none());
-    assert!(reopened.delivered("t").is_empty());
+#[tokio::test]
+async fn malformed_legacy_bytes_are_rejected() {
+    let (_storage, store) = new_store();
+    assert!(import_legacy_sessions(&store, b"not json").await.is_err());
+    assert_eq!(store.get("thread").await.unwrap(), None);
 }

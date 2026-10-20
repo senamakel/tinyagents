@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     BlobStore, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, Sort,
     WriteOptions,
 };

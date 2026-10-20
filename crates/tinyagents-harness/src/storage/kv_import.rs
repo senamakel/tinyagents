@@ -13,7 +13,7 @@
 //! already written (a newer value) is never overwritten by the stale v1 row.
 
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Migrations, Precondition, Query, Result,
     ScopedStorage, Sort, WriteOptions,
 };
@@ -104,6 +104,19 @@ pub async fn import_legacy_kv(
     legacy_collection: &str,
     kind: LegacyKv,
 ) -> Result<u64> {
+    tinyagents_storage_kit::with_migration_lease(storage, owner, |lease| async move {
+        import_legacy_kv_with_lease(storage, owner, legacy_collection, kind, &lease).await
+    })
+    .await
+}
+
+pub(crate) async fn import_legacy_kv_with_lease(
+    storage: &ScopedStorage,
+    owner: &str,
+    legacy_collection: &str,
+    kind: LegacyKv,
+    lease: &tinyagents_storage_kit::MigrationLease,
+) -> Result<u64> {
     let step = format!("kv_import_{legacy_collection}");
     let migrations = Migrations::new(storage);
     if migrations.done(owner, &step).await? {
@@ -142,6 +155,7 @@ pub async fn import_legacy_kv(
             }
             let id = kv_id(owner, &entry.ns, &entry.key)?;
             let body = kv_body(owner, &entry.ns, &entry.key, entry.value);
+            lease.renew().await?;
             match docs
                 .put_with(KV, &id, body, Precondition::Absent, options)
                 .await
@@ -157,9 +171,10 @@ pub async fn import_legacy_kv(
             None => break,
         }
     }
+    lease.renew().await?;
     docs.delete_where(legacy_collection, &Filter::default())
         .await?;
-    migrations.mark_done(owner, &step).await?;
+    lease.mark_done(owner, &step).await?;
     tracing::debug!(owner, step = %step, written, "[storage] kv import complete");
     Ok(written)
 }

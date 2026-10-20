@@ -6,9 +6,9 @@
 //! session history ([`crate::SessionHistoryStore`]) and of the model-facing
 //! [`crate::transcript`]: nothing here touches `session_db/` or `session_raw/`.
 //!
-//! [`DriverConversationStore`] is the only implementation. A library host with
-//! no storage backend gets the process-lifetime memory driver from
-//! [`DriverConversationStore::in_memory`]; the JSONL file store is removed.
+//! [`DriverConversationStore`] is the only implementation. The host supplies
+//! its admitted storage backend; this crate never opens an engine or selects a
+//! memory fallback.
 //! The legacy API retained textual errors; the persistence contract preserves
 //! typed failures. See `README.md` beside this file for the layout and design.
 //!

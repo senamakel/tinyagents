@@ -114,7 +114,9 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
-pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
+pub use storage::{
+    collections, import_legacy_leases, import_legacy_task_cache, open_storage, storage_schema,
+};
 pub use stream::{
     CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
     StreamProjection, project_graph_event,

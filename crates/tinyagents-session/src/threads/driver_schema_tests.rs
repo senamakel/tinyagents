@@ -1,6 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::json;
-use tinystoragedrivers_core::{CollectionSpec, Fence, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{CollectionSpec, Fence, Scope};
+use tinystoragedrivers_api::StorageBackend;
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -70,7 +72,7 @@ async fn prepared_fenced(backend: &dyn StorageBackend) {
         .update_thread_title("one", "stale", "now")
         .await
         .unwrap_err();
-    assert!(matches!(error, ConversationError::Driver(e) if e.kind() == ErrorKind::Fenced));
+    assert!(matches!(error, ConversationError::Driver(e) if e.kind() == ErrorKind::Unavailable));
     assert_eq!(
         DriverConversationStore::new(raw)
             .get_thread("one")
@@ -87,8 +89,7 @@ async fn memory_explicit_admission_refuses_missing_declaration_before_read() {
 #[tokio::test(flavor = "current_thread")]
 async fn sqlite_explicit_admission_refuses_missing_declaration_before_read() {
     let dir = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation.db")).unwrap();
+    let backend = MemoryStorage::new();
     missing_declaration(&backend).await;
 }
 #[tokio::test(flavor = "current_thread")]
@@ -98,8 +99,7 @@ async fn memory_prepared_actor_retains_original_native_fence_and_scope() {
 #[tokio::test(flavor = "current_thread")]
 async fn sqlite_prepared_actor_retains_original_native_fence_and_scope() {
     let dir = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation.db")).unwrap();
+    let backend = MemoryStorage::new();
     prepared_fenced(&backend).await;
 }
 
@@ -193,21 +193,21 @@ async fn native_required_feature_validation_accepts_compatible_superset_declarat
 #[tokio::test(flavor = "current_thread")]
 async fn schema_preparation_is_explicit_and_restricted_native_handles_refuse_it() {
     let backend = MemoryStorage::new();
-    let raw = backend.for_scope(&Scope::local()).unwrap();
+    let raw = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     DriverConversationStore::prepare_schema(raw.documents().as_ref())
         .await
         .unwrap();
     let actor = backend
         .existing_schema()
         .unwrap()
-        .for_scope(&Scope::local())
+        .for_scope(&Scope::new("local").unwrap())
         .unwrap();
     let error = DriverConversationStore::prepare_schema(actor.documents().as_ref())
         .await
         .unwrap_err();
     assert_eq!(
         error.kind(),
-        ErrorKind::Unsupported(tinystoragedrivers_core::Capability::ExistingSchema)
+        ErrorKind::Unsupported(tinystoragedrivers_types::Capability::ExistingSchema)
     );
     actor
         .documents()

@@ -37,7 +37,7 @@ mod bridge;
 pub mod driver;
 mod event_mapper;
 mod input_builder;
-mod session_store;
+pub mod session_store;
 pub mod settings;
 mod stream_parser;
 pub mod types;
@@ -49,6 +49,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bridge::{ChatMessage, ChatResponse, ProviderDelta};
+use tinyagents_storage_kit::primitives::Kv;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
@@ -58,6 +59,7 @@ use tinyinference_llm::prompt_tools::{
     TextScrubber, coalesce_tool_results, recover_tool_calls, with_tool_instructions,
 };
 use tinyinference_llm::usage::Usage;
+use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::Semaphore;
 
 /// Aborts the wrapped task when dropped, so a caller that stops polling the
@@ -85,7 +87,7 @@ pub fn render_request_stdin(request: &ModelRequest, is_new_session: bool) -> Vec
 }
 
 #[cfg(test)]
-pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static ENV_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 #[allow(unsafe_code)]
@@ -114,6 +116,7 @@ pub struct ClaudeCodeProvider {
     semaphore: Arc<Semaphore>,
     thread_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     session_store: Arc<session_store::SessionStore>,
+    settings_store: Kv,
     profile: ModelProfile,
     mcp_provider: Option<Arc<dyn driver::McpEndpointProvider>>,
 }
@@ -138,9 +141,12 @@ impl ClaudeCodeProvider {
         workspace_dir: PathBuf,
         project_dir: PathBuf,
         anthropic_api_key: Option<String>,
-    ) -> Self {
+        documents: Arc<dyn DocumentStore>,
+    ) -> anyhow::Result<Self> {
         let model = model.into();
-        Self {
+        let session_store = session_store::SessionStore::new(&documents)?;
+        let settings_store = settings::store(&documents)?;
+        Ok(Self {
             profile: ModelProfile {
                 provider: Some("claude-code".into()),
                 model: Some(model.clone()),
@@ -157,13 +163,14 @@ impl ClaudeCodeProvider {
             model,
             bin_path,
             project_dir,
-            session_store: Arc::new(session_store::SessionStore::open(&workspace_dir)),
+            session_store: Arc::new(session_store),
+            settings_store,
             workspace_dir,
             anthropic_api_key,
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_TURNS)),
             thread_locks: Arc::new(Mutex::new(HashMap::new())),
             mcp_provider: None,
-        }
+        })
     }
 
     /// Resolve the installed CLI and environment authentication.
@@ -171,6 +178,7 @@ impl ClaudeCodeProvider {
         model: impl Into<String>,
         workspace_dir: PathBuf,
         project_dir: PathBuf,
+        documents: Arc<dyn DocumentStore>,
     ) -> anyhow::Result<Self> {
         match version_check::probe() {
             types::CliStatus::Ok { path, .. } => {
@@ -181,7 +189,8 @@ impl ClaudeCodeProvider {
                     workspace_dir,
                     project_dir,
                     key,
-                ))
+                    documents,
+                )?)
             }
             types::CliStatus::NotInstalled => anyhow::bail!(
                 "[claude-code] `claude` CLI not installed; require >= {}",
@@ -260,6 +269,7 @@ impl ClaudeCodeProvider {
             append_system_prompt,
             messages,
             session_store: self.session_store.clone(),
+            settings_store: self.settings_store.clone(),
             stream,
             anthropic_api_key: self.anthropic_api_key.clone(),
             mcp_provider: self.mcp_provider.clone(),

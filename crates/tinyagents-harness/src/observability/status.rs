@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Key, Precondition, Query,
     WriteOptions,
 };

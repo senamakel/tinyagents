@@ -1,17 +1,17 @@
 //! The `tsd.kv` body and id, for stores that need more than `Kv` offers
 //! (expiry, creation times, range queries).
 //!
-//! `tinystoragedrivers_core::Kv` stores `{owner, ns, key, value}` under
+//! `tinyagents_storage_kit::Kv` stores `{owner, ns, key, value}` under
 //! `Key::of([owner, ns, key])` and cannot set an expiry. The namespaced store
 //! and the response cache need one, so they write the same documented shape
 //! through [`kv_body`] / [`kv_id`] and read with `Kv`-compatible bodies.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tinystoragedrivers_core::{Key, StorageError};
+use tinyagents_storage_kit::{Key, StorageError};
 
 /// The `tsd.kv` collection name.
-pub(crate) const KV: &str = tinystoragedrivers_core::primitives::KV;
+pub(crate) const KV: &str = tinyagents_storage_kit::primitives::KV;
 
 /// `tsd.kv` namespace prefix of [`crate::store::namespaced::DriverNamespacedStore`]
 /// entries (`namespaced:<segments joined with '.'>`).

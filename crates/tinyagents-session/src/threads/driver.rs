@@ -3,7 +3,7 @@
 //! No host paths/backend lookup, FullText shortcut, or persistent process cache.
 //! Plain append uses a recoverable intent; edits and distributed leases remain unsupported.
 //!
-//! Threads are `conversations.threads` documents (schema v2, see [`super::dto`]).
+//! Threads are `conversations.threads` documents (schema v2, see the private `dto` module).
 //! A change to one thread document is one [`Repo::update`] loop. The loops that
 //! stay hand-written coordinate more than that one document: an append
 //! reconciles an intent, a stream row and the thread together, and a rewrite
@@ -16,11 +16,13 @@ use super::*;
 use async_trait::async_trait;
 use std::future::Future;
 use std::sync::Arc;
-use tinystoragedrivers_core::primitives::Repo;
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
-    StorageError, StreamStore, Versioned, WriteOptions,
+use tinyagents_storage_kit::ScopedStorage;
+use tinyagents_storage_kit::primitives::Repo;
+use tinyagents_storage_kit::{
+    CollectionSpec, ErrorKind, Filter, Key, Precondition, Query, StorageError, Versioned,
+    WriteOptions,
 };
+use tinystoragedrivers_api::{DocumentStore, StreamStore};
 mod append;
 mod pending;
 mod reader;
@@ -114,24 +116,6 @@ impl DriverConversationStore {
         }
     }
 
-    /// A process-lifetime store over the memory driver, for library hosts that
-    /// have no storage backend. Nothing is written to disk and nothing survives
-    /// the process; plain append is fully prepared.
-    ///
-    /// # Panics
-    /// Never in practice: the memory driver accepts every declaration.
-    pub async fn in_memory() -> Self {
-        use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
-        let backend = MemoryStorage::new();
-        let scoped = backend
-            .for_scope(&Scope::new("local").expect("static scope"))
-            .expect("memory scope");
-        Self::prepare_append_schema(scoped.documents().as_ref())
-            .await
-            .expect("memory driver accepts declarations");
-        Self::new(scoped)
-    }
-
     /// The `conversations.threads` declaration.
     ///
     /// There are no required secondary indexes, TTL or full-text fields.
@@ -149,7 +133,7 @@ impl DriverConversationStore {
     /// The native declaration error, preserving its kind and original cause.
     pub async fn prepare_schema(
         documents: &dyn DocumentStore,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         for spec in Self::collection_specs() {
             documents.ensure_collection(&spec).await?;
         }
@@ -527,10 +511,6 @@ fn timestamp(value: &str) -> i64 {
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "driver_schema_tests.rs"]
-mod schema_tests;
 
 #[cfg(test)]
 #[path = "driver_append_tests.rs"]

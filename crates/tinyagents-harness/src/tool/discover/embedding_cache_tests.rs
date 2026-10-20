@@ -1,8 +1,9 @@
 use super::*;
 use crate::tool::discover::EmbeddingToolRanker;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinyinference_embeddings::{EmbeddingModel, Result as EmbedResult};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 use tinytools::{RankCandidate, RankContext, ToolRanker};
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
@@ -64,7 +65,7 @@ fn candidates() -> Vec<RankCandidate> {
 
 #[tokio::test]
 async fn vectors_round_trip_exactly_including_full_width_keys() {
-    let cache = DriverEmbeddingCache::new(docs(&MemoryStorage::new(), "local"));
+    let cache = DriverEmbeddingCache::new(docs(&MemoryBackend::new(), "local"));
     let values = vec![
         (u64::MAX, vec![0.1_f32, -2.5, 3.0e-8]),
         (0, vec![1.0, 0.0, 0.0]),
@@ -88,7 +89,7 @@ async fn vectors_round_trip_exactly_including_full_width_keys() {
 
 #[tokio::test]
 async fn signatures_and_scopes_never_share_vectors() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverEmbeddingCache::new(docs(&storage, "alice"));
     let bob = DriverEmbeddingCache::new(docs(&storage, "bob"));
     alice.store("space-a", &[(1, vec![1.0])]).await.unwrap();
@@ -99,7 +100,7 @@ async fn signatures_and_scopes_never_share_vectors() {
 
 #[tokio::test]
 async fn non_finite_vectors_are_not_persisted() {
-    let cache = DriverEmbeddingCache::new(docs(&MemoryStorage::new(), "local"));
+    let cache = DriverEmbeddingCache::new(docs(&MemoryBackend::new(), "local"));
     cache
         .store(
             SIGNATURE,
@@ -116,12 +117,10 @@ async fn non_finite_vectors_are_not_persisted() {
 }
 
 #[tokio::test]
-async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("embeddings.sqlite");
+async fn a_ranker_warms_after_a_driver_reopen() {
+    let storage = MemoryBackend::new();
     let first = bag();
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         let cache = Arc::new(DriverEmbeddingCache::new(docs(&storage, "local")));
         EmbeddingToolRanker::new(first.clone(), SIGNATURE)
             .with_cache(cache)
@@ -131,7 +130,6 @@ async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
     }
     assert_eq!(first.calls.load(Ordering::SeqCst), 2, "catalogue + intent");
 
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let cache = Arc::new(DriverEmbeddingCache::new(docs(&storage, "local")));
     let warm = bag();
     let hits = EmbeddingToolRanker::new(warm.clone(), SIGNATURE)
@@ -160,7 +158,7 @@ async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
 /// `Key::of([signature, key as 16 hex digits])`, stamped schema 2.
 #[tokio::test]
 async fn vectors_are_harness_embedding_cache_documents_keyed_by_signature_and_key() {
-    let documents = docs(&MemoryStorage::new(), "local");
+    let documents = docs(&MemoryBackend::new(), "local");
     let cache = DriverEmbeddingCache::new(Arc::clone(&documents));
     cache
         .store("sig/with/slashes", &[(0xAB, vec![1.0, 2.0])])

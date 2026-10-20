@@ -3,6 +3,9 @@ use crate::artifacts::policy::{ArtifactRedactor, Redacted};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
+use tinyagents_storage_kit::Scope;
+use tinyagents_storage_kit::StorageBackend;
+use tinystoragedrivers_testkit::{MemoryBackend, memory_storage};
 
 /// Stand-in for a host's credential/PII pass: rewrites a GitHub token and
 /// phone numbers, and (like the real one) can grow a body.
@@ -26,7 +29,9 @@ fn test_github_token() -> String {
 }
 
 fn store(session: &str) -> ToolResultArtifactStore {
-    ToolResultArtifactStore::in_memory(
+    let scope = Scope::new("local").expect("valid scope");
+    ToolResultArtifactStore::new(
+        memory_storage(&scope).blobs().clone(),
         session,
         Arc::new(TestRedactor),
         "file_read",
@@ -595,7 +600,7 @@ async fn in_memory_stores_do_not_share_artifacts() {
 /// The pointer is a blob key on a host-supplied store, not a filesystem path.
 #[tokio::test]
 async fn a_host_supplied_blob_store_receives_the_redacted_body() {
-    let scoped = MemoryStorage::new()
+    let scoped = MemoryBackend::new()
         .for_scope(&Scope::new("tenant").unwrap())
         .unwrap();
     let blobs = scoped.blobs().clone();
@@ -673,7 +678,7 @@ async fn read_accepts_the_legacy_relative_pointer() {
 
 #[tokio::test]
 async fn purge_session_removes_only_this_sessions_artifacts() {
-    let scoped = MemoryStorage::new()
+    let scoped = MemoryBackend::new()
         .for_scope(&Scope::new("local").unwrap())
         .unwrap();
     let blobs = scoped.blobs().clone();

@@ -168,7 +168,7 @@ pub fn project_transcripts(
 ///   `role:"tool"` line pairs to one by id, falling back to FIFO order.
 /// - A prompt-guided round (calls in the visible text, results folded into one
 ///   `[Tool results]` user line) projects to the same shape: see
-///   [`prompt_tools`].
+///   `prompt_tools`.
 /// - Interrupted partials and compaction markers pass through as their items.
 /// - A [`DisplayItem::TurnBoundary`] is emitted whenever `request_id` changes.
 pub fn project_records(records: &[DisplayRecord]) -> Vec<DisplayItem> {

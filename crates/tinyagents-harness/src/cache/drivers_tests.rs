@@ -1,7 +1,8 @@
 use super::*;
 use crate::store::Store as _;
 use std::time::Duration;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -57,32 +58,27 @@ async fn round_trips_expires_and_counts(cache: DriverResponseCache) {
 #[tokio::test]
 async fn memory_backend_round_trips_expires_and_counts() {
     round_trips_expires_and_counts(DriverResponseCache::new(docs(
-        &MemoryStorage::new(),
+        &MemoryBackend::new(),
         "local",
     )))
     .await;
 }
 
 #[tokio::test]
-async fn sqlite_backend_round_trips_expires_and_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("cache.sqlite")).unwrap();
+async fn testkit_backend_round_trips_expires_and_counts() {
+    let storage = MemoryBackend::new();
     round_trips_expires_and_counts(DriverResponseCache::new(docs(&storage, "local"))).await;
 }
 
 #[tokio::test]
-async fn entries_survive_a_dropped_handle_and_a_reopened_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("responses.sqlite");
+async fn entries_survive_reopening_the_driver_on_one_backend() {
+    let storage = MemoryBackend::new();
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         DriverResponseCache::new(docs(&storage, "local"))
             .put("k", ModelResponse::assistant("persisted"))
             .await
             .unwrap();
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = DriverResponseCache::new(docs(&storage, "local"));
     assert_eq!(
         reopened.get("k").await.unwrap().unwrap().text(),
@@ -92,7 +88,7 @@ async fn entries_survive_a_dropped_handle_and_a_reopened_file() {
 
 #[tokio::test]
 async fn namespaces_do_not_cross_serve_and_clear_independently() {
-    let base = DriverResponseCache::new(docs(&MemoryStorage::new(), "local"));
+    let base = DriverResponseCache::new(docs(&MemoryBackend::new(), "local"));
     let tenant_a = base.with_namespace("tenant-a");
     let tenant_b = base.with_namespace("tenant-b");
     assert_eq!(tenant_a.namespace(), "tenant-a");
@@ -112,7 +108,7 @@ async fn namespaces_do_not_cross_serve_and_clear_independently() {
 
 #[tokio::test]
 async fn scopes_and_owners_keep_entries_apart_and_long_keys_fit() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverResponseCache::new(docs(&storage, "alice"));
     let bob = DriverResponseCache::new(docs(&storage, "bob"));
     let other = DriverResponseCache::with_owner(docs(&storage, "alice"), "other");
@@ -131,7 +127,7 @@ async fn scopes_and_owners_keep_entries_apart_and_long_keys_fit() {
 /// record's `expires_ms`, not a body field.
 #[tokio::test]
 async fn entries_are_tsd_kv_documents_with_the_deadline_in_metadata() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let documents = docs(&storage, "local");
     let cache = DriverResponseCache::new(Arc::clone(&documents)).with_namespace("arm-a");
     cache
@@ -170,7 +166,7 @@ async fn entries_are_tsd_kv_documents_with_the_deadline_in_metadata() {
 /// flat store's of the same owner.
 #[tokio::test]
 async fn clear_drops_only_its_own_namespace_of_the_shared_collection() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let documents = docs(&storage, "local");
     let flat = crate::store::DriverStore::new(Arc::clone(&documents));
     flat.put("default", "k", serde_json::json!("flat"))

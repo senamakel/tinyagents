@@ -11,15 +11,14 @@ use tinyagents_session::run_ledger::{
     AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskUpsert, AgentTeamUpsert,
     ClaimOutcome, CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 use super::*;
 
-fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
+fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
+    let ledger_backend = MemoryBackend::new();
     TeamService::new(
-        SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(
-            dir.path(),
-        )))
-        .unwrap(),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap(),
     )
 }
 

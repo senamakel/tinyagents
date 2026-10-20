@@ -1,17 +1,17 @@
 # `session::run_ledger` — background run and team coordination
 
 A durable, restart-survivable ledger for background agent/workflow execution
-state, sharing the session database with `crate::store`. See the top-level
-`session` crate README for how this fits next to session history and the
-graph checkpointer.
+state, stored through the host-bound session storage ports. See the top-level
+`session` crate README for how this fits next to session history and the graph
+checkpointer.
 
 ## Why this is separate from session history
 
-`crate::ops` (session history) records what a conversation *said*. This
+Session history records what a conversation *said*. This
 module records what the runtime was *doing*: which background agent runs,
 worker threads, and workflows were in flight, what state they held, and how
 they coordinate. A run and the session that produced it are queryable
-together (both go through `crate::store`), but they answer different
+together (both use the host-bound storage scope), but they answer different
 questions and have different write patterns — session history is append-only
 per turn; the run ledger is upserted and compare-and-swapped as a run's
 state changes.
@@ -110,15 +110,8 @@ parent-facing note about interrupted *children* see
 
 These are the non-obvious rules; most are pinned by a test in `mod_tests.rs`.
 
-**An upsert reads its own write back inside the same transaction.** Every
-`upsert_*` function opens one `crate::store::with_transaction` call that
-both writes the row and re-fetches it via a connection-scoped `*_inner`
-helper — never a fresh `with_connection` after the write, which could
-observe a concurrent writer's state instead of the caller's own.
-
-**Workflow-run upserts favor `COALESCE` on plain `upsert_workflow_run`, but
-compare-and-swap for a live driver.** `upsert_workflow_run` has no revision
-fencing and can clobber a concurrent driver's write; a driver holding a
+**Plain workflow upserts are not driver-fenced.** `upsert_workflow_run` has no
+revision fencing and can clobber a concurrent driver's write; a driver holding a
 lease must use `compare_and_swap_workflow_run` (revision + lease-owner
 checked) or `compare_and_swap_workflow_run_lifecycle` (revision only, always
 clears the lease) instead.
@@ -128,17 +121,13 @@ plain upsert and the compare-and-swap paths null out `lease_owner` /
 `lease_expires_at` on a transition to `completed` / `failed` / `cancelled` /
 `interrupted`, since a finished run has nothing left to drive.
 
-**Run-event sequences are allocated by the INSERT itself**, via a
-sub-`SELECT MAX(sequence) + 1` inside the same statement — never a separate
-read followed by an insert, which would race two concurrent appenders onto
-the same sequence number and lose one event to a primary-key conflict.
+**Run events allocate durable ordinals with the record write.** The driver
+stores authoritative event receipts in checked document batches and projects
+them to streams only when reconciliation is explicitly requested.
 
-**Telemetry counters are `Option` for partial updates.** The columns are
-`NOT NULL DEFAULT`, and SQLite does not apply that default to an explicit
-`NULL`, so `upsert_run_telemetry`'s insert side coalesces to the column
-default while its update side coalesces to the *stored* value — `excluded.*`
-cannot serve the update side, since it observes the already-coalesced insert
-row and would read a caller's `None` as `0`.
+**History message and tool-call identifiers use shared counters.** The
+session owner stores those counters in `tsd.counters`; a failed later record
+write may leave a gap, and subsequent writes never reuse the identifier.
 
 **A team-task claim is meaningful only while `status = "in_progress"`.**
 `claimed_by_member_id` and `claim_token` are cleared whenever
@@ -160,22 +149,12 @@ the member `stopped` — the bulk analogue of `release_agent_team_task`.
 
 ## Storage provider port
 
-`RunLedgerStore` is the object-safe, async form of the existing ledger
-API. A handle binds its workspace or namespace once; payloads never choose
-another namespace. It covers agent runs, workflow leases/revisions, events,
-telemetry, teams/members/tasks, effects, recovery classification,
-command-center controls, and the existing retention operations. The three pure
-recovery helpers remain synchronous. Storage methods can await driver ports
-directly; no blocking bridge or caller-runtime reentry is required. The SQLite
-adapter polls the original short synchronous transactions; it keeps their
-existing execution behavior rather than adding a driver client.
-
-`SqliteRunLedger::new(workspace)` implements the port by delegating to the
-existing SQLite functions. Status CAS plus event remains one transaction;
-workflow ownership, expiry and revision are checked together; task dependency
-reads and claims retain their current transaction. Constructors do not open or
-migrate the database. Existing workspace-based APIs and all SQLite tables remain
-available, including the still-active session/message/tool-call tables.
+`RunLedgerStore` is the object-safe, async form of the ledger API. A handle
+binds its storage scope once; payloads never choose another namespace. It
+covers agent runs, workflow leases/revisions, events, telemetry,
+teams/members/tasks, effects, recovery classification, command-center
+controls, and retention operations. The three pure recovery helpers remain
+synchronous. Storage methods await the host-supplied driver ports directly.
 
 Providers may override `SessionStoreProvider::run_ledger_for_agent` to return an
 `Arc<dyn RunLedgerStore>`. Its default is `Ok(None)`, independent of the existing
@@ -186,22 +165,22 @@ or migrate their data by itself. Shared hosts must supply handles bound to the
 admitted tenant and agent, and must not use the classic startup orphan sweep to
 interrupt another live process.
 
-The SQLite adapter preserves current task completion semantics: completion is
-validated against the member identity, not a takeover claim token. Retention
-preserves its existing scope: sessions/messages/tool calls, events and telemetry;
-it does not add pruning of workflows, teams or effects.
+Task completion is validated against the member identity, not a takeover
+claim token. Retention preserves its existing scope: sessions/messages/tool
+calls, events and telemetry; it does not add pruning of workflows, teams or
+effects.
 
 ### Typed errors
 
-The port returns `LedgerResult<T>`. `LedgerError` retains legacy SQLite and
-control errors and, with `storage-drivers`, native `StorageError` values. Native
-admission, fencing, conflict and capability kinds remain available to callers.
+The port returns `LedgerResult<T>`. `LedgerError` retains control errors and
+native `StorageError` values. Native admission, fencing, conflict and
+capability kinds remain available to callers.
 
 ### Scoped driver adapter
 
-With `storage-drivers`, `DriverRunLedger::new(scoped)` binds an explicitly
-admitted `ScopedStorage`. It opens no workspace database. The supplied native
-fence remains attached to its document handles.
+`DriverRunLedger::new(scoped)` binds an explicitly admitted `ScopedStorage`.
+It opens no workspace database. The supplied native fence remains attached to
+its document handles.
 
 Implemented native families include agent upsert/read/filter/page, telemetry joins,
 status compare-and-swap, events and command-center controls; workflow
@@ -216,7 +195,9 @@ Dependency-aware team claims/completion, bulk member shutdown and retention
 across sessions/messages/events still return typed Unsupported before writing.
 The orphan sweep is explicitly for an exclusive owner; it is not a shared-process
 lease reaper.
-Existing host callers are not routed to this adapter automatically.
+The session crate runs in-storage ledger/history migrations when its
+owner-open path is invoked. Workspace and SQLite source import belongs to the
+host; see [`legacy-import-handoff.md`](../docs/legacy-import-handoff.md).
 
 DriverSessionStores caches one optional native ledger handle per logical agent.
 Independent factories and actor bindings keep independent caches while sharing
@@ -299,31 +280,11 @@ The supplied ScopedStorage must also use the native ExistingSchema contract to
 restrict driver-internal initialization. The constructor does not infer
 authority from capabilities or turn arbitrary ports into restricted ports.
 
-### Source admission before migration
+### Legacy source import
 
-`SourceOwner::asserted_by_trusted_host(scope)` and
-`QuiescentSource::asserted_by_trusted_host(path, owner)` represent trusted host
-assertions. Hosts must validate the path-to-owner mapping and stop source writers
-for the complete inspection/import. Model input, stored rows and path digests
-cannot establish that authority.
-
-`preflight_source` compares source ownership with the target scope before source
-access. It rejects missing databases without creating directories, and refuses
-WAL or journal sidecars with `LedgerError::SourceRequiresSnapshot`. The host must
-supply a checkpointed database or consistent snapshot; the importer never
-checkpoints it. Sources are opened through SQLite immutable read-only access,
-which also avoids writing auxiliary shared-memory files. The retained snapshot
-discovers historical schema and columns without migrations. import_agent_family supports the known agent_runs, run_events and run_telemetry
-schema. It validates all source rows before target declarations, commits all
-absent target records and a durable operation receipt in one native batch, and
-retains source bytes. An identical operation retry returns its receipt without
-overwriting later native edits; changed source bytes or target collisions
-refuse. The source fingerprint identifies content and grants no authority.
-Original event ordinals survive import, and allocation continues above their
-maximum.
-
-Hosts must still arrange source ownership, quiescence, snapshots and the
-migration checkpoint. Older incomplete layouts can be inspected but are not
-silently upgraded. Workflow/team/effect/session import, automatic host
-migration, shared-owner recovery and generation-aware retention remain separate
-work.
+The session crate does not open SQLite databases, discover workspace files, or
+rewrite JSONL transcripts. OpenHuman owns those source-reading workflows and
+uses the typed target APIs documented in
+[`legacy-import-handoff.md`](../docs/legacy-import-handoff.md). The session
+crate retains migrations over records already present in its bound storage and
+runs them from its owner-open path.

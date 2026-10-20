@@ -2,7 +2,8 @@ use super::*;
 use crate::testkit::conformance::task_cache_contract;
 use serde_json::json;
 use tinyagents_harness::ids::NodeId;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -19,31 +20,26 @@ fn key(graph: &str, node: &str, hash: &str) -> TaskCacheKey {
 
 #[tokio::test]
 async fn memory_backend_passes_the_task_cache_contract() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     task_cache_contract(DriverTaskCache::new(docs(&storage, "local"))).await;
 }
 
 #[tokio::test]
-async fn sqlite_backend_passes_the_task_cache_contract() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("cache.sqlite")).unwrap();
+async fn testkit_backend_passes_the_task_cache_contract() {
+    let storage = MemoryBackend::new();
     task_cache_contract(DriverTaskCache::new(docs(&storage, "local"))).await;
 }
 
 #[tokio::test]
-async fn entries_persist_across_handles_and_reopened_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("cache.sqlite");
+async fn entries_persist_across_driver_handles_on_one_backend() {
+    let storage = MemoryBackend::new();
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         let cache = DriverTaskCache::new(docs(&storage, "local"));
         cache
             .put(&key("g", "n", "h"), json!(7), None)
             .await
             .unwrap();
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = DriverTaskCache::new(docs(&storage, "local"));
     assert_eq!(
         reopened.get(&key("g", "n", "h")).await.unwrap(),
@@ -53,7 +49,7 @@ async fn entries_persist_across_handles_and_reopened_files() {
 
 #[tokio::test]
 async fn scopes_and_namespaces_keep_entries_apart() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverTaskCache::new(docs(&storage, "alice"));
     let bob = DriverTaskCache::new(docs(&storage, "bob"));
     let other = DriverTaskCache::with_namespace(docs(&storage, "alice"), "other_cache");
@@ -71,7 +67,7 @@ async fn scopes_and_namespaces_keep_entries_apart() {
 
 #[tokio::test]
 async fn long_input_hashes_fit_the_document_id_limit() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let cache = DriverTaskCache::new(docs(&storage, "local"));
     let long = key("g", "n", &"x".repeat(10_000));
     cache.put(&long, json!("big"), None).await.unwrap();
@@ -80,7 +76,7 @@ async fn long_input_hashes_fit_the_document_id_limit() {
 
 #[tokio::test]
 async fn a_backend_that_cannot_keep_expiry_refuses_a_ttl_instead_of_caching_forever() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let wrapped: Arc<dyn DocumentStore> = Arc::new(tinyagents_harness::testkit::WithoutNativeTtl(
         docs(&storage, "local"),
     ));

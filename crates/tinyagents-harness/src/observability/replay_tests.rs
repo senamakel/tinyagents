@@ -9,10 +9,13 @@ use crate::observability::{
     DriverStatusStore, FanOutSink, JournalSink, StoreEventJournal, mint_run_id,
 };
 use crate::store::{AppendStore, DriverAppendStore};
-use tinystoragedrivers_core::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn storage() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 fn journal_over(storage: &ScopedStorage) -> StoreEventJournal<Arc<dyn AppendStore>> {

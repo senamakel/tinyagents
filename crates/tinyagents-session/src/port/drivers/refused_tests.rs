@@ -23,7 +23,7 @@ async fn every_document_call_reports_the_refusal() {
         assert_eq!(error.message(), "down");
         error.kind()
     };
-    assert_eq!(docs.capabilities(), Capabilities::default());
+    assert_eq!(DocumentStore::capabilities(&docs), Capabilities::default());
     assert_eq!(
         kind(
             docs.ensure_collection(&CollectionSpec::new("c"))

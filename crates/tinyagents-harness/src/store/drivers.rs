@@ -29,10 +29,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tinystoragedrivers_core::primitives::{self, Kv};
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, StorageError, StreamStore,
-};
+use tinyagents_storage_kit::primitives::{self, Kv};
+use tinyagents_storage_kit::{CollectionSpec, DocumentStore, ErrorKind, StorageError, StreamStore};
 use tokio::sync::OnceCell;
 
 use super::{AppendStore, SchemaAdmission, Store};
@@ -92,10 +90,7 @@ impl DriverStore {
     /// (`Registry::prepare` declares it too). Returning a declaration grants no
     /// access and does not initialize the backend.
     pub fn collection_spec() -> CollectionSpec {
-        primitives::collection_specs()
-            .into_iter()
-            .find(|spec| spec.name == primitives::KV)
-            .expect("the primitives always declare tsd.kv")
+        primitives::kv_collection_spec()
     }
 
     /// The `Kv` namespace `namespace` of this store's owner.

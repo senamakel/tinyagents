@@ -45,7 +45,7 @@ use super::port::RunLedgerStore;
 /// Lifecycle state of one recorded tool effect.
 ///
 /// Mirrors `tinyagents_harness::tool::ToolEffectStatus` (see
-/// [`ToolEffectStatus::from_harness`] / [`ToolEffectStatus::into_harness`])
+/// `from_harness` / `into_harness`)
 /// rather than reusing it directly, matching how every other run-ledger
 /// status enum (`AgentRunStatus`, `WorkflowRunStatus`, ...) stays
 /// session-owned and serde-friendly independent of the harness crate's own

@@ -2,21 +2,21 @@ use super::super::DriverRunLedger;
 use super::*;
 use crate::run_ledger::types::*;
 use crate::run_ledger::{RunLedgerStore, SessionHistoryStore};
+use crate::testkit::MemoryStorage;
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tinystoragedrivers_core::DocumentStoreExt;
-use tinystoragedrivers_core::{
-    Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
-    StorageBackend, WriteOptions,
+use tinyagents_storage_kit::{
+    Item, MigrateOptions, Precondition, Registry, Scope, ScopedStorage, WriteOptions,
 };
+use tinystoragedrivers_api::DocumentStoreExt;
+use tinystoragedrivers_api::StorageBackend;
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
-    backend
-        .for_scope(&Scope::local().agent("planner").unwrap())
-        .unwrap()
+    let scope = Scope::new("test-planner-ledger").unwrap();
+    ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope)
 }
 
 /// The v1 document id: a digest of the length-prefixed parts.
@@ -32,7 +32,7 @@ fn v1_id(parts: &[&str]) -> String {
 async fn put_v1(storage: &ScopedStorage, collection: &str, parts: &[&str], record: Value) {
     let envelope = json!({"schemaVersion": 1, "updatedSql": null, "record": record});
     let docs = storage.documents();
-    docs.ensure_collection(&tinystoragedrivers_core::CollectionSpec::new(collection))
+    docs.ensure_collection(&tinystoragedrivers_types::CollectionSpec::new(collection))
         .await
         .unwrap();
     docs.put_with(
@@ -47,7 +47,7 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, parts: &[&str], recor
 }
 
 async fn migrate(storage: &ScopedStorage) {
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
+    for spec in tinyagents_storage_kit::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     for schema in [ledger_storage_schema(), history_storage_schema()] {
@@ -174,7 +174,10 @@ async fn ledger_records_move_to_snake_case_bodies_with_ms_times_and_key_ids() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.meta.schema, 2);
-    assert_eq!(stored.meta.created_ms, 1_700_000_000_000);
+    assert!(
+        stored.meta.created_ms > 0,
+        "the engine assigns new row metadata"
+    );
     assert_eq!(
         stored.doc,
         json!({

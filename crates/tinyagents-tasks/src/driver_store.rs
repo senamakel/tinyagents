@@ -40,7 +40,7 @@ use std::sync::{Arc, Mutex};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::ids::TaskId;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Blocking, DocumentStore, DocumentStoreExt, ErrorKind, Filter, Query, Repo, Sort, StorageError,
     Versioned, WriteOptions,
 };

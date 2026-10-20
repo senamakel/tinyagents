@@ -13,7 +13,7 @@ fn legacy_storage_error_keeps_original_type() {
 /// Native unsupported failures retain their exact driver capability and error kind.
 #[test]
 fn native_driver_error_preserves_capability_and_kind() {
-    use tinystoragedrivers_core::{Capability, ErrorKind, StorageError};
+    use tinyagents_storage_kit::{Capability, ErrorKind, StorageError};
     let error: LedgerError = StorageError::unsupported(Capability::Transactions, "required").into();
     assert!(
         matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::Transactions))

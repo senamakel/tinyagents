@@ -6,12 +6,15 @@
 
 use std::sync::Arc;
 
-use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
+use tinyagents_session::port::{AgentStorageFactory, DriverSessionStores, SessionStoreProvider};
 use tinyagents_session::transcript::{
     DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts, TranscriptHistory,
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
 };
-use tinystoragedrivers_core::MemoryStorage;
+use tinyagents_storage_kit::{Scope, ScopedStorage};
+use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::StorageError;
 
 /// An empty transcript store: the production driver-backed locator, over memory.
 pub(crate) fn memory() -> Arc<dyn TranscriptLocator> {
@@ -176,11 +179,17 @@ impl TranscriptLocator for Destination {
 
 /// An empty driver-backed transcript store (the production store, over memory).
 pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
-    DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        tinystoragedrivers_core::Scope::local(),
-    )
-    .expect("driver session stores over memory")
-    .for_agent("runtime-tests")
-    .transcripts
+    let backend = Arc::new(MemoryBackend::new());
+    let factory: AgentStorageFactory = Arc::new(move |agent_id| {
+        if agent_id != "runtime-tests" {
+            return Err(StorageError::invalid_input("unknown test agent"));
+        }
+        let scope = Scope::new("runtime-tests")?;
+        let storage = backend.for_scope(&scope)?;
+        Ok(ScopedStorage::new(storage, scope))
+    });
+    DriverSessionStores::new(factory)
+        .expect("driver session stores over memory")
+        .for_agent("runtime-tests")
+        .transcripts
 }

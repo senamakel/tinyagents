@@ -13,24 +13,27 @@ resolver = "3"
 [features]
 default = []
 mongodb-storage-tests = [
-    "dep:tinystoragedrivers-core",
-    "dep:tinystoragedrivers-mongodb",
+    "dep:tinystoragedrivers-api",
+    "dep:tinystoragedrivers-connect",
+    "dep:tinystoragedrivers-document",
+    "dep:tinystoragedrivers-testkit",
+    "dep:tinystoragedrivers-types",
     "dep:tinyagents-session",
-    "dep:tinyinference-llm",
+    "dep:tinyagents-storage-kit",
 ]
 
 [dependencies]
-chrono = "0.4"
 reqwest = { version = "0.12", default-features = false }
-rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
-tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
-tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", optional = true }
-tinystoragedrivers-mongodb = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", optional = true }
-tinyagents-session = { path = "../../crates/tinyagents-session", features = ["storage-drivers"], optional = true }
-tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", optional = true }
+tinystoragedrivers-api = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", version = "2.0.1", optional = true }
+tinystoragedrivers-connect = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", version = "2.0.1", features = ["mongodb"], optional = true }
+tinystoragedrivers-document = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", version = "2.0.1", default-features = false, features = ["mongodb"], optional = true }
+tinystoragedrivers-testkit = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", version = "2.0.1", optional = true }
+tinystoragedrivers-types = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", version = "2.0.1", optional = true }
+tinyagents-session = { path = "../../crates/tinyagents-session", features = ["storage-drivers", "testkit"], optional = true }
+tinyagents-storage-kit = { path = "../../crates/tinyagents-storage-kit", optional = true }
 
 [patch."https://github.com/tinyhumansai/tinytools"]
 tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent" }

@@ -43,7 +43,9 @@ tinytools-std = { path = "../../vendor/tinytools/crates/tinytools-std", version 
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs", "io-util", "process"] }
 # Storage ports (no database client): the `storage-drivers` adapters put
 # the harness `Store` / `AppendStore` on any tinystoragedrivers backend.
-tinystoragedrivers-core = { workspace = true }
+tinyagents-storage-kit = { workspace = true }
+tinystoragedrivers-api = { workspace = true }
+tinystoragedrivers-types = { workspace = true }
 tempfile = { workspace = true }
 wait-timeout = { version = "0.2", optional = true }
 uuid = { workspace = true }
@@ -88,7 +90,7 @@ tracing = ["tinytools-agent/tracing"]
 
 [dev-dependencies]
 png = "0.17"
-tinystoragedrivers-sqlite = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]

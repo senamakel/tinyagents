@@ -36,7 +36,7 @@ pub use completions::{
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
     CompletionRouterReplaceOutcome, DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate,
-    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store_or_memory,
+    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store,
 };
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{
@@ -47,11 +47,9 @@ pub use recovery::{
     build_restart_recovery_note, recovery_children,
 };
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
-pub use storage::storage_schema;
+pub use storage::{collections, open_storage, storage_schema};
 pub use store::{InMemoryTaskStore, TaskStore};
-pub use store_registry::{
-    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
-};
+pub use store_registry::{TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store};
 pub use tool::{
     OrchestrationStatusOverlay, OrchestrationTool, SteeringRegistry, orchestration_tool_schema,
     orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_status_overlay,

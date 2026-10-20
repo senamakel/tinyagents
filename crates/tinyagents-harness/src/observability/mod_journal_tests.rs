@@ -9,10 +9,13 @@ use crate::ids::RunId;
 use crate::observability::replay::read_run_events_page;
 use crate::store::{AppendStore, DriverAppendStore};
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn storage() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 fn journal_over(storage: &ScopedStorage) -> StoreEventJournal<Arc<dyn AppendStore>> {

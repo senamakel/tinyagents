@@ -4,11 +4,9 @@ The store-port seam hosts persist conversations through. A transcript lives in
 whatever store the host installed (`crate::port`: the `tinystoragedrivers`
 backed `DriverSessionStores`, or the in-memory double); this module defines
 the traits and types, and nothing in it reads or writes a workspace directory.
-The only code touching classic `session_raw/{stem}.jsonl` files is in
-`crate::legacy`: the one-time, read-only import (`import_transcripts_once`,
-`WorkspaceStores`) and `rewrite_legacy_transcripts`, which rewrites them in
-place. Both parse them with the internal JSONL codec kept here
-(`jsonl.rs`, `reader.rs`, `legacy_md.rs`). See the module doc in
+Workspace discovery, import and rewrite of classic `session_raw/{stem}.jsonl`
+files belong to the host. The session crate exposes typed transcript ports and
+keeps no workspace path or SQLite reader. See the module doc in
 `../transcript.rs` for the append-only log model and the classic line schema.
 
 ## Why this exists, and how it differs from `crate::ops` / `crate::run_ledger`
@@ -144,11 +142,11 @@ sub-agents by a `SpawnCallLookup`). See `view/README.md`.
 | `session.rs` | `SessionRef` identity and its deterministic stem. |
 | `display.rs` | Row ⇄ display projection helpers. |
 | `jsonl.rs` | Internal classic JSONL line shapes and line ⇄ message conversions. |
-| `reader.rs` | Classic-file model-context replay and display projection (legacy import). |
-| `writer.rs` | Classic-file full rewrite (`legacy::rewrite_legacy_transcripts`); turn-append helpers are test fixtures. |
-| `paths.rs`, `markdown.rs` | Stem sanitisation and the `.md` companion the classic rewrite re-renders. |
-| `legacy_md.rs` | Legacy HTML-comment `.md` reader (import compatibility). |
-| `test_locator.rs` | Test fixtures: classic files imported into a driver-backed locator. |
+| `reader.rs` | Classic-file model-context replay and display projection retained for host migration tooling. |
+| `writer.rs` | Legacy JSONL write helpers used by host migration tooling and tests. |
+| `paths.rs`, `markdown.rs` | Stem sanitisation and `.md` compatibility helpers for host migration tooling. |
+| `legacy_md.rs` | Legacy HTML-comment `.md` reader used by host migration tooling. |
+| `test_locator.rs` | Test fixtures: classic files loaded into a test locator. |
 | `*_tests.rs` | Module-local unit tests. |
 
 ## Operational constraints

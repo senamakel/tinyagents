@@ -7,7 +7,7 @@
 //! again. The decision rules are the classic SQLite ones.
 use super::storage::{CAS_ATTEMPTS, MEMBERS, TASKS, encode, key, now};
 use super::*;
-use tinystoragedrivers_core::{ErrorKind, ExpectedDocument, Precondition, ReadCheck, WriteOp};
+use tinyagents_storage_kit::{ErrorKind, ExpectedDocument, Precondition, ReadCheck, WriteOp};
 
 const LOG_PREFIX: &str = "[run_ledger:team]";
 
@@ -262,7 +262,7 @@ impl DriverRunLedger {
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>> {
-        use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, Sort};
+        use tinyagents_storage_kit::{DocumentStoreExt, Filter, Query, Sort};
         for _ in 0..CAS_ATTEMPTS {
             let Some(member) = self
                 .read::<AgentTeamMember>(MEMBERS, member_id)

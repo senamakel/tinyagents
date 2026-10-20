@@ -1,0 +1,24 @@
+[package]
+name = "tinyagents-storage-kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+data-encoding = "2"
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+uuid = { workspace = true }
+tinystoragedrivers-api = { workspace = true }
+tinystoragedrivers-types = { workspace = true }
+
+[dev-dependencies]
+tinystoragedrivers-busproxy = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-testkit = { workspace = true }
+
+[lints]
+workspace = true

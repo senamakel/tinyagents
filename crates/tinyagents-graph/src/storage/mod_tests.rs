@@ -5,13 +5,16 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 use tinyagents_harness::ids::{GraphId, NodeId, now_ms};
-use tinystoragedrivers_core::{
-    DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Query, Registry, Scope,
-    ScopeClass, ScopedStorage, StorageBackend,
+use tinyagents_storage_kit::{
+    DocumentStoreExt, MigrateOptions, Precondition, Query, Registry, Scope, ScopeClass,
+    ScopedStorage, StorageBackend,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
@@ -25,9 +28,15 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
 async fn migrate(storage: &ScopedStorage) {
     let registry = Registry::compose([storage_schema()]).unwrap();
     for item in storage_schema().items {
-        if let tinystoragedrivers_core::Item::Collection { spec, .. } = item {
+        if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
+    }
+    for spec in [
+        tinyagents_storage_kit::primitives::leases_collection_spec(),
+        tinyagents_storage_kit::primitives::kv_collection_spec(),
+    ] {
+        storage.documents().ensure_collection(&spec).await.unwrap();
     }
     registry
         .migrate(storage, &MigrateOptions::new())

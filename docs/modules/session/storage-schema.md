@@ -7,7 +7,7 @@ for the host's `Registry::compose` (owner `session`, scope class Agent).
 
 | v1 | v2 |
 |---|---|
-| `session_transcripts` (id `<len>:<stem>` or `h:<sha>`, `created_at` RFC 3339 nanos, `reserved_at`) | `session.transcripts`, id `Key::of([stem])`; creation time is the `_created_ms` metadata (indexes and sorts use it, ties break on `_id`); reservation rows are dropped |
+| `session_transcripts` (id `<len>:<stem>` or `h:<sha>`, `created_at` RFC 3339 nanos, `reserved_at`) | `session.transcripts`, id `Key::of([stem])`; creation time is converted to application `created_ms` (indexes and sorts use it, ties break on `_id`); reservation rows are dropped |
 | `session_transcript_entries` (id `<len>:<stem>#<seq>`) | `session.transcript_entries`, id `Key::of([stem, "<seq>"])`, `seq` zero-padded to 10 digits |
 | `session_turn_states` (`{thread_id, request_id, lifecycle, turn: {camelCase}}`) | `session.turn_states`, id `Key::of([thread_id, request_id])`, snake_case storage form of `TurnState` with `started_ms` / `updated_ms` |
 | `reserved_at` + 30 s stale takeover on a transcript index row | `tsd.leases` (owner `session`, key = stem, 30 s); a takeover advances the lease epoch, which refuses the stalled owner's first write |

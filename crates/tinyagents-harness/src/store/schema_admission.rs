@@ -1,5 +1,5 @@
 //! Explicit declaration policy for driver-backed stores.
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Result};
+use tinyagents_storage_kit::{CollectionSpec, DocumentStore, Result};
 
 /// How an adapter admits its required collection declarations.
 ///

@@ -16,7 +16,7 @@ use super::{ConversationThread, ThreadMessage};
 use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tinystoragedrivers_core::StorageError;
+use tinystoragedrivers_types::StorageError;
 
 /// An RFC 3339 time as epoch milliseconds.
 ///

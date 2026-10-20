@@ -5,8 +5,9 @@ use std::sync::Arc;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::ids::new_call_id;
 use tinyagents_harness::tool::ToolDispatch;
+use tinyagents_storage_kit::{DocumentStore, Scope, StorageBackend};
 use tinyagents_tasks::TaskStore;
-use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -83,7 +84,7 @@ fn legacy_session_rows_decode_without_a_lifecycle_key() {
 
 #[tokio::test]
 async fn session_selector_requires_matching_scope_and_reusable_status() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let selector = selector("analysis");
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
     assert!(session.matches_selector(&selector));
@@ -95,7 +96,7 @@ async fn session_selector_requires_matching_scope_and_reusable_status() {
 
 #[tokio::test]
 async fn driver_store_reuses_matching_session_and_force_fresh_creates_another() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let (first, first_decision) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
     assert_eq!(first_decision, ReuseDecision::SpawnedNew);
 
@@ -111,7 +112,7 @@ async fn driver_store_reuses_matching_session_and_force_fresh_creates_another() 
 
 #[tokio::test]
 async fn closing_a_session_removes_it_from_reuse_and_preserves_it_in_listing() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
     assert!(store.close(&session.subagent_session_id).await.unwrap());
     assert!(!store.close("missing").await.unwrap());
@@ -128,7 +129,7 @@ async fn closing_a_session_removes_it_from_reuse_and_preserves_it_in_listing() {
 
 #[tokio::test]
 async fn stale_completion_cannot_overwrite_a_reassigned_or_closed_session() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
     store.upsert_running(upsert(false, "task-2")).await.unwrap();
     assert!(
@@ -164,7 +165,7 @@ async fn stale_completion_cannot_overwrite_a_reassigned_or_closed_session() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_first_upserts_claim_one_durable_session_for_a_selector() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let left_store = store.clone();
     let right_store = store.clone();
     let (left, right) = tokio::join!(
@@ -184,7 +185,7 @@ async fn concurrent_first_upserts_claim_one_durable_session_for_a_selector() {
 
 #[tokio::test]
 async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let owner_key = parent.instance_id().to_string();
     let mut request = upsert(false, "task-waiting");
@@ -434,7 +435,7 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
 
 #[tokio::test]
 async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
     let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread("thread"), ());
 
@@ -456,7 +457,7 @@ async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
 
 #[tokio::test]
 async fn continuation_by_unknown_session_id_is_rejected() {
-    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap();
     let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread("thread"), ());
 
     let error = SubagentRequest::continue_with_key(

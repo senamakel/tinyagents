@@ -1,17 +1,21 @@
+use crate::testkit::MemoryStorage;
 use std::sync::Arc;
 
 use tinyagents_harness::tool::{
     ToolEffectLedger, ToolEffectSettle as HarnessSettle, ToolEffectStart as HarnessStart,
     ToolEffectStatus as HarnessStatus,
 };
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, ScopedStorage};
+use tinystoragedrivers_api::StorageBackend;
 
 use super::*;
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> Arc<dyn RunLedgerStore> {
-    Arc::new(DriverRunLedger::new(
-        backend.for_scope(&Scope::new(scope).unwrap()).unwrap(),
-    ))
+    let scope = Scope::new(scope).unwrap();
+    Arc::new(DriverRunLedger::new(ScopedStorage::new(
+        backend.for_scope(&scope).unwrap(),
+        scope,
+    )))
 }
 
 fn started(run: &str, call: &str) -> HarnessStart {
@@ -72,15 +76,10 @@ async fn run_ledger_tool_effects_implements_the_harness_ledger_trait() {
 }
 
 #[tokio::test]
-async fn tool_effects_survive_a_reopened_sqlite_file_and_stay_per_scope() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("effects.sqlite");
-    {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-        let ledger = RunLedgerToolEffects::new(ledger_on(&backend, "agent"));
-        ledger.started(started("run-1", "call-1")).await.unwrap();
-    }
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+async fn tool_effects_survive_store_reconstruction_and_stay_per_scope() {
+    let backend = MemoryStorage::new();
+    let ledger = RunLedgerToolEffects::new(ledger_on(&backend, "agent"));
+    ledger.started(started("run-1", "call-1")).await.unwrap();
     let reopened = RunLedgerToolEffects::new(ledger_on(&backend, "agent"));
     let unresolved = reopened.unresolved("run-1").await.unwrap();
     assert_eq!(
@@ -93,11 +92,9 @@ async fn tool_effects_survive_a_reopened_sqlite_file_and_stay_per_scope() {
 }
 
 #[tokio::test]
-async fn the_ledger_conformance_suite_passes_on_memory_and_sqlite() {
+async fn the_ledger_conformance_suite_passes_on_independent_memory_backends() {
     use crate::testkit::conformance::run_ledger_conformance;
     run_ledger_conformance(ledger_on(&MemoryStorage::new(), "agent")).await;
-    let dir = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("ledger.sqlite")).unwrap();
+    let backend = MemoryStorage::new();
     run_ledger_conformance(ledger_on(&backend, "agent")).await;
 }

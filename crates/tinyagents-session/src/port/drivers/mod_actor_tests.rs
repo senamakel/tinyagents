@@ -1,143 +1,51 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::turn_state::TurnState;
-use serde_json::json;
-use tinystoragedrivers_core::{Capabilities, Fence, Filter, MemoryStorage};
+
+fn factory(storage: ScopedStorage) -> AgentStorageFactory {
+    Arc::new(move |_| Ok(storage.clone()))
+}
 
 #[test]
-fn actor_factory_uses_supplied_backend_with_independent_stable_agent_cache() {
-    let original_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let admitted_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let original =
-        DriverSessionStores::new(original_backend, tinystoragedrivers_core::Scope::local())
-            .unwrap();
-    let old = original.for_agent("alice~planner");
-    old.turn_states
-        .put(&TurnState::started(
-            "old",
-            "old-r",
-            1,
-            "2026-01-01T00:00:00Z",
-        ))
-        .unwrap();
+fn actor_factory_uses_host_bound_storage_and_keeps_handles_independent() {
+    let original_scope = Scope::new("host-bound-original").unwrap();
+    let original_storage = MemoryStorage::new().for_scope(&original_scope).unwrap();
+    let original = DriverSessionStores::new(factory(original_storage)).unwrap();
+    let old = original.for_agent("arbitrary-agent-id");
+    let old_state = TurnState::started("old", "old-r", 1, "2026-01-01T00:00:00Z");
+    old.turn_states.put(&old_state).unwrap();
+
+    let actor_scope = Scope::new("host-bound-actor").unwrap();
+    let actor_storage = MemoryStorage::new().for_scope(&actor_scope).unwrap();
     let actor = original
-        .bind_actor(admitted_backend)
+        .bind_actor(factory(actor_storage))
         .unwrap()
-        .expect("driver providers support admitted actors");
-    let fresh = actor.for_agent("alice~planner");
+        .expect("driver providers support host-bound actor storage");
+    let fresh = actor.for_agent("arbitrary-agent-id");
+
     assert!(fresh.turn_states.get("old").unwrap().is_none());
-    fresh
-        .turn_states
-        .put(&TurnState::started("fresh", "r", 1, "2026-01-01T00:00:00Z"))
-        .unwrap();
+    let fresh_state = TurnState::started("fresh", "fresh-r", 1, "2026-01-01T00:00:00Z");
+    fresh.turn_states.put(&fresh_state).unwrap();
     assert!(old.turn_states.get("fresh").unwrap().is_none());
+    assert_eq!(old.turn_states.get("old").unwrap(), Some(old_state));
     assert!(Arc::ptr_eq(
         &fresh.turn_states,
-        &actor.for_agent("alice~planner").turn_states
+        &actor.for_agent("arbitrary-agent-id").turn_states
     ));
-    assert!(!Arc::ptr_eq(&fresh.turn_states, &old.turn_states));
-}
-
-#[derive(Debug)]
-struct AdmittedBackend {
-    inner: Arc<dyn StorageBackend>,
-    fence: Fence,
-}
-impl StorageBackend for AdmittedBackend {
-    fn driver(&self) -> &'static str {
-        self.inner.driver()
-    }
-    fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
-    }
-    fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
-        self.inner.for_scope_fenced(scope, &self.fence)
-    }
-}
-
-fn admitted(inner: &Arc<dyn StorageBackend>, epoch: u64) -> Arc<dyn StorageBackend> {
-    Arc::new(AdmittedBackend {
-        inner: Arc::clone(inner),
-        fence: Fence::new(
-            Scope::new("cluster").unwrap(),
-            "leases",
-            "alice",
-            Filter::eq("epoch", epoch),
-        ),
-    })
-}
-
-fn set_epoch(backend: &Arc<dyn StorageBackend>, epoch: u64) {
-    let scoped = backend.for_scope(&Scope::new("cluster").unwrap()).unwrap();
-    Blocking::new()
-        .unwrap()
-        .run(async move {
-            scoped
-                .documents()
-                .put(
-                    "leases",
-                    "alice",
-                    json!({"epoch": epoch}),
-                    tinystoragedrivers_core::Precondition::None,
-                )
-                .await
-        })
-        .unwrap()
-        .unwrap();
-}
-
-#[test]
-fn fresh_actor_after_native_takeover_preserves_namespace_and_refuses_retained_old_handles() {
-    let inner: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    set_epoch(&inner, 1);
-    let original =
-        DriverSessionStores::new(admitted(&inner, 1), tinystoragedrivers_core::Scope::local())
-            .unwrap();
-    let old = original.for_agent("alice~planner");
-    let saved = TurnState::started("persisted", "r", 1, "2026-01-01T00:00:00Z");
-    old.turn_states.put(&saved).unwrap();
-    set_epoch(&inner, 2);
-    let actor = original
-        .bind_actor(admitted(&inner, 2))
-        .unwrap()
-        .expect("driver providers support admitted actors");
-    let new = actor.for_agent("alice~planner");
-    assert_eq!(new.turn_states.get("persisted").unwrap(), Some(saved));
-    new.turn_states
-        .put(&TurnState::started("new", "r", 1, "2026-01-01T00:00:00Z"))
-        .unwrap();
-    assert!(
-        old.turn_states
-            .put(&TurnState::started("stale", "r", 1, "2026-01-01T00:00:00Z"))
-            .is_err()
-    );
-    assert!(new.turn_states.get("stale").unwrap().is_none());
-    let session = crate::transcript::SessionRef::scoped("stable-thread", "alice~planner");
-    let error = old
-        .transcripts
-        .begin_generation(&session, super::transcripts::tests::meta("stable-thread"))
-        .err()
-        .expect("retained transcript writes are fenced");
-    assert_eq!(
-        error.downcast_ref::<StorageError>().unwrap().kind(),
-        tinystoragedrivers_core::ErrorKind::Fenced
-    );
-    assert!(
-        new.transcripts
-            .begin_generation(&session, super::transcripts::tests::meta("stable-thread"))
-            .is_ok()
-    );
 }
 
 #[test]
 fn arbitrary_provider_reports_actor_factory_absence_without_fallback() {
     let provider = crate::port::InMemorySessionStores::default();
-    let admitted: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let scope = Scope::new("host-bound-test").unwrap();
+    let storage = MemoryStorage::new().for_scope(&scope).unwrap();
     assert!(
         provider
-            .bind_actor(Arc::clone(&admitted))
+            .bind_actor(factory(storage.clone()))
             .unwrap()
             .is_none()
     );
+
     let shared: Arc<dyn SessionStoreProvider> = Arc::new(provider);
-    assert!(shared.bind_actor(admitted).unwrap().is_none());
+    assert!(shared.bind_actor(factory(storage)).unwrap().is_none());
 }

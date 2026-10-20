@@ -4,9 +4,7 @@ use super::*;
 
 #[test]
 fn defaults_to_cli_credentials_without_env() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.blocking_lock();
     let prev = std::env::var("ANTHROPIC_API_KEY").ok();
     super::super::test_remove_env("ANTHROPIC_API_KEY");
 

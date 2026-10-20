@@ -1,8 +1,9 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::Value;
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, MemoryStorage, Page, Precondition, ReadCheck,
-    StorageBackend, Version, Versioned, WriteOp, WriteResult,
+use tinyagents_storage_kit::{
+    CollectionSpec, DocumentStore, ErrorKind, Page, Precondition, ReadCheck, Version, Versioned,
+    WriteOp, WriteResult,
 };
 type NativeResult<T> = std::result::Result<T, StorageError>;
 
@@ -38,7 +39,7 @@ struct SignedBsonDocuments {
 }
 #[async_trait::async_trait]
 impl DocumentStore for SignedBsonDocuments {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
@@ -102,21 +103,19 @@ impl DocumentStore for SignedBsonDocuments {
 }
 
 pub(super) fn wrap(native: ScopedStorage) -> DriverRunLedger {
-    DriverRunLedger::new(ScopedStorage::new(
-        native.scope().clone(),
-        "mongo-bson-fixture",
+    let wrapped = crate::testkit::with_documents(
+        &native,
         Arc::new(SignedBsonDocuments {
             inner: native.documents().clone(),
         }),
-        native.streams().clone(),
-        native.blobs().clone(),
-    ))
+    );
+    DriverRunLedger::new(wrapped)
 }
 
 #[tokio::test]
 async fn last_signed_event_sequence_commits_with_bson_representable_head() {
     let backend = MemoryStorage::new();
-    let native = backend.for_scope(&Scope::local()).unwrap();
+    let native = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let ledger = wrap(native.clone());
     ledger.declare().await.unwrap();
     native

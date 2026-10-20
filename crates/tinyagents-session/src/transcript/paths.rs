@@ -1,6 +1,6 @@
-//! Transcript file naming shared by the stem codec and the legacy JSONL
-//! reader/writer: stem sanitisation and the `.md` companion path.
+//! Transcript stem sanitization and test-only legacy `.md` fixture paths.
 
+#[cfg(test)]
 use std::path::{Path, PathBuf};
 
 /// Sanitize a user-supplied transcript stem so it never escapes the
@@ -37,6 +37,7 @@ pub(super) fn sanitize_stem(stem: &str) -> String {
 ///
 /// If no `session_raw` component is present (tests using a flat
 /// tempdir), the companion sits alongside as a sibling `.md`.
+#[cfg(test)]
 pub(super) fn md_companion_path(jsonl_path: &Path) -> PathBuf {
     let components: Vec<_> = jsonl_path.components().collect();
 

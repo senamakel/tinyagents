@@ -202,7 +202,7 @@ const DISALLOWED_CC_BUILTINS: &[&str] = &[
 ///    force ON; `acceptEdits`/`edits`/`default`/`off`/`false`/`0` force OFF.
 /// 2. Otherwise the persisted UI toggle in
 ///    [`super::settings`] (the Claude Code modal "Full access" switch).
-fn claude_code_full_access(workspace_dir: &std::path::Path) -> bool {
+async fn claude_code_full_access(settings_store: &tinyagents_storage_kit::primitives::Kv) -> bool {
     if let Ok(raw) = std::env::var("OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE") {
         match raw.trim() {
             "bypass" | "bypassPermissions" | "full" => return true,
@@ -210,7 +210,10 @@ fn claude_code_full_access(workspace_dir: &std::path::Path) -> bool {
             _ => {}
         }
     }
-    super::settings::load(workspace_dir).full_access
+    super::settings::load(settings_store)
+        .await
+        .map(|settings| settings.full_access)
+        .unwrap_or(false)
 }
 
 /// Whether to wrap the `claude` spawn in the macOS Seatbelt jail. On by
@@ -290,9 +293,15 @@ fn openhuman_internal_root(workspace_dir: &std::path::Path) -> std::path::PathBu
 pub(crate) struct TurnContext<'a> {
     /// Resolved path to the `claude` CLI binary to spawn.
     pub bin_path: PathBuf,
-    /// Directory holding this provider's session store and settings
-    /// (`claude-code-sessions.json`, `claude_code_settings.json`); also the
-    /// root the macOS Seatbelt jail walls off from the CLI's own tools.
+    /// Private runtime directory and the root the macOS Seatbelt jail walls
+    /// off from the CLI's own tools. Persistence is host-bound, never file-based.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(
+            dead_code,
+            reason = "workspace path is consumed by the macOS Seatbelt profile"
+        )
+    )]
     pub workspace_dir: PathBuf,
     /// The user's project root. Claude Code runs here
     /// (cwd + `--add-dir`) so its file tools act on the user's code, not the
@@ -314,6 +323,8 @@ pub(crate) struct TurnContext<'a> {
     pub messages: &'a [ChatMessage],
     /// Thread-key → CC session UUID persistence, shared across turns.
     pub session_store: Arc<SessionStore>,
+    /// Host-bound settings namespace.
+    pub settings_store: tinyagents_storage_kit::primitives::Kv,
     /// Channel to forward streaming deltas on, when the caller wants a
     /// streamed response rather than only the final aggregate.
     pub stream: Option<&'a mpsc::Sender<ProviderDelta>>,
@@ -428,10 +439,11 @@ fn append_system_prompt_args(
 /// `ProviderDelta`s through `ctx.stream` as they arrive and returns the
 /// aggregated `ChatResponse` when done.
 pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatResponse> {
-    let stored = ctx
-        .persist_session
-        .then(|| ctx.session_store.get(&ctx.thread_id))
-        .flatten();
+    let stored = if ctx.persist_session {
+        ctx.session_store.get(&ctx.thread_id).await?
+    } else {
+        None
+    };
     let is_new = !stored.as_deref().map(is_uuid_v4).unwrap_or(false);
     let cc_session_id = if is_new {
         generate_uuid_v4()
@@ -486,7 +498,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     // only); the user opts into `bypassPermissions` (full toolset incl. bash)
     // explicitly. On macOS the Seatbelt jail walls off `~/.openhuman` in either
     // mode; on Linux/Windows full access is unconfined.
-    let full_access = claude_code_full_access(&ctx.workspace_dir);
+    let full_access = claude_code_full_access(&ctx.settings_store).await;
     let permission_mode = if full_access {
         "bypassPermissions"
     } else {
@@ -539,7 +551,10 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     let (delivered, claim) = if is_new || !ctx.persist_session {
         (std::collections::HashSet::new(), None)
     } else {
-        let (already, claim) = ctx.session_store.claim_delivered(&ctx.thread_id, &pending);
+        let (already, claim) = ctx
+            .session_store
+            .claim_delivered(&ctx.thread_id, &pending)
+            .await?;
         (already, Some(claim))
     };
     let stdin_bytes = build_stdin_with_delivered(ctx.messages, is_new, &delivered);
@@ -701,7 +716,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
                 .error
                 .as_deref()
                 .is_some_and(|e| is_missing_session_error(e, &cc_session_id));
-        if !is_new && missing && clear_missing_session(&ctx, &cc_session_id) {
+        if !is_new && missing && clear_missing_session(&ctx, &cc_session_id).await {
             return Box::pin(run_turn(ctx)).await;
         }
         // The CLI reports most failures (bad auth, unknown model, invalid
@@ -721,7 +736,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     if let Some(err) = mapper.error.clone() {
         if !is_new
             && is_missing_session_error(&err, &cc_session_id)
-            && clear_missing_session(&ctx, &cc_session_id)
+            && clear_missing_session(&ctx, &cc_session_id).await
         {
             return Box::pin(run_turn(ctx)).await;
         }
@@ -737,7 +752,7 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     // than poisoning it with a UUID Claude never created.
     if ctx.persist_session && is_new {
         let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
-        if let Err(error) = ctx.session_store.set(&ctx.thread_id, accepted_id) {
+        if let Err(error) = ctx.session_store.set(&ctx.thread_id, accepted_id).await {
             tracing::warn!(
                 "[claude-code][driver] failed to persist accepted session uuid for thread {}: {}",
                 ctx.thread_id,
@@ -752,7 +767,11 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     // One-shot (non-durable) calls never resume, so they record nothing.
     if ctx.persist_session {
         let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
-        if let Err(error) = ctx.session_store.record_delivered(&ctx.thread_id, &pending) {
+        if let Err(error) = ctx
+            .session_store
+            .record_delivered(&ctx.thread_id, &pending)
+            .await
+        {
             tracing::warn!(
                 "[claude-code][driver] failed to record delivered turns for thread {} session {}: {}",
                 ctx.thread_id,
@@ -773,13 +792,14 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
 /// as a new session with the full history; false means this call did not remove
 /// the mapping (write failed, or a concurrent turn already replaced it)
 /// and the original failure must be surfaced.
-fn clear_missing_session(ctx: &TurnContext<'_>, failed_session_id: &str) -> bool {
+async fn clear_missing_session(ctx: &TurnContext<'_>, failed_session_id: &str) -> bool {
     tracing::warn!(
         "[claude-code][driver] saved session is missing; clearing mapping and retrying with full history"
     );
     match ctx
         .session_store
         .remove_if(&ctx.thread_id, failed_session_id)
+        .await
     {
         Ok(removed) => removed,
         Err(error) => {

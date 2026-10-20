@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tinyinference_llm::message::Message;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Precondition, Query,
 };
+use tinyinference_llm::message::Message;
 use tokio::sync::OnceCell;
 
 use super::{SubagentError, SubagentTaskKey};

@@ -1,37 +1,37 @@
 use super::*;
 use serde_json::Value;
 use tinyagents_session::run_ledger::DriverRunLedger;
-use tinystoragedrivers_core::{
-    Capabilities, Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, MemoryStorage,
-    Page, Precondition, Query, Scope, ScopedStorage, Sort, StorageBackend, StorageError, Version,
-    Versioned,
+use tinyagents_storage_kit::{
+    Capabilities, Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, Page, Precondition,
+    Query, Scope, ScopedStorage, Sort, Storage, StorageBackend, StorageError, Version, Versioned,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 #[derive(Debug)]
 struct RefusedDocuments(ErrorKind);
 
 impl RefusedDocuments {
-    fn refused<T>(&self) -> tinystoragedrivers_core::Result<T> {
+    fn refused<T>(&self) -> tinyagents_storage_kit::Result<T> {
         Err(StorageError::new(self.0, "admitted backend refused"))
     }
 }
 
 #[async_trait]
 impl DocumentStore for RefusedDocuments {
-    async fn drop_collection(&self, _: &str) -> tinystoragedrivers_core::Result<()> {
+    async fn drop_collection(&self, _: &str) -> tinyagents_storage_kit::Result<()> {
         self.refused()
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities::default()
     }
-    async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+    async fn ensure_collection(&self, _: &CollectionSpec) -> tinyagents_storage_kit::Result<()> {
         self.refused()
     }
     async fn get(
         &self,
         _: &str,
         _: &str,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+    ) -> tinyagents_storage_kit::Result<Option<Versioned<Value>>> {
         self.refused()
     }
     async fn put(
@@ -40,7 +40,7 @@ impl DocumentStore for RefusedDocuments {
         _: &str,
         _: Value,
         _: Precondition,
-    ) -> tinystoragedrivers_core::Result<Version> {
+    ) -> tinyagents_storage_kit::Result<Version> {
         self.refused()
     }
     async fn delete(
@@ -48,20 +48,20 @@ impl DocumentStore for RefusedDocuments {
         _: &str,
         _: &str,
         _: Precondition,
-    ) -> tinystoragedrivers_core::Result<bool> {
+    ) -> tinyagents_storage_kit::Result<bool> {
         self.refused()
     }
     async fn query(
         &self,
         _: &str,
         _: &Query,
-    ) -> tinystoragedrivers_core::Result<Page<Versioned<Value>>> {
+    ) -> tinyagents_storage_kit::Result<Page<Versioned<Value>>> {
         self.refused()
     }
-    async fn count(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
+    async fn count(&self, _: &str, _: &Filter) -> tinyagents_storage_kit::Result<u64> {
         self.refused()
     }
-    async fn delete_where(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
+    async fn delete_where(&self, _: &str, _: &Filter) -> tinyagents_storage_kit::Result<u64> {
         self.refused()
     }
     async fn claim(
@@ -70,7 +70,7 @@ impl DocumentStore for RefusedDocuments {
         _: &Filter,
         _: &[Sort],
         _: &Value,
-    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+    ) -> tinyagents_storage_kit::Result<Option<Versioned<Value>>> {
         self.refused()
     }
 }
@@ -83,18 +83,22 @@ async fn authoritative_refusals_preserve_native_kind_and_never_create_sqlite() {
     let existed_before = ambient_db.exists();
     for kind in [
         ErrorKind::Unavailable,
-        ErrorKind::Fenced,
+        ErrorKind::Conflict,
         ErrorKind::Unsupported(Capability::Transactions),
     ] {
-        let memory = MemoryStorage::new();
+        let memory = MemoryBackend::new();
         let scope = Scope::new("explicit-profile").unwrap();
         let handles = memory.for_scope(&scope).unwrap();
         let admitted = ScopedStorage::new(
+            Storage::new(
+                Arc::new(RefusedDocuments(kind)),
+                handles.streams().clone(),
+                handles.kv().clone(),
+                handles.blobs().clone(),
+                handles.queues().clone(),
+                handles.secrets().clone(),
+            ),
             scope,
-            "refused",
-            Arc::new(RefusedDocuments(kind)),
-            handles.streams().clone(),
-            handles.blobs().clone(),
         );
         let store = LedgerWorkflowStore::new(Arc::new(DriverRunLedger::new(admitted)));
         let outcomes = [

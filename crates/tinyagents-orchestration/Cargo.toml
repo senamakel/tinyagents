@@ -12,7 +12,6 @@ description = "Host-neutral subagent invocation and lifecycle orchestration."
 tinyagents-definition = { path = "../tinyagents-definition", version = "2.2.0" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-fs2 = "0.4"
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -30,7 +29,7 @@ tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 tracing = { workspace = true }
 # `blocking` bridges the synchronous `TeamLedger` / `WorkflowStore` traits onto the
 # async run-ledger port.
-tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
+tinyagents-storage-kit = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 
 [features]
@@ -42,7 +41,7 @@ tracing = [
 ]
 
 [dev-dependencies]
-tinystoragedrivers-sqlite = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
 tempfile = "3"

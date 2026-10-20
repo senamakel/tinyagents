@@ -4,11 +4,14 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use serde_json::Value;
-use tinystoragedrivers_core::{
-    Blocking, Capabilities, CollectionSpec, DocumentStore, ErrorKind, Filter, Page, Precondition,
-    Query, Result, Sort, StorageError, StreamEntry, StreamStore, Version, Versioned, async_trait,
+use tinyagents_storage_kit::Blocking;
+use tinyagents_storage_kit::{
+    Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, Result, Sort,
+    StorageError, StreamEntry, Version, Versioned,
 };
+use tinystoragedrivers_api::{DocumentStore, StreamStore};
 
 use super::super::AgentStores;
 use super::{DriverAppendStore, DriverStore, DriverTranscriptLocator, DriverTurnStates};
@@ -76,7 +79,7 @@ impl DocumentStore for Refused {
         _id: &str,
         _doc: Value,
         _precondition: Precondition,
-        _options: tinystoragedrivers_core::WriteOptions,
+        _options: tinystoragedrivers_types::WriteOptions,
     ) -> Result<Version> {
         Err(self.error())
     }
@@ -114,6 +117,10 @@ impl DocumentStore for Refused {
 
 #[async_trait]
 impl StreamStore for Refused {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::none()
+    }
+
     async fn append(&self, _stream: &str, _value: Value) -> Result<u64> {
         Err(self.error())
     }

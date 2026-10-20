@@ -74,8 +74,10 @@ caller-supplied adapter — can be certified by running the same assertions:
   `tinyagents_tasks::TaskStore` implementation.
 - `taskstore_concurrent_contract(store: Arc<S>)` — concurrent-access contract
   (no lost updates, no corrupted records under concurrent writers).
-- `taskstore_replay_contract(reopen)` — durability contract: a store reopened
-  via `reopen` must replay to the same state.
+- `taskstore_replay_contract(reopen)` — replay contract: a store reopened via
+  `reopen` must replay to the same state. A test that uses memory should pass
+  another handle to the same backend; it verifies driver reopening within the
+  test, not persistence across a process restart.
 
 Each function **panics** with a descriptive message on the first violation —
 call them from a `#[tokio::test]` / `#[test]` in the crate implementing a new

@@ -4,9 +4,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use tinystoragedrivers_core::DocumentStore;
-
-use super::{CompletionRouter, CompletionStore, DriverCompletionStore, InMemoryCompletionStore};
+use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
 
 /// Outcome of replacing one cached router only if it is still current.
 pub enum CompletionRouterReplaceOutcome {
@@ -141,21 +139,18 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPoo
     }
 }
 
-/// Opens a durable completion store over `docs`, falling back to memory when
-/// the bridge cannot start or the collection cannot be declared.
-pub fn open_driver_completion_store_or_memory(
-    docs: Arc<dyn DocumentStore>,
-) -> Arc<dyn CompletionStore> {
-    let store = match DriverCompletionStore::new(docs) {
-        Ok(store) => store,
-        Err(error) => {
-            tracing::warn!(error = %error, "durable completion store unavailable; using memory");
-            return Arc::new(InMemoryCompletionStore::new());
-        }
-    };
-    if let Err(error) = store.declare_collections() {
-        tracing::warn!(error = %error, "durable completion store unavailable; using memory");
-        return Arc::new(InMemoryCompletionStore::new());
-    }
-    Arc::new(store)
+/// Opens the durable completion store after applying the tasks owner's schema
+/// migrations to this already scope-bound storage handle.
+pub async fn open_driver_completion_store(
+    storage: tinyagents_storage_kit::ScopedStorage,
+) -> tinyagents_harness::error::Result<Arc<dyn CompletionStore>> {
+    crate::open_storage(storage.clone())
+        .await
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    let store = DriverCompletionStore::new(Arc::clone(storage.documents()))
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    store
+        .declare_collections()
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    Ok(Arc::new(store))
 }

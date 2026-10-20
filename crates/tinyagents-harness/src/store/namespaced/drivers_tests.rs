@@ -3,7 +3,8 @@ use super::*;
 use crate::store::Store as FlatStore;
 use crate::store::conformance::run_namespaced_store_conformance;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -20,25 +21,21 @@ fn ns(segments: &[&str]) -> Namespace {
 
 #[tokio::test]
 async fn memory_backend_passes_the_namespaced_conformance_suite() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     run_namespaced_store_conformance(&DriverNamespacedStore::new(docs(&storage, "local"))).await;
 }
 
 #[tokio::test]
-async fn sqlite_backend_passes_the_namespaced_conformance_suite() {
-    let dir = tempfile::tempdir().unwrap();
-    let storage =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("ns.sqlite")).unwrap();
+async fn testkit_backend_passes_the_namespaced_conformance_suite() {
+    let storage = MemoryBackend::new();
     run_namespaced_store_conformance(&DriverNamespacedStore::new(docs(&storage, "local"))).await;
 }
 
 #[tokio::test]
-async fn items_survive_a_reopened_file_with_their_timestamps() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("ns.sqlite");
+async fn items_keep_timestamps_when_the_driver_is_reopened() {
+    let storage = MemoryBackend::new();
     let created;
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         let store = DriverNamespacedStore::new(docs(&storage, "local"));
         store
             .put(&ns(&["users", "alice"]), "k", json!({"v": 1}))
@@ -51,7 +48,6 @@ async fn items_survive_a_reopened_file_with_their_timestamps() {
             .unwrap()
             .created_at_ms;
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let store = DriverNamespacedStore::new(docs(&storage, "local"));
     let item = store
         .get(&ns(&["users", "alice"]), "k")
@@ -77,7 +73,7 @@ async fn items_survive_a_reopened_file_with_their_timestamps() {
 /// An expired item is invisible on read before any sweep, and a sweep reclaims it.
 #[tokio::test]
 async fn expired_items_are_invisible_and_reclaimed_by_a_sweep() {
-    let store = DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local"));
+    let store = DriverNamespacedStore::new(docs(&MemoryBackend::new(), "local"));
     let n = ns(&["cache"]);
     store
         .put_with_ttl(&n, "gone", json!(1), Some(f64::MIN_POSITIVE))
@@ -113,7 +109,7 @@ async fn expired_items_are_invisible_and_reclaimed_by_a_sweep() {
 #[tokio::test]
 async fn default_ttl_applies_and_a_sliding_window_extends_on_read() {
     let sliding =
-        DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local")).with_ttl(TtlConfig {
+        DriverNamespacedStore::new(docs(&MemoryBackend::new(), "local")).with_ttl(TtlConfig {
             default_ttl_minutes: Some(60.0),
             refresh_on_read: true,
         });
@@ -143,7 +139,7 @@ async fn default_ttl_applies_and_a_sliding_window_extends_on_read() {
 
 #[tokio::test]
 async fn batch_results_align_positionally_with_the_request() {
-    let store = DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local"));
+    let store = DriverNamespacedStore::new(docs(&MemoryBackend::new(), "local"));
     let n = ns(&["b"]);
     let results = store
         .batch(&[
@@ -188,7 +184,7 @@ async fn batch_results_align_positionally_with_the_request() {
 
 #[tokio::test]
 async fn invalid_namespaces_are_rejected_before_any_write() {
-    let store = DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local"));
+    let store = DriverNamespacedStore::new(docs(&MemoryBackend::new(), "local"));
     let bad = Namespace(vec!["langgraph".into()]);
     assert!(store.put(&bad, "k", json!(1)).await.is_err());
     assert!(store.get(&Namespace(vec![]), "k").await.is_err());
@@ -196,7 +192,7 @@ async fn invalid_namespaces_are_rejected_before_any_write() {
 
 #[tokio::test]
 async fn scopes_and_owners_keep_items_apart() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverNamespacedStore::new(docs(&storage, "alice"));
     let bob = DriverNamespacedStore::new(docs(&storage, "bob"));
     let other = DriverNamespacedStore::with_owner(docs(&storage, "alice"), "other");
@@ -234,7 +230,7 @@ async fn scopes_and_owners_keep_items_apart() {
 #[tokio::test]
 async fn the_flat_store_surface_works_over_the_driver() {
     let store = FlatNamespacedStore::new(DriverNamespacedStore::new(docs(
-        &MemoryStorage::new(),
+        &MemoryBackend::new(),
         "local",
     )));
     store.put("events", "e1", json!({"a": 1})).await.unwrap();
@@ -252,7 +248,7 @@ async fn the_flat_store_surface_works_over_the_driver() {
 /// creation and expiry times live in the record metadata, not the body.
 #[tokio::test]
 async fn items_are_tsd_kv_documents_with_times_in_metadata() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let documents = docs(&storage, "local");
     let store = DriverNamespacedStore::new(Arc::clone(&documents));
     store
@@ -296,7 +292,7 @@ async fn items_are_tsd_kv_documents_with_times_in_metadata() {
 /// name merely sorts nearby, nor the flat store's entries of the same owner.
 #[tokio::test]
 async fn a_root_search_ignores_lookalike_roots_and_flat_entries() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let documents = docs(&storage, "local");
     let store = DriverNamespacedStore::new(Arc::clone(&documents));
     store.put(&ns(&["a", "x"]), "k", json!(1)).await.unwrap();
@@ -320,7 +316,7 @@ async fn a_root_search_ignores_lookalike_roots_and_flat_entries() {
 /// Expiry is the driver's: an expired item reads as absent, and a sweep never fails.
 #[tokio::test]
 async fn expired_items_read_as_absent_and_a_sweep_is_harmless() {
-    let store = DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local"));
+    let store = DriverNamespacedStore::new(docs(&MemoryBackend::new(), "local"));
     let n = ns(&["cache"]);
     store
         .put_with_ttl(&n, "gone", json!(1), Some(f64::MIN_POSITIVE))

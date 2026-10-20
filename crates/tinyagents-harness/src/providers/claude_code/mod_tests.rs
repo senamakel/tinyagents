@@ -2,6 +2,21 @@
 //! `ClaudeCodeProvider`'s `ModelProfile` construction.
 
 use super::*;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
+
+fn memory_documents(
+    scope: &str,
+) -> (
+    tinyagents_storage_kit::ScopedStorage,
+    Arc<dyn tinystoragedrivers_api::DocumentStore>,
+) {
+    let scoped = MemoryBackend::new()
+        .for_scope(&Scope::new(scope).unwrap())
+        .unwrap();
+    let documents = Arc::clone(scoped.documents());
+    (scoped, documents)
+}
 
 #[test]
 fn only_explicit_conversation_identity_enables_claude_session_persistence() {
@@ -30,13 +45,16 @@ fn only_explicit_conversation_identity_enables_claude_session_persistence() {
 fn chat_model_profile_advertises_streaming_without_native_tools() {
     let workspace = tempfile::tempdir().expect("workspace");
     let project = tempfile::tempdir().expect("project");
+    let (_storage, documents) = memory_documents("cc-provider-profile");
     let provider = ClaudeCodeProvider::new(
         "claude-sonnet-4-6",
         PathBuf::from("claude"),
         workspace.path().to_path_buf(),
         project.path().to_path_buf(),
         None,
-    );
+        documents,
+    )
+    .unwrap();
 
     let profile = provider.profile().expect("profile");
     assert_eq!(profile.provider.as_deref(), Some("claude-code"));
@@ -87,20 +105,26 @@ fn cache_identity_includes_project_scope() {
     let workspace = tempfile::tempdir().expect("workspace");
     let project_a = tempfile::tempdir().expect("project a");
     let project_b = tempfile::tempdir().expect("project b");
+    let (_storage_a, documents_a) = memory_documents("cc-cache-a");
+    let (_storage_b, documents_b) = memory_documents("cc-cache-b");
     let first = ClaudeCodeProvider::new(
         "claude-sonnet-4-6",
         PathBuf::from("claude"),
         workspace.path().to_path_buf(),
         project_a.path().to_path_buf(),
         None,
-    );
+        documents_a,
+    )
+    .unwrap();
     let second = ClaudeCodeProvider::new(
         "claude-sonnet-4-6",
         PathBuf::from("claude"),
         workspace.path().to_path_buf(),
         project_b.path().to_path_buf(),
         None,
-    );
+        documents_b,
+    )
+    .unwrap();
     assert_ne!(first.cache_identity(), second.cache_identity());
 }
 

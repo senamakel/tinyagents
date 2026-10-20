@@ -1,6 +1,6 @@
 //! The session crate's v2 storage declarations: [`storage_schema`].
 
-use tinystoragedrivers_core::{Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 
 use super::transcripts::{
     self, ENTRIES as ENTRIES_NAME, INDEX as INDEX_NAME, SCHEMA_VERSION as TRANSCRIPT_VERSION,
@@ -16,15 +16,15 @@ mod steps;
 ///
 /// | v1 | v2 |
 /// |---|---|
-/// | `session_transcripts` (id `<len>:<stem>` or `h:<sha>`) | `session.transcripts`, id `Key::of([stem])`; `created_at` (RFC 3339, indexed) becomes the record's `_created_ms`; unwritten reservation rows (`reserved_at`) are dropped |
+/// | `session_transcripts` (id `<len>:<stem>` or `h:<sha>`) | `session.transcripts`, id `Key::of([stem])`; `created_at` (RFC 3339) becomes application `created_ms` (indexed); unwritten reservation rows (`reserved_at`) are dropped |
 /// | `session_transcript_entries` (id `<len>:<stem>#<seq>`) | `session.transcript_entries`, id `Key::of([stem, "<seq>"])` with `seq` zero-padded |
 /// | `session_turn_states` (`{thread_id, request_id, lifecycle, turn: {camelCase}}`) | `session.turn_states`, id `Key::of([thread_id, request_id])`, bare snake_case body with `started_ms` / `updated_ms` (RFC 3339 to epoch ms) |
 ///
 /// Things that move outside a document step:
 ///
-/// - `session_kv` lives in `tsd.kv` (owner `session`); the host calls
-///   `tinyagents_harness::storage::import_legacy_kv(storage, "session",
-///   "session_kv", LegacyKv::Flat)` once per scope.
+/// - `session_kv` lives in `tsd.kv` (owner `session`); `open_agent_storage`
+///   calls `tinyagents_harness::storage::import_legacy_kv` once per scope
+///   before the session Registry migration.
 /// - The generation reservations that were `reserved_at` rows are `tsd.leases`
 ///   records (owner `session`, key = the successor stem); nothing is migrated,
 ///   an in-flight reservation simply lapses.
@@ -35,12 +35,9 @@ mod steps;
 /// - The journal streams are the harness's: `harness.journal/<run>`, declared and
 ///   migrated by `tinyagents_harness::storage_schema()`.
 ///
-/// A provider is constructed with the tenant scope (see
-/// `DriverSessionStores::new`) and binds each agent to `tenant.agent(id)`;
-/// the scope class is `Agent` for that reason. Data stored by v1 under a raw
-/// agent-id scope is not moved by these steps: a step runs inside one scope,
-/// and the host that re-homes a profile's database copies each v1 agent scope
-/// into its `tenant.agent(id)` scope.
+/// Each migration runs against the already-bound scope supplied by the host.
+/// Scope selection and any profile re-homing are host-owned operations; a step
+/// here transforms data only within its supplied scope.
 #[must_use]
 pub fn storage_schema() -> Schema {
     let owner = Owner::new("session").expect("`session` is a valid owner");

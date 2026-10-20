@@ -17,8 +17,9 @@
 
 use std::sync::Arc;
 
-use tinystoragedrivers_core::primitives::{self, Leases};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Filter, StorageError};
+use tinyagents_storage_kit::primitives::{self, Leases};
+use tinyagents_storage_kit::{CollectionSpec, Filter, StorageError};
+use tinystoragedrivers_api::DocumentStore;
 
 use super::ENTRIES;
 

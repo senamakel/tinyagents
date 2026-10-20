@@ -4,8 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
+use tinyagents_storage_kit::BlobStore;
 use tinyinference_image::MediaReference;
-use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 
 /// Sub-directory of the output root that generated media is written into.
 pub const DEFAULT_MEDIA_SUBDIR: &str = "harness/generated_media";
@@ -25,26 +25,21 @@ pub struct MediaOutput {
     /// Local-reference admission policy; `None` confines references to the
     /// workspace (or fallback) root.
     pub reference_policy: Option<ReferencePathPolicy>,
-    /// Where generated artifacts are stored. Defaults to a private in-memory
-    /// blob store; hosts pass their scoped blob handle with
-    /// [`with_blobs`](Self::with_blobs).
+    /// Where generated artifacts are stored. Hosts pass their scoped blob
+    /// handle when opening this output target.
     pub blobs: Arc<dyn BlobStore>,
 }
 
 impl MediaOutput {
     /// Resolves local references against `fallback_root` when no workspace is
-    /// known. Generated artifacts go to the blob store under
-    /// `generated-media/`, in memory unless [`with_blobs`](Self::with_blobs).
+    /// known and stores generated artifacts through the supplied host port.
     #[must_use]
-    pub fn new(fallback_root: impl Into<PathBuf>) -> Self {
-        let scoped = MemoryStorage::new()
-            .for_scope(&Scope::new("local").expect("static scope"))
-            .expect("memory scope");
+    pub fn new(fallback_root: impl Into<PathBuf>, blobs: Arc<dyn BlobStore>) -> Self {
         Self {
             fallback_root: fallback_root.into(),
             subdir: DEFAULT_MEDIA_SUBDIR.to_owned(),
             reference_policy: None,
-            blobs: scoped.blobs().clone(),
+            blobs,
         }
     }
 

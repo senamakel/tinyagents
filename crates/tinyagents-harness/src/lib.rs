@@ -102,6 +102,7 @@ pub mod summarization;
 pub mod terminal;
 pub mod testkit;
 pub mod title;
+
 pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]
@@ -167,7 +168,7 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
-pub use storage::storage_schema;
+pub use storage::{collections, open_storage, storage_schema};
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
 pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

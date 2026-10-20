@@ -20,7 +20,7 @@ use tinyagents_session::run_ledger::{
     AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
     CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunLedgerStore,
 };
-use tinystoragedrivers_core::Blocking;
+use tinyagents_storage_kit::Blocking;
 use uuid::Uuid;
 
 use super::runtime::drain_run_events;

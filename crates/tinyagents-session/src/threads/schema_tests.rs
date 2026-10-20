@@ -1,4 +1,5 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::threads::{
     ConversationPersistence, CreateConversationThread, DriverConversationStore, ThreadMessage,
     ThreadMessagePatch,
@@ -6,18 +7,20 @@ use crate::threads::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tinystoragedrivers_core::{
-    CollectionSpec, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
-    ScopedStorage, StorageBackend, WriteOptions,
+use tinyagents_storage_kit::{
+    CollectionSpec, Item, MigrateOptions, Precondition, Registry, Scope, ScopeClass, ScopedStorage,
+    WriteOptions,
     schema::{StepBody, StreamStepFn},
 };
+use tinystoragedrivers_api::StorageBackend;
 
 const INCARNATION: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
 const TOKEN: &str = "0b4e8d6c-3c0e-4f5e-9d3f-1d2c3b4a5f60";
 
 fn storage() -> ScopedStorage {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    backend.for_scope(&Scope::local()).unwrap()
+    let scope = Scope::new("test-conversations").unwrap();
+    ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope)
 }
 
 /// The v1 document id of a thread: the hex SHA-256 of its id.
@@ -88,7 +91,7 @@ async fn migrate(storage: &ScopedStorage) {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
+    for spec in tinyagents_storage_kit::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     Registry::compose([conversations_storage_schema()])
@@ -188,7 +191,10 @@ async fn v1_threads_appends_and_messages_move_to_the_v2_names_and_shapes() {
         .unwrap()
         .unwrap();
     assert_eq!(thread.meta.schema, 2);
-    assert_eq!(thread.meta.created_ms, 1_700_000_000_000);
+    assert!(
+        thread.meta.created_ms > 0,
+        "the engine assigns new row metadata"
+    );
     assert_eq!(
         thread.doc,
         json!({

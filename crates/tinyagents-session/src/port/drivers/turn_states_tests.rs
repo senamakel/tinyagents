@@ -1,15 +1,21 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::turn_state::types::{SubagentTranscriptItem, TranscriptItem};
 use crate::turn_state::{
     SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus,
 };
 
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::Scope;
 
 fn store() -> (DriverTurnStates, Arc<dyn DocumentStore>) {
     let storage = MemoryStorage::new();
-    let docs = Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
+    let docs = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     (
         DriverTurnStates::new(Arc::clone(&docs), Blocking::new().unwrap()),
         docs,

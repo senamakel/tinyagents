@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
+use super::helpers::{
+    COMPLETED_RETENTION, MAX_GENERATIONS, completed_newest_first, is_terminal, newest_first,
+};
 use super::{AgentStores, SessionStoreProvider, TurnStates};
 use crate::testkit::InMemoryTranscriptHistory;
 use crate::transcript::{
@@ -20,11 +23,6 @@ use crate::transcript::{
     TranscriptMeta, TranscriptPartial, TranscriptRead, session_stem,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
-
-pub(super) const MAX_GENERATIONS: u32 = 4096;
-
-/// Completed turns kept per thread, as the on-disk store keeps them.
-pub(super) const COMPLETED_RETENTION: usize = 20;
 
 /// A [`SessionStoreProvider`] keeping every agent's stores in memory, each
 /// agent's apart from every other's.
@@ -411,7 +409,7 @@ impl InMemoryTranscriptLocator {
 
 /// [`TurnStates`] held in memory, with the on-disk store's semantics:
 /// "latest" is the newest `started_at`, completed turns are kept up to
-/// [`COMPLETED_RETENTION`] per thread, and a completed turn is never
+/// the completed-turn retention limit per thread, and a completed turn is never
 /// overwritten by a conditional write.
 #[derive(Debug, Default)]
 pub struct InMemoryTurnStates {
@@ -424,38 +422,8 @@ impl InMemoryTurnStates {
     }
 }
 
-/// Newest first: by `started_at`, then `updated_at`.
-pub(super) fn newest_first(a: &TurnState, b: &TurnState) -> Ordering {
-    compare_rfc3339(&b.started_at, &a.started_at)
-        .then_with(|| compare_rfc3339(&b.updated_at, &a.updated_at))
-}
-
-/// Completed-turn retention follows completion time, as the durable store
-/// does. Listing the latest live turn still follows its start time.
-pub(super) fn completed_newest_first(a: &TurnState, b: &TurnState) -> Ordering {
-    compare_rfc3339(&b.updated_at, &a.updated_at)
-        .then_with(|| compare_rfc3339(&b.started_at, &a.started_at))
-}
-
-fn compare_rfc3339(left: &str, right: &str) -> Ordering {
-    match (
-        chrono::DateTime::parse_from_rfc3339(left),
-        chrono::DateTime::parse_from_rfc3339(right),
-    ) {
-        (Ok(left), Ok(right)) => left.cmp(&right),
-        _ => left.cmp(right),
-    }
-}
-
 fn key(thread_id: &str, request_id: &str) -> (String, String) {
     (thread_id.to_string(), request_id.to_string())
-}
-
-pub(super) fn is_terminal(state: &TurnState) -> bool {
-    matches!(
-        state.lifecycle,
-        TurnLifecycle::Interrupted | TurnLifecycle::Completed
-    )
 }
 
 /// Drops `thread_id`'s completed turns beyond the newest

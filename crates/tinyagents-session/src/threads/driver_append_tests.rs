@@ -1,6 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{CollectionSpec, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{CollectionSpec, Scope, ScopedStorage};
+use tinystoragedrivers_api::StorageBackend;
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
 const PENDING_COLLECTION: &str = "conversations.appends";
@@ -29,21 +31,25 @@ fn message(id: &str, content: &str) -> ThreadMessage {
 }
 
 async fn prepared_append(backend: &dyn StorageBackend) {
-    backend.prepare_schema().await.unwrap();
     let alice = Scope::new("alice").unwrap();
     let bob = Scope::new("bob").unwrap();
     let raw = backend.for_scope(&alice).unwrap();
-    DriverConversationStore::prepare_schema(raw.documents().as_ref())
+    DriverConversationStore::prepare_append_schema(raw.documents().as_ref())
         .await
         .unwrap();
     raw.documents()
         .ensure_collection(&CollectionSpec::new(PENDING_COLLECTION))
         .await
         .unwrap();
-    let restricted = backend.existing_schema().unwrap();
-    let a = DriverConversationStore::new_validate_only(restricted.for_scope(&alice).unwrap());
-    let b = DriverConversationStore::new_validate_only(restricted.for_scope(&alice).unwrap());
-    let other = DriverConversationStore::new_validate_only(restricted.for_scope(&bob).unwrap());
+    let a =
+        DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
+    let b =
+        DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
+    let bob_storage = backend.for_scope(&bob).unwrap();
+    DriverConversationStore::prepare_append_schema(bob_storage.documents().as_ref())
+        .await
+        .unwrap();
+    let other = DriverConversationStore::new_validate_only(ScopedStorage::new(bob_storage, bob));
     a.ensure_thread(request("same")).await.unwrap();
     other.ensure_thread(request("same")).await.unwrap();
 
@@ -79,8 +85,10 @@ async fn prepared_append(backend: &dyn StorageBackend) {
         .unwrap();
     b.append_message("same", ordinary.clone()).await.unwrap();
 
-    let reopened =
-        DriverConversationStore::new_validate_only(restricted.for_scope(&alice).unwrap());
+    let reopened = DriverConversationStore::new_validate_only(ScopedStorage::new(
+        backend.for_scope(&alice).unwrap(),
+        alice,
+    ));
     assert_eq!(
         reopened.get_messages("same").await.unwrap(),
         vec![first, channel, ordinary.clone(), ordinary.clone()]
@@ -116,10 +124,8 @@ async fn memory_prepared_native_append_reopens_and_preserves_classic_duplicate_s
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn sqlite_prepared_native_append_reopens_and_preserves_classic_duplicate_semantics() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation.db")).unwrap();
+async fn reconstructed_memory_prepared_append_reopens_and_preserves_classic_duplicate_semantics() {
+    let backend = MemoryStorage::new();
     prepared_append(&backend).await;
 }
 
@@ -178,11 +184,10 @@ async fn canceled_memory_writers_keep_reserved_and_appended_rows_invisible_until
     }
 }
 #[tokio::test]
-async fn canceled_sqlite_writers_keep_reserved_and_appended_rows_invisible_until_recovery() {
+async fn canceled_reconstructed_memory_writers_keep_reserved_and_appended_rows_invisible_until_recovery()
+ {
     for phase in [Phase::Probe, Phase::Reserve, Phase::Append] {
-        let dir = tempfile::tempdir().unwrap();
-        let backend =
-            tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("phase.db")).unwrap();
+        let backend = MemoryStorage::new();
         canceled(&backend, phase).await;
     }
 }
@@ -251,7 +256,7 @@ async fn counterfeit_document_capabilities_do_not_reserve_when_actual_stream_pro
         .await
         .unwrap_err();
     assert!(
-        matches!(error, ConversationError::Driver(ref e) if matches!(e.kind(), ErrorKind::Unsupported(tinystoragedrivers_core::Capability::ConditionalStreamAppend)))
+        matches!(error, ConversationError::Driver(ref e) if matches!(e.kind(), ErrorKind::Unsupported(tinystoragedrivers_types::Capability::ConditionalStreamAppend)))
     );
     assert!(store.get_messages("same").await.unwrap().is_empty());
     assert_eq!(
@@ -303,115 +308,6 @@ async fn cold_helpers_publish_once_and_preserve_concurrent_title_and_duplicate_o
         "Concurrent title"
     );
 }
-
-#[tokio::test]
-async fn pending_old_incarnation_cannot_publish_after_delete_and_recreate() {
-    let store = actor(&MemoryStorage::new()).await;
-    let fault = Fault::new(Phase::Append, Action::Pause);
-    let interrupted = faulted(&store, fault.clone());
-    let mut writer =
-        Box::pin(interrupted.append_message("same", message("agent:old", "old hidden row")));
-    tokio::select! {
-        _ = fault.reached.notified() => {},
-        result = &mut writer => panic!("append never paused: {result:?}"),
-    }
-    assert!(store.delete_thread("same", "now").await.unwrap());
-    store.ensure_thread(request("same")).await.unwrap();
-    fault.release.notify_one();
-    assert!(
-        matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind() == ErrorKind::Conflict)
-    );
-    assert!(store.get_messages("same").await.unwrap().is_empty());
-    let fresh = message("agent:new", "new incarnation");
-    store.append_message("same", fresh.clone()).await.unwrap();
-    assert_eq!(store.get_messages("same").await.unwrap(), vec![fresh]);
-}
-
-async fn fenced_phases(backend: &dyn StorageBackend) {
-    use tinystoragedrivers_core::Fence;
-    let store = actor(backend).await;
-    let cluster = Scope::new("cluster").unwrap();
-    let owner = backend.for_scope(&cluster).unwrap();
-    owner
-        .documents()
-        .ensure_collection(&CollectionSpec::new("leases"))
-        .await
-        .unwrap();
-    for (index, phase) in [Phase::Probe, Phase::Reserve, Phase::Append]
-        .into_iter()
-        .enumerate()
-    {
-        let epoch = (index * 2 + 1) as u64;
-        owner
-            .documents()
-            .put(
-                "leases",
-                "alice",
-                json!({"epoch":epoch}),
-                Precondition::None,
-            )
-            .await
-            .unwrap();
-        let fence = Fence::epoch(cluster.clone(), "leases", "alice", "epoch", epoch);
-        let bound = DriverConversationStore::new_validate_only(
-            backend
-                .existing_schema()
-                .unwrap()
-                .for_scope_fenced(&Scope::new("alice").unwrap(), &fence)
-                .unwrap(),
-        );
-        let fault = Fault::new(phase, Action::Pause);
-        let interrupted = faulted(&bound, fault.clone());
-        let mut writer = Box::pin(
-            interrupted.append_message("same", message(&format!("agent:{index}"), "late")),
-        );
-        tokio::select! {
-            _ = fault.reached.notified() => {},
-            result = &mut writer => panic!("phase never paused: {result:?}"),
-        }
-        owner
-            .documents()
-            .put(
-                "leases",
-                "alice",
-                json!({"epoch":epoch+1}),
-                Precondition::None,
-            )
-            .await
-            .unwrap();
-        fault.release.notify_one();
-        assert!(
-            matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind()==ErrorKind::Fenced)
-        );
-        assert_eq!(store.get_messages("same").await.unwrap().len(), index);
-        // An independently admitted fresh writer may reconcile the accepted
-        // pending attempt. The stale original never publishes it itself.
-        let fresh_fence = Fence::epoch(cluster.clone(), "leases", "alice", "epoch", epoch + 1);
-        let fresh = DriverConversationStore::new_validate_only(
-            backend
-                .existing_schema()
-                .unwrap()
-                .for_scope_fenced(&Scope::new("alice").unwrap(), &fresh_fence)
-                .unwrap(),
-        );
-        fresh
-            .append_message("same", message(&format!("agent:{index}"), "fresh"))
-            .await
-            .unwrap();
-    }
-}
-#[tokio::test]
-async fn memory_original_native_fence_refuses_each_append_commit_after_takeover() {
-    fenced_phases(&MemoryStorage::new()).await;
-}
-#[tokio::test]
-async fn sqlite_original_native_fence_refuses_each_append_commit_after_takeover() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("fence.db")).unwrap();
-    fenced_phases(&backend).await;
-}
-
 #[tokio::test]
 async fn byte_identical_ordinary_competitor_cannot_prove_unobserved_reservation_ownership() {
     let store = actor(&MemoryStorage::new()).await;

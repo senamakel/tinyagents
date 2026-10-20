@@ -8,6 +8,7 @@ use crate::TinyAgentsError;
 use crate::builder::{GraphBuilder, NodeContext};
 use crate::command::{Command, NodeResult};
 use serde_json::{Value, json};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 // --- per-channel merge rules ---
 
@@ -478,6 +479,7 @@ fn register_reducer_is_reachable_through_the_graph_builder() {
 
 #[tokio::test]
 async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
+    let checkpoint_backend = MemoryBackend::new();
     use crate::checkpoint::Checkpointer;
     use crate::command::{Command, Interrupt};
     use std::sync::Arc;
@@ -512,22 +514,21 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
         .with_channel("total", BinaryAggregate::named("sum").unwrap())
         .with_channel("log", Topic);
 
-    let dir = tempfile::tempdir().unwrap();
     {
         let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
-            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+            crate::test_support::dir_checkpointer::<ChannelState>(&checkpoint_backend),
         );
         let g = graph().with_checkpointer(cp);
         let paused = g.run_with_thread("ch-thread", initial).await.unwrap();
         assert!(paused.is_interrupted());
     }
     // Fresh checkpointer over the same directory, simulating a process
-    // restart: the `binary_aggregate` channel must decode using the (still
+    // reopen: the `binary_aggregate` channel must decode using the (still
     // process-wide registered) `"sum"` reducer and the resumed run must
     // merge through it correctly.
     {
         let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
-            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+            crate::test_support::dir_checkpointer::<ChannelState>(&checkpoint_backend),
         );
         let g = graph().with_checkpointer(cp);
         let exec = g

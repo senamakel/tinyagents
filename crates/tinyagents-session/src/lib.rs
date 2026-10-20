@@ -4,11 +4,10 @@
 //! session history (sessions, messages, tool calls, with full-text search), a
 //! [`run_ledger`] for background agent and workflow execution state, the
 //! transcripts, turn-state snapshots and chat
-//! threads. A host opens one storage backend (SQLite on a desktop, MongoDB in
-//! the cloud, memory in tests), hands it to [`DriverSessionStores`], and gets
-//! every agent's stores in that backend, each under its own tenant scope. This
-//! is the runtime's *history* layer: what ran, what it cost, what it called,
-//! and how runs nest.
+//! threads. A host selects its backend and supplies storage already bound to
+//! each authorized agent identity to [`DriverSessionStores`]. This is the
+//! runtime's *history* layer: what ran, what it cost, what it called, and how
+//! runs nest.
 //!
 //! # Why this is a top-level module
 //!
@@ -33,7 +32,7 @@
 //!
 //! [`run_ledger::DriverRunLedger`] is the one implementation of both
 //! [`run_ledger::RunLedgerStore`] (runs, workflows, teams and tasks with atomic
-//! claim/complete/shutdown, events, telemetry and tool effects,
+//! claim/complete/shutdown, events, telemetry, tool effects, entry trees,
 //! retention) and [`run_ledger::SessionHistoryStore`] (the session, message and
 //! tool-call history and its full-text index). Retention, trimming and
 //! `reindex_fts` bound and repair exactly the records those writers produce.
@@ -43,13 +42,6 @@
 //! [`threads`] is the product-facing chat log: threads and messages with a
 //! cross-thread inverted index. See `src/threads/README.md`.
 //!
-//! # Migrating a classic workspace
-//!
-//! Workspaces written before the storage-port migration kept a SQLite
-//! `sessions.db`, JSONL transcripts and turn-state JSON files.
-//! [`legacy::import_workspace`] (feature `legacy-import`, on by default) moves
-//! all of it into the ports, read-only, id-preserving and only-if-absent.
-//!
 //! # Example
 //!
 //! ```
@@ -58,11 +50,15 @@
 //!     DriverRunLedger, NewSessionMessage, SessionEnd, SessionHistoryStore, SessionStart,
 //! };
 //! use tinyagents_session::SessionStatus;
-//! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+//! use tinystoragedrivers_api::StorageBackend;
+//! use tinystoragedrivers_testkit::memory_backend;
+//! use tinyagents_storage_kit::ScopedStorage;
+//! use tinystoragedrivers_types::Scope;
 //!
 //! # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
-//! let storage = MemoryStorage::new().for_scope(&Scope::local())?;
-//! let ledger = DriverRunLedger::new(storage);
+//! let scope = Scope::new("local")?;
+//! let storage = memory_backend().for_scope(&scope)?;
+//! let ledger = DriverRunLedger::new(ScopedStorage::new(storage, scope));
 //!
 //! ledger
 //!     .record_session_start(SessionStart {
@@ -103,11 +99,10 @@
 //! coordination guarantees.
 
 pub mod fts;
-#[cfg(feature = "legacy-import")]
-pub mod legacy;
 pub mod port;
 pub mod retention;
 pub mod run_ledger;
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod threads;
 pub mod transcript;
@@ -117,19 +112,18 @@ pub mod types;
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 pub use fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_bytes};
-pub use port::{
-    AgentStores, InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates,
-    SessionStoreProvider, TurnStates,
-};
+pub use port::{AgentStores, SessionStoreProvider, TurnStates};
 pub use port::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
-    RebindableSessionStores, SessionStoreRegistry, storage_schema,
+    RebindableSessionStores, SessionStoreRegistry, collections, open_agent_storage, storage_schema,
 };
+#[cfg(any(test, feature = "testkit"))]
+pub use port::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use retention::RetentionReport;
 pub use run_ledger::DriverRunLedger;
 pub use run_ledger::command_center::{CommandCenterView, ControlError, ControlVerb, build_view};
 pub use run_ledger::drivers::{
-    LegacyLedgerImport, history_storage_schema, import_legacy_ledger, ledger_storage_schema,
+    history_storage_schema, import_legacy_ledger, ledger_storage_schema,
 };
 pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SessionHistoryStore};
 pub use threads::{

@@ -20,11 +20,11 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread"]
 tracing = { workspace = true }
 # Storage ports (no database client). `blocking` bridges the synchronous
 # `TaskStore` / `CompletionStore` traits onto the async ports.
-tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
+tinyagents-storage-kit = { workspace = true }
 
 [dev-dependencies]
-tinystoragedrivers-sqlite = { workspace = true }
-tempfile = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
+tinystoragedrivers-document = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]

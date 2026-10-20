@@ -22,7 +22,7 @@ pub enum ConversationError {
     Unsupported { operation: &'static str },
     /// Native capability, conflict, fencing and backend detail remains available.
     #[error("{0}")]
-    Driver(#[source] Box<tinystoragedrivers_core::StorageError>),
+    Driver(#[source] Box<tinystoragedrivers_types::StorageError>),
     /// A native write acknowledgment could not be resolved to this exact attempt.
     ///
     /// The original native failure remains the source. Ordinary-ID append is
@@ -33,12 +33,12 @@ pub enum ConversationError {
         operation: &'static str,
         /// The original native write failure, retained without textual flattening.
         #[source]
-        source: Box<tinystoragedrivers_core::StorageError>,
+        source: Box<tinystoragedrivers_types::StorageError>,
     },
 }
 
-impl From<tinystoragedrivers_core::StorageError> for ConversationError {
-    fn from(error: tinystoragedrivers_core::StorageError) -> Self {
+impl From<tinystoragedrivers_types::StorageError> for ConversationError {
+    fn from(error: tinystoragedrivers_types::StorageError) -> Self {
         Self::Driver(Box::new(error))
     }
 }

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use super::*;
 use crate::store::TaskStore;
 use crate::types::{OrchestrationTaskKind, OrchestrationTaskStatus};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -24,7 +25,7 @@ fn spec(id: &str) -> OrchestrationTaskSpec {
 }
 
 fn store() -> DriverTaskStore {
-    DriverTaskStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap()
+    DriverTaskStore::new(docs_of(&MemoryBackend::new(), "local")).unwrap()
 }
 
 #[test]
@@ -97,12 +98,10 @@ fn an_already_requested_cancellation_is_idempotent() {
 }
 
 #[test]
-fn state_and_history_survive_a_reopened_sqlite_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tasks.sqlite");
+fn state_and_history_survive_a_driver_reopen_on_the_same_backend() {
+    let storage = MemoryBackend::new();
     let id = TaskId::new("task-a");
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         let store = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
         store.insert(spec("task-a")).unwrap();
         store.mark_running(&id).unwrap();
@@ -111,9 +110,10 @@ fn state_and_history_survive_a_reopened_sqlite_file() {
             .unwrap();
         assert_eq!(store.history(&id).len(), 3);
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
-    let record = reopened.get(&id).expect("task survives a restart");
+    let record = reopened
+        .get(&id)
+        .expect("task survives reopening a driver on the same backend");
     assert_eq!(record.status, OrchestrationTaskStatus::Completed);
     assert_eq!(record.result.unwrap().text.as_deref(), Some("done"));
     assert_eq!(reopened.history(&id).len(), 3);
@@ -204,7 +204,7 @@ fn list_filters_by_lineage_status_kind_and_time() {
 /// sees a terminal task rather than overwriting the winner.
 #[test]
 fn racing_settlements_have_one_winner() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs_of(&storage, "local");
     let first = DriverTaskStore::new(docs.clone()).unwrap();
     first.insert(spec("race")).unwrap();
@@ -232,7 +232,7 @@ fn racing_settlements_have_one_winner() {
 
 #[test]
 fn tenants_never_share_tasks() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverTaskStore::new(docs_of(&storage, "alice")).unwrap();
     let bob = DriverTaskStore::new(docs_of(&storage, "bob")).unwrap();
     alice.insert(spec("shared")).unwrap();
@@ -269,23 +269,23 @@ async fn works_inside_a_current_thread_runtime() {
     assert_eq!(store.history(&id).len(), 2);
 }
 
-#[test]
-fn the_opener_returns_a_durable_store_and_degrades_to_memory_when_unusable() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("opener.sqlite");
-    {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-        let durable = crate::open_driver_task_store_or_memory(docs_of(&storage, "local"));
-        durable.insert(spec("t1")).unwrap();
-    }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-    let reopened = crate::open_driver_task_store_or_memory(docs_of(&storage, "local"));
+#[tokio::test]
+async fn the_opener_migrates_and_returns_a_durable_store() {
+    let backend = MemoryBackend::new();
+    let scope = Scope::new("local").unwrap();
+    let durable = crate::open_driver_task_store(backend.for_scope(&scope).unwrap())
+        .await
+        .unwrap();
+    durable.insert(spec("t1")).unwrap();
+    let reopened = crate::open_driver_task_store(backend.for_scope(&scope).unwrap())
+        .await
+        .unwrap();
     assert_eq!(reopened.list(OrchestrationTaskFilter::default()).len(), 1);
 }
 
 #[tokio::test]
 async fn records_and_history_are_v2_documents_with_key_ids_and_ms_times() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs_of(&storage, "local");
     let store = DriverTaskStore::new(docs.clone()).unwrap();
     let id = TaskId::new("a/b");

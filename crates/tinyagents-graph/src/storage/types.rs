@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tinystoragedrivers_core::Key;
+use tinyagents_storage_kit::Key;
 
 use crate::checkpoint::PendingWrite;
 

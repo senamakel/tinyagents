@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
-use tinystoragedrivers_core::{SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{SourceRecord, Step, TargetRecord};
 
 use super::dto::{CompletionDoc, TaskDoc, history_id_key, task_id_key, to_ms};
 use super::{COMPLETIONS, HISTORY, RECORDS, SCHEMA_VERSION};

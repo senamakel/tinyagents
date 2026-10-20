@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn key(parent: &str) -> SubagentTaskKey {
     SubagentTaskKey {
@@ -30,15 +31,15 @@ fn pause(key: SubagentTaskKey, checkpoint: &str) -> PersistedSubagentPause {
     }
 }
 
-fn open(backend: &MemoryStorage, scope: &Scope) -> DocumentSubagentPersistence {
+fn open(backend: &MemoryBackend, scope: &Scope) -> DocumentSubagentPersistence {
     let scoped = backend.for_scope(scope).unwrap();
     DocumentSubagentPersistence::new(Arc::clone(scoped.documents())).unwrap()
 }
 
 #[tokio::test]
 async fn reopened_store_preserves_pause_cas_terminal_and_scoped_task_index() {
-    let backend = MemoryStorage::new();
-    let store = open(&backend, &Scope::local());
+    let backend = MemoryBackend::new();
+    let store = open(&backend, &Scope::new("local").unwrap());
     let first = key("first");
     let second = key("second");
     assert_eq!(
@@ -49,7 +50,7 @@ async fn reopened_store_preserves_pause_cas_terminal_and_scoped_task_index() {
         store.save_pause(pause(second.clone(), "b")).await.unwrap(),
         SubagentPausePersistenceDisposition::Inserted
     );
-    let reopened = open(&backend, &Scope::local());
+    let reopened = open(&backend, &Scope::new("local").unwrap());
     let resume = reopened.load(&first).await.unwrap().unwrap();
     assert_eq!(
         reopened.keys_for_task("task").unwrap(),
@@ -112,9 +113,9 @@ async fn reopened_store_preserves_pause_cas_terminal_and_scoped_task_index() {
 
 #[tokio::test]
 async fn tenant_documents_do_not_leak_between_identical_task_keys() {
-    let backend = MemoryStorage::new();
-    let alice = open(&backend, &Scope::tenant("alice").unwrap());
-    let bob = open(&backend, &Scope::tenant("bob").unwrap());
+    let backend = MemoryBackend::new();
+    let alice = open(&backend, &Scope::new("alice").unwrap());
+    let bob = open(&backend, &Scope::new("bob").unwrap());
     let key = key("same");
     alice
         .save_pause(pause(key.clone(), "secret"))
@@ -134,9 +135,9 @@ async fn tenant_documents_do_not_leak_between_identical_task_keys() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn independent_stores_choose_one_pause_winner_and_return_its_actual_outcome() {
-    let backend = MemoryStorage::new();
-    let first = open(&backend, &Scope::local());
-    let second = open(&backend, &Scope::local());
+    let backend = MemoryBackend::new();
+    let first = open(&backend, &Scope::new("local").unwrap());
+    let second = open(&backend, &Scope::new("local").unwrap());
     let key = key("race");
     let left = pause(key.clone(), "left");
     let right = pause(key.clone(), "right");
@@ -182,8 +183,8 @@ async fn independent_stores_choose_one_pause_winner_and_return_its_actual_outcom
 
 #[tokio::test]
 async fn import_fills_missing_parts_without_replacing_committed_state() {
-    let backend = MemoryStorage::new();
-    let store = open(&backend, &Scope::local());
+    let backend = MemoryBackend::new();
+    let store = open(&backend, &Scope::new("local").unwrap());
     let key = key("legacy");
     store
         .import_record(&key, Some(pause(key.clone(), "legacy")), None)
@@ -222,9 +223,9 @@ async fn import_fills_missing_parts_without_replacing_committed_state() {
 
 #[tokio::test]
 async fn raw_kv_records_reopen_without_changing_host_legacy_namespace() {
-    use tinystoragedrivers_core::{Kv, Precondition};
-    let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    use tinyagents_storage_kit::{Kv, Precondition};
+    let backend = MemoryBackend::new();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let docs = Arc::clone(scoped.documents());
     let store = DocumentSubagentPersistence::new(docs.clone()).unwrap();
     let key = key("raw");
@@ -239,7 +240,7 @@ async fn raw_kv_records_reopen_without_changing_host_legacy_namespace() {
         .unwrap();
     let id = Key::of([OWNER, NS, &name]).unwrap();
     docs.put(
-        tinystoragedrivers_core::primitives::KV,
+        tinyagents_storage_kit::primitives::KV,
         id.as_str(),
         serde_json::json!({"owner": OWNER, "ns": NS, "key": name, "value": {"pause": persisted}}),
         Precondition::Absent,
@@ -259,13 +260,11 @@ async fn raw_kv_records_reopen_without_changing_host_legacy_namespace() {
 }
 
 #[tokio::test]
-async fn sqlite_reopen_keeps_terminal_and_stale_continuations_cannot_reopen_it() {
-    let directory = tempfile::tempdir().unwrap();
-    let file = directory.path().join("lifecycle.sqlite");
+async fn reopened_driver_keeps_terminal_and_stale_continuations_cannot_reopen_it() {
+    let backend = MemoryBackend::new();
     let key = key("restart");
     let resume = {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&file).unwrap();
-        let docs = backend.for_scope(&Scope::local()).unwrap();
+        let docs = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
         let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
         store
             .save_pause(pause(key.clone(), "checkpoint"))
@@ -274,8 +273,7 @@ async fn sqlite_reopen_keeps_terminal_and_stale_continuations_cannot_reopen_it()
         store.load(&key).await.unwrap().unwrap()
     };
     {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&file).unwrap();
-        let docs = backend.for_scope(&Scope::local()).unwrap();
+        let docs = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
         let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
         assert_eq!(store.load(&key).await.unwrap(), Some(resume.clone()));
         assert_eq!(
@@ -290,8 +288,7 @@ async fn sqlite_reopen_keeps_terminal_and_stale_continuations_cannot_reopen_it()
             SubagentTerminalPersistenceDisposition::Inserted
         );
     }
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&file).unwrap();
-    let docs = backend.for_scope(&Scope::local()).unwrap();
+    let docs = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
     assert_eq!(
         store.terminal_outcome(&key).unwrap().unwrap().output,
@@ -308,8 +305,8 @@ async fn sqlite_reopen_keeps_terminal_and_stale_continuations_cannot_reopen_it()
 
 #[tokio::test]
 async fn pause_replacement_rejects_stale_continuations_and_invalid_imports() {
-    let backend = MemoryStorage::new();
-    let store = open(&backend, &Scope::local());
+    let backend = MemoryBackend::new();
+    let store = open(&backend, &Scope::new("local").unwrap());
     let task_key = key("replacement");
     let original = pause(task_key.clone(), "first");
     store.save_pause(original).await.unwrap();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 
 async fn refuses_corruption(change: impl FnOnce(&mut Value)) {
     let store = actor(&MemoryStorage::new()).await;

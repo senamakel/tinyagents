@@ -1,42 +1,55 @@
-//! Unit tests for `ClaudeCodeSettings` load/save round-tripping.
+//! Host-bound settings persistence and legacy import tests.
 
 use super::*;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
-#[test]
-fn load_missing_file_returns_safe_defaults() {
-    let dir = std::env::temp_dir().join("oh_cc_settings_missing_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    let s = load(&dir);
-    assert!(!s.full_access, "missing settings must default to OFF");
+fn settings_store() -> (tinyagents_storage_kit::ScopedStorage, Kv) {
+    let scoped = MemoryBackend::new()
+        .for_scope(&Scope::new("claude-code-settings-test").unwrap())
+        .unwrap();
+    let kv = store(scoped.documents()).unwrap();
+    (scoped, kv)
 }
 
-#[test]
-fn save_then_load_roundtrips() {
-    let dir = std::env::temp_dir().join("oh_cc_settings_roundtrip_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    save(&dir, &ClaudeCodeSettings { full_access: true }).unwrap();
-    assert!(
-        load(&dir).full_access,
-        "saved full_access=true must persist"
-    );
-    save(&dir, &ClaudeCodeSettings { full_access: false }).unwrap();
-    assert!(
-        !load(&dir).full_access,
-        "toggling back to false must persist"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
+#[tokio::test]
+async fn missing_settings_return_the_safe_default() {
+    let (_scoped, kv) = settings_store();
+    assert!(!load(&kv).await.unwrap().full_access);
 }
 
-#[test]
-fn load_corrupt_file_returns_safe_defaults() {
-    let dir = std::env::temp_dir().join("oh_cc_settings_corrupt_test");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(settings_path(&dir), b"{not json").unwrap();
+#[tokio::test]
+async fn save_then_load_roundtrips_settings() {
+    let (_scoped, kv) = settings_store();
+    save(&kv, &ClaudeCodeSettings { full_access: true })
+        .await
+        .unwrap();
+    assert!(load(&kv).await.unwrap().full_access);
+    save(&kv, &ClaudeCodeSettings { full_access: false })
+        .await
+        .unwrap();
+    assert!(!load(&kv).await.unwrap().full_access);
+}
+
+#[tokio::test]
+async fn legacy_settings_import_only_fills_an_empty_target() {
+    let (_scoped, kv) = settings_store();
+    let old_release_fixture = include_bytes!("fixtures/claude_code_settings.json");
+    assert!(import_legacy(&kv, old_release_fixture).await.unwrap());
+    assert!(load(&kv).await.unwrap().full_access);
+    assert!(!import_legacy(&kv, old_release_fixture).await.unwrap());
+    assert!(load(&kv).await.unwrap().full_access);
     assert!(
-        !load(&dir).full_access,
-        "corrupt settings must fail safe to OFF"
+        !import_legacy(&kv, br#"{"full_access":false}"#)
+            .await
+            .unwrap()
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(load(&kv).await.unwrap().full_access);
+}
+
+#[tokio::test]
+async fn malformed_legacy_settings_are_rejected_without_changing_state() {
+    let (_scoped, kv) = settings_store();
+    assert!(import_legacy(&kv, b"{broken").await.is_err());
+    assert!(!load(&kv).await.unwrap().full_access);
 }

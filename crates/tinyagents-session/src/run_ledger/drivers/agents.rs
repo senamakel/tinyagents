@@ -5,7 +5,7 @@ use super::*;
 impl DriverRunLedger {
     pub(super) async fn agent(&self, id: &str) -> Result<Option<AgentRun>> {
         use super::storage::{CAS_ATTEMPTS, key};
-        use tinystoragedrivers_core::{ErrorKind, ExpectedDocument, ReadCheck};
+        use tinyagents_storage_kit::{ErrorKind, ExpectedDocument, ReadCheck};
         for _ in 0..CAS_ATTEMPTS {
             let Some(previous) = self.read::<AgentRun>(AGENTS, id).await? else {
                 return Ok(None);
@@ -40,8 +40,8 @@ impl DriverRunLedger {
     pub(super) async fn telemetry_dependency(
         &self,
         id: &str,
-    ) -> Result<(Option<RunTelemetry>, tinystoragedrivers_core::ReadCheck)> {
-        use tinystoragedrivers_core::{ExpectedDocument, ReadCheck};
+    ) -> Result<(Option<RunTelemetry>, tinystoragedrivers_types::ReadCheck)> {
+        use tinyagents_storage_kit::{ExpectedDocument, ReadCheck};
         let telemetry = self.read::<RunTelemetry>(TELEMETRY, id).await?;
         let check = ReadCheck {
             collection: TELEMETRY.into(),
@@ -63,7 +63,7 @@ impl DriverRunLedger {
 
     pub(super) async fn upsert_agent(&self, upsert: AgentRunUpsert) -> Result<AgentRun> {
         use super::storage::{CAS_ATTEMPTS, key, put_op};
-        use tinystoragedrivers_core::{ErrorKind, Precondition};
+        use tinyagents_storage_kit::{ErrorKind, Precondition};
         let now = now();
         for _ in 0..CAS_ATTEMPTS {
             let previous = self.read::<AgentRun>(AGENTS, &upsert.id).await?;
@@ -123,7 +123,7 @@ impl DriverRunLedger {
     // The port admits this sweep only under exclusive process ownership.
     pub(super) async fn interrupt_agents(&self) -> Result<usize> {
         use super::storage::{CAS_ATTEMPTS, key, put_op};
-        use tinystoragedrivers_core::{DocumentStoreExt, ErrorKind, Precondition};
+        use tinyagents_storage_kit::{DocumentStoreExt, ErrorKind, Precondition};
         self.declare().await?;
         let filter = Filter::eq("status", "running").or(Filter::eq("status", "pending"));
         for _ in 0..CAS_ATTEMPTS {

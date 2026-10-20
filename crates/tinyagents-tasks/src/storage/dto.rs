@@ -9,7 +9,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_core::{Key, Result};
+use tinyagents_storage_kit::{Key, Result};
 
 use crate::completions::{
     CompletionRecord, CompletionResult, CompletionState, CompletionStatus, NotifyMode,

@@ -293,7 +293,7 @@ and `..Default::default()`.
 ### Document-backed lifecycle state
 
 `DocumentSubagentPersistence` implements the same pause/resume/terminal contract
-as `FileSubagentPersistence` over a host-supplied, already scoped
+as `DocumentSubagentPersistence` over a host-supplied, already scoped
 `DocumentStore`. A retrying compare-and-swap stores pause and terminal together
 in one `tsd.kv` value: owner `subagents`, namespace `lifecycle-neutral`, key
 `record/<key_component>`. This namespace leaves older host-specific lifecycle

@@ -36,8 +36,10 @@ Everything lives wherever the host's storage backend puts it:
 
 ```text
 {host storage backend}                          ← sessions, run ledger, transcripts, chat threads (collections)
-{workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once; rewritten in place only by legacy::rewrite_legacy_transcripts
 ```
+
+Classic workspace files are outside this crate's layout. The host owns their
+discovery, import and any rewrite; see the legacy import handoff.
 
 ## Public surface
 
@@ -63,12 +65,12 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
   `InMemorySessionStores`, `DriverSessionStores`, and `RebindableSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
-- **Legacy import** — `legacy::import_workspace` and
-  `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
+- **Legacy import handoff** — workspace discovery and parsing moved to the
+  host; see [`docs/legacy-import-handoff.md`](../docs/legacy-import-handoff.md).
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
   `transcript_history_conformance`: contract suites certifying that a run
-  ledger workspace or a `TranscriptHistory` implementation behaves like the
-  bundled ones. Run against the memory and SQLite run ledgers and both the driver-backed and the in-memory
+  ledger or a `TranscriptHistory` implementation behaves like the bundled
+  ones. Run against the testkit memory backend and both the driver-backed and the in-memory
   `testkit::InMemoryTranscriptHistory` double in
   `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
@@ -85,9 +87,9 @@ reachable under `session::`, `session::run_ledger::`, and
 | `tsd.counters` (`history`, `messages` / `tool_calls`) | dense message and tool-call id counters; a failed commit leaves a gap |
 | run-ledger collections | agent and workflow runs, run events and telemetry, teams, members, tasks |
 
-A classic `sessions.db`, `session_raw/` transcripts and turn-state JSON import
-through the `legacy` module (feature `legacy-import`), id-preserving and
-only-if-absent.
+Classic `sessions.db`, `session_raw/` transcript and turn-state import is a
+host responsibility. Session storage declarations still migrate records
+already held by the admitted backend.
 
 ## Operational constraints
 

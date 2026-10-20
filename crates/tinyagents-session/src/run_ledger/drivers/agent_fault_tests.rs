@@ -1,7 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, Page, Precondition, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };
@@ -17,7 +18,7 @@ type NativeResult<T> = std::result::Result<T, StorageError>;
 
 #[async_trait::async_trait]
 impl DocumentStore for NoPostCommitReads {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
@@ -25,7 +26,7 @@ impl DocumentStore for NoPostCommitReads {
     }
     async fn get(&self, collection: &str, id: &str) -> NativeResult<Option<Versioned<Value>>> {
         if collection == storage::TELEMETRY && self.committed.load(Ordering::SeqCst) {
-            return Err(StorageError::fenced(
+            return Err(StorageError::unavailable(
                 "fixture expires reads immediately after committed write",
             ));
         }
@@ -101,9 +102,7 @@ impl DocumentStore for NoPostCommitReads {
 }
 
 fn wrapped(native: &ScopedStorage) -> DriverRunLedger {
-    DriverRunLedger::new(ScopedStorage::new(
-        native.scope().clone(),
-        "memory",
+    let storage = tinyagents_storage_kit::Storage::new(
         Arc::new(NoPostCommitReads {
             inner: native.documents().clone(),
             committed: AtomicBool::new(false),
@@ -111,8 +110,12 @@ fn wrapped(native: &ScopedStorage) -> DriverRunLedger {
             raced: AtomicBool::new(false),
         }),
         native.streams().clone(),
+        native.kv().clone(),
         native.blobs().clone(),
-    ))
+        native.queues().clone(),
+        native.secrets().clone(),
+    );
+    DriverRunLedger::new(ScopedStorage::new(storage, native.scope().clone()))
 }
 
 #[tokio::test]
@@ -201,13 +204,8 @@ async fn concurrent_telemetry_change_retries_before_agent_commit_and_returns_val
             telemetry_race: Some(newer),
             raced: AtomicBool::new(false),
         });
-        let ledger = DriverRunLedger::new(ScopedStorage::new(
-            native.scope().clone(),
-            "memory",
-            documents.clone(),
-            native.streams().clone(),
-            native.blobs().clone(),
-        ));
+        let ledger =
+            DriverRunLedger::new(crate::testkit::with_documents(&native, documents.clone()));
         let committed = if transition {
             match ledger
                 .transition_agent_run_status_from(

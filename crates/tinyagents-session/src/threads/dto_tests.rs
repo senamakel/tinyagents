@@ -39,7 +39,7 @@ fn a_time_that_is_not_rfc_3339_is_invalid_input() {
         let error = to_ms(text).unwrap_err();
         assert_eq!(
             error.kind(),
-            tinystoragedrivers_core::ErrorKind::InvalidInput
+            tinystoragedrivers_types::ErrorKind::InvalidInput
         );
     }
 }

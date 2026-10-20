@@ -168,7 +168,7 @@ literals and providers are unchanged.
 
 | Store | Backend shape |
 | --- | --- |
-| transcripts | `session.transcripts`: one index document per stem (thread, agent, sub-agent flag; its creation time is the `_created_ms` metadata); `session.transcript_entries`: an append-only log per stem |
+| transcripts | `session.transcripts`: one index document per stem (thread, agent, sub-agent flag, application `created_ms`); `session.transcript_entries`: an append-only log per stem |
 | generation reservations | `tsd.leases` (owner `session`, key = the successor stem) |
 | turn states | `session.turn_states`: one document per `(thread, request)` |
 | key-value | `tsd.kv` (owner `session`) through the harness `DriverStore` |

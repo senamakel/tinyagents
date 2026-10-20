@@ -2,7 +2,7 @@
 //! function of its input, so a resumed run produces the same output.
 
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{Key, Result, SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{Key, Result, SourceRecord, Step, TargetRecord};
 
 use super::{ATTACHMENT_STASH, EMBEDDING_CACHE, JOURNAL, RUN_STATUS, SCHEMA_VERSION};
 use crate::observability::{journal_entry_from_v1, status_record};

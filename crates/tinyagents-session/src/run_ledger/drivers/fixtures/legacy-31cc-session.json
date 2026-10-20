@@ -1,0 +1,96 @@
+{
+  "history.messages": [
+    {
+      "doc": {
+        "content": "session writer compatibility fixture",
+        "cost_usd": null,
+        "created_ms": 1792507759737,
+        "id": 1,
+        "input_tokens": null,
+        "model": null,
+        "output_tokens": null,
+        "reasoning_content": null,
+        "role": "user",
+        "session_id": "fixture-session"
+      },
+      "id": "1",
+      "meta": {
+        "created_ms": 1792507759737,
+        "schema": 0,
+        "updated_ms": 1792507759737
+      },
+      "version": 1
+    }
+  ],
+  "history.sessions": [
+    {
+      "doc": {
+        "agent_definition_id": "fixture-agent",
+        "agent_definition_name": "Archived fixture",
+        "cached_input_tokens": 0,
+        "cost_usd": 0.0,
+        "ended_ms": null,
+        "id": "fixture-session",
+        "input_tokens": 0,
+        "model": null,
+        "output_tokens": 0,
+        "parent_session_id": null,
+        "session_key": "fixture-session-key",
+        "source_channel": null,
+        "started_ms": 1792507759737,
+        "status": "running",
+        "thread_id": "fixture-thread",
+        "transcript_path": null,
+        "turn_count": 0
+      },
+      "id": "fixture-session",
+      "meta": {
+        "created_ms": 1792507759737,
+        "schema": 0,
+        "updated_ms": 1792507759737
+      },
+      "version": 1
+    }
+  ],
+  "ledger.workflow_runs": [
+    {
+      "doc": {
+        "child_run_ids": [],
+        "completed_ms": null,
+        "definition_id": "fixture-definition",
+        "id": "fixture-workflow",
+        "input": {
+          "prompt": "archived writer fixture"
+        },
+        "parent_thread_id": "fixture-thread",
+        "phase_states": {},
+        "revision": 0,
+        "started_ms": 1792507759737,
+        "status": "running",
+        "summary": null,
+        "updated_ms": 1792507759737
+      },
+      "id": "fixture-workflow",
+      "meta": {
+        "created_ms": 1792507759737,
+        "schema": 2,
+        "updated_ms": 1792507759737
+      },
+      "version": 1
+    }
+  ],
+  "tsd.counters": [
+    {
+      "doc": {
+        "value": 1
+      },
+      "id": "history/messages",
+      "meta": {
+        "created_ms": 1792507759737,
+        "schema": 0,
+        "updated_ms": 1792507759737
+      },
+      "version": 1
+    }
+  ]
+}

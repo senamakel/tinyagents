@@ -79,7 +79,12 @@ async fn oversized_result_is_bounded_to_the_shared_budget() {
 async fn body_past_persistable_limit_is_bounded_inline_not_spilled() {
     use crate::artifacts::policy::NoRedaction;
     use std::sync::Arc;
-    let store = ToolResultArtifactStore::in_memory(
+    let scope = tinyagents_storage_kit::Scope::new("local").unwrap();
+    let blobs = tinystoragedrivers_testkit::memory_storage(&scope)
+        .blobs()
+        .clone();
+    let store = ToolResultArtifactStore::new(
+        blobs,
         "s",
         Arc::new(NoRedaction),
         "file_read",

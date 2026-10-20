@@ -1,8 +1,13 @@
 use super::*;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+use crate::testkit::MemoryStorage;
+use tinystoragedrivers_api::StorageBackend;
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
-    DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
+    let scope = Scope::new(scope).unwrap();
+    DriverRunLedger::new(ScopedStorage::new(
+        backend.for_scope(&scope).unwrap(),
+        scope,
+    ))
 }
 
 async fn member(ledger: &DriverRunLedger, id: &str) {
@@ -165,10 +170,8 @@ async fn memory_team_claim_and_completion_follow_the_classic_lifecycle() {
 }
 
 #[tokio::test]
-async fn sqlite_team_claim_and_completion_follow_the_classic_lifecycle() {
-    let root = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(root.path().join("team.sqlite")).unwrap();
+async fn reconstructed_memory_team_claim_and_completion_follow_the_classic_lifecycle() {
+    let backend = MemoryStorage::new();
     claim_and_complete_lifecycle(&backend).await;
 }
 

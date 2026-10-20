@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, Sort, StorageError};
+use tinyagents_storage_kit::{DocumentStoreExt, Filter, Query, Sort, StorageError};
 
 use super::{
     DriverTranscriptHistory, DriverTranscriptLocator, ENTRIES, Entry, HistoryInner, INDEX,

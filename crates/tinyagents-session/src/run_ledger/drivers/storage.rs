@@ -10,9 +10,9 @@ use super::DriverRunLedger;
 use super::dto::Stored;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tinystoragedrivers_core::primitives::{self, Repo};
+use tinyagents_storage_kit::primitives::{self, Repo};
 
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort,
     StorageError, Versioned, WriteOp, WriteOptions,
 };
@@ -183,7 +183,7 @@ pub(super) fn put_op<T: Stored>(
     collection: &str,
     id: String,
     record: &T,
-    precondition: tinystoragedrivers_core::Precondition,
+    precondition: tinystoragedrivers_types::Precondition,
 ) -> Result<WriteOp, StorageError> {
     Ok(WriteOp::Put {
         collection: collection.into(),

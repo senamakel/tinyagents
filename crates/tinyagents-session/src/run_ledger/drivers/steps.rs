@@ -15,7 +15,7 @@ use crate::run_ledger::tool_effects::ToolEffectStatus;
 use crate::run_ledger::types::*;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tinystoragedrivers_core::{SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{SourceRecord, Step, TargetRecord};
 
 /// The wire record inside a v1 envelope.
 pub(super) fn v1_record<T: DeserializeOwned>(body: &Value) -> Option<T> {

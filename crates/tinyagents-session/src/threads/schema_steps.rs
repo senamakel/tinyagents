@@ -7,7 +7,8 @@ use super::{ConversationThread, ThreadMessage};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{Key, SourceRecord, Step, StorageError, TargetRecord};
+use tinyagents_storage_kit::{Key, StorageError};
+use tinyagents_storage_kit::{SourceRecord, Step, TargetRecord};
 
 /// The v1 thread collection.
 const LEGACY_THREADS: &str = "conversation_threads_v1";

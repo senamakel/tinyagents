@@ -2,7 +2,7 @@
 //! function of its input, so a resumed run produces the same output.
 
 use serde_json::Value;
-use tinystoragedrivers_core::{Key, SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{Key, SourceRecord, Step, TargetRecord};
 
 use super::super::turn_states::storage;
 use super::{ENTRIES_NAME, INDEX_NAME, TRANSCRIPT_VERSION, TURN_NAME, TURN_VERSION};
@@ -33,8 +33,8 @@ fn with_created(record: TargetRecord, created: Option<i64>) -> TargetRecord {
 }
 
 /// `session_transcripts` -> `session.transcripts`: id `Key::of([stem])`,
-/// `created_at` becomes metadata, and the rows that only held a generation
-/// reservation (`written: false`) are dropped.
+/// `created_at` becomes the application field `created_ms`, and rows that only
+/// held a generation reservation (`written: false`) are dropped.
 pub(super) fn transcripts() -> Step {
     Step::new(
         "transcripts_v2",
@@ -51,12 +51,13 @@ pub(super) fn transcripts() -> Step {
                     let id = key([source.body.get("stem")?.as_str()?])?;
                     let mut body = source.body.clone();
                     let fields = body.as_object_mut()?;
+                    let created = created_ms(source);
                     fields.remove("created_at");
                     fields.remove("reserved_at");
-                    Some(with_created(
-                        TargetRecord::new(INDEX_NAME, id, body),
-                        created_ms(source),
-                    ))
+                    if let Some(created) = created {
+                        fields.insert("created_ms".into(), Value::from(created));
+                    }
+                    Some(TargetRecord::new(INDEX_NAME, id, body))
                 })
                 .collect())
         },

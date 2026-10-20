@@ -34,7 +34,8 @@
 //!   record's expiry is its `_expires_ms`, which the store never sets.
 
 use super::schema_steps;
-use tinystoragedrivers_core::{CollectionSpec, Key, Owner, Schema, ScopeClass, StorageError};
+use tinyagents_storage_kit::{CollectionSpec, Key, StorageError};
+use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 
 /// The owner of the conversation store's collections and streams.
 pub(super) const OWNER: &str = "conversations";
@@ -64,7 +65,10 @@ pub(super) fn append_spec() -> CollectionSpec {
 /// # Errors
 /// `InvalidInput` when `thread` is empty.
 pub(super) fn stream_name(thread: &str, incarnation: &str) -> Result<String, StorageError> {
-    Ok(format!("{MESSAGES}/{}", Key::of([thread, incarnation])?))
+    Ok(format!(
+        "{MESSAGES}/{}",
+        Key::of([thread, incarnation])?.as_str()
+    ))
 }
 
 /// What the conversation store keeps (owner `conversations`, scope class

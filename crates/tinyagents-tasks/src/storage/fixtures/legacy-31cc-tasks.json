@@ -1,0 +1,145 @@
+{
+  "tasks.history": [
+    {
+      "doc": {
+        "created_ms": 1792501443529,
+        "input": {
+          "attempt": 2,
+          "prompt": "fixture input"
+        },
+        "kind": {
+          "graph_id": "fixture-graph",
+          "type": "graph"
+        },
+        "kind_label": "graph",
+        "metadata": {
+          "source": "31cc-public-writer"
+        },
+        "node_id": "node-fixture",
+        "parent_run_id": "run-parent",
+        "rev": 1,
+        "root_run_id": "run-root",
+        "status": "pending",
+        "task_id": "legacy-task-31cc",
+        "thread_id": "thread-fixture",
+        "timeout_ms": 30000
+      },
+      "id": "legacy-task-31cc/1",
+      "meta": {
+        "created_ms": 1792501443529,
+        "schema": 2,
+        "updated_ms": 1792501443529
+      },
+      "version": 1
+    },
+    {
+      "doc": {
+        "created_ms": 1792501443529,
+        "input": {
+          "attempt": 2,
+          "prompt": "fixture input"
+        },
+        "kind": {
+          "graph_id": "fixture-graph",
+          "type": "graph"
+        },
+        "kind_label": "graph",
+        "metadata": {
+          "source": "31cc-public-writer"
+        },
+        "node_id": "node-fixture",
+        "parent_run_id": "run-parent",
+        "rev": 2,
+        "root_run_id": "run-root",
+        "started_ms": 1792501443529,
+        "status": "running",
+        "task_id": "legacy-task-31cc",
+        "thread_id": "thread-fixture",
+        "timeout_ms": 30000
+      },
+      "id": "legacy-task-31cc/2",
+      "meta": {
+        "created_ms": 1792501443529,
+        "schema": 2,
+        "updated_ms": 1792501443529
+      },
+      "version": 1
+    },
+    {
+      "doc": {
+        "created_ms": 1792501443529,
+        "ended_ms": 1792501443529,
+        "input": {
+          "attempt": 2,
+          "prompt": "fixture input"
+        },
+        "kind": {
+          "graph_id": "fixture-graph",
+          "type": "graph"
+        },
+        "kind_label": "graph",
+        "metadata": {
+          "source": "31cc-public-writer"
+        },
+        "node_id": "node-fixture",
+        "parent_run_id": "run-parent",
+        "result": {
+          "text": "fixture completed"
+        },
+        "rev": 3,
+        "root_run_id": "run-root",
+        "started_ms": 1792501443529,
+        "status": "completed",
+        "task_id": "legacy-task-31cc",
+        "thread_id": "thread-fixture",
+        "timeout_ms": 30000
+      },
+      "id": "legacy-task-31cc/3",
+      "meta": {
+        "created_ms": 1792501443529,
+        "schema": 2,
+        "updated_ms": 1792501443529
+      },
+      "version": 1
+    }
+  ],
+  "tasks.records": [
+    {
+      "doc": {
+        "created_ms": 1792501443529,
+        "ended_ms": 1792501443529,
+        "input": {
+          "attempt": 2,
+          "prompt": "fixture input"
+        },
+        "kind": {
+          "graph_id": "fixture-graph",
+          "type": "graph"
+        },
+        "kind_label": "graph",
+        "metadata": {
+          "source": "31cc-public-writer"
+        },
+        "node_id": "node-fixture",
+        "parent_run_id": "run-parent",
+        "result": {
+          "text": "fixture completed"
+        },
+        "rev": 3,
+        "root_run_id": "run-root",
+        "started_ms": 1792501443529,
+        "status": "completed",
+        "task_id": "legacy-task-31cc",
+        "thread_id": "thread-fixture",
+        "timeout_ms": 30000
+      },
+      "id": "legacy-task-31cc",
+      "meta": {
+        "created_ms": 1792501443529,
+        "schema": 2,
+        "updated_ms": 1792501443529
+      },
+      "version": 3
+    }
+  ]
+}

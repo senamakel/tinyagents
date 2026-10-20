@@ -5,7 +5,9 @@
 mod dto;
 mod steps;
 
-use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema, ScopeClass, ScopedStorage,
+};
 
 pub(crate) use dto::{CompletionDoc, TaskDoc, history_id_key, task_id_key, to_ms};
 
@@ -45,9 +47,9 @@ pub(crate) fn completions_spec() -> CollectionSpec {
         .index(IndexSpec::new("by_state", ["state"]))
 }
 
-/// The tasks crate's storage declarations: what it stores and the steps that
-/// bring the v1 names and shapes forward. The host composes it with
-/// `Registry::compose` and runs `Registry::migrate` per scope.
+/// The tasks crate's storage declaration and the steps that bring its v1 names
+/// and shapes forward. `open_storage` runs this owner-local migration against
+/// the already-bound scope before returning the handle.
 ///
 /// | v1 | v2 |
 /// |---|---|
@@ -70,6 +72,31 @@ pub fn storage_schema() -> Schema {
         .step(steps::records())
         .step(steps::history())
         .step(steps::completions())
+}
+
+/// Collections owned by tasks; callers declare these on their chosen backend.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    storage_schema().collections()
+}
+
+/// Open tasks storage for one scope, declaring collections and applying the
+/// task-owned migrations before returning the scope-bound ports.
+pub async fn open_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    let owned_storage = storage.clone();
+    tinyagents_storage_kit::with_migration_lease(&storage, "tasks", move |lease| async move {
+        let storage = owned_storage;
+        let registry = Registry::compose([storage_schema()])?;
+        for spec in collections() {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        registry.migrate(&storage, &MigrateOptions::new()).await?;
+        lease.renew().await?;
+        Ok(storage)
+    })
+    .await
 }
 
 #[cfg(test)]

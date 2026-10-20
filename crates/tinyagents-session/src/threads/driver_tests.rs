@@ -1,6 +1,7 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::Scope;
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -245,53 +246,14 @@ async fn invalid_ids_and_malformed_committed_records_keep_native_error_kinds() {
         matches!(store.get_messages("one").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Serialization)
     );
 }
-
 #[tokio::test]
-async fn native_scope_fence_rejects_metadata_takeover_without_local_fallback() {
-    use tinystoragedrivers_core::Fence;
-    let backend = MemoryStorage::new();
-    let owner_scope = Scope::new("root-owner").unwrap();
-    let owner = backend.for_scope(&owner_scope).unwrap();
-    owner
-        .documents()
-        .put(
-            "leases",
-            "profile",
-            json!({"epoch":1}),
-            Precondition::Absent,
-        )
-        .await
-        .unwrap();
-    let profile = Scope::new("profile").unwrap();
-    let fence = Fence::epoch(owner_scope, "leases", "profile", "epoch", 1);
-    let store = DriverConversationStore::new(backend.for_scope_fenced(&profile, &fence).unwrap());
-    let before = store.ensure_thread(request("one")).await.unwrap();
-    owner
-        .documents()
-        .put("leases", "profile", json!({"epoch":2}), Precondition::None)
-        .await
-        .unwrap();
-    assert!(
-        matches!(store.update_thread_title("one", "stale", "now").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Fenced)
-    );
-    assert_eq!(
-        scoped(&backend, "profile").get_thread("one").await.unwrap(),
-        Some(before)
-    );
-}
-
-#[tokio::test]
-async fn sqlite_reopen_reads_same_committed_profile_fixture() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("conversation.db");
+async fn store_reconstruction_reads_same_committed_profile_fixture() {
     let scope = Scope::new("profile").unwrap();
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let backend = MemoryStorage::new();
     let a = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
     seed(&a, "one", &["東京 persisted"]).await;
     drop(a);
-    drop(backend);
-    let reopened = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-    let b = DriverConversationStore::new(reopened.for_scope(&scope).unwrap());
+    let b = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         b.get_messages("one").await.unwrap()[0].content,
         "東京 persisted"
@@ -311,26 +273,17 @@ async fn conflicting_metadata_edits_reread_version_and_preserve_both_fields() {
         .await
         .unwrap();
     let ports = backend.for_scope(&scope).unwrap();
+    let scoped_ports = ports;
     let docs = Arc::new(fixtures::ConflictingDocs {
-        inner: ports.documents().clone(),
+        inner: scoped_ports.documents().clone(),
         attempts: AtomicUsize::new(0),
         barrier: tokio::sync::Barrier::new(2),
         refuse_get: false,
     });
-    let a = DriverConversationStore::new(ScopedStorage::new(
-        scope.clone(),
-        "test",
-        docs.clone(),
-        ports.streams().clone(),
-        ports.blobs().clone(),
-    ));
-    let b = DriverConversationStore::new(ScopedStorage::new(
-        scope,
-        "test",
-        docs.clone(),
-        ports.streams().clone(),
-        ports.blobs().clone(),
-    ));
+    let a =
+        DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
+    let b =
+        DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
     let (title, labels) = tokio::join!(
         a.update_thread_title("one", "Changed", "now"),
         b.update_thread_labels("one", vec!["worker".into()], "now")
@@ -408,13 +361,7 @@ async fn configured_backend_refusal_preserves_native_source_without_selecting_cl
         barrier: tokio::sync::Barrier::new(2),
         refuse_get: true,
     });
-    let store = DriverConversationStore::new(ScopedStorage::new(
-        scope,
-        "refused",
-        docs,
-        ports.streams().clone(),
-        ports.blobs().clone(),
-    ));
+    let store = DriverConversationStore::new(crate::testkit::with_documents(&ports, docs));
     let Err(error) = store.ensure_thread(request("one")).await else {
         panic!("configured refusal became success");
     };

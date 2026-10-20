@@ -1,12 +1,18 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::Value;
-use tinystoragedrivers_core::MemoryStorage;
+use tinystoragedrivers_api::StorageBackend;
 
 #[tokio::test]
 async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes() {
     let registry = SessionStoreRegistry::default();
     let old_backend = Arc::new(MemoryStorage::new());
-    let provider = RebindableSessionStores::new_in(&registry, old_backend.clone(), false).unwrap();
+    let provider = RebindableSessionStores::new_in(
+        &registry,
+        crate::testkit::fixed_scope_factory(old_backend.clone(), "old"),
+        false,
+    )
+    .unwrap();
     let first = provider.for_agent("agent-one");
     let first_clone = first.clone();
     let second = provider.for_agent("agent-two");
@@ -22,7 +28,15 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
         .unwrap();
 
     let new_backend = Arc::new(MemoryStorage::new());
-    assert_eq!(registry.rebind(new_backend.clone()).unwrap(), 1);
+    assert_eq!(
+        registry
+            .rebind(crate::testkit::fixed_scope_factory(
+                new_backend.clone(),
+                "new"
+            ))
+            .unwrap(),
+        1
+    );
     assert_eq!(first_clone.kv.get("prefs", "key").await.unwrap(), None);
     first_clone
         .kv
@@ -43,7 +57,8 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
         second.kv.get("prefs", "key").await.unwrap(),
         Some(serde_json::json!("new-two"))
     );
-    let fresh_driver = DriverSessionStores::new(new_backend, Scope::local()).unwrap();
+    let fresh_driver =
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "new")).unwrap();
     assert_eq!(
         fresh_driver
             .for_agent("agent-one")
@@ -53,7 +68,8 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
             .unwrap(),
         Some(serde_json::json!("new-one"))
     );
-    let old_driver = DriverSessionStores::new(old_backend, Scope::local()).unwrap();
+    let old_driver =
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(old_backend, "old")).unwrap();
     assert_eq!(
         old_driver
             .for_agent("agent-one")
@@ -68,15 +84,24 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
 #[tokio::test]
 async fn retained_journal_handle_routes_later_appends_to_new_backend() {
     let registry = SessionStoreRegistry::default();
-    let provider =
-        RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    let provider = RebindableSessionStores::new_in(
+        &registry,
+        crate::testkit::fixed_scope_factory(Arc::new(MemoryStorage::new()), "initial"),
+        false,
+    )
+    .unwrap();
     let stores = provider.for_agent("agent");
     stores
         .journal
         .append("turns", serde_json::json!({"where":"old"}))
         .await
         .unwrap();
-    provider.rebind(Arc::new(MemoryStorage::new())).unwrap();
+    provider
+        .rebind(crate::testkit::fixed_scope_factory(
+            Arc::new(MemoryStorage::new()),
+            "replacement",
+        ))
+        .unwrap();
     assert_eq!(stores.journal.len("turns").await.unwrap(), 0);
     stores
         .journal
@@ -99,21 +124,18 @@ struct GateBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for GateBackend {
-    fn driver(&self) -> &'static str {
-        self.inner.driver()
-    }
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     fn for_scope(
         &self,
-        scope: &tinystoragedrivers_core::Scope,
-    ) -> std::result::Result<tinystoragedrivers_core::ScopedStorage, StorageError> {
+        scope: &tinystoragedrivers_types::Scope,
+    ) -> std::result::Result<tinyagents_storage_kit::Storage, StorageError> {
         if let Some((entered, release)) = self.gate.lock().unwrap().take() {
             let _ = entered.send(());
             let _ = release.recv();
         }
-        self.inner.for_scope(scope)
+        tinystoragedrivers_api::StorageBackend::for_scope(&self.inner, scope)
     }
 }
 
@@ -142,8 +164,11 @@ impl Store for BlockingStore {
 
 #[tokio::test]
 async fn rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new() {
-    let base_provider =
-        DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap();
+    let base_provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+        Arc::new(MemoryStorage::new()),
+        "local",
+    ))
+    .unwrap();
     let mut old = base_provider.for_agent("agent");
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -182,8 +207,12 @@ async fn rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_n
 #[test]
 fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
     let registry = SessionStoreRegistry::default();
-    let provider =
-        RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    let provider = RebindableSessionStores::new_in(
+        &registry,
+        crate::testkit::fixed_scope_factory(Arc::new(MemoryStorage::new()), "initial"),
+        false,
+    )
+    .unwrap();
     let _already_live = provider.for_agent("already-live");
     let (entered_tx, entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -193,7 +222,11 @@ fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
     });
     let rebind_provider = Arc::clone(&provider);
     let rebind_backend: Arc<dyn StorageBackend> = new_backend.clone();
-    let rebind = std::thread::spawn(move || rebind_provider.rebind(rebind_backend).unwrap());
+    let rebind = std::thread::spawn(move || {
+        rebind_provider
+            .rebind(crate::testkit::fixed_scope_factory(rebind_backend, "gated"))
+            .unwrap()
+    });
 
     // The gate is reached while rebinding the already-live agent, after the
     // provider has captured its live registry. A registration at this point
@@ -210,7 +243,9 @@ fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
             .put("n", "k", serde_json::json!("new"))
             .await
             .unwrap();
-        let direct = DriverSessionStores::new(new_backend, Scope::local()).unwrap();
+        let direct =
+            DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "gated"))
+                .unwrap();
         assert_eq!(
             direct
                 .for_agent("late-agent")
@@ -226,8 +261,12 @@ fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
 #[test]
 fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_backend() {
     let registry = SessionStoreRegistry::default();
-    let provider =
-        RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    let provider = RebindableSessionStores::new_in(
+        &registry,
+        crate::testkit::fixed_scope_factory(Arc::new(MemoryStorage::new()), "initial"),
+        false,
+    )
+    .unwrap();
     let barrier = Arc::new(std::sync::Barrier::new(3));
     let registration_provider = Arc::clone(&provider);
     let registration_barrier = Arc::clone(&barrier);
@@ -241,7 +280,9 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
     let expected_backend = Arc::clone(&new_backend);
     let rebind = std::thread::spawn(move || {
         rebind_barrier.wait();
-        rebind_provider.rebind(new_backend).unwrap();
+        rebind_provider
+            .rebind(crate::testkit::fixed_scope_factory(new_backend, "new"))
+            .unwrap();
     });
     barrier.wait();
     let registered = registration.join().unwrap();
@@ -255,9 +296,10 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .put("n", "k", serde_json::json!("retained"))
             .await
             .unwrap();
-        let independent = DriverSessionStores::new(expected_backend, Scope::local())
-            .unwrap()
-            .for_agent("racing-agent");
+        let independent =
+            DriverSessionStores::new(crate::testkit::fixed_scope_factory(expected_backend, "new"))
+                .unwrap()
+                .for_agent("racing-agent");
         assert_eq!(
             independent.kv.get("n", "k").await.unwrap(),
             Some(serde_json::json!("retained"))
@@ -272,8 +314,12 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
 #[test]
 fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handles() {
     let registry = SessionStoreRegistry::default();
-    let provider =
-        RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+    let provider = RebindableSessionStores::new_in(
+        &registry,
+        crate::testkit::fixed_scope_factory(Arc::new(MemoryStorage::new()), "initial"),
+        false,
+    )
+    .unwrap();
     let retained = provider.for_agent("agent");
     let barrier = Arc::new(std::sync::Barrier::new(3));
     let backends = [
@@ -288,7 +334,9 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
         let backend = Arc::clone(backend);
         workers.push(std::thread::spawn(move || {
             barrier.wait();
-            provider.rebind(backend).unwrap();
+            provider
+                .rebind(crate::testkit::fixed_scope_factory(backend, "candidate"))
+                .unwrap();
         }));
     }
     barrier.wait();
@@ -305,7 +353,9 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .unwrap();
         let mut winner = None;
         for (index, backend) in candidate_backends.into_iter().enumerate() {
-            let direct = DriverSessionStores::new(backend, Scope::local()).unwrap();
+            let direct =
+                DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "candidate"))
+                    .unwrap();
             if direct
                 .for_agent("agent")
                 .kv
@@ -323,7 +373,11 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .put("n", "fresh", serde_json::json!("current"))
             .await
             .unwrap();
-        let direct = DriverSessionStores::new(backends[winner].clone(), Scope::local()).unwrap();
+        let direct = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+            backends[winner].clone(),
+            "candidate",
+        ))
+        .unwrap();
         assert_eq!(
             direct.for_agent("agent").kv.get("n", "k").await.unwrap(),
             Some(serde_json::json!("same-backend"))
@@ -341,31 +395,37 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
 }
 
 #[tokio::test]
-async fn tenant_is_preserved_across_rebind_without_crossing_other_tenants() {
+async fn host_supplied_scope_bindings_survive_rebind_without_crossing_scopes() {
     let registry = SessionStoreRegistry::default();
-    let tenant = Scope::tenant("alice").unwrap();
-    let provider = RebindableSessionStores::new_in_tenant(
+    let provider = RebindableSessionStores::new_in(
         &registry,
-        Arc::new(MemoryStorage::new()),
-        tenant.clone(),
+        crate::testkit::fixed_scope_factory(Arc::new(MemoryStorage::new()), "host-alice"),
         false,
     )
     .unwrap();
     let retained = provider.for_agent("agent");
     let next = Arc::new(MemoryStorage::new());
-    registry.rebind(next.clone()).unwrap();
+    registry
+        .rebind(crate::testkit::fixed_scope_factory(
+            next.clone(),
+            "host-alice-rebound",
+        ))
+        .unwrap();
     retained
         .kv
         .put("n", "k", serde_json::json!("alice"))
         .await
         .unwrap();
-    let alice = DriverSessionStores::new(next.clone(), tenant)
+    let alice = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+        next.clone(),
+        "host-alice-rebound",
+    ))
+    .unwrap()
+    .for_agent("agent");
+    let bob = DriverSessionStores::new(crate::testkit::fixed_scope_factory(next.clone(), "u:bob"))
         .unwrap()
         .for_agent("agent");
-    let bob = DriverSessionStores::new(next.clone(), Scope::tenant("bob").unwrap())
-        .unwrap()
-        .for_agent("agent");
-    let local = DriverSessionStores::new(next, Scope::local())
+    let local = DriverSessionStores::new(crate::testkit::fixed_scope_factory(next, "local"))
         .unwrap()
         .for_agent("agent");
     assert_eq!(

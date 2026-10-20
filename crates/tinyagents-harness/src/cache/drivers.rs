@@ -34,8 +34,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tinyagents_storage_kit::{CollectionSpec, DocumentStore, Filter, Repo, WriteOptions};
 use tinyinference_llm::model::ModelResponse;
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Filter, Repo, WriteOptions};
 use tokio::sync::OnceCell;
 
 use super::types::{CacheStats, ResponseCache};

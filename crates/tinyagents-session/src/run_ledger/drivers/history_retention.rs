@@ -17,7 +17,7 @@ use super::*;
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
 use serde_json::Value;
 use std::collections::HashSet;
-use tinystoragedrivers_core::{DocumentStoreExt, Precondition, Versioned, WriteOp, WriteResult};
+use tinyagents_storage_kit::{DocumentStoreExt, Precondition, Versioned, WriteOp, WriteResult};
 
 const LOG_PREFIX: &str = "[session_db:retention]";
 
@@ -133,7 +133,7 @@ impl DriverRunLedger {
                 .await
             {
                 Ok(results) => count += usize::from(removed(&results[1..]) > 0),
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                Err(error) if error.kind() == tinystoragedrivers_types::ErrorKind::Conflict => {}
                 Err(error) => return Err(error.into()),
             }
         }

@@ -1,17 +1,13 @@
-//! Fixtures for in-crate tests that need a durable run ledger.
-
-use std::path::Path;
+//! Shared testkit fixtures for the orchestration drivers.
 
 use tinyagents_session::run_ledger::DriverRunLedger;
-use tinystoragedrivers_core::{Scope, StorageBackend};
-use tinystoragedrivers_sqlite::SqliteStorage;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
-/// A run ledger over the SQLite file `ledger.sqlite` in `dir`.
-///
-/// Every call opens the file afresh, so two calls with the same directory are
-/// two independent handles (two executors) on one database, and a ledger
-/// dropped and reopened models a process restart.
-pub(crate) fn ledger_in(dir: &Path) -> DriverRunLedger {
-    let storage = SqliteStorage::open(dir.join("ledger.sqlite")).expect("open ledger database");
-    DriverRunLedger::new(storage.for_scope(&Scope::local()).expect("local scope"))
+/// Opens a run ledger over the explicit testkit backend owned by one test.
+pub(crate) fn ledger_in(backend: &MemoryBackend) -> DriverRunLedger {
+    let scoped = backend
+        .for_scope(&Scope::new("local").unwrap())
+        .expect("local scope");
+    DriverRunLedger::new(scoped)
 }

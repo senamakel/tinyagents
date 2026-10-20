@@ -27,7 +27,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, Filter, IndexSpec, Key, Repo, StorageError, WriteOptions,
     primitives,
 };

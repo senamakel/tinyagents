@@ -11,10 +11,6 @@ mod effects;
 mod events;
 mod history;
 mod history_retention;
-#[cfg(feature = "legacy-import")]
-mod import;
-#[cfg(feature = "legacy-import")]
-mod legacy_import;
 mod legacy_state;
 mod retention;
 mod schema;
@@ -22,13 +18,6 @@ mod steps;
 mod steps_history;
 mod storage;
 mod team;
-#[cfg(feature = "legacy-import")]
-pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
-#[cfg(feature = "legacy-import")]
-pub use import::AgentImportReport;
-#[cfg(feature = "legacy-import")]
-pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
-
 pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
 pub use schema::{history_storage_schema, ledger_storage_schema};
 use std::sync::Arc;
@@ -36,7 +25,9 @@ use storage::{
     LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now, trunc,
     workflow_lease_key,
 };
-use tinystoragedrivers_core::{Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError};
+use tinyagents_storage_kit::ScopedStorage;
+use tinyagents_storage_kit::primitives::Leases;
+use tinyagents_storage_kit::{Filter, Query, Scope, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -83,7 +74,7 @@ impl DriverRunLedger {
     }
 
     /// Exact document declarations shared by bootstrap preparation and lazy admission.
-    pub fn collection_specs() -> Vec<tinystoragedrivers_core::CollectionSpec> {
+    pub fn collection_specs() -> Vec<tinystoragedrivers_types::CollectionSpec> {
         storage::specs()
     }
 
@@ -93,7 +84,7 @@ impl DriverRunLedger {
     /// The first native declaration refusal, with no fallback or rollback claim
     /// for earlier successful declarations. This does not prepare native internal schema.
     pub async fn prepare_schema(
-        documents: &dyn tinystoragedrivers_core::DocumentStore,
+        documents: &dyn tinystoragedrivers_api::DocumentStore,
     ) -> std::result::Result<(), StorageError> {
         // The shared `tsd.*` collections (leases, counters, migrations) are
         // declared with them: the ledger reads and writes those too.

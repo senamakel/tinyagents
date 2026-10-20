@@ -25,7 +25,10 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
-tinystoragedrivers-core = { workspace = true }
+tinyagents-storage-kit = { workspace = true }
+tinystoragedrivers-api = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
+tinystoragedrivers-types = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

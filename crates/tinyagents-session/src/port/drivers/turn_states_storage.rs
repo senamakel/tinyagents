@@ -16,7 +16,7 @@
 //! touched. Times keep millisecond precision and come back as UTC (`Z`).
 
 use serde_json::{Map, Value};
-use tinystoragedrivers_core::StorageError;
+use tinystoragedrivers_types::StorageError;
 
 use crate::turn_state::TurnState;
 

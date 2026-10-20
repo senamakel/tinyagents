@@ -6,9 +6,13 @@ mod import;
 mod steps;
 mod types;
 
-use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, primitives};
+use tinyagents_storage_kit::{
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema, ScopeClass, ScopedStorage,
+    primitives,
+};
 
 pub use import::{import_legacy_leases, import_legacy_task_cache};
+pub(crate) use import::{import_legacy_leases_with_lease, import_legacy_task_cache_with_lease};
 pub(crate) use types::{
     CheckpointBody, ThreadBody, WritesBody, checkpoint_id_key, lease_key, subgraph_key,
     thread_id_key, writes_id_key,
@@ -77,9 +81,10 @@ pub(crate) fn leases_spec() -> CollectionSpec {
     CollectionSpec::new(primitives::LEASES)
 }
 
-/// The graph crate's storage declarations: what the one graph checkpointer
-/// stores and the steps that bring the v1 names and shapes forward. The host
-/// composes it with `Registry::compose` and runs `Registry::migrate` per scope.
+/// The graph crate's storage declaration for its checkpointer and the steps
+/// that bring the v1 names and shapes forward. Graph open runs this
+/// owner-local migration against the already-bound scope before returning the
+/// handle.
 ///
 /// | v1 | v2 |
 /// |---|---|
@@ -109,6 +114,38 @@ pub fn storage_schema() -> Schema {
         schema = schema.step(step);
     }
     schema
+}
+
+/// Collections owned by graph; callers declare these on their chosen backend.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    storage_schema().collections()
+}
+
+/// Open graph storage for one scope, applying graph-owned migrations and
+/// importing the graph's legacy cache and lease records before use.
+pub async fn open_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    let owned_storage = storage.clone();
+    tinyagents_storage_kit::with_migration_lease(&storage, "graph", move |lease| async move {
+        let storage = owned_storage;
+        let registry = Registry::compose([storage_schema()])?;
+        for spec in collections() {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        for spec in [
+            primitives::leases_collection_spec(),
+            primitives::kv_collection_spec(),
+        ] {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        registry.migrate(&storage, &MigrateOptions::new()).await?;
+        import_legacy_leases_with_lease(&storage, &lease).await?;
+        import_legacy_task_cache_with_lease(&storage, &lease).await?;
+        Ok(storage)
+    })
+    .await
 }
 
 #[cfg(test)]

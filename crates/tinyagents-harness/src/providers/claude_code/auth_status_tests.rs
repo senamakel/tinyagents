@@ -85,9 +85,7 @@ fn malformed_json_is_unknown_not_signed_out() {
 
 #[test]
 fn api_key_env_short_circuits_probe() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.blocking_lock();
     let prev = std::env::var("ANTHROPIC_API_KEY").ok();
     super::super::test_set_env("ANTHROPIC_API_KEY", "sk-ant-test");
 

@@ -24,7 +24,7 @@ use crate::types::{
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Counters, DocumentStoreExt, ErrorKind, ExpectedDocument, ID_FIELD, Precondition, ReadCheck,
     Versioned, WriteOp,
 };
@@ -220,7 +220,7 @@ impl DriverRunLedger {
         }
         let wanted: Vec<Vec<String>> = terms
             .iter()
-            .map(|term| tinystoragedrivers_core::value::tokens(&Value::String((*term).into())))
+            .map(|term| tinystoragedrivers_types::value::tokens(&Value::String((*term).into())))
             .collect();
         let mut sessions = HashSet::new();
         for id in candidates.unwrap_or_default() {
@@ -230,7 +230,7 @@ impl DriverRunLedger {
             let row: FtsRow = decode(found.doc)?;
             let have: HashSet<String> = [&row.agent_name, &row.content, &row.tool_name]
                 .into_iter()
-                .flat_map(|field| tinystoragedrivers_core::value::tokens(&json!(field)))
+                .flat_map(|field| tinystoragedrivers_types::value::tokens(&json!(field)))
                 .collect();
             // The driver ranks by any-token overlap; a quoted multi-token term
             // must still match on every token within the one row.

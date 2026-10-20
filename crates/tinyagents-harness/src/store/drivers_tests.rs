@@ -1,22 +1,23 @@
 use super::*;
 use crate::store::conformance::run_store_conformance;
 use serde_json::json;
-use tinystoragedrivers_core::{Kv, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Kv, Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
-fn scoped(storage: &MemoryStorage, scope: &str) -> tinystoragedrivers_core::ScopedStorage {
+fn scoped(storage: &MemoryBackend, scope: &str) -> tinyagents_storage_kit::ScopedStorage {
     storage.for_scope(&Scope::new(scope).unwrap()).unwrap()
 }
 
 #[tokio::test]
 async fn driver_store_passes_the_store_conformance_suite() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverStore::new(Arc::clone(scoped(&storage, "local").documents()));
     run_store_conformance(&store).await;
 }
 
 #[tokio::test]
 async fn namespaces_and_keys_may_hold_any_characters() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverStore::new(Arc::clone(scoped(&storage, "local").documents()));
     store.put("a/b", "c", json!(1)).await.unwrap();
     store.put("a", "b/c", json!(2)).await.unwrap();
@@ -29,7 +30,7 @@ async fn namespaces_and_keys_may_hold_any_characters() {
 
 #[tokio::test]
 async fn stores_in_different_scopes_and_owners_are_isolated() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverStore::new(Arc::clone(scoped(&storage, "alice").documents()));
     let bob = DriverStore::new(Arc::clone(scoped(&storage, "bob").documents()));
     let other = DriverStore::with_owner(Arc::clone(scoped(&storage, "alice").documents()), "other");
@@ -41,7 +42,7 @@ async fn stores_in_different_scopes_and_owners_are_isolated() {
 
 #[tokio::test]
 async fn a_list_follows_every_page() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverStore::new(Arc::clone(scoped(&storage, "local").documents()));
     for i in 0..1_005 {
         store
@@ -54,7 +55,7 @@ async fn a_list_follows_every_page() {
 
 #[tokio::test]
 async fn an_overlong_key_is_stored_under_a_hashed_id_and_still_listed() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverStore::new(Arc::clone(scoped(&storage, "local").documents()));
     let long = "k".repeat(600);
     store.put("ns", &long, json!(1)).await.unwrap();
@@ -64,7 +65,7 @@ async fn an_overlong_key_is_stored_under_a_hashed_id_and_still_listed() {
 
 #[tokio::test]
 async fn an_empty_namespace_is_a_validation_error() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let store = DriverStore::new(Arc::clone(scoped(&storage, "local").documents()));
     let error = store.put("", "k", json!(1)).await.unwrap_err();
     assert!(matches!(error, TinyAgentsError::Validation(_)), "{error:?}");
@@ -74,7 +75,7 @@ async fn an_empty_namespace_is_a_validation_error() {
 /// value unwrapped into the primitive's own `value` field.
 #[tokio::test]
 async fn entries_are_tsd_kv_documents_of_the_owner() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = Arc::clone(scoped(&storage, "local").documents());
     let store = DriverStore::new(Arc::clone(&docs));
     store.put("ns", "k", json!({"v": 1})).await.unwrap();
@@ -82,7 +83,7 @@ async fn entries_are_tsd_kv_documents_of_the_owner() {
     let kv = Kv::ns(&docs, "harness", "ns").unwrap();
     assert_eq!(kv.get::<Value>("k").await.unwrap(), Some(json!({"v": 1})));
     let raw = docs
-        .get(tinystoragedrivers_core::primitives::KV, "harness/ns/k")
+        .get(tinyagents_storage_kit::primitives::KV, "harness/ns/k")
         .await
         .unwrap()
         .expect("the entry sits under Key::of([owner, ns, key])");
@@ -98,7 +99,7 @@ async fn entries_are_tsd_kv_documents_of_the_owner() {
 
 #[tokio::test]
 async fn a_store_reads_only_its_own_owner() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = Arc::clone(scoped(&storage, "local").documents());
     let harness = DriverStore::new(Arc::clone(&docs));
     let session = DriverStore::with_owner(Arc::clone(&docs), "session");
@@ -118,7 +119,7 @@ fn backend_failures_map_to_storage_errors() {
 
 #[tokio::test]
 async fn driver_append_store_keeps_dense_offsets() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let journal = DriverAppendStore::new(Arc::clone(scoped(&storage, "local").streams()));
     assert_eq!(journal.len("run-1").await.unwrap(), 0);
     assert!(journal.read_from("run-1", 0).await.unwrap().is_empty());
@@ -139,7 +140,7 @@ async fn driver_append_store_keeps_dense_offsets() {
 
 #[tokio::test]
 async fn read_from_follows_long_streams_and_prefixes_isolate() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let streams = Arc::clone(scoped(&storage, "local").streams());
     let journal = DriverAppendStore::with_prefix(Arc::clone(&streams), "journal/");
     let other = DriverAppendStore::with_prefix(Arc::clone(&streams), "other/");
@@ -156,7 +157,7 @@ async fn read_from_follows_long_streams_and_prefixes_isolate() {
 
 #[tokio::test]
 async fn streams_are_named_by_prefix_and_stream_without_a_length_prefix() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let scoped = scoped(&storage, "local");
     let journal = DriverAppendStore::with_prefix(Arc::clone(scoped.streams()), "harness.journal/");
     journal.append("run.1", json!(1)).await.unwrap();
@@ -170,7 +171,7 @@ async fn streams_are_named_by_prefix_and_stream_without_a_length_prefix() {
 
 #[tokio::test]
 async fn sealing_closes_a_stream_without_changing_what_a_reader_sees() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let scoped = scoped(&storage, "local");
     let journal = DriverAppendStore::with_prefix(Arc::clone(scoped.streams()), "harness.journal/");
     for i in 0..(READ_PAGE as u64 + 3) {
@@ -204,7 +205,7 @@ async fn sealing_closes_a_stream_without_changing_what_a_reader_sees() {
 
 #[tokio::test]
 async fn sealing_a_stream_nothing_was_written_to_is_a_no_op() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let journal = DriverAppendStore::new(Arc::clone(scoped(&storage, "local").streams()));
     journal.seal("never-written").await.unwrap();
     assert_eq!(journal.len("never-written").await.unwrap(), 0);

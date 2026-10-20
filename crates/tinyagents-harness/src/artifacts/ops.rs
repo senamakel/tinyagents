@@ -4,7 +4,7 @@
 //! [`ArtifactOffload`] is the per-run writer: it resolves a target key via
 //! [`super::paths::resolve_artifact_key`], applies the host redactor from
 //! [`super::policy`], and stores the redacted body on a
-//! [`BlobStore`] port (memory by default). [`should_offload`]
+//! [`BlobStore`] port. [`should_offload`]
 //! and [`effective_offload_threshold`] decide *whether* a result should be
 //! written; [`offload_oversized_result`] ties threshold decision, write, and
 //! pointer rendering into the single entry point most callers use.
@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::BlobStore;
 
 use super::paths::{resolve_artifact_key, sanitize_component};
 use super::policy::{ArtifactPathPolicy, ArtifactRedactor};
@@ -210,15 +210,6 @@ impl ArtifactOffload {
             agent_id: agent_id.into(),
             task_id: task_id.into(),
         }
-    }
-
-    /// A writer over a private in-memory blob store: the default for library
-    /// users with no storage backend. Nothing outlives the process.
-    pub fn in_memory(agent_id: impl Into<String>, task_id: impl Into<String>) -> Self {
-        let scoped = MemoryStorage::new()
-            .for_scope(&Scope::new("local").expect("static scope"))
-            .expect("memory scope");
-        Self::new(scoped.blobs().clone(), agent_id, task_id)
     }
 
     /// Consults `policy` for host-internal key refusals.

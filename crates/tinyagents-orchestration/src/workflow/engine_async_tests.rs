@@ -4,6 +4,7 @@ use serde_json::json;
 use std::sync::Arc;
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{RunLedgerStore, WorkflowRunStatus};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 struct RegisteredExecutor;
 #[async_trait]
@@ -26,8 +27,9 @@ impl AsyncWorkflowExecutor for RegisteredExecutor {
 
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_engine_awaits_registration_and_completes_on_current_thread() {
-    let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
+    let ledger_backend = MemoryBackend::new();
+    let _workspace = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
         Arc::new(RegisteredExecutor),
@@ -52,8 +54,8 @@ use tinyagents_session::run_ledger::{WorkflowLeaseClaim, WorkflowRun, WorkflowRu
 
 fn refusal() -> WorkflowPersistenceError {
     WorkflowPersistenceError::Ledger(
-        tinystoragedrivers_core::StorageError::new(
-            tinystoragedrivers_core::ErrorKind::Unavailable,
+        tinyagents_storage_kit::StorageError::new(
+            tinyagents_storage_kit::ErrorKind::Unavailable,
             "registration backend unavailable",
         )
         .into(),
@@ -136,8 +138,9 @@ fn innermost(error: &WorkflowPersistenceError) -> &WorkflowPersistenceError {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ignored_registration_refusal_cancels_child_and_preserves_source_without_waiting() {
-    let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
+    let ledger_backend = MemoryBackend::new();
+    let _workspace = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let store = Arc::new(RegistrationRefusal {
         inner: LedgerWorkflowStore::new(ledger.clone()),
         cas: AtomicUsize::new(0),
@@ -198,8 +201,9 @@ impl AsyncWorkflowExecutor for UnregisteredExecutor {
 
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_success_cannot_substitute_for_committed_child_registration() {
-    let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
+    let ledger_backend = MemoryBackend::new();
+    let _workspace = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
         Arc::new(UnregisteredExecutor),
@@ -249,8 +253,9 @@ impl AsyncWorkflowExecutor for RefusingChild {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn typed_child_failure_interrupts_parallel_waiters_without_string_flattening() {
-    let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
+    let ledger_backend = MemoryBackend::new();
+    let _workspace = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
         Arc::new(RefusingChild),
@@ -306,9 +311,10 @@ impl AsyncWorkflowExecutor for SyncRegistrationAttempt {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ignored_synchronous_registration_refusal_cannot_leave_authoritative_driver_waiting() {
-    let workspace = tempfile::tempdir().unwrap();
+    let ledger_backend = MemoryBackend::new();
+    let _workspace = tempfile::tempdir().unwrap();
     let store = Arc::new(LedgerWorkflowStore::new(Arc::new(
-        crate::test_support::ledger_in(workspace.path()),
+        crate::test_support::ledger_in(&ledger_backend),
     )));
     let engine = WorkflowEngine::new_async(store, Arc::new(SyncRegistrationAttempt));
     let definition = tests::definition();

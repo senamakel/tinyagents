@@ -3,10 +3,16 @@ use super::*;
 use crate::teams::NewMember;
 use tempfile::TempDir;
 use tinyagents_session::run_ledger::{AgentTeamMemberStatus, AgentTeamTaskStatus};
+use tinystoragedrivers_testkit::MemoryBackend;
 
-fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
+fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
+    let ledger_backend = MemoryBackend::new();
+    service_with_backend(&ledger_backend)
+}
+
+fn service_with_backend(ledger_backend: &MemoryBackend) -> TeamService<SessionTeamLedger> {
     TeamService::new(
-        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(dir.path()))).unwrap(),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(ledger_backend))).unwrap(),
     )
 }
 
@@ -116,11 +122,11 @@ async fn start_member_runs_and_completes_claimed_task() {
 
 #[tokio::test]
 async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
-    let dir = TempDir::new().unwrap();
-    // Independent handles prove the admission fence is durable and shared,
+    // Independent handles prove the admission fence is in the shared backend,
     // rather than a mutex local to one TeamService instance.
-    let first_service = service(&dir);
-    let second_service = service(&dir);
+    let ledger_backend = MemoryBackend::new();
+    let first_service = service_with_backend(&ledger_backend);
+    let second_service = service_with_backend(&ledger_backend);
     let team = first_service
         .create_team(
             "lead",

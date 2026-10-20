@@ -14,7 +14,7 @@ use super::storage::{
     HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, SCHEMA_VERSION, encode, key,
 };
 use crate::types::{SessionMessage, SessionRecord, SessionToolCall};
-use tinystoragedrivers_core::{Result, SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{Result, SourceRecord, Step, TargetRecord};
 
 fn search_row(id: Result<String>, row: &FtsRow) -> Option<TargetRecord> {
     Some(TargetRecord::new(

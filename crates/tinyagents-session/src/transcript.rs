@@ -5,10 +5,9 @@
 //! (see [`crate::port`]): [`TranscriptLocator`] resolves transcripts by thread,
 //! agent or [`SessionRef`] and binds a write handle, and
 //! [`TranscriptHistory`]/[`TranscriptRead`] are those handles. This crate no
-//! longer reads or writes a workspace directory on that path; the only code
-//! touching classic `session_raw/{stem}.jsonl` files is in [`crate::legacy`]:
-//! the one-time, read-only import and `rewrite_legacy_transcripts`, which
-//! rewrites them in place.
+//! longer reads or writes a workspace directory on that path. Host-owned
+//! migration code reads classic `session_raw/{stem}.jsonl` files and writes
+//! their content through the target `TranscriptHistory` API.
 //!
 //! ## Append-only log
 //!
@@ -75,16 +74,14 @@ mod adoption;
 mod background;
 mod display;
 mod history;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod jsonl;
 pub mod legacy;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
+#[cfg(test)]
 mod legacy_md;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
+#[cfg(test)]
 mod markdown;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod paths;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
+#[cfg(test)]
 mod reader;
 mod session;
 pub mod spend;
@@ -93,14 +90,12 @@ pub(crate) mod test_locator;
 mod turn_lock;
 mod types;
 pub mod view;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
+#[cfg(test)]
 mod writer;
 
 pub use adoption::SessionAdoption;
 pub use background::append_background_message_in;
 pub use display::BACKGROUND_METADATA_KEY;
-#[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]
-pub(crate) use display::with_background as display_with_background_row;
 pub(crate) use display::{display_from_session, display_message_of, partial_display_message};
 pub(crate) use history::same_transcript_messages;
 pub use history::{
@@ -108,7 +103,7 @@ pub use history::{
     TruncateCut,
 };
 pub(crate) use jsonl::stamped_rows;
-#[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]
+#[cfg(test)]
 pub(crate) use reader::{read_transcript, read_transcript_display};
 pub use session::{SessionRef, session_stem};
 pub use turn_lock::{SessionTurnGuard, lock_session_turn};
@@ -118,8 +113,6 @@ pub use types::{
     ThreadTranscript, ThreadTranscripts, ToolFailure, TranscriptMediaRef, TranscriptMessage,
     TranscriptMeta, TranscriptPart, TranscriptToolCall, TurnUsage, UsageCostSource,
 };
-#[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]
-pub(crate) use writer::write_transcript_with_tools;
 #[cfg(test)]
 pub(crate) use writer::{
     append_interrupted_partial, append_tools_record, append_transcript_turn, write_transcript,

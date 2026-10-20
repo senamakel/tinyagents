@@ -37,9 +37,12 @@ tracing = "0.1"
 # Storage ports from tinystoragedrivers, taken by git tag: the same source every
 # module (tinyflows, tinybox, tinychannels, ...) and tinyinference names, so a
 # host's graph holds one set of port types with no [patch] to reconcile them.
-tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-file = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-sqlite = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+tinystoragedrivers-types = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-api = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-testkit = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-document = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", features = ["sqlite", "file"] }
+tinystoragedrivers-connect = { version = "2.0.1", git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1", features = ["sqlite"] }
+tinyagents-storage-kit = { path = "crates/tinyagents-storage-kit" }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]

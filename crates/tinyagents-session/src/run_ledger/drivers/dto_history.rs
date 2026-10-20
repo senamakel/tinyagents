@@ -7,7 +7,7 @@
 use super::dto::{Stored, from_ms, from_ms_opt, stored_as_is, to_ms};
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_core::StorageError;
+use tinystoragedrivers_types::StorageError;
 
 /// `history.sessions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

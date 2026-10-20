@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition,
     Query, Repo, StorageError, UPDATED_FIELD, Versioned, WriteOptions,
 };
@@ -111,8 +111,8 @@ impl DriverCompletionStore {
             .index(IndexSpec::new("by_state", ["state"]))
     }
 
-    /// Declares the backing collection eagerly so a host can decide whether to
-    /// keep this durable store or fall back to memory before accepting work.
+    /// Declares the backing collection eagerly so an unavailable backend is
+    /// reported before the host accepts work.
     pub fn declare_collections(&self) -> Result<()> {
         let this = self.clone();
         self.run(async move { this.declare().await })
@@ -231,7 +231,7 @@ impl CompletionStore for DriverCompletionStore {
                     .await
                 {
                     Ok(removed) => dropped += usize::from(removed),
-                    Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                    Err(error) if error.kind() == tinyagents_storage_kit::ErrorKind::Conflict => {}
                     Err(error) => return Err(map_error(error)),
                 }
             }

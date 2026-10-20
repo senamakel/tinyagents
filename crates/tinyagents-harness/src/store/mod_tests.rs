@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use super::*;
 use serde_json::json;
+use tinystoragedrivers_testkit::MemoryBackend;
 
 #[tokio::test]
 async fn in_memory_store_put_get_delete() {
@@ -207,8 +208,10 @@ async fn in_memory_append_unbounded_by_default() {
 
 #[tokio::test]
 async fn read_window_returns_a_bounded_slice_for_both_backends() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
-    let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    use tinyagents_storage_kit::{Scope, StorageBackend};
+    let scoped = MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap();
     let driver = DriverAppendStore::new(Arc::clone(scoped.streams()));
     let memory = InMemoryAppendStore::new();
     for n in 0..5 {

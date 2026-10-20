@@ -37,7 +37,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     DocumentStore, DocumentStoreExt, ErrorKind, Filter, Leases, Query, Repo, Sort, StorageError,
     Versioned, WriteOptions,
 };
@@ -139,9 +139,8 @@ impl<State> DriverCheckpointer<State> {
         &self.ns
     }
 
-    /// The `tsd.leases` owner and key of `thread`'s execution lease, for a host
-    /// that wants the lease's epoch as a write fence
-    /// (`Leases::current(owner, key)` then `Lease::fence`).
+    /// The `tsd.leases` owner and key of `thread`'s execution lease. A host may
+    /// use these identifiers with its own conditional-write policy.
     pub fn lease_key(&self, thread: &str) -> (&'static str, String) {
         (LEASE_OWNER, lease_key(&self.ns, thread))
     }

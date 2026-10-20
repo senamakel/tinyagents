@@ -22,7 +22,7 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
 use crate::driver_store::DriverTaskStore;
-use crate::store::{InMemoryTaskStore, TaskStore};
+use crate::store::TaskStore;
 
 /// Why a registry lookup could not complete.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,10 +55,9 @@ pub struct TaskStoreRegistry<K: Eq + Hash + Clone + Send + Sync> {
 impl<K: Eq + Hash + Clone + Send + Sync> TaskStoreRegistry<K> {
     /// Builds a registry that opens missing stores with `open`.
     ///
-    /// `open` is infallible by design: a store that cannot be made durable
-    /// should degrade to an in-memory one rather than take the caller's
-    /// orchestration surface down with it. See
-    /// [`open_driver_task_store_or_memory`].
+    /// `open` returns the store implementation selected by the host for each
+    /// scope. Hosts that require durable storage should open it through
+    /// [`open_driver_task_store`] before inserting it into this registry.
     pub fn new(open: impl Fn(&K) -> Arc<dyn TaskStore> + Send + Sync + 'static) -> Self {
         Self {
             stores: Mutex::new(HashMap::new()),
@@ -147,32 +146,18 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for TaskStoreRegistry<K
     }
 }
 
-/// Opens a durable [`DriverTaskStore`] over `docs`, degrading to an in-memory store.
-///
-/// A failure to start the store's bridge thread or to declare its collections
-/// yields an [`InMemoryTaskStore`] instead of an error: losing durability across
-/// a restart is a far smaller harm than refusing to run orchestration at all, so
-/// a host whose backend is briefly unavailable can still spawn work.
-pub fn open_driver_task_store_or_memory(
-    docs: Arc<dyn tinystoragedrivers_core::DocumentStore>,
-) -> Arc<dyn TaskStore> {
-    let store = match DriverTaskStore::new(docs) {
-        Ok(store) => store,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "[orchestration] durable task store unavailable; falling back to memory"
-            );
-            return Arc::new(InMemoryTaskStore::new());
-        }
-    };
-    // Declare eagerly so an unusable backend degrades now, not at first use.
-    if let Err(err) = store.declare_collections() {
-        tracing::warn!(
-            error = %err,
-            "[orchestration] durable task store unavailable; falling back to memory"
-        );
-        return Arc::new(InMemoryTaskStore::new());
-    }
-    Arc::new(store)
+/// Opens a durable [`DriverTaskStore`] after applying this owner's migrations
+/// to the already scope-bound storage handle.
+pub async fn open_driver_task_store(
+    storage: tinyagents_storage_kit::ScopedStorage,
+) -> tinyagents_harness::error::Result<Arc<dyn TaskStore>> {
+    crate::open_storage(storage.clone())
+        .await
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    let store = DriverTaskStore::new(Arc::clone(storage.documents()))
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    store
+        .declare_collections()
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    Ok(Arc::new(store))
 }

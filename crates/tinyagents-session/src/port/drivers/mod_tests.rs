@@ -1,21 +1,37 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
-use tinystoragedrivers_core::MemoryStorage;
-use tinystoragedrivers_file::FileStorage;
-use tinystoragedrivers_sqlite::SqliteStorage;
+use tinystoragedrivers_api::StorageBackend;
+
+fn storage_factory(backend: Arc<dyn StorageBackend>) -> AgentStorageFactory {
+    let bindings = [
+        ("plain", "test-bound-plain"),
+        ("a", "test-bound-a"),
+        ("b", "test-bound-b"),
+        ("agent", "test-bound-agent"),
+        ("agent-1", "test-bound-agent-1"),
+        ("other", "test-bound-other"),
+        ("alice", "test-bound-alice"),
+        ("bob", "test-bound-bob"),
+        ("prepared-actor", "test-bound-prepared-actor"),
+        ("contract-store-agent", "test-bound-contract-store"),
+        ("contract-iso-a", "test-bound-contract-iso-a"),
+        ("contract-iso-b", "test-bound-contract-iso-b"),
+    ]
+    .into_iter()
+    .map(|(agent, label)| (agent.to_owned(), Scope::new(label).unwrap()))
+    .collect();
+    crate::testkit::mapped_storage_factory(backend, bindings)
+}
 
 fn memory() -> DriverSessionStores {
-    DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        tinystoragedrivers_core::Scope::local(),
-    )
-    .unwrap()
+    DriverSessionStores::new(storage_factory(Arc::new(MemoryStorage::new()))).unwrap()
 }
 
 #[test]
 fn bootstrap_manifest_contains_all_session_document_indexes() {
-    use tinystoragedrivers_core::IndexSpec;
+    use tinystoragedrivers_types::IndexSpec;
     let specs = DriverSessionStores::collection_specs();
     assert_eq!(specs.len(), 5);
     assert_eq!(specs[0].name, "session.transcript_entries");
@@ -30,9 +46,9 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
     assert_eq!(
         specs[1].indexes,
         vec![
-            IndexSpec::new("by_thread", ["thread_id", "_created_ms"]),
-            IndexSpec::new("by_agent_name", ["agent_name", "_created_ms"]),
-            IndexSpec::new("by_agent_id", ["agent_id", "_created_ms"]),
+            IndexSpec::new("by_thread", ["thread_id", "created_ms"]),
+            IndexSpec::new("by_agent_name", ["agent_name", "created_ms"]),
+            IndexSpec::new("by_agent_id", ["agent_id", "created_ms"]),
         ]
     );
     assert_eq!(specs[2].name, "session.turn_states");
@@ -51,13 +67,11 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
 
 #[tokio::test]
 async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data() {
-    let directory = tempfile::tempdir().unwrap();
-    let backends: Vec<Arc<dyn StorageBackend>> = vec![
-        Arc::new(MemoryStorage::new()),
-        Arc::new(SqliteStorage::open(directory.path().join("prepared.db")).unwrap()),
-    ];
-    for backend in backends {
-        let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    {
+        let scoped = backend
+            .for_scope(&Scope::new("host-prepared-test").unwrap())
+            .unwrap();
         DriverSessionStores::prepare_schema(scoped.documents().as_ref())
             .await
             .unwrap();
@@ -67,7 +81,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
                 "tsd.kv",
                 "bootstrap-control",
                 serde_json::json!({"owner": "session", "ns": "control", "key": "k", "value": "retained"}),
-                tinystoragedrivers_core::Precondition::Absent,
+                tinystoragedrivers_types::Precondition::Absent,
             )
             .await
             .unwrap();
@@ -84,16 +98,10 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
                 .doc["value"],
             "retained"
         );
-        let provider =
-            DriverSessionStores::new(backend, tinystoragedrivers_core::Scope::local()).unwrap();
+        let provider = DriverSessionStores::new(storage_factory(Arc::clone(&backend))).unwrap();
         session_store_conformance(&provider).await;
         session_store_isolation_conformance(&provider).await;
     }
-}
-
-fn sqlite(dir: &tempfile::TempDir) -> DriverSessionStores {
-    let storage = SqliteStorage::open(dir.path().join("sessions.db")).unwrap();
-    DriverSessionStores::new(Arc::new(storage), tinystoragedrivers_core::Scope::local()).unwrap()
 }
 
 #[tokio::test]
@@ -104,30 +112,6 @@ async fn memory_backed_stores_meet_the_session_store_contract() {
 #[tokio::test]
 async fn memory_backed_stores_keep_agents_apart() {
     session_store_isolation_conformance(&memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_backed_stores_meet_the_session_store_contract() {
-    let dir = tempfile::tempdir().unwrap();
-    session_store_conformance(&sqlite(&dir)).await;
-}
-
-#[tokio::test]
-async fn sqlite_backed_stores_keep_agents_apart() {
-    let dir = tempfile::tempdir().unwrap();
-    session_store_isolation_conformance(&sqlite(&dir)).await;
-}
-
-#[tokio::test]
-async fn file_backed_stores_meet_the_contract_and_keep_agents_apart() {
-    let dir = tempfile::tempdir().unwrap();
-    let stores = DriverSessionStores::new(
-        Arc::new(FileStorage::open(dir.path()).unwrap()),
-        tinystoragedrivers_core::Scope::local(),
-    )
-    .unwrap();
-    session_store_conformance(&stores).await;
-    session_store_isolation_conformance(&stores).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -144,72 +128,27 @@ fn stores_work_outside_any_runtime() {
 }
 
 #[test]
-fn an_agent_is_stored_under_its_principal_of_the_tenant() {
-    let provider = memory();
-    assert_eq!(provider.tenant(), &Scope::local());
-    assert_eq!(
-        provider.scope_for("agent-7").unwrap().as_str(),
-        "local/agent:agent-7"
-    );
-    let tenant = Scope::tenant("alice").unwrap();
-    let provider =
-        DriverSessionStores::new(Arc::new(MemoryStorage::new()), tenant.clone()).unwrap();
-    assert_eq!(
-        provider.scope_for("agent-7").unwrap().as_str(),
-        "u:alice/agent:agent-7"
-    );
-    assert_eq!(
-        provider.scope_for("agent-7").unwrap().tenant_scope(),
-        Some(tenant)
-    );
-}
-
-#[test]
-fn an_agent_id_outside_the_segment_grammar_is_hashed_under_its_tenant() {
-    let provider = memory();
-    let spaced = provider.scope_for("has a space").unwrap();
-    assert!(spaced.as_str().starts_with("local/agent:~"), "{spaced}");
-    assert_eq!(spaced, provider.scope_for("has a space").unwrap());
-    assert_ne!(spaced, provider.scope_for("has  a space").unwrap());
-    let long = "a".repeat(300);
-    assert!(
-        provider
-            .scope_for(&long)
-            .unwrap()
-            .as_str()
-            .starts_with("local/agent:~")
-    );
-    assert_eq!(spaced.tenant_scope(), Some(Scope::local()));
-}
-
-#[test]
-fn an_empty_agent_id_has_no_scope() {
-    let provider = memory();
-    assert!(provider.scope_for("").is_err());
-    assert!(provider.try_for_agent("").is_err());
-}
-
-#[test]
-fn a_provider_needs_a_tenant_scope() {
-    for scope in [Scope::cluster(), Scope::local().agent("someone").unwrap()] {
-        let error =
-            DriverSessionStores::new(Arc::new(MemoryStorage::new()), scope.clone()).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            tinystoragedrivers_core::ErrorKind::InvalidInput
-        );
-    }
-}
-
-#[test]
-fn two_tenants_on_one_backend_never_see_each_others_agents() {
+fn host_bound_factory_keeps_agents_in_their_supplied_scopes() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let alice = DriverSessionStores::new(Arc::clone(&backend), Scope::tenant("alice").unwrap())
-        .unwrap()
-        .for_agent("a");
-    let bob = DriverSessionStores::new(backend, Scope::tenant("bob").unwrap())
-        .unwrap()
-        .for_agent("a");
+    let bindings = [
+        (
+            "agent-a".to_owned(),
+            Scope::new("host-selected-alpha").unwrap(),
+        ),
+        (
+            "agent-b".to_owned(),
+            Scope::new("host-selected-beta").unwrap(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let provider = DriverSessionStores::new(crate::testkit::mapped_storage_factory(
+        Arc::clone(&backend),
+        bindings,
+    ))
+    .unwrap();
+    let alice = provider.for_agent("agent-a");
+    let bob = provider.for_agent("agent-b");
     alice
         .turn_states
         .put(&TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z"))
@@ -244,11 +183,10 @@ fn an_agent_gets_the_same_stores_every_time() {
     );
     let debug = format!("{provider:?}");
     assert!(debug.contains("agents: 2"), "{debug}");
-    assert!(debug.contains("memory"), "{debug}");
     assert!(
         provider
             .destination_key()
-            .is_some_and(|key| key.starts_with("memory://"))
+            .is_some_and(|key| key.starts_with("storage://"))
     );
 }
 
@@ -256,16 +194,16 @@ fn an_agent_gets_the_same_stores_every_time() {
 fn data_survives_a_new_provider_on_the_same_backend() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let turn = TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z");
-    DriverSessionStores::new(
+    DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::clone(&backend),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap()
     .for_agent("a")
     .turn_states
     .put(&turn)
     .unwrap();
-    let reopened = DriverSessionStores::new(backend, tinystoragedrivers_core::Scope::local())
+    let reopened = DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "local"))
         .unwrap()
         .for_agent("a");
     assert_eq!(reopened.turn_states.get("t").unwrap(), Some(turn));
@@ -289,10 +227,10 @@ fn recover_marks_open_agents_turns_interrupted() {
 #[test]
 fn recover_on_open_interrupts_turns_an_earlier_process_left() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let earlier = DriverSessionStores::new(
+    let earlier = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::clone(&backend),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap();
     earlier
         .for_agent("a")
@@ -300,10 +238,10 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
         .put(&TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z"))
         .unwrap();
 
-    let plain = DriverSessionStores::new(
+    let plain = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::clone(&backend),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap();
     assert_eq!(
         plain
@@ -317,9 +255,10 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
         "without the option nothing is touched"
     );
 
-    let recovering = DriverSessionStores::new(backend, tinystoragedrivers_core::Scope::local())
-        .unwrap()
-        .recover_on_open(true);
+    let recovering =
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "local"))
+            .unwrap()
+            .recover_on_open(true);
     assert!(format!("{recovering:?}").contains("recover_on_open: true"));
     let stores = recovering.for_agent("a");
     assert_eq!(
@@ -350,25 +289,21 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
 struct Unbindable;
 
 impl StorageBackend for Unbindable {
-    fn driver(&self) -> &'static str {
-        "unbindable"
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        tinystoragedrivers_types::Capabilities::default()
     }
 
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
-        tinystoragedrivers_core::Capabilities::default()
-    }
-
-    fn for_scope(&self, _scope: &Scope) -> Result<ScopedStorage, StorageError> {
+    fn for_scope(&self, _scope: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         Err(StorageError::unavailable("database is down"))
     }
 }
 
 #[tokio::test]
 async fn an_unbindable_scope_fails_closed() {
-    let provider = DriverSessionStores::new(
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::new(Unbindable),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap();
     assert!(provider.try_for_agent("a").is_err());
     let stores = provider.for_agent("a");
@@ -423,7 +358,7 @@ struct Flaky {
 
 #[derive(Debug)]
 struct FlakyDocs {
-    inner: Arc<dyn tinystoragedrivers_core::DocumentStore>,
+    inner: Arc<dyn tinystoragedrivers_api::DocumentStore>,
     down: Arc<std::sync::atomic::AtomicBool>,
     reject_declaration: bool,
 }
@@ -432,26 +367,22 @@ impl FlakyDocs {
     /// Injects a typed refusal while the recovery backend is unavailable.
     fn check(&self) -> Result<(), StorageError> {
         if self.down.load(std::sync::atomic::Ordering::SeqCst) {
-            Err(StorageError::unsupported(
-                tinystoragedrivers_core::Capability::Fencing,
-                "flaky backend is down",
-            )
-            .with_source(NativeFailure))
+            Err(StorageError::unavailable("flaky backend is down").with_source(NativeFailure))
         } else {
             Ok(())
         }
     }
 }
 
-#[tinystoragedrivers_core::async_trait]
-impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+#[async_trait::async_trait]
+impl tinystoragedrivers_api::DocumentStore for FlakyDocs {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     /// Fails declaration when selected, otherwise delegates the native schema operation.
     async fn ensure_collection(
         &self,
-        spec: &tinystoragedrivers_core::CollectionSpec,
+        spec: &tinystoragedrivers_types::CollectionSpec,
     ) -> Result<(), StorageError> {
         if self.reject_declaration {
             self.check()?;
@@ -462,7 +393,7 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
         &self,
         collection: &str,
         id: &str,
-    ) -> Result<Option<tinystoragedrivers_core::Versioned<serde_json::Value>>, StorageError> {
+    ) -> Result<Option<tinystoragedrivers_types::Versioned<serde_json::Value>>, StorageError> {
         self.inner.get(collection, id).await
     }
     async fn put(
@@ -470,8 +401,8 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
         collection: &str,
         id: &str,
         doc: serde_json::Value,
-        precondition: tinystoragedrivers_core::Precondition,
-    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        precondition: tinystoragedrivers_types::Precondition,
+    ) -> Result<tinystoragedrivers_types::Version, StorageError> {
         self.inner.put(collection, id, doc, precondition).await
     }
     async fn put_with(
@@ -479,9 +410,9 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
         collection: &str,
         id: &str,
         doc: serde_json::Value,
-        precondition: tinystoragedrivers_core::Precondition,
-        options: tinystoragedrivers_core::WriteOptions,
-    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        precondition: tinystoragedrivers_types::Precondition,
+        options: tinystoragedrivers_types::WriteOptions,
+    ) -> Result<tinystoragedrivers_types::Version, StorageError> {
         self.inner
             .put_with(collection, id, doc, precondition, options)
             .await
@@ -490,16 +421,16 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
         &self,
         collection: &str,
         id: &str,
-        precondition: tinystoragedrivers_core::Precondition,
+        precondition: tinystoragedrivers_types::Precondition,
     ) -> Result<bool, StorageError> {
         self.inner.delete(collection, id, precondition).await
     }
     async fn query(
         &self,
         collection: &str,
-        query: &tinystoragedrivers_core::Query,
+        query: &tinystoragedrivers_types::Query,
     ) -> Result<
-        tinystoragedrivers_core::Page<tinystoragedrivers_core::Versioned<serde_json::Value>>,
+        tinystoragedrivers_types::Page<tinystoragedrivers_types::Versioned<serde_json::Value>>,
         StorageError,
     > {
         self.check()?;
@@ -508,50 +439,55 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
     async fn count(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
+        filter: &tinystoragedrivers_types::Filter,
     ) -> Result<u64, StorageError> {
         self.inner.count(collection, filter).await
     }
     async fn delete_where(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
+        filter: &tinystoragedrivers_types::Filter,
     ) -> Result<u64, StorageError> {
         self.inner.delete_where(collection, filter).await
     }
     async fn claim(
         &self,
         collection: &str,
-        filter: &tinystoragedrivers_core::Filter,
-        sort: &[tinystoragedrivers_core::Sort],
+        filter: &tinystoragedrivers_types::Filter,
+        sort: &[tinystoragedrivers_types::Sort],
         patch: &serde_json::Value,
-    ) -> Result<Option<tinystoragedrivers_core::Versioned<serde_json::Value>>, StorageError> {
+    ) -> Result<Option<tinystoragedrivers_types::Versioned<serde_json::Value>>, StorageError> {
         self.inner.claim(collection, filter, sort, patch).await
     }
     async fn drop_collection(&self, collection: &str) -> Result<(), StorageError> {
         self.inner.drop_collection(collection).await
     }
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<tinystoragedrivers_types::ReadCheck>,
+        writes: Vec<tinystoragedrivers_types::WriteOp>,
+    ) -> Result<Vec<tinystoragedrivers_types::WriteResult>, StorageError> {
+        self.inner.atomic_batch_checked(checks, writes).await
+    }
 }
 
 impl StorageBackend for Flaky {
-    fn driver(&self) -> &'static str {
-        "flaky"
-    }
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.storage.capabilities()
     }
-    fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
-        let inner = self.storage.for_scope(scope)?;
-        Ok(ScopedStorage::new(
-            scope.clone(),
-            "flaky",
+    fn for_scope(&self, scope: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
+        let inner = tinystoragedrivers_api::StorageBackend::for_scope(&self.storage, scope)?;
+        Ok(tinyagents_storage_kit::Storage::new(
             Arc::new(FlakyDocs {
                 inner: Arc::clone(inner.documents()),
                 down: Arc::clone(&self.down),
                 reject_declaration: self.reject_declaration,
             }),
             Arc::clone(inner.streams()),
+            Arc::clone(inner.kv()),
             Arc::clone(inner.blobs()),
+            Arc::clone(inner.queues()),
+            Arc::clone(inner.secrets()),
         ))
     }
 }
@@ -559,14 +495,14 @@ impl StorageBackend for Flaky {
 #[test]
 fn a_failed_recovery_fails_closed_and_is_retried() {
     let down = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let provider = DriverSessionStores::new(
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::new(Flaky {
             storage: MemoryStorage::new(),
             down: Arc::clone(&down),
             reject_declaration: false,
         }),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap()
     .recover_on_open(true);
 
@@ -611,43 +547,27 @@ impl std::fmt::Display for NativeFailure {
 }
 impl std::error::Error for NativeFailure {}
 
-#[derive(Debug)]
-struct NativeRefusal {
-    marker: Arc<NativeFailure>,
-}
-impl StorageBackend for NativeRefusal {
-    /// Names the scope-refusing fixture backend.
-    fn driver(&self) -> &'static str {
-        "native-refusal"
-    }
-    /// Advertises no optional native capabilities.
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
-        Default::default()
-    }
-    /// Refuses admission with the same source Arc supplied by the test.
-    fn for_scope(&self, _: &Scope) -> Result<ScopedStorage, StorageError> {
-        Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
-    }
-}
-
 #[test]
 /// Pins native scope error and source identity through object-safe checked opening.
 fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
     use std::error::Error;
     let marker = Arc::new(NativeFailure);
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(
-        DriverSessionStores::new(
-            Arc::new(NativeRefusal {
-                marker: marker.clone(),
-            }),
-            tinystoragedrivers_core::Scope::local(),
-        )
+        DriverSessionStores::new({
+            let marker = marker.clone();
+            Arc::new(move |_| {
+                Err(StorageError::unavailable("scope rejected").with_source(marker.clone()))
+            })
+        })
         .unwrap(),
     );
     // Unusual keys get the hashed principal segment, and are refused alike.
     for key in ["agent", "unusual key", "sha256:reserved"] {
         let error = provider.try_for_agent(key).unwrap_err();
-        assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+        assert_eq!(
+            error.kind(),
+            tinystoragedrivers_types::ErrorKind::Unavailable
+        );
         let source = error
             .source()
             .unwrap()
@@ -662,22 +582,20 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
 fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
     use std::error::Error;
     let down = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let provider = DriverSessionStores::new(
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::new(Flaky {
             storage: MemoryStorage::new(),
             down: down.clone(),
             reject_declaration: false,
         }),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap()
     .recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
     assert_eq!(
         error.kind(),
-        tinystoragedrivers_core::ErrorKind::Unsupported(
-            tinystoragedrivers_core::Capability::Fencing
-        )
+        tinystoragedrivers_types::ErrorKind::Unavailable
     );
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
@@ -692,22 +610,20 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
 /// Pins native declaration errors before turn recovery can proceed.
 fn checked_open_preserves_native_recovery_declaration_refusal() {
     use std::error::Error;
-    let provider = DriverSessionStores::new(
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
         Arc::new(Flaky {
             storage: MemoryStorage::new(),
             down: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             reject_declaration: true,
         }),
-        tinystoragedrivers_core::Scope::local(),
-    )
+        "local",
+    ))
     .unwrap()
     .recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
     assert_eq!(
         error.kind(),
-        tinystoragedrivers_core::ErrorKind::Unsupported(
-            tinystoragedrivers_core::Capability::Fencing
-        )
+        tinystoragedrivers_types::ErrorKind::Unavailable
     );
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
@@ -719,12 +635,19 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     use std::error::Error;
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_core::Scope::local()).unwrap(),
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+            backend.clone(),
+            "local",
+        ))
+        .unwrap(),
     );
     let first = provider.try_for_agent("agent").unwrap();
     let cached = provider.try_for_agent("agent").unwrap();
     assert!(Arc::ptr_eq(&first.turn_states, &cached.turn_states));
-    let rebound = provider.bind_actor(backend).unwrap().unwrap();
+    let rebound = provider
+        .bind_actor(crate::testkit::fixed_scope_factory(backend, "local"))
+        .unwrap()
+        .unwrap();
     let independent = rebound.try_for_agent("agent").unwrap();
     assert!(!Arc::ptr_eq(&first.turn_states, &independent.turn_states));
     first
@@ -744,9 +667,12 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
 
     let marker = Arc::new(NativeFailure);
     let refused = provider
-        .bind_actor(Arc::new(NativeRefusal {
-            marker: marker.clone(),
-        }))
+        .bind_actor({
+            let marker = marker.clone();
+            Arc::new(move |_| {
+                Err(StorageError::unavailable("scope rejected").with_source(marker.clone()))
+            })
+        })
         .unwrap()
         .unwrap();
     let error = refused.try_for_agent("agent").unwrap_err();
@@ -766,9 +692,8 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
 
 #[tokio::test]
 async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independently() {
-    let backend = Arc::new(tinystoragedrivers_core::MemoryStorage::new());
     let provider =
-        DriverSessionStores::new(backend, tinystoragedrivers_core::Scope::local()).unwrap();
+        DriverSessionStores::new(storage_factory(Arc::new(MemoryStorage::new()))).unwrap();
     let one = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     let same = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     assert!(Arc::ptr_eq(&one, &same));
@@ -791,7 +716,7 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
         0
     );
     let actor = provider
-        .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+        .bind_actor(storage_factory(Arc::new(MemoryStorage::new())))
         .unwrap()
         .unwrap();
     let rebound = actor.run_ledger_for_agent("alice").unwrap().unwrap();
@@ -810,19 +735,15 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
 }
 
 async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
-    backend.prepare_schema().await.unwrap();
-    let bootstrap = backend.for_scope(&Scope::local()).unwrap();
+    let factory = storage_factory(Arc::clone(&backend));
+    let bootstrap = factory("prepared-actor").unwrap();
     DriverSessionStores::prepare_schema(bootstrap.documents().as_ref())
         .await
         .unwrap();
-    let restricted = backend.existing_schema().unwrap();
-    let actor = DriverSessionStores::new_with_schema_admission(
-        restricted,
-        tinystoragedrivers_core::Scope::local(),
-        SchemaAdmission::ValidateOnly,
-    )
-    .unwrap()
-    .recover_on_open(true);
+    let actor =
+        DriverSessionStores::new_with_schema_admission(factory, SchemaAdmission::ValidateOnly)
+            .unwrap()
+            .recover_on_open(true);
     let opened = actor.try_for_agent("prepared-actor");
     assert!(
         opened.is_ok(),
@@ -839,19 +760,9 @@ async fn prepared_restricted_actor_recovers_and_uses_memory_stores() {
 }
 
 #[tokio::test]
-async fn prepared_restricted_actor_recovers_and_uses_sqlite_stores() {
-    let directory = tempfile::tempdir().unwrap();
-    prepared_restricted_actor_contract(Arc::new(
-        SqliteStorage::open(directory.path().join("prepared-actor.db")).unwrap(),
-    ))
-    .await;
-}
-
-#[tokio::test]
 async fn the_journal_lives_in_the_harness_journal_stream_family() {
-    let backend = Arc::new(MemoryStorage::new());
-    let provider =
-        DriverSessionStores::new(backend.clone(), tinystoragedrivers_core::Scope::local()).unwrap();
+    let backend = MemoryStorage::new();
+    let provider = DriverSessionStores::new(storage_factory(Arc::new(backend.clone()))).unwrap();
     let stores = provider.for_agent("agent-1");
     stores
         .journal
@@ -860,7 +771,7 @@ async fn the_journal_lives_in_the_harness_journal_stream_family() {
         .unwrap();
 
     let scoped = backend
-        .for_scope(&provider.scope_for("agent-1").unwrap())
+        .for_scope(&Scope::new("test-bound-agent-1").unwrap())
         .unwrap();
     assert_eq!(
         scoped.streams().streams("").await.unwrap(),

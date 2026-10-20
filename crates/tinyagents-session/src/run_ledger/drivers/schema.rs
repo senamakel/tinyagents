@@ -24,7 +24,7 @@
 use super::storage::{
     EVENT_STREAM, HISTORY_OWNER, LEDGER_OWNER, SCHEMA_VERSION, history_specs, ledger_specs,
 };
-use tinystoragedrivers_core::{Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 
 /// What the run ledger stores (owner `ledger`, scope class Agent), with the
 /// steps that bring the v1 names and shapes forward.

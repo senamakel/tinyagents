@@ -8,9 +8,10 @@ use crate::testkit::conformance::{
 };
 use serde::Serialize;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
+use tinyagents_storage_kit::{Precondition, Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
-fn docs(storage: &MemoryStorage, scope: &str) -> Arc<dyn DocumentStore> {
+fn docs(storage: &MemoryBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
         storage
             .for_scope(&Scope::new(scope).unwrap())
@@ -26,7 +27,7 @@ fn sample(thread: &str, id: &str, _parent: Option<&str>, step: i32) -> Checkpoin
 }
 
 fn checkpointer() -> DriverCheckpointer<i32> {
-    DriverCheckpointer::new(docs(&MemoryStorage::new(), "local"))
+    DriverCheckpointer::new(docs(&MemoryBackend::new(), "local"))
 }
 
 #[tokio::test]
@@ -51,7 +52,7 @@ async fn passes_the_concurrent_contract() {
 
 #[tokio::test]
 async fn scopes_and_namespaces_keep_threads_apart() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let alice = DriverCheckpointer::<i32>::new(docs(&storage, "alice"));
     let bob = DriverCheckpointer::<i32>::new(docs(&storage, "bob"));
     let other = DriverCheckpointer::<i32>::with_namespace(docs(&storage, "alice"), "other");
@@ -197,7 +198,7 @@ fn driver_failures_are_checkpoint_errors() {
 
 #[tokio::test]
 async fn a_corrupt_record_is_a_checkpoint_error() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs(&storage, "local");
     let cp = DriverCheckpointer::<i32>::new(Arc::clone(&docs));
     cp.put(sample("t", "c1", None, 1)).await.unwrap();
@@ -233,7 +234,7 @@ impl<'de> serde::Deserialize<'de> for CountedState {
 #[tokio::test]
 async fn list_and_limited_history_decode_only_what_they_return() {
     use std::sync::atomic::Ordering;
-    let cp = DriverCheckpointer::<CountedState>::new(docs(&MemoryStorage::new(), "local"));
+    let cp = DriverCheckpointer::<CountedState>::new(docs(&MemoryBackend::new(), "local"));
     let mut parent: Option<String> = None;
     for step in 0..40 {
         let id = format!("c{step}");
@@ -295,7 +296,7 @@ async fn put_with_writes_persists_the_checkpoint_and_its_writes() {
 
 #[tokio::test]
 async fn documents_are_v2_bodies_with_the_namespace_in_ids_and_fields() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs(&storage, "local");
     let delegation = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "delegation");
     let flows = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "flows");
@@ -333,12 +334,12 @@ async fn documents_are_v2_bodies_with_the_namespace_in_ids_and_fields() {
 
 #[tokio::test]
 async fn the_lease_lives_in_tsd_leases_and_its_epoch_moves_on_every_new_tenure() {
-    let storage = MemoryStorage::new();
+    let storage = MemoryBackend::new();
     let docs = docs(&storage, "local");
     let cp = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "flows");
     let minute = Duration::from_secs(60);
     let (owner, key) = cp.lease_key("t");
-    let leases = tinystoragedrivers_core::Leases::new(&docs);
+    let leases = tinyagents_storage_kit::Leases::new(&docs);
 
     assert!(cp.try_claim("t", "a", minute).await.unwrap());
     let first = leases.current(owner, &key).await.unwrap().unwrap();

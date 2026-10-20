@@ -1,6 +1,7 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
+use tinyagents_storage_kit::{Precondition, Scope, WriteOptions};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
@@ -18,7 +19,12 @@ fn message(role: &str, content: &str) -> TranscriptMessage {
 
 fn docs() -> Arc<dyn DocumentStore> {
     let storage = MemoryStorage::new();
-    Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents())
+    Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    )
 }
 
 fn locator(docs: &Arc<dyn DocumentStore>) -> DriverTranscriptLocator {
@@ -365,15 +371,17 @@ fn lookups_find_the_newest_written_root() {
     let _unwritten = locator.open_stem("never", meta("t")).unwrap();
     assert!(locator.root_for_thread("t").is_none());
 
+    let mut old_meta = meta("t");
+    old_meta.created = "2026-01-01T00:00:00Z".into();
     locator
-        .open_stem("old", meta("t"))
+        .open_stem("old", old_meta)
         .unwrap()
         .append(message("user", "old"))
         .unwrap();
-    // Creation time is kept in whole milliseconds.
-    std::thread::sleep(std::time::Duration::from_millis(3));
+    let mut new_meta = meta("t");
+    new_meta.created = "2026-01-02T00:00:00Z".into();
     locator
-        .open_stem("new", meta("t"))
+        .open_stem("new", new_meta)
         .unwrap()
         .append(message("user", "new"))
         .unwrap();
@@ -400,6 +408,55 @@ fn lookups_find_the_newest_written_root() {
     assert_eq!(
         locator.handle("new", meta("t")).partials().unwrap().len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn migrated_roots_keep_their_historical_creation_order() {
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("legacy-session-order").unwrap();
+    let storage = backend.for_scope(&scope).unwrap();
+    let docs = storage.documents();
+
+    // These are v1 session_transcripts rows. Their source ids deliberately
+    // make the newer record migrate first, opposite to their historical time.
+    for (id, stem, created_at) in [
+        ("0:newer", "newer", "2026-02-01T00:00:00Z"),
+        ("1:older", "older", "2026-01-01T00:00:00Z"),
+    ] {
+        docs.put_with(
+            "session_transcripts",
+            id,
+            json!({
+                "stem": stem,
+                "subagent": false,
+                "written": true,
+                "thread_id": "legacy-thread",
+                "agent_id": "planner",
+                "agent_name": "planner",
+                "indexed_seq": 1,
+                "created_at": created_at,
+            }),
+            Precondition::None,
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    crate::port::drivers::open_agent_storage(&storage)
+        .await
+        .unwrap();
+    let locator = DriverTranscriptLocator::new(
+        Arc::clone(docs),
+        Blocking::new().unwrap(),
+        "legacy-migration-order",
+    );
+
+    assert_eq!(
+        locator.root_for_thread("legacy-thread").unwrap().path(),
+        Path::new("legacy-migration-order/newer"),
+        "root selection follows the v1 created_at value, not the target write order"
     );
 }
 
@@ -431,7 +488,7 @@ fn ids_are_unambiguous_and_bounded() {
     let long = "x".repeat(1_000);
     let hashed = index_id(&long).unwrap();
     assert!(hashed.starts_with('~') && hashed.len() == 53, "{hashed}");
-    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_core::MAX_ID_LEN);
+    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_types::MAX_ID_LEN);
     assert!(is_subagent("parent__child"));
     assert!(!is_subagent("__child"));
     assert!(!is_subagent("plain"));
@@ -481,8 +538,9 @@ fn the_index_keeps_its_creation_time() {
     let (first, second) = (first.unwrap(), second.unwrap());
     assert!(
         first.doc.get("created_at").is_none(),
-        "the time is metadata"
+        "the legacy source field is normalized"
     );
+    assert_eq!(first.doc["created_ms"], 1_767_225_600_000_i64);
     assert!(first.meta.created_ms > 0);
     assert_eq!(first.meta.created_ms, second.meta.created_ms);
     assert!(second.meta.updated_ms >= first.meta.updated_ms);

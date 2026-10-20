@@ -1,11 +1,12 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::{
-    Kv, MemoryStorage, Migrations, Precondition, Scope, ScopedStorage, StorageBackend,
-};
+use tinyagents_storage_kit::{Kv, Migrations, Precondition, Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn scoped() -> ScopedStorage {
-    MemoryStorage::new().for_scope(&Scope::local()).unwrap()
+    MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap()
 }
 
 async fn seed(storage: &ScopedStorage, collection: &str, id: &str, body: serde_json::Value) {
@@ -51,7 +52,7 @@ async fn a_flat_v1_store_moves_into_tsd_kv_with_the_value_unwrapped() {
     );
     let left = storage
         .documents()
-        .count("harness_store", &tinystoragedrivers_core::Filter::default())
+        .count("harness_store", &tinyagents_storage_kit::Filter::default())
         .await
         .unwrap();
     assert_eq!(left, 0, "the v1 rows are removed once copied");

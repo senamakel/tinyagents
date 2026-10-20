@@ -1,6 +1,14 @@
 //! Tests for the media generation tools.
 
 use std::sync::Arc;
+use tinyagents_storage_kit::Scope;
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_testkit::memory_storage;
+
+fn media_output(root: impl Into<std::path::PathBuf>) -> MediaOutput {
+    let scope = Scope::new("local").expect("valid scope");
+    MediaOutput::new(root, memory_storage(&scope).blobs().clone())
+}
 use std::time::Duration;
 
 use serde_json::json;
@@ -139,7 +147,7 @@ impl VideoGenerator for WebmVideoGenerator {
 async fn image_tool_stores_blobs_and_reports_their_keys() {
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(MockImageGenerator::new());
-    let output = MediaOutput::new("/nonexistent");
+    let output = media_output("/nonexistent");
     let tool =
         GenerateImageTool::new(generator.clone(), output.clone()).with_name("media_generate_image");
     let result = tool
@@ -180,7 +188,7 @@ async fn billed_non_delivery_tells_the_model_not_to_retry() {
     let dir = tempfile::tempdir().unwrap();
     let tool = GenerateImageTool::new(
         Arc::new(MockImageGenerator::returning_no_media()),
-        MediaOutput::new(dir.path()),
+        media_output(dir.path()),
     );
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error);
@@ -194,10 +202,7 @@ async fn billed_non_delivery_tells_the_model_not_to_retry() {
 
 #[tokio::test]
 async fn image_tool_requires_a_prompt() {
-    let tool = GenerateImageTool::new(
-        Arc::new(MockImageGenerator::new()),
-        MediaOutput::new("/tmp"),
-    );
+    let tool = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), media_output("/tmp"));
     let result = tool.execute(json!({})).await.unwrap();
     assert!(result.is_error);
 }
@@ -211,7 +216,7 @@ async fn references_resolve_inside_the_workspace_and_are_confined_to_it() {
     std::fs::write(art_dir.join("ref.png"), b"fake image").unwrap();
 
     let generator = Arc::new(MockImageGenerator::new());
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"));
+    let tool = GenerateImageTool::new(generator.clone(), media_output("/nonexistent"));
     let context = workspace(dir.path());
 
     let result = tool
@@ -286,7 +291,7 @@ async fn symlinked_references_cannot_escape_the_workspace() {
     std::os::unix::fs::symlink(&outside, workspace_dir.path().join("escape.png")).unwrap();
 
     let generator = Arc::new(MockImageGenerator::new());
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"));
+    let tool = GenerateImageTool::new(generator.clone(), media_output("/nonexistent"));
     let result = tool
         .execute_with_context(
             json!({ "prompt": "x", "references": ["escape.png"] }),
@@ -309,7 +314,7 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
 
     // Test 1: a policy that rejects all references. Since the custom policy is
     // called after canonicalize, it rejects the canonical path.
-    let output = MediaOutput::new("/nonexistent").with_reference_policy(Arc::new(|path| {
+    let output = media_output("/nonexistent").with_reference_policy(Arc::new(|path| {
         Err(format!("host refused {}", path.display()))
     }));
     let tool = GenerateImageTool::new(generator.clone(), output);
@@ -331,7 +336,7 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
     let reference = outside.path().join("ref2.png");
     std::fs::write(&reference, b"fake").unwrap();
     let output =
-        MediaOutput::new(dir.path()).with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
+        media_output(dir.path()).with_reference_policy(Arc::new(|path| Ok(path.to_path_buf())));
     let tool = GenerateImageTool::new(generator, output);
     let result = tool
         .execute(json!({ "prompt": "x", "references": [reference] }))
@@ -368,7 +373,7 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
         ],
         error: None,
     }));
-    let output = MediaOutput::new(dir.path());
+    let output = media_output(dir.path());
     let tool = GenerateVideoTool::new(generator.clone(), output.clone()).with_wait_policy(fast());
     let result = tool
         .execute(json!({
@@ -400,7 +405,7 @@ fn text_response(text: &str) -> ModelResponse {
 #[tokio::test]
 async fn video_tool_preserves_delivered_media_extension() {
     let dir = tempfile::tempdir().unwrap();
-    let output = MediaOutput::new(dir.path());
+    let output = media_output(dir.path());
     let tool = GenerateVideoTool::new(Arc::new(WebmVideoGenerator), output.clone());
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
 
@@ -420,7 +425,7 @@ async fn video_timeout_names_the_job_and_resume_collects_it() {
         error: None,
     }));
     let tool =
-        GenerateVideoTool::new(generator.clone(), MediaOutput::new(dir.path())).with_wait_policy(
+        GenerateVideoTool::new(generator.clone(), media_output(dir.path())).with_wait_policy(
             WaitPolicy::new(Duration::from_millis(1), Duration::from_millis(10)),
         );
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
@@ -432,7 +437,7 @@ async fn video_timeout_names_the_job_and_resume_collects_it() {
     );
 
     let delivered = Arc::new(MockVideoGenerator::new(MockVideoScript::delivers()));
-    let resume = GenerateVideoTool::new(delivered.clone(), MediaOutput::new(dir.path()))
+    let resume = GenerateVideoTool::new(delivered.clone(), media_output(dir.path()))
         .with_wait_policy(fast());
     let result = resume
         .execute(json!({ "resume_job_id": "mock-job", "model": "mock/video" }))
@@ -455,7 +460,7 @@ async fn video_timeout_stays_resumable_through_agent_harness() {
         polls: vec![(JobState::InProgress, 0)],
         error: None,
     }));
-    let video = GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(
+    let video = GenerateVideoTool::new(generator, media_output(dir.path())).with_wait_policy(
         WaitPolicy::new(Duration::from_millis(1), Duration::from_millis(10)),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -491,8 +496,7 @@ async fn video_failure_surfaces_the_provider_reason() {
         polls: vec![(JobState::Failed, 0)],
         error: Some("safety filter".into()),
     }));
-    let tool =
-        GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(fast());
+    let tool = GenerateVideoTool::new(generator, media_output(dir.path())).with_wait_policy(fast());
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error);
     assert!(text(&result).contains("safety filter"));
@@ -502,8 +506,7 @@ async fn video_failure_surfaces_the_provider_reason() {
 async fn empty_video_delivery_is_a_billed_non_retryable_error() {
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(EmptyVideoGenerator);
-    let tool =
-        GenerateVideoTool::new(generator, MediaOutput::new(dir.path())).with_wait_policy(fast());
+    let tool = GenerateVideoTool::new(generator, media_output(dir.path())).with_wait_policy(fast());
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     let message = text(&result);
     assert!(result.is_error, "{message}");
@@ -515,10 +518,7 @@ async fn empty_video_delivery_is_a_billed_non_retryable_error() {
 
 #[test]
 fn media_tools_declare_billing_side_effects() {
-    let tool = GenerateImageTool::new(
-        Arc::new(MockImageGenerator::new()),
-        MediaOutput::new("/tmp"),
-    );
+    let tool = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), media_output("/tmp"));
     let policy = tool.policy();
     assert!(
         policy.side_effects.payment
@@ -554,7 +554,7 @@ fn media_errors_map_onto_harness_errors() {
 #[tokio::test]
 async fn malformed_string_options_are_rejected_not_ignored() {
     let generator = Arc::new(MockImageGenerator::new());
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/tmp"));
+    let tool = GenerateImageTool::new(generator.clone(), media_output("/tmp"));
     let result = tool
         .execute(json!({ "prompt": "x", "n": "two" }))
         .await
@@ -566,8 +566,7 @@ async fn malformed_string_options_are_rejected_not_ignored() {
     );
 
     let video = Arc::new(MockVideoGenerator::new(MockVideoScript::delivers()));
-    let tool =
-        GenerateVideoTool::new(video.clone(), MediaOutput::new("/tmp")).with_wait_policy(fast());
+    let tool = GenerateVideoTool::new(video.clone(), media_output("/tmp")).with_wait_policy(fast());
     let result = tool
         .execute(json!({ "prompt": "x", "generate_audio": "maybe" }))
         .await
@@ -580,7 +579,7 @@ async fn malformed_string_options_are_rejected_not_ignored() {
 fn video_schema_exposes_size() {
     let tool = GenerateVideoTool::new(
         Arc::new(MockVideoGenerator::new(MockVideoScript::delivers())),
-        MediaOutput::new("/tmp"),
+        media_output("/tmp"),
     );
     assert!(tool.parameters_schema()["properties"].get("size").is_some());
 }
@@ -588,7 +587,7 @@ fn video_schema_exposes_size() {
 #[tokio::test]
 async fn negative_counts_are_rejected_but_negative_seeds_are_not() {
     let generator = Arc::new(MockImageGenerator::new());
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/tmp"));
+    let tool = GenerateImageTool::new(generator.clone(), media_output("/tmp"));
     let result = tool
         .execute(json!({ "prompt": "x", "n": -1 }))
         .await
@@ -602,7 +601,7 @@ async fn negative_counts_are_rejected_but_negative_seeds_are_not() {
     assert!(generator.requests().is_empty());
 
     let dir = tempfile::tempdir().unwrap();
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new(dir.path()));
+    let tool = GenerateImageTool::new(generator.clone(), media_output(dir.path()));
     let result = tool
         .execute(json!({ "prompt": "x", "seed": -7 }))
         .await
@@ -614,7 +613,7 @@ async fn negative_counts_are_rejected_but_negative_seeds_are_not() {
 #[tokio::test]
 async fn values_outside_provider_integer_ranges_are_rejected_before_billing() {
     let image_generator = Arc::new(MockImageGenerator::new());
-    let image = GenerateImageTool::new(image_generator.clone(), MediaOutput::new("/tmp"));
+    let image = GenerateImageTool::new(image_generator.clone(), media_output("/tmp"));
     let result = image
         .execute(json!({ "prompt": "x", "seed": 9_223_372_036_854_775_808_u64 }))
         .await
@@ -623,7 +622,7 @@ async fn values_outside_provider_integer_ranges_are_rejected_before_billing() {
     assert!(image_generator.requests().is_empty());
 
     let video_generator = Arc::new(MockVideoGenerator::new(MockVideoScript::delivers()));
-    let video = GenerateVideoTool::new(video_generator.clone(), MediaOutput::new("/tmp"));
+    let video = GenerateVideoTool::new(video_generator.clone(), media_output("/tmp"));
     let result = video
         .execute(json!({ "prompt": "x", "duration": 4_294_967_296_u64 }))
         .await
@@ -637,7 +636,7 @@ async fn artifact_subdirectory_must_stay_below_the_output_root() {
     let generator = Arc::new(MockImageGenerator::new());
     let tool = GenerateImageTool::new(
         generator.clone(),
-        MediaOutput::new("/tmp").with_subdir("../outside"),
+        media_output("/tmp").with_subdir("../outside"),
     );
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
     assert!(result.is_error && text(&result).contains("artifact subdirectory"));
@@ -649,13 +648,13 @@ async fn artifact_subdirectory_must_stay_below_the_output_root() {
 
 #[tokio::test]
 async fn a_host_blob_store_receives_the_artifacts_with_their_content_type() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{Scope, StorageBackend};
 
-    let scoped = MemoryStorage::new()
+    let scoped = MemoryBackend::new()
         .for_scope(&Scope::new("host").unwrap())
         .unwrap();
     let blobs = scoped.blobs().clone();
-    let output = MediaOutput::new("/nonexistent")
+    let output = media_output("/nonexistent")
         .with_subdir("media/out")
         .with_blobs(blobs.clone());
     let tool = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), output);
@@ -669,7 +668,7 @@ async fn a_host_blob_store_receives_the_artifacts_with_their_content_type() {
 
 #[tokio::test]
 async fn persist_refuses_to_replace_an_existing_artifact() {
-    let output = MediaOutput::new("/nonexistent");
+    let output = media_output("/nonexistent");
     let prefix = output.prefix().unwrap();
     output
         .persist(&prefix, "clip", "png", b"one", "image/png")
@@ -690,7 +689,7 @@ async fn persist_refuses_to_replace_an_existing_artifact() {
 
 #[tokio::test]
 async fn persist_refuses_path_like_names() {
-    let output = MediaOutput::new("/nonexistent");
+    let output = media_output("/nonexistent");
     let prefix = output.prefix().unwrap();
     let error = output
         .persist(&prefix, "../escape", "png", b"x", "image/png")
@@ -701,17 +700,14 @@ async fn persist_refuses_path_like_names() {
 
 #[test]
 fn schemas_advertise_a_single_reference_string() {
-    let image = GenerateImageTool::new(
-        Arc::new(MockImageGenerator::new()),
-        MediaOutput::new("/tmp"),
-    );
+    let image = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), media_output("/tmp"));
     assert_eq!(
         image.parameters_schema()["properties"]["references"]["type"],
         json!(["array", "string"])
     );
     let video = GenerateVideoTool::new(
         Arc::new(MockVideoGenerator::new(MockVideoScript::delivers())),
-        MediaOutput::new("/tmp"),
+        media_output("/tmp"),
     );
     assert_eq!(
         video.parameters_schema()["properties"]["references"]["type"],

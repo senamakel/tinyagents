@@ -6,11 +6,13 @@ mod kv;
 mod kv_import;
 mod steps;
 
-use tinystoragedrivers_core::{
-    CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, SealPolicy, SealWhen,
+use tinyagents_storage_kit::{
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema, ScopeClass, ScopedStorage,
+    SealPolicy, SealWhen,
 };
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_id};
+pub(crate) use kv_import::import_legacy_kv_with_lease;
 pub use kv_import::{LegacyKv, import_legacy_kv};
 
 /// The body version of every harness collection a v1 -> v2 step produces.
@@ -38,9 +40,9 @@ pub(crate) fn attachment_stash_spec() -> CollectionSpec {
     CollectionSpec::new(ATTACHMENT_STASH).index(IndexSpec::new("touched", ["touched_ms"]))
 }
 
-/// The harness's storage declarations: what it stores and the steps that bring
-/// the v1 names and shapes forward. The host composes it with
-/// `Registry::compose` and runs `Registry::migrate` per scope.
+/// The harness's storage declaration and the steps that bring its v1 names
+/// and shapes forward. Harness open runs this owner-local migration against
+/// the already-bound scope before returning the handle.
 ///
 /// | v1 | v2 |
 /// |---|---|
@@ -92,6 +94,42 @@ pub fn storage_schema() -> Schema {
         schema = schema.step(steps::blobs(BLOB_STEP_IDS[index], from, to));
     }
     schema
+}
+
+/// Collections owned by the harness; callers declare these on their chosen backend.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    storage_schema().collections()
+}
+
+/// Open harness storage for one scope, declaring its collections and applying
+/// the harness-owned migrations before returning the scope-bound ports.
+pub async fn open_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    let owned_storage = storage.clone();
+    tinyagents_storage_kit::with_migration_lease(&storage, "harness", move |lease| async move {
+        let storage = owned_storage;
+        let registry = Registry::compose([storage_schema()])?;
+        for spec in collections() {
+            storage.documents().ensure_collection(&spec).await?;
+        }
+        storage
+            .documents()
+            .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+            .await?;
+        registry.migrate(&storage, &MigrateOptions::new()).await?;
+        lease.renew().await?;
+        for (collection, kind) in [
+            ("harness_store", LegacyKv::Flat),
+            ("harness_namespaced_store", LegacyKv::Namespaced),
+            ("harness_response_cache", LegacyKv::ResponseCache),
+        ] {
+            import_legacy_kv_with_lease(&storage, "harness", collection, kind, &lease).await?;
+        }
+        Ok(storage)
+    })
+    .await
 }
 
 const BLOB_STEP_IDS: [&str; 5] = [

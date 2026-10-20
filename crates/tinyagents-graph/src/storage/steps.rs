@@ -2,7 +2,7 @@
 //! function of its input, so a resumed run produces the same output.
 
 use serde_json::Value;
-use tinystoragedrivers_core::{SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{SourceRecord, Step, TargetRecord};
 
 use super::types::{
     CheckpointBody, ThreadBody, WritesBody, checkpoint_id_key, subgraph_key, thread_id_key,

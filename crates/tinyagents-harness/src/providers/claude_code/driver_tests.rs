@@ -2,6 +2,23 @@
 //! posture, PATH construction, and bounded stderr accumulation.
 
 use super::*;
+use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinystoragedrivers_testkit::MemoryBackend;
+
+fn storage_pair(
+    name: &str,
+) -> (
+    tinyagents_storage_kit::ScopedStorage,
+    Arc<SessionStore>,
+    tinyagents_storage_kit::primitives::Kv,
+) {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new(name).unwrap())
+        .unwrap();
+    let sessions = Arc::new(SessionStore::new(storage.documents()).unwrap());
+    let settings = super::super::settings::store(storage.documents()).unwrap();
+    (storage, sessions, settings)
+}
 
 #[test]
 fn missing_session_error_is_recognized_precisely() {
@@ -41,6 +58,7 @@ mod retry {
     async fn drive(
         dir: &std::path::Path,
         store: Arc<SessionStore>,
+        settings_store: tinyagents_storage_kit::primitives::Kv,
         bin: PathBuf,
     ) -> anyhow::Result<ChatResponse> {
         let messages = vec![ChatMessage::user("hi")];
@@ -54,6 +72,7 @@ mod retry {
             append_system_prompt: None,
             messages: &messages,
             session_store: store,
+            settings_store,
             stream: None,
             anthropic_api_key: None,
             mcp_provider: None,
@@ -66,13 +85,13 @@ mod retry {
     #[tokio::test]
     async fn missing_resumed_session_clears_mapping_and_retries_as_new() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(SessionStore::open(dir.path()));
-        store.set("t1", SAVED).unwrap();
+        let (_storage, store, settings_store) = storage_pair("driver-retry-one");
+        store.set("t1", SAVED).await.unwrap();
         let bin = fake_cli(
             dir.path(),
             &format!("No conversation found with session ID: {SAVED}"),
         );
-        drive(dir.path(), store.clone(), bin)
+        drive(dir.path(), store.clone(), settings_store, bin)
             .await
             .expect("retry succeeds");
         let log = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
@@ -80,20 +99,28 @@ mod retry {
         assert_eq!(lines.len(), 2, "one resume then one retry: {log}");
         assert!(lines[0].contains("--resume"));
         assert!(lines[1].contains("--session-id") && !lines[1].contains("--resume"));
-        let new_id = store.get("t1").expect("new mapping persisted");
+        let new_id = store
+            .get("t1")
+            .await
+            .unwrap()
+            .expect("new mapping persisted");
         assert_ne!(new_id, SAVED);
     }
 
     #[tokio::test]
     async fn unrelated_failure_keeps_mapping_and_does_not_retry() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(SessionStore::open(dir.path()));
-        store.set("t1", SAVED).unwrap();
+        let (_storage, store, settings_store) = storage_pair("driver-retry-two");
+        store.set("t1", SAVED).await.unwrap();
         let bin = fake_cli(dir.path(), "authentication_failed");
-        assert!(drive(dir.path(), store.clone(), bin).await.is_err());
+        assert!(
+            drive(dir.path(), store.clone(), settings_store, bin)
+                .await
+                .is_err()
+        );
         let log = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
         assert_eq!(log.lines().count(), 1);
-        assert_eq!(store.get("t1").as_deref(), Some(SAVED));
+        assert_eq!(store.get("t1").await.unwrap().as_deref(), Some(SAVED));
     }
 }
 
@@ -138,9 +165,7 @@ fn ephemeral_calls_disable_session_persistence_and_durable_calls_keep_resume_arg
 
 #[test]
 fn child_path_prepends_cli_dir_and_keeps_inherited_entries() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.blocking_lock();
     struct PathRestore(Option<std::ffi::OsString>);
     impl Drop for PathRestore {
         fn drop(&mut self) {
@@ -264,9 +289,7 @@ fn openhuman_internal_root_walks_up_to_dotopenhuman() {
 #[cfg(target_os = "macos")]
 #[test]
 fn seatbelt_available_honors_opt_out() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _env = super::super::ENV_TEST_LOCK.blocking_lock();
     let prev = std::env::var("OPENHUMAN_CLAUDE_CODE_SANDBOX").ok();
     super::super::test_set_env("OPENHUMAN_CLAUDE_CODE_SANDBOX", "0");
     assert!(
@@ -279,29 +302,26 @@ fn seatbelt_available_honors_opt_out() {
     }
 }
 
-#[test]
-fn full_access_defaults_off_and_opts_in_via_env() {
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+#[tokio::test]
+async fn full_access_defaults_off_and_opts_in_via_env() {
+    let _env = super::super::ENV_TEST_LOCK.lock().await;
     // Empty workspace (no persisted toggle) → file layer resolves to OFF.
-    let ws = std::env::temp_dir().join("oh_cc_fullaccess_env_test");
-    let _ = std::fs::remove_dir_all(&ws);
+    let (_storage, _sessions, settings_store) = storage_pair("driver-settings-env");
     let key = "OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE";
     let prev = std::env::var(key).ok();
     super::super::test_remove_env(key);
     assert!(
-        !claude_code_full_access(&ws),
+        !claude_code_full_access(&settings_store).await,
         "default posture must be acceptEdits (full access OFF)"
     );
     super::super::test_set_env(key, "bypass");
     assert!(
-        claude_code_full_access(&ws),
+        claude_code_full_access(&settings_store).await,
         "explicit opt-in (`bypass`) enables full access"
     );
     super::super::test_set_env(key, "acceptEdits");
     assert!(
-        !claude_code_full_access(&ws),
+        !claude_code_full_access(&settings_store).await,
         "acceptEdits env override keeps the default (limited) posture"
     );
     match prev {
@@ -310,29 +330,27 @@ fn full_access_defaults_off_and_opts_in_via_env() {
     }
 }
 
-#[test]
-fn full_access_reads_persisted_toggle_when_env_unset() {
+#[tokio::test]
+async fn full_access_reads_persisted_toggle_when_env_unset() {
     use super::super::settings::{self, ClaudeCodeSettings};
-    let _env = super::super::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let ws = std::env::temp_dir().join("oh_cc_fullaccess_file_test");
-    let _ = std::fs::remove_dir_all(&ws);
-    std::fs::create_dir_all(&ws).unwrap();
+    let _env = super::super::ENV_TEST_LOCK.lock().await;
+    let (_storage, _sessions, settings_store) = storage_pair("driver-settings-persisted");
     let key = "OPENHUMAN_CLAUDE_CODE_PERMISSION_MODE";
     let prev = std::env::var(key).ok();
     super::super::test_remove_env(key);
 
-    settings::save(&ws, &ClaudeCodeSettings { full_access: true }).unwrap();
+    settings::save(&settings_store, &ClaudeCodeSettings { full_access: true })
+        .await
+        .unwrap();
     assert!(
-        claude_code_full_access(&ws),
+        claude_code_full_access(&settings_store).await,
         "persisted toggle ON must enable full access when env is unset"
     );
 
     // Env override beats the persisted toggle.
     super::super::test_set_env(key, "acceptEdits");
     assert!(
-        !claude_code_full_access(&ws),
+        !claude_code_full_access(&settings_store).await,
         "env override OFF must beat a persisted ON toggle"
     );
 
@@ -340,7 +358,6 @@ fn full_access_reads_persisted_toggle_when_env_unset() {
         Some(v) => super::super::test_set_env(key, v),
         None => super::super::test_remove_env(key),
     }
-    let _ = std::fs::remove_dir_all(&ws);
 }
 
 /// `String::truncate` takes a byte index and panics when it is not a character
@@ -455,6 +472,7 @@ async fn run_fake_claude(script_body: &str, api_key: Option<&str>) -> anyhow::Re
     std::fs::write(&bin, format!("#!/bin/sh\ncat >/dev/null\n{script_body}\n")).expect("script");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     let messages = [ChatMessage::user("hello")];
+    let (_storage, session_store, settings_store) = storage_pair("driver-fake-claude");
     run_turn(TurnContext {
         bin_path: bin,
         workspace_dir: dir.path().join("ws"),
@@ -463,7 +481,8 @@ async fn run_fake_claude(script_body: &str, api_key: Option<&str>) -> anyhow::Re
         model: "sonnet".into(),
         append_system_prompt: None,
         messages: &messages,
-        session_store: Arc::new(SessionStore::open(&dir.path().join("ws"))),
+        session_store,
+        settings_store,
         stream: None,
         anthropic_api_key: api_key.map(str::to_string),
         persist_session: false,
@@ -617,8 +636,8 @@ mod structured_exit {
     async fn nonzero_exit_with_structured_missing_session_error_retries() {
         let dir = tempfile::tempdir().unwrap();
         let saved = "11111111-1111-4111-8111-111111111111";
-        let store = Arc::new(SessionStore::open(dir.path()));
-        store.set("t1", saved).unwrap();
+        let (_storage, store, settings_store) = storage_pair("driver-structured-exit");
+        store.set("t1", saved).await.unwrap();
         let bin = dir.path().join("claude");
         let script = format!(
             "#!/bin/sh\ncat >/dev/null\ncase \"$*\" in *--resume*) echo '{{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"errors\":[\"No conversation found with session ID: {saved}\"]}}'; exit 1;; esac\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}}'\n"
@@ -636,13 +655,14 @@ mod structured_exit {
             append_system_prompt: None,
             messages: &messages,
             session_store: store.clone(),
+            settings_store,
             stream: None,
             anthropic_api_key: None,
             mcp_provider: None,
         })
         .await
         .expect("retry succeeds");
-        assert_ne!(store.get("t1").as_deref(), Some(saved));
+        assert_ne!(store.get("t1").await.unwrap().as_deref(), Some(saved));
     }
 }
 
@@ -692,7 +712,7 @@ async fn shared_session_receives_a_pending_user_turn_once() {
     )
     .expect("script");
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    let store = Arc::new(SessionStore::open(&dir.path().join("ws")));
+    let (_storage, store, settings_store) = storage_pair("driver-shared-session");
     let messages = [ChatMessage::user("UNIQUE-PENDING-TURN")];
 
     for _ in 0..3 {
@@ -706,6 +726,7 @@ async fn shared_session_receives_a_pending_user_turn_once() {
             append_system_prompt: None,
             messages: &messages,
             session_store: store.clone(),
+            settings_store: settings_store.clone(),
             stream: None,
             anthropic_api_key: None,
             mcp_provider: None,

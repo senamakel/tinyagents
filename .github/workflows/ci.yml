@@ -67,6 +67,9 @@ jobs:
       - name: Release version script
         run: .github/scripts/next-release-version.test.sh
 
+      - name: Ensure storage engines stay out of library trees
+        run: bash .github/scripts/check-storage-engine-trees.sh
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

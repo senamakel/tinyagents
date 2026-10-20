@@ -3,12 +3,15 @@
 //! [`TranscriptMeta`] / [`DisplayMessage`] types.
 
 use super::display::{metadata_with_background, split_background};
-use super::types::{
-    BackgroundOrigin, DisplayMessage, MessageUsage, TRANSCRIPT_SCHEMA_VERSION, TranscriptMeta,
-    TurnUsage,
-};
+#[cfg(test)]
+use super::types::TRANSCRIPT_SCHEMA_VERSION;
+#[cfg(test)]
+use super::types::TranscriptMeta;
+use super::types::{BackgroundOrigin, DisplayMessage, MessageUsage, TurnUsage};
 use super::types::{ToolFailure, TranscriptMessage, TranscriptPart, TranscriptToolCall};
-use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tinytools_agent::dialect::{
@@ -17,9 +20,11 @@ use tinytools_agent::dialect::{
 };
 
 /// Discriminator value for a compaction record's `kind` field.
+#[cfg(test)]
 pub(super) const COMPACTION_KIND: &str = "compaction";
 
 /// Discriminator value for a tool-declaration record's `kind` field.
+#[cfg(test)]
 pub(super) const TOOLS_KIND: &str = "tools";
 
 /// `v` of a typed row (see [`MessageLine::row_version`]).
@@ -70,12 +75,14 @@ fn is_false(b: &bool) -> bool {
 
 /// The `_meta` line serialisation shape.
 #[derive(Serialize, Deserialize)]
+#[cfg(test)]
 pub(super) struct MetaLine {
     #[serde(rename = "_meta")]
     pub(super) meta: MetaPayload,
 }
 
 #[derive(Serialize, Deserialize)]
+#[cfg(test)]
 pub(super) struct MetaPayload {
     /// Schema version of the transcript record format (see
     /// [`TRANSCRIPT_SCHEMA_VERSION`]). Absent (deserialises to `0`) on files
@@ -228,6 +235,7 @@ where
 /// `messages` slice on each persist call and message ids are optional, so an
 /// id-reference scheme would be less robust for no gain.
 #[derive(Serialize, Deserialize)]
+#[cfg(test)]
 pub(super) struct CompactionLine {
     pub(super) kind: String,
     pub(super) replacement: Vec<MessageLine>,
@@ -247,6 +255,7 @@ pub(super) struct CompactionLine {
 /// process happens to have registered. Last record wins. Neither reader puts
 /// it into the message stream.
 #[derive(Serialize, Deserialize)]
+#[cfg(test)]
 pub(super) struct ToolsLine {
     pub(super) kind: String,
     pub(super) tools: serde_json::Value,
@@ -257,6 +266,7 @@ pub(super) struct ToolsLine {
 }
 
 /// Serialises `tools` as one `{"kind":"tools"}` record line (no trailing newline).
+#[cfg(test)]
 pub(super) fn tools_line_json(tools: &serde_json::Value) -> Result<String> {
     serde_json::to_string(&ToolsLine {
         kind: TOOLS_KIND.to_string(),
@@ -269,6 +279,7 @@ pub(super) fn tools_line_json(tools: &serde_json::Value) -> Result<String> {
 
 /// Build the serialised `_meta` header line for `meta`, stamping the current
 /// [`TRANSCRIPT_SCHEMA_VERSION`].
+#[cfg(test)]
 fn meta_payload_from(meta: &TranscriptMeta) -> MetaPayload {
     MetaPayload {
         version: TRANSCRIPT_SCHEMA_VERSION,
@@ -294,6 +305,7 @@ fn meta_payload_from(meta: &TranscriptMeta) -> MetaPayload {
 }
 
 /// Serialises `meta` as the JSON `_meta` header line (no trailing newline).
+#[cfg(test)]
 pub(super) fn meta_line_json(meta: &TranscriptMeta) -> Result<String> {
     let meta_line = MetaLine {
         meta: meta_payload_from(meta),
@@ -612,6 +624,7 @@ fn row_from_line(ml: &MessageLine) -> TranscriptMessage {
 /// Serialise `messages` into JSONL message lines, attributing
 /// `last_assistant_turn_usage` (or per-message embedded usage) to the last
 /// assistant row and stamping `request_id` on every line.
+#[cfg(test)]
 pub(super) fn serialise_message_lines(
     messages: &[TranscriptMessage],
     last_assistant_turn_usage: Option<&TurnUsage>,
@@ -723,6 +736,7 @@ fn turn_step_stamps(
 }
 
 /// Convert a parsed `MetaPayload` into the public [`TranscriptMeta`].
+#[cfg(test)]
 pub(super) fn meta_from_payload(mp: MetaPayload) -> TranscriptMeta {
     TranscriptMeta {
         session_id: mp.session_id,
@@ -803,6 +817,7 @@ pub(super) fn message_from_line(ml: MessageLine) -> TranscriptMessage {
 }
 
 /// Classification of one non-empty JSONL line.
+#[cfg(test)]
 pub(super) enum LineKind {
     Meta(MetaLine),
     Compaction(CompactionLine),
@@ -814,6 +829,7 @@ pub(super) enum LineKind {
 /// message line. Returns `Err` only when the line is malformed for its
 /// apparent kind; the caller decides whether that is fatal (first line) or a
 /// skippable warning (later lines).
+#[cfg(test)]
 pub(super) fn classify_line(line: &str) -> Result<LineKind, serde_json::Error> {
     // Cheap structural peek. Unknown/other shapes fall through to MessageLine,
     // whose required `role`/`content` gate rejects genuinely foreign lines.

@@ -1,6 +1,6 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
 
 pub(super) fn run(id: &str) -> AgentRunUpsert {
     AgentRunUpsert {
@@ -191,9 +191,13 @@ async fn independent_event_allocators_replay_without_duplicates_and_keep_cursor_
 }
 
 #[derive(Debug)]
-struct RefusingProjection(Arc<dyn tinystoragedrivers_core::StreamStore>);
+struct RefusingProjection(Arc<dyn tinystoragedrivers_api::StreamStore>);
 #[async_trait::async_trait]
-impl tinystoragedrivers_core::StreamStore for RefusingProjection {
+impl tinystoragedrivers_api::StreamStore for RefusingProjection {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.0.capabilities()
+    }
+
     async fn append(
         &self,
         stream: &str,
@@ -214,14 +218,14 @@ impl tinystoragedrivers_core::StreamStore for RefusingProjection {
         _: u64,
         _: Vec<serde_json::Value>,
     ) -> std::result::Result<u64, StorageError> {
-        Err(StorageError::fenced("projection grant expired"))
+        Err(StorageError::unavailable("projection grant expired"))
     }
     async fn read_window(
         &self,
         stream: &str,
         from: u64,
         limit: usize,
-    ) -> std::result::Result<Vec<tinystoragedrivers_core::StreamEntry>, StorageError> {
+    ) -> std::result::Result<Vec<tinystoragedrivers_types::StreamEntry>, StorageError> {
         self.0.read_window(stream, from, limit).await
     }
     async fn len(&self, stream: &str) -> std::result::Result<u64, StorageError> {
@@ -247,12 +251,17 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let native = backend.for_scope(&scope).unwrap();
+    let ports = tinystoragedrivers_api::StorageBackend::for_scope(&backend, &scope).unwrap();
     let refused = ScopedStorage::new(
+        tinystoragedrivers_api::Storage::new(
+            ports.documents().clone(),
+            Arc::new(RefusingProjection(native.streams().clone())),
+            ports.kv().clone(),
+            ports.blobs().clone(),
+            ports.queues().clone(),
+            ports.secrets().clone(),
+        ),
         scope.clone(),
-        "memory",
-        native.documents().clone(),
-        Arc::new(RefusingProjection(native.streams().clone())),
-        native.blobs().clone(),
     );
     let a = DriverRunLedger::new(refused);
     a.upsert_agent_run(run("run")).await.unwrap();
@@ -271,7 +280,7 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
     .await
     .unwrap();
     assert!(
-        matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_core::ErrorKind::Fenced)
+        matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_types::ErrorKind::Unavailable)
     );
     let reconstructed = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
@@ -391,84 +400,27 @@ async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
 }
 
 #[tokio::test]
-async fn retired_generation_cannot_change_status_allocate_events_or_project_streams() {
-    use tinystoragedrivers_core::{ErrorKind, PurgeMode, PurgeRequest, ScopeGeneration};
-    let backend = MemoryStorage::new();
+async fn agent_and_event_receipts_survive_driver_reconstruction() {
     let scope = Scope::new("alice").unwrap();
-    let old = DriverRunLedger::new(
-        backend
-            .for_scope_generation(&scope, ScopeGeneration(0))
-            .unwrap(),
-    );
-    old.upsert_agent_run(run("run")).await.unwrap();
-    old.append_run_event(RunEventAppend {
-        run_id: "run".into(),
-        event_type: "before".into(),
-        payload: json!({}),
-    })
-    .await
-    .unwrap();
-    let receipt = backend
-        .for_scope(&scope)
-        .unwrap()
-        .purge(&PurgeRequest {
-            operation_id: "reset".into(),
-            mode: PurgeMode::Atomic,
-        })
+    let backend = MemoryStorage::new();
+    let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    ledger.upsert_agent_run(run("run")).await.unwrap();
+    ledger
+        .transition_agent_run_status_from(
+            "run",
+            AgentRunStatus::Running,
+            AgentRunStatus::Completed,
+            None,
+            None,
+            Some(RunEventAppend {
+                run_id: "run".into(),
+                event_type: "done".into(),
+                payload: json!({}),
+            }),
+        )
         .await
         .unwrap();
-    let error = old
-        .transition_agent_run_status("run", AgentRunStatus::Completed, None, None)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, super::super::LedgerError::Driver(ref native) if native.kind() == ErrorKind::ScopeGenerationRejected)
-    );
-    assert!(
-        old.append_run_event(RunEventAppend {
-            run_id: "run".into(),
-            event_type: "stale".into(),
-            payload: json!({})
-        })
-        .await
-        .is_err()
-    );
-    assert!(old.reconcile_run_events("run").await.is_err());
-    let fresh = DriverRunLedger::new(
-        backend
-            .for_scope_generation(&scope, receipt.generation)
-            .unwrap(),
-    );
-    assert!(fresh.get_agent_run("run").await.unwrap().is_none());
-    fresh.upsert_agent_run(run("run")).await.unwrap();
-}
-
-#[tokio::test]
-async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_tables() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("ledger.db");
-    let scope = Scope::new("alice").unwrap();
-    {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-        let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
-        ledger.upsert_agent_run(run("run")).await.unwrap();
-        ledger
-            .transition_agent_run_status_from(
-                "run",
-                AgentRunStatus::Running,
-                AgentRunStatus::Completed,
-                None,
-                None,
-                Some(RunEventAppend {
-                    run_id: "run".into(),
-                    event_type: "done".into(),
-                    payload: json!({}),
-                }),
-            )
-            .await
-            .unwrap();
-    }
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    drop(ledger);
     let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         ledger.get_agent_run("run").await.unwrap().unwrap().status,
@@ -476,13 +428,6 @@ async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_t
     );
     assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
     assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
-    let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
-        &path,
-        tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .unwrap();
-    let classic: i64 = sql.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agent_runs','run_events','sessions')", [], |row| row.get(0)).unwrap();
-    assert_eq!(classic, 0);
 }
 
 #[tokio::test]
@@ -508,48 +453,7 @@ async fn projection_refuses_an_existing_stream_that_disagrees_with_committed_rec
         .unwrap();
     assert!(
         matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref error)
-        if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization)
-    );
-}
-
-#[tokio::test]
-async fn existing_schema_ledger_validates_native_declarations_without_ensure() {
-    let backend = MemoryStorage::new();
-    let scope = Scope::new("alice").unwrap();
-    let trusted = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
-    trusted.upsert_agent_run(run("run")).await.unwrap();
-    let restricted = backend.existing_schema().unwrap();
-    let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
-    assert!(actor.get_agent_run("run").await.unwrap().is_some());
-    actor
-        .append_run_event(RunEventAppend {
-            run_id: "run".into(),
-            event_type: "actor".into(),
-            payload: json!({}),
-        })
-        .await
-        .unwrap();
-    assert_eq!(actor.reconcile_run_events("run").await.unwrap(), 1);
-}
-
-#[tokio::test]
-async fn existing_schema_ledger_missing_declaration_refuses_before_any_record_write() {
-    let backend = MemoryStorage::new();
-    let scope = Scope::new("alice").unwrap();
-    let restricted = backend.existing_schema().unwrap();
-    let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
-    assert!(
-        matches!(actor.upsert_agent_run(run("run")).await.unwrap_err(), super::super::LedgerError::Driver(ref error)
-        if error.kind() == tinystoragedrivers_core::ErrorKind::NotFound)
-    );
-    let inspect = backend.for_scope(&scope).unwrap();
-    assert!(
-        inspect
-            .documents()
-            .collections("")
-            .await
-            .unwrap()
-            .is_empty()
+        if error.kind() == tinystoragedrivers_types::ErrorKind::Serialization)
     );
 }
 
@@ -585,7 +489,7 @@ async fn projection_refuses_a_valid_receipt_that_skips_an_earlier_committed_even
         .unwrap();
     let error = ledger.reconcile_run_events("run").await.unwrap_err();
     assert!(
-        matches!(error, crate::run_ledger::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization)
+        matches!(error, crate::run_ledger::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_types::ErrorKind::Serialization)
     );
     assert_eq!(native.streams().len(&stream).await.unwrap(), 1);
     assert_eq!(

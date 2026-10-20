@@ -17,7 +17,7 @@ const TRUNCATION_MARKER_BUDGET: usize = 80;
 /// Upper bound on a single persisted transcript prose item (one coalesced
 /// narration or reasoning block, parent or sub-agent). A runaway reasoning
 /// stream would otherwise grow one item without bound and bloat every
-/// full-file snapshot rewrite. Tighter than [`MAX_PERSISTED_TOOL_OUTPUT`]
+/// full-file snapshot rewrite. Tighter than `MAX_PERSISTED_TOOL_OUTPUT`
 /// because a turn can accumulate many prose items.
 pub const MAX_PERSISTED_TRANSCRIPT_ITEM: usize = 16 * 1024;
 
@@ -91,7 +91,7 @@ pub fn cap_persisted_output(output: &str) -> Option<String> {
 /// only arrive with `SubagentToolCallCompleted`, so the completion arm
 /// backfills what this returns `None` for at start.
 ///
-/// A payload that serialises within [`MAX_PERSISTED_TOOL_ARGS`] is kept
+/// A payload that serialises within `MAX_PERSISTED_TOOL_ARGS` is kept
 /// verbatim, so the rehydrated row renders the same structured input the live
 /// row did. An oversized one degrades to a truncated *string* carrying the
 /// same marker shape [`cap_persisted_output`] uses: the prefix is what the

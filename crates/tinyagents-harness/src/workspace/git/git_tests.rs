@@ -30,6 +30,32 @@ impl TempDir {
     fn path(&self) -> &Path {
         &self.path
     }
+
+    fn outside_git_repo() -> Self {
+        let mut parent = std::env::temp_dir();
+        while Command::new("git")
+            .current_dir(&parent)
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            let Some(next) = parent.parent() else {
+                break;
+            };
+            parent = next.to_path_buf();
+        }
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(
+            "tinyagents-nonrepo-test-{}-{nanos}-{counter}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create non-repository temp dir");
+        Self { path }
+    }
 }
 
 impl Drop for TempDir {
@@ -77,7 +103,7 @@ fn validate_repo_root_rejects_non_repo() {
     if !git_available() {
         return;
     }
-    let tmp = TempDir::new();
+    let tmp = TempDir::outside_git_repo();
     let err = create_git_worktree(tmp.path(), "run-1", GitWorktreeBaseRef::Head).unwrap_err();
     assert!(matches!(err, GitWorktreeError::NotAGitRepo(_)));
 }

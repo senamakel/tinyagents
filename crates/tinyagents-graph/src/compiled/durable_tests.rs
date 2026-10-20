@@ -1,15 +1,6 @@
-//! Durable executor tests: the interrupt→resume and failure→retry scenarios
-//! from `test.rs` (`interrupt_then_resume_reruns_node`,
-//! `exhausted_retries_leave_a_resumable_failure_checkpoint`), replayed against
-//! a real on-disk (SQLite-file) checkpointer instead of [`InMemoryCheckpointer`].
-//!
-//! Each scenario simulates a process restart between its write half and its
-//! read/resume half: the checkpointer used for the first half is dropped
-//! entirely, and a **fresh** checkpointer instance is opened against the same
-//! on-disk database file for the second half. This
-//! exercises the "close it, come back, resume from disk" path rather than
-//! merely calling `.resume()`/`.retry()` on an already-warm in-process
-//! checkpointer.
+//! Durable executor tests: interrupt→resume and failure→retry across dropped
+//! and reopened driver handles on an explicitly owned testkit backend.
+//! Physical persistence is covered by the storage engine's own tests.
 
 use super::*;
 use crate::builder::{GraphBuilder, NodeContext};
@@ -19,6 +10,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use tinyagents_harness::ids::ExecutionStatus;
+use tinystoragedrivers_testkit::MemoryBackend;
 
 /// Same "human approval" graph shape as `interrupt_then_resume_reruns_node`:
 /// pauses on first run, applies a resume-supplied bump on the second.
@@ -67,30 +59,29 @@ fn flaky_graph(fail_times: usize, attempts: Arc<AtomicUsize>) -> CompiledGraph<i
         .unwrap()
 }
 
-// ── DriverCheckpointer on a SQLite file ──────────────────────────────────
+// ── DriverCheckpointer over testkit ports ────────────────────────────────
 
 #[tokio::test]
-async fn driver_backend_interrupt_then_restart_then_resume() {
-    let dir = tempfile::tempdir().unwrap();
+async fn driver_backend_interrupt_then_reopen_then_resume() {
+    let checkpoint_backend = MemoryBackend::new();
 
-    // Write phase: a fresh `DriverCheckpointer` opened on the temp directory
-    // runs the graph to its interrupt point.
+    // Write phase runs the graph to its interrupt point.
     {
-        let cp: Arc<dyn Checkpointer<i32>> =
-            Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+        let cp: Arc<dyn Checkpointer<i32>> = Arc::new(
+            crate::test_support::dir_checkpointer::<i32>(&checkpoint_backend),
+        );
         let graph = approve_graph().with_checkpointer(cp);
         let paused = graph.run_with_thread("hitl", 10).await.unwrap();
         assert!(paused.is_interrupted());
         assert_eq!(paused.status.status, ExecutionStatus::Interrupted);
         assert_eq!(paused.interrupts.len(), 1);
-        // `graph` (and the checkpointer it owns) is dropped at the end of
-        // this block, simulating the process exiting.
+        // Drop the graph and its checkpointer.
     }
 
-    // Read/resume phase: a brand-new `DriverCheckpointer` instance, opened
-    // fresh against the same directory, resumes the run from disk.
-    let cp2: Arc<dyn Checkpointer<i32>> =
-        Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+    // Read/resume phase uses a new driver over the same backend.
+    let cp2: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(
+        &checkpoint_backend,
+    ));
     let graph2 = approve_graph().with_checkpointer(cp2);
     let resumed = graph2
         .resume("hitl", Command::resume(json!({ "bump": 5 })))
@@ -102,28 +93,28 @@ async fn driver_backend_interrupt_then_restart_then_resume() {
 }
 
 #[tokio::test]
-async fn driver_backend_failure_then_restart_then_retry() {
-    let dir = tempfile::tempdir().unwrap();
+async fn driver_backend_failure_then_reopen_then_retry() {
+    let checkpoint_backend = MemoryBackend::new();
     let attempts = Arc::new(AtomicUsize::new(0));
 
     // Write phase: the node fails once and the run aborts, leaving a
-    // resumable failure checkpoint on disk.
+    // resumable failure checkpoint.
     {
-        let cp: Arc<dyn Checkpointer<i32>> =
-            Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+        let cp: Arc<dyn Checkpointer<i32>> = Arc::new(
+            crate::test_support::dir_checkpointer::<i32>(&checkpoint_backend),
+        );
         let graph = flaky_graph(1, attempts.clone()).with_checkpointer(cp);
         let err = graph.run_with_thread("net", 100).await.unwrap_err();
         assert!(matches!(err, TinyAgentsError::Model(_)), "got {err:?}");
         assert_eq!(attempts.load(AtomicOrdering::SeqCst), 1);
-        // `graph` (and the checkpointer it owns) is dropped here, simulating
-        // the process exiting after the failure.
+        // Drop the graph and its checkpointer.
     }
 
-    // Read/retry phase: a fresh `DriverCheckpointer` instance, opened against
-    // the same directory, retries the failed node from disk. The transient
+    // Read/retry phase uses a new driver over the same backend. The transient
     // condition has cleared by the time this attempt runs.
-    let cp2: Arc<dyn Checkpointer<i32>> =
-        Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+    let cp2: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(
+        &checkpoint_backend,
+    ));
     let graph2 = flaky_graph(1, attempts.clone()).with_checkpointer(cp2);
     let resumed = graph2.retry("net").await.unwrap();
     assert_eq!(resumed.state, 101);

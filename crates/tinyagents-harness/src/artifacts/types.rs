@@ -125,7 +125,7 @@ pub enum OffloadError {
 
     /// The blob store refused or failed the write.
     #[error("artifact storage failed: {0}")]
-    Storage(#[from] tinystoragedrivers_core::StorageError),
+    Storage(#[from] tinyagents_storage_kit::StorageError),
 
     /// The filesystem copy could not be materialized safely.
     #[error("artifact materialization failed: {0}")]

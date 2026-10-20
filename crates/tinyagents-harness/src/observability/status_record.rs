@@ -121,7 +121,7 @@ impl From<RunStatusRecord> for HarnessRunStatus {
 /// `record` no longer decodes.
 pub(crate) fn from_v1(body: &Value) -> Option<(String, Value)> {
     let status: HarnessRunStatus = serde_json::from_value(body.get("record")?.clone()).ok()?;
-    let id = tinystoragedrivers_core::Key::of([status.run_id.as_str()])
+    let id = tinyagents_storage_kit::Key::of([status.run_id.as_str()])
         .ok()?
         .as_str()
         .to_owned();

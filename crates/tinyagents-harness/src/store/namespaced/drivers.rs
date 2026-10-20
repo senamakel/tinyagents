@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     DocumentStore, DocumentStoreExt, EXPIRES_FIELD, Filter, Precondition, Query, Repo,
     StorageError, Versioned, WriteOptions,
 };

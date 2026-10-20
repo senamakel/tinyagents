@@ -1,12 +1,17 @@
 use super::*;
 use crate::port::drivers::transcripts::tests::meta;
+use crate::testkit::MemoryStorage;
 use crate::transcript::{TranscriptMessage, TranscriptTurn};
-use tinystoragedrivers_core::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Blocking, DocumentStore, Scope};
 
 fn locator() -> DriverTranscriptLocator {
     let storage = MemoryStorage::new();
-    let docs: Arc<dyn DocumentStore> =
-        Arc::clone(storage.for_scope(&Scope::local()).unwrap().documents());
+    let docs: Arc<dyn DocumentStore> = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
     DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://display")
 }
 

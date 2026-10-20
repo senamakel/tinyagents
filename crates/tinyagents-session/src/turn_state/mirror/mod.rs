@@ -27,7 +27,7 @@ use crate::turn_state::types::TurnState;
 pub use caps::MAX_PERSISTED_TRANSCRIPT_ITEM;
 
 /// In-process cursor that keeps the authoritative [`TurnState`] in sync
-/// with the agent loop and writes it through to a [`TurnStates`](crate::port::TurnStates) store.
+/// with the agent loop and writes it through to a [`TurnStates`] store.
 pub struct TurnStateMirror {
     pub(super) store: Arc<dyn TurnStates>,
     /// Where an interrupted turn's partial answer is appended, when set.

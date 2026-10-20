@@ -15,7 +15,7 @@ anyhow = { workspace = true }
 thiserror = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
-tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0", default-features = false, features = ["sqlite"] }
+tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0", default-features = false }
 # `OrchestrationTaskStatus` is the canonical lifecycle status the run-ledger and
 # transcript-view statuses convert to and from.
 tinyagents-tasks = { path = "../tinyagents-tasks", version = "2.2.0", default-features = false }
@@ -23,24 +23,19 @@ tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", vers
 hex = "0.4"
 sha2 = "0.11"
 parking_lot = "0.12"
-tempfile = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["sync"] }
 # `threads` names its atomic-rewrite temp files `.conversations-<uuid>.tmp`.
 uuid = { workspace = true }
-# Session stores over `tinystoragedrivers` ports (`storage-drivers` feature).
-tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
-# The legacy-session importer reads a classic `sessions.db` read-only through
-# the SQLite driver's re-export of `rusqlite`. Nothing else in this crate
-# touches SQLite: persistence goes through the storage ports.
-tinystoragedrivers-sqlite = { workspace = true, optional = true }
+# Port contracts and their shared type models. Engine implementations are
+# supplied by the host; session code never opens a storage engine.
+tinystoragedrivers-api = { workspace = true }
+tinystoragedrivers-types = { workspace = true }
+tinyagents-storage-kit = { workspace = true }
 
 [features]
-default = ["legacy-import"]
-# `legacy`: a public, read-only, id-preserving importer for classic workspaces
-# (`session_db/sessions.db`, `session_raw/*.jsonl` transcripts and turn-state
-# JSON) into the storage ports. Disable it to drop the SQLite reader.
-legacy-import = ["dep:tinystoragedrivers-sqlite"]
+default = []
+testkit = []
 # Tracing instrumentation is now always compiled in (via the `tracing` crate
 # dependency above). This feature is retained as a no-op so downstream
 # feature forwards keep compiling.
@@ -52,11 +47,8 @@ tracing = ["tinyagents-harness/tracing"]
 storage-drivers = []
 
 [dev-dependencies]
-# Tests build transcript fixtures as classic JSONL and import them through
-# `legacy`, so they need the importer even under `--no-default-features`.
-tinyagents-session = { path = ".", features = ["legacy-import"] }
-tinystoragedrivers-sqlite = { workspace = true }
-tinystoragedrivers-file = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

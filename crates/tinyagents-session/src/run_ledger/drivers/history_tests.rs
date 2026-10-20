@@ -5,12 +5,18 @@ use crate::run_ledger::history::{
     MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
     SessionStart,
 };
+use crate::testkit::MemoryStorage;
 use crate::types::{SessionSearchParams, SessionStatus};
 use chrono::Duration;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, StorageBackend};
+use tinyagents_storage_kit::Precondition;
+use tinystoragedrivers_api::StorageBackend;
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
-    DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
+    let scope = Scope::new(scope).unwrap();
+    DriverRunLedger::new(ScopedStorage::new(
+        backend.for_scope(&scope).unwrap(),
+        scope,
+    ))
 }
 
 fn start(id: &str, agent: &str, name: &str) -> SessionStart {
@@ -232,10 +238,8 @@ async fn memory_history_records_and_answers_queries() {
 }
 
 #[tokio::test]
-async fn sqlite_history_records_and_answers_queries() {
-    let root = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(root.path().join("history.sqlite")).unwrap();
+async fn reconstructed_memory_history_records_and_answers_queries() {
+    let backend = MemoryStorage::new();
     records_and_queries(&backend).await;
 }
 
@@ -314,11 +318,8 @@ async fn memory_prune_sessions_cascades_to_children_and_index() {
 }
 
 #[tokio::test]
-async fn sqlite_prune_sessions_cascades_to_children_and_index() {
-    let root = tempfile::tempdir().unwrap();
-    let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(root.path().join("retention.sqlite"))
-            .unwrap();
+async fn reconstructed_memory_prune_sessions_cascades_to_children_and_index() {
+    let backend = MemoryStorage::new();
     retention_removes_only_what_is_stale(&backend).await;
 }
 

@@ -23,9 +23,10 @@
 //! [`INDEX`] holds one small document per stem (id `Key::of([stem])`) with the
 //! lookup fields (`thread_id`, `agent_id`, `agent_name`, `subagent`), so
 //! "newest root transcript of this thread" is one indexed query instead of a
-//! scan of every log. Its creation time is the document's `_created_ms`
-//! metadata, which the driver keeps. It is refreshed after each write that
-//! changes the fields. A successor generation is reserved as a `tsd.leases`
+//! scan of every log. Its application `created_ms` field preserves the
+//! transcript's original creation time across cross-collection migration,
+//! independently of host-assigned record metadata. It is refreshed after each
+//! write that changes the fields. A successor generation is reserved as a `tsd.leases`
 //! record (see `transcripts_reservation.rs`) before its predecessor is sealed.
 
 use std::future::Future;
@@ -35,14 +36,16 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
-use tinystoragedrivers_core::primitives::{Leases, Repo};
-use tinystoragedrivers_core::{
-    Blocking, CREATED_FIELD, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter,
-    ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
+use tinyagents_storage_kit::primitives::{Leases, Repo};
+use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
+use tinyagents_storage_kit::{
+    CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Sort, StorageError,
+    WriteOptions,
 };
+use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::{Mutex, OnceCell};
 
-use super::super::memory::MAX_GENERATIONS;
+use super::super::helpers::MAX_GENERATIONS;
 use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,
@@ -53,6 +56,7 @@ pub(super) use reservation::leases_spec;
 
 /// One document per transcript stem: the lookup fields.
 pub(super) const INDEX: &str = "session.transcripts";
+const CREATED_FIELD: &str = "created_ms";
 /// One document per write to a transcript: its append-only log.
 pub(super) const ENTRIES: &str = "session.transcript_entries";
 
@@ -208,8 +212,8 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
     ]
 }
 
-/// `query` ordered newest first by the index document's creation time, ties
-/// broken by id so the order is stable.
+/// `query` ordered newest first by the transcript's original creation time,
+/// ties broken by id so the order is stable.
 fn newest_first(query: Query) -> Query {
     query
         .sort(Sort::desc(CREATED_FIELD))
@@ -533,6 +537,9 @@ impl HistoryInner {
             return Ok(());
         }
         let meta = replay.meta.as_ref().unwrap_or(&self.seed);
+        let created_ms = chrono::DateTime::parse_from_rfc3339(&meta.created)
+            .map(|created| created.timestamp_millis())
+            .unwrap_or_default();
         let fields = json!({
             "stem": self.stem,
             "subagent": is_subagent(&self.stem),
@@ -540,6 +547,7 @@ impl HistoryInner {
             "thread_id": meta.thread_id,
             "agent_id": meta.agent_id,
             "agent_name": meta.agent_name,
+            "created_ms": created_ms,
         });
         if replay.indexed.as_ref() == Some(&fields) {
             return Ok(());

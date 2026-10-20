@@ -1,7 +1,7 @@
 //! Writer-only reconciliation; a stream row is invisible until metadata publishes it.
 use super::pending::{APPENDS, AppendIntent};
 use super::*;
-use tinystoragedrivers_core::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
+use tinyagents_storage_kit::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
 
 impl DriverConversationStore {
     /// Thread metadata plus the companion durable append-intent declaration
@@ -24,7 +24,7 @@ impl DriverConversationStore {
     /// The original native declaration failure, with its kind and source.
     pub async fn prepare_append_schema(
         documents: &dyn DocumentStore,
-    ) -> tinystoragedrivers_core::Result<()> {
+    ) -> tinystoragedrivers_types::Result<()> {
         for spec in Self::append_collection_specs() {
             documents.ensure_collection(&spec).await?;
         }
@@ -63,7 +63,7 @@ impl DriverConversationStore {
             .transpose()
     }
 
-    fn check(collection: &str, id: &str, version: tinystoragedrivers_core::Version) -> ReadCheck {
+    fn check(collection: &str, id: &str, version: tinystoragedrivers_types::Version) -> ReadCheck {
         ReadCheck {
             collection: collection.into(),
             id: id.into(),

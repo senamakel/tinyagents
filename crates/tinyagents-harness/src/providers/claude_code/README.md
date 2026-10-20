@@ -19,8 +19,8 @@ surfaced](#tool-calls-are-not-surfaced)).
 | `driver.rs` | `run_turn`: per-turn scratch dir, permission posture, macOS Seatbelt jail, MCP config, argv, stdin/stdout piping, `DEFAULT_TURN_TIMEOUT_SECS` (900, override `OPENHUMAN_CLAUDE_CODE_TURN_TIMEOUT_SECS`), stderr diagnostics cap. |
 | `event_mapper.rs` | `ClaudeCodeEvent` → `ProviderDelta` / aggregated `ChatResponse`. `tool_use` blocks are tracked only to keep their `input_json_delta`s out of the visible text and are **not** surfaced as tool calls: the CLI is self-executing, so a tool block in the stream has already run; surfacing it would make the harness try to dispatch `Read`/`Bash`/… and loop on "unknown tool". |
 | `input_builder.rs` | `build_stdin`: JSONL user turns for `--input-format stream-json` — full history folded into a text preamble on a new session, only the pending user turn(s) on `--resume`, minus any already delivered to that session (`session_store` keeps per-thread fingerprints, so services or loop iterations sharing a thread do not re-send a turn); inline images re-hydrated from `[IMAGE:...]`/`[OH_IMAGE:...]` markers (5 MiB cap). |
-| `session_store.rs` | `SessionStore`: thread key → CC session UUID v4, persisted in `<workspace_dir>/claude-code-sessions.json`. |
-| `settings.rs` | `ClaudeCodeSettings { full_access }` persisted in `<workspace_dir>/claude_code_settings.json`. |
+| `session_store.rs` | `SessionStore`: thread key → CC session UUID v4, persisted through a host-bound `DocumentStore`; includes a byte-oriented importer for the former `claude-code-sessions.json` format. |
+| `settings.rs` | `ClaudeCodeSettings { full_access }` persisted through host-bound KV storage; includes a byte-oriented importer for the former `claude_code_settings.json` format. |
 | `stream_parser.rs` | Line-buffered JSONL parser for `--output-format stream-json`; permissive `serde_json::Value` payloads so a minor CLI schema bump does not break parsing. |
 | `types.rs` | `MIN_CLI_VERSION` (`2.0.0`), `CliStatus`, `BRAND_LABEL`. |
 | `version_check.rs` | `resolve_binary` (`OPENHUMAN_CLAUDE_CLI` env → `PATH` → well-known install dirs, because GUI launches inherit a stripped launchd `PATH`) and `probe()` against `MIN_CLI_VERSION`. |
@@ -110,9 +110,10 @@ On macOS the spawn is additionally wrapped in a Seatbelt jail
 (`sandbox-exec -p <profile>`, on by default when `/usr/bin/sandbox-exec`
 exists; opt out with `OPENHUMAN_CLAUDE_CODE_SANDBOX=0`). The profile allows
 everything the user can do *except* reads and writes under the first
-`.openhuman*`-named ancestor directory of `workspace_dir` — this provider's
-own on-disk state (session store, settings), not the CLI's own tools. Linux
-and Windows have no OS wall yet; CC runs unconfined there.
+`.openhuman*`-named ancestor directory of `workspace_dir`. Linux and Windows
+have no OS wall yet; CC runs unconfined there. The provider uses `workspace_dir`
+as CLI scratch/jail context only; session and settings persistence are supplied
+by the host's scoped storage backend.
 
 A host can attach an MCP endpoint by implementing `driver::McpEndpointProvider`
 and calling `ClaudeCodeProvider::with_mcp_provider`. When present,
@@ -137,10 +138,22 @@ internal to the CLI process.
 
 Not registered automatically by this crate. A host constructs a provider
 directly with `ClaudeCodeProvider::from_env(model, workspace_dir,
-project_dir)` — which fails fast with an actionable error when the CLI is
-missing, outdated (`types::MIN_CLI_VERSION`), or otherwise unusable
-(`version_check::probe`) — or with `ClaudeCodeProvider::new` when the caller
-has already resolved the binary path and credentials itself.
+project_dir, documents)` or `ClaudeCodeProvider::new(..., documents)` and must
+provide a bound `DocumentStore`; there is no filesystem or in-memory fallback.
+The host retains responsibility for discovering and reading any old workspace
+files, then can pass their bytes to `session_store::import_legacy_sessions`
+and `settings::import_legacy`. Session imports preserve existing state: equal
+session IDs merge delivered-turn fingerprints, while a different existing
+ID wins. Settings import only fills a missing value. These importers are
+repeatable and never access the filesystem themselves. Host migration should
+record its own completion marker after successful imports. A host can use
+`workspace_dir` for the CLI scratch/jail context; it is not the provider's
+persistence location.
+
+`from_env` fails fast with an actionable error when the CLI is missing,
+outdated (`types::MIN_CLI_VERSION`), or otherwise unusable
+(`version_check::probe`). Use `ClaudeCodeProvider::new` when the caller has
+already resolved the binary path and credentials itself.
 `PROVIDER_PREFIX` (`"claude-code:"`) is exported for a host's own routing
 grammar to recognize a `claude-code:<model>` provider string; this crate
 does not interpret it itself.

@@ -81,7 +81,8 @@ async fn thread_ids_with_separators_and_unicode_round_trip() {
 /// One undecodable record must not break listing for every other thread.
 #[tokio::test]
 async fn one_undecodable_record_does_not_break_other_threads() {
-    use tinystoragedrivers_core::{DocumentStore, Precondition};
+    use tinystoragedrivers_api::DocumentStore;
+    use tinystoragedrivers_types::Precondition;
     let dir = tempfile::tempdir().unwrap();
     let scoped = storage::sqlite(dir.path(), "checkpoints.sqlite");
     let docs = storage::docs(&scoped);

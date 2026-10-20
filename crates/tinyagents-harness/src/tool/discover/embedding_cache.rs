@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, IndexSpec, Key, Precondition, WriteOptions,
 };
 use tokio::sync::OnceCell;

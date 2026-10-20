@@ -138,7 +138,7 @@ pub struct TranscriptMessage {
     pub parts: Option<Vec<TranscriptPart>>,
     /// The legacy string this row was lifted from, if any; see [`LegacyText`].
     /// Serialized (only while it still describes the row; see
-    /// [`TranscriptMessageWire`]) so a store that round-trips the row through
+    /// `TranscriptMessageWire`) so a store that round-trips the row through
     /// serde keeps the original bytes of a non-canonical envelope.
     #[serde(default)]
     pub legacy: LegacyText,
@@ -660,6 +660,7 @@ pub struct TurnUsage {
 /// Schema version stamped on the `_meta` header line. Bumped when the JSONL
 /// record shape changes in a way future readers may need to branch on. `0`
 /// (absent) denotes pre-append-only files written before this field existed.
+#[cfg(test)]
 pub const TRANSCRIPT_SCHEMA_VERSION: u32 = 1;
 
 /// Metadata header for a session transcript file.

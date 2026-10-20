@@ -1,8 +1,9 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::Value;
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, MemoryStorage, Page, Precondition, ReadCheck,
-    StorageBackend, Version, Versioned, WriteOp, WriteResult,
+use tinyagents_storage_kit::{
+    CollectionSpec, DocumentStore, ErrorKind, Page, Precondition, ReadCheck, Version, Versioned,
+    WriteOp, WriteResult,
 };
 type NativeResult<T> = std::result::Result<T, StorageError>;
 
@@ -14,7 +15,7 @@ struct BoundedQueries {
 }
 #[async_trait::async_trait]
 impl DocumentStore for BoundedQueries {
-    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
@@ -45,7 +46,7 @@ impl DocumentStore for BoundedQueries {
         if collection == storage::EVENTS {
             self.limits.lock().push(query.limit);
             if self.refuse {
-                return Err(StorageError::fenced("event admission refused"));
+                return Err(StorageError::unavailable("event admission refused"));
             }
             if query.limit.is_none_or(|limit| limit > 3) {
                 return Err(StorageError::invalid_input(
@@ -87,12 +88,16 @@ impl DocumentStore for BoundedQueries {
 
 #[derive(Debug)]
 struct ArrivingReceipts {
-    inner: Arc<dyn tinystoragedrivers_core::StreamStore>,
+    inner: Arc<dyn tinystoragedrivers_api::StreamStore>,
     ledger: DriverRunLedger,
     generated: std::sync::atomic::AtomicUsize,
 }
 #[async_trait::async_trait]
-impl tinystoragedrivers_core::StreamStore for ArrivingReceipts {
+impl tinystoragedrivers_api::StreamStore for ArrivingReceipts {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
     async fn append(
         &self,
         stream: &str,
@@ -137,7 +142,7 @@ impl tinystoragedrivers_core::StreamStore for ArrivingReceipts {
         stream: &str,
         from: u64,
         limit: usize,
-    ) -> std::result::Result<Vec<tinystoragedrivers_core::StreamEntry>, StorageError> {
+    ) -> std::result::Result<Vec<tinystoragedrivers_types::StreamEntry>, StorageError> {
         self.inner.read_window(stream, from, limit).await
     }
     async fn len(&self, stream: &str) -> std::result::Result<u64, StorageError> {
@@ -168,7 +173,7 @@ fn event() -> RunEventAppend {
 #[tokio::test]
 async fn event_pages_follow_native_cursors_with_the_requested_limit() {
     let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let native = DriverRunLedger::new(scoped.clone());
     for _ in 0..5 {
         native.append_run_event(event()).await.unwrap();
@@ -178,13 +183,7 @@ async fn event_pages_follow_native_cursors_with_the_requested_limit() {
         limits: Default::default(),
         refuse: false,
     });
-    let actor = DriverRunLedger::new(ScopedStorage::new(
-        scoped.scope().clone(),
-        "query-budget",
-        documents.clone(),
-        scoped.streams().clone(),
-        scoped.blobs().clone(),
-    ));
+    let actor = DriverRunLedger::new(crate::testkit::with_documents(&scoped, documents.clone()));
     let page = actor
         .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
@@ -205,19 +204,13 @@ async fn event_pages_follow_native_cursors_with_the_requested_limit() {
 #[tokio::test]
 async fn zero_limit_event_reads_still_require_native_admission() {
     let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let documents = Arc::new(BoundedQueries {
         inner: scoped.documents().clone(),
         limits: Default::default(),
         refuse: true,
     });
-    let actor = DriverRunLedger::new(ScopedStorage::new(
-        scoped.scope().clone(),
-        "query-budget",
-        documents,
-        scoped.streams().clone(),
-        scoped.blobs().clone(),
-    ));
+    let actor = DriverRunLedger::new(crate::testkit::with_documents(&scoped, documents));
     let error = actor
         .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
@@ -227,13 +220,13 @@ async fn zero_limit_event_reads_still_require_native_admission() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Unavailable)
     );
 }
 #[tokio::test]
 async fn successful_projection_progress_does_not_exhaust_the_contention_budget() {
     let backend = MemoryStorage::new();
-    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let receipts = DriverRunLedger::new(scoped.clone());
     receipts.append_run_event(event()).await.unwrap();
     let streams = Arc::new(ArrivingReceipts {
@@ -241,12 +234,10 @@ async fn successful_projection_progress_does_not_exhaust_the_contention_budget()
         ledger: receipts,
         generated: std::sync::atomic::AtomicUsize::new(0),
     });
-    let actor = DriverRunLedger::new(ScopedStorage::new(
-        scoped.scope().clone(),
-        "arriving-receipts",
+    let actor = DriverRunLedger::new(crate::testkit::with_documents_and_streams(
+        &scoped,
         scoped.documents().clone(),
         streams,
-        scoped.blobs().clone(),
     ));
     assert_eq!(actor.reconcile_run_events("run").await.unwrap(), 65);
     assert_eq!(actor.reconcile_run_events("run").await.unwrap(), 65);

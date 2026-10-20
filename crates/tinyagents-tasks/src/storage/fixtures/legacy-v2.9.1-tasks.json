@@ -1,0 +1,190 @@
+{
+  "orchestration_task_history": [
+    {
+      "doc": {
+        "record": {
+          "created_at": {
+            "nanos_since_epoch": 860610470,
+            "secs_since_epoch": 1792501985
+          },
+          "spec": {
+            "input": {
+              "attempt": 2,
+              "prompt": "fixture input"
+            },
+            "kind": {
+              "graph_id": "fixture-graph",
+              "type": "graph"
+            },
+            "metadata": {
+              "source": "v2.9.1-public-writer"
+            },
+            "node_id": "node-fixture",
+            "parent_run_id": "run-parent",
+            "root_run_id": "run-root",
+            "task_id": "legacy-task-v291",
+            "thread_id": "thread-fixture",
+            "timeout_ms": 30000
+          },
+          "status": "pending",
+          "updated_at": {
+            "nanos_since_epoch": 860610470,
+            "secs_since_epoch": 1792501985
+          }
+        },
+        "rev": 1,
+        "taskId": "legacy-task-v291"
+      },
+      "id": "06355c637889ff66d504e4d7bccf093d605a2a5b98cd4317f5cb0f44714d0ae6",
+      "version": 1
+    },
+    {
+      "doc": {
+        "record": {
+          "created_at": {
+            "nanos_since_epoch": 860610470,
+            "secs_since_epoch": 1792501985
+          },
+          "ended_at": {
+            "nanos_since_epoch": 861180441,
+            "secs_since_epoch": 1792501985
+          },
+          "result": {
+            "text": "fixture completed"
+          },
+          "spec": {
+            "input": {
+              "attempt": 2,
+              "prompt": "fixture input"
+            },
+            "kind": {
+              "graph_id": "fixture-graph",
+              "type": "graph"
+            },
+            "metadata": {
+              "source": "v2.9.1-public-writer"
+            },
+            "node_id": "node-fixture",
+            "parent_run_id": "run-parent",
+            "root_run_id": "run-root",
+            "task_id": "legacy-task-v291",
+            "thread_id": "thread-fixture",
+            "timeout_ms": 30000
+          },
+          "started_at": {
+            "nanos_since_epoch": 860909635,
+            "secs_since_epoch": 1792501985
+          },
+          "status": "completed",
+          "updated_at": {
+            "nanos_since_epoch": 861180441,
+            "secs_since_epoch": 1792501985
+          }
+        },
+        "rev": 3,
+        "taskId": "legacy-task-v291"
+      },
+      "id": "0d309b97cf9885b602cbf5a349f6576b5baa5084bc21ed30944f03be99a86038",
+      "version": 1
+    },
+    {
+      "doc": {
+        "record": {
+          "created_at": {
+            "nanos_since_epoch": 860610470,
+            "secs_since_epoch": 1792501985
+          },
+          "spec": {
+            "input": {
+              "attempt": 2,
+              "prompt": "fixture input"
+            },
+            "kind": {
+              "graph_id": "fixture-graph",
+              "type": "graph"
+            },
+            "metadata": {
+              "source": "v2.9.1-public-writer"
+            },
+            "node_id": "node-fixture",
+            "parent_run_id": "run-parent",
+            "root_run_id": "run-root",
+            "task_id": "legacy-task-v291",
+            "thread_id": "thread-fixture",
+            "timeout_ms": 30000
+          },
+          "started_at": {
+            "nanos_since_epoch": 860909635,
+            "secs_since_epoch": 1792501985
+          },
+          "status": "running",
+          "updated_at": {
+            "nanos_since_epoch": 860909635,
+            "secs_since_epoch": 1792501985
+          }
+        },
+        "rev": 2,
+        "taskId": "legacy-task-v291"
+      },
+      "id": "255fa96fb9185a36a159bcf0dfc8791ce81bc3afccc1715cd24b9f9901645c70",
+      "version": 1
+    }
+  ],
+  "orchestration_tasks": [
+    {
+      "doc": {
+        "kind": "graph",
+        "nodeId": "node-fixture",
+        "parentRunId": "run-parent",
+        "record": {
+          "created_at": {
+            "nanos_since_epoch": 860610470,
+            "secs_since_epoch": 1792501985
+          },
+          "ended_at": {
+            "nanos_since_epoch": 861180441,
+            "secs_since_epoch": 1792501985
+          },
+          "result": {
+            "text": "fixture completed"
+          },
+          "spec": {
+            "input": {
+              "attempt": 2,
+              "prompt": "fixture input"
+            },
+            "kind": {
+              "graph_id": "fixture-graph",
+              "type": "graph"
+            },
+            "metadata": {
+              "source": "v2.9.1-public-writer"
+            },
+            "node_id": "node-fixture",
+            "parent_run_id": "run-parent",
+            "root_run_id": "run-root",
+            "task_id": "legacy-task-v291",
+            "thread_id": "thread-fixture",
+            "timeout_ms": 30000
+          },
+          "started_at": {
+            "nanos_since_epoch": 860909635,
+            "secs_since_epoch": 1792501985
+          },
+          "status": "completed",
+          "updated_at": {
+            "nanos_since_epoch": 861180441,
+            "secs_since_epoch": 1792501985
+          }
+        },
+        "rev": 3,
+        "rootRunId": "run-root",
+        "status": "completed",
+        "taskId": "legacy-task-v291",
+        "threadId": "thread-fixture"
+      },
+      "id": "df8eb4d143406251c4d2c1521395713a1fb7fe60d7fe2ca447aca5c44e7c219d",
+      "version": 3
+    }
+  ]
+}
