@@ -3,8 +3,8 @@
 use super::*;
 use crate::error::{Result, TinyAgentsError};
 use crate::events::HarnessRunStatus;
-use crate::ids::{ComponentId, ExecutionStatus, HarnessPhase, mint_run_id};
-use crate::observability::{DriverStatusStore, HarnessStatusStore};
+use crate::ids::{ComponentId, ExecutionStatus, HarnessPhase};
+use crate::observability::{DriverStatusStore, HarnessStatusStore, mint_run_id};
 use std::sync::Arc;
 use tinyagents_storage_kit::{Scope, StorageBackend, StreamStore};
 use tinystoragedrivers_testkit::MemoryBackend;
@@ -87,7 +87,10 @@ async fn backfills_only_inactive_journals_and_is_idempotent() {
         .await
         .unwrap();
     assert_eq!(again.backfilled, 0);
-    assert_eq!(again.deleted, 0, "zero retention keeps sealed journals forever");
+    assert_eq!(
+        again.deleted, 0,
+        "zero retention keeps sealed journals forever"
+    );
 }
 
 #[tokio::test]
@@ -152,6 +155,23 @@ async fn retention_deletes_only_after_the_exact_cutoff() {
     .await
     .unwrap();
     assert_eq!(repeated.deleted, 0);
+}
+
+#[tokio::test]
+async fn active_run_journals_are_never_removed_by_retention() {
+    let (status_store, streams) = setup();
+    let active = status(&status_store, ExecutionStatus::Running).await;
+    let name = format!("harness.journal/{active}");
+    journal(streams.as_ref(), &active).await;
+    streams.seal(&name).await.unwrap();
+
+    let report = maintain_run_journals(&status_store, streams.as_ref(), 1, i64::MAX, true)
+        .await
+        .unwrap();
+
+    assert_eq!(report.backfilled, 0);
+    assert_eq!(report.deleted, 0);
+    assert!(streams.info(&name).await.unwrap().is_some());
 }
 
 struct RefusingStatusStore;

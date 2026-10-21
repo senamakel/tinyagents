@@ -31,9 +31,9 @@ mod profile;
 mod types;
 mod worker;
 
+pub mod journal_maintenance;
 pub mod reaper;
 pub mod replay;
-pub mod journal_maintenance;
 pub mod status;
 pub(crate) mod status_record;
 pub mod trace_export;
@@ -42,6 +42,7 @@ pub mod turn_observer;
 #[doc(hidden)]
 pub use worker::{AppendWorker, DEFAULT_DRAIN_CAPACITY};
 
+pub use journal_maintenance::{JournalMaintenanceReport, maintain_run_journals};
 #[cfg(feature = "langfuse")]
 pub use langfuse::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
