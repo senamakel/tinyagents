@@ -1,276 +1,157 @@
-//! Transcript readers: the model-context replay ([`read_transcript`]), the
-//! display projection ([`read_transcript_display`]), and the cheap
-//! meta-only / last-usage scans used by thread summaries.
+//! Pure decoder for the classic append-only transcript JSONL format.
+//!
+//! Hosts own path discovery and file reads. This module accepts the bytes they
+//! read and returns both the model replay and display projection so each view
+//! is derived from the same source snapshot.
 
 use super::jsonl::{
     LineKind, MetaLine, classify_line, display_message_from_line, message_from_line,
     meta_from_payload,
 };
-use super::legacy_md::read_transcript_legacy_md;
-use super::types::TranscriptMessage;
 use super::types::{
     CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionTranscript, TranscriptMeta,
+    TranscriptMessage,
 };
 use anyhow::{Context, Result};
-use std::fs;
-use std::path::Path;
 
-/// Decode records independently so a cut multibyte character in one record
-/// cannot make every earlier and later turn unreadable.
-pub(super) fn read_jsonl_lines(path: &Path) -> Result<Vec<Option<String>>> {
-    let raw =
-        fs::read(path).with_context(|| format!("read transcript jsonl {}", path.display()))?;
-    Ok(raw
-        .split(|byte| *byte == b'\n')
-        .map(|line| std::str::from_utf8(line).ok().map(str::to_owned))
-        .collect())
+/// The model-context replay and display projection of one JSONL byte stream.
+#[derive(Debug, Clone)]
+pub struct DecodedTranscript {
+    /// Messages and tool declarations visible to a resumed model turn.
+    pub session: SessionTranscript,
+    /// Every displayable record, including interrupted and pre-compaction rows.
+    pub display: DisplaySessionTranscript,
 }
 
-/// Read a session transcript.
+/// Decodes a classic transcript JSONL byte stream without accessing the
+/// filesystem.
 ///
-/// **Primary path**: reads the `.jsonl` source of truth.
-/// **Fallback**: if the `.jsonl` does not exist but the legacy `.md` does
-/// (migration path — old sessions), reads it via the legacy HTML-comment
-/// parser and returns a `SessionTranscript` with default meta where the
-/// `.md` format didn't track a field.
-pub fn read_transcript(path: &Path) -> Result<SessionTranscript> {
-    // Route by extension first: a legacy `.md` path (returned by
-    // `find_latest_transcript` when only legacy files exist) must go to
-    // the legacy parser, never to the JSONL parser.
-    if path.extension().and_then(|s| s.to_str()) == Some("md") {
-        tracing::debug!(
-            "[transcript] reading legacy .md transcript: {}",
-            path.display()
-        );
-        return read_transcript_legacy_md(path);
-    }
-
-    if path.exists() {
-        read_transcript_jsonl(path)
-    } else {
-        // Fallback: try the .md sibling (legacy one-release compat).
-        let md_path = path.with_extension("md");
-        if md_path.exists() {
-            tracing::debug!(
-                "[transcript] .jsonl not found, falling back to legacy .md: {}",
-                md_path.display()
-            );
-            read_transcript_legacy_md(&md_path)
-        } else {
-            // Neither exists — propagate the original jsonl error.
-            read_transcript_jsonl(path)
-        }
-    }
-}
-
-/// Replays a `.jsonl` transcript into the model-context [`SessionTranscript`]:
-/// message lines accumulate, a `compaction` record replaces the accumulator
-/// wholesale, and `interrupted` partials are skipped since they never entered
-/// the model's context.
-fn read_transcript_jsonl(path: &Path) -> Result<SessionTranscript> {
-    let lines = read_jsonl_lines(path)?;
-
+/// The first non-empty line must be a valid `_meta` header. Later malformed,
+/// unknown, or invalid-UTF-8 lines are skipped. Metadata and tool declarations
+/// use the last valid record. Compactions replace model context and remain in
+/// the display history; interrupted messages remain display-only.
+///
+/// # Errors
+/// Returns an error when the first non-empty line is invalid UTF-8 or is not a
+/// valid `_meta` header, or when the stream contains no header.
+pub fn decode_transcript_jsonl(bytes: &[u8]) -> Result<DecodedTranscript> {
     let mut meta: Option<TranscriptMeta> = None;
-    let mut messages: Vec<TranscriptMessage> = Vec::new();
-    let mut tools: Option<serde_json::Value> = None;
-    let mut compactions_replayed = 0usize;
-    let mut interrupted_skipped = 0usize;
-
-    // Append-only log replay (Phase A): the first non-empty line MUST be the
-    // `_meta` header; subsequent lines are messages, `compaction` records
-    // (which *replace* the accumulated context), interrupted partials (skipped
-    // for the model-context path), or refreshed `_meta` lines (last wins).
+    let mut messages = Vec::<TranscriptMessage>::new();
+    let mut tools = None;
+    let mut records = Vec::<DisplayRecord>::new();
     let mut seen_first = false;
-    for (line_no, line) in lines.iter().enumerate() {
-        let Some(line) = line else {
-            if !seen_first {
+
+    for (line_index, bytes) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        let line = match std::str::from_utf8(bytes) {
+            Ok(line) => line.trim(),
+            Err(error) if !seen_first => {
                 anyhow::bail!(
-                    "first non-empty line of {} is not valid UTF-8",
-                    path.display()
+                    "first non-empty transcript line is not valid UTF-8 (line {}): {error}",
+                    line_index + 1
                 );
             }
-            tracing::warn!(
-                "[transcript] skipping invalid UTF-8 record line {} in {}",
-                line_no + 1,
-                path.display()
-            );
-            continue;
-        };
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if !seen_first {
-            seen_first = true;
-            let ml: MetaLine = serde_json::from_str(line).map_err(|err| {
-                anyhow::anyhow!(
-                    "first non-empty line of {} (line {}) is not a valid _meta object: {err}",
-                    path.display(),
-                    line_no + 1,
-                )
-            })?;
-            meta = Some(meta_from_payload(ml.meta));
-            continue;
-        }
-
-        match classify_line(line) {
-            Ok(LineKind::Meta(ml)) => {
-                // Refreshed cumulative meta — last one wins.
-                meta = Some(meta_from_payload(ml.meta));
-            }
-            Ok(LineKind::Compaction(cl)) => {
-                // Reduction record: the reduced context REPLACES everything
-                // accumulated so far, exactly reproducing the old full-rewrite.
-                let replacement: Vec<TranscriptMessage> =
-                    cl.replacement.into_iter().map(message_from_line).collect();
-                tracing::debug!(
-                    "[transcript] replay: compaction at line {} replaces {} accumulated message(s) with {} (request_id={:?}) in {}",
-                    line_no + 1,
-                    messages.len(),
-                    replacement.len(),
-                    cl.request_id,
-                    path.display()
-                );
-                messages = replacement;
-                compactions_replayed += 1;
-            }
-            Ok(LineKind::Tools(tl)) => {
-                // Declarations the session was last sent with — last wins.
-                tools = Some(tl.tools);
-            }
-            Ok(LineKind::Message(ml)) => {
-                if ml.interrupted {
-                    // Display-only partial — never part of the model context.
-                    interrupted_skipped += 1;
-                    tracing::debug!(
-                        "[transcript] replay: skipping interrupted partial line {} (display only) in {}",
-                        line_no + 1,
-                        path.display()
-                    );
-                    continue;
-                }
-                messages.push(message_from_line(ml));
-            }
-            Err(err) => {
+            Err(error) => {
                 tracing::warn!(
-                    "[transcript] skipping malformed/unknown record line {} in {}: {err}",
-                    line_no + 1,
-                    path.display()
+                    line = line_index + 1,
+                    %error,
+                    "[transcript] skipping invalid UTF-8 record"
                 );
+                continue;
             }
-        }
-    }
-
-    let meta = meta.with_context(|| {
-        format!(
-            "missing _meta header line in jsonl transcript {}",
-            path.display()
-        )
-    })?;
-
-    tracing::debug!(
-        "[transcript] loaded {} messages (jsonl, {} compaction(s) replayed, {} interrupted skipped) from {}",
-        messages.len(),
-        compactions_replayed,
-        interrupted_skipped,
-        path.display()
-    );
-
-    Ok(SessionTranscript {
-        meta,
-        messages,
-        tools,
-    })
-}
-
-/// Read a transcript for **display**: returns *every* record in file order,
-/// including pre-compaction history, compaction markers, and interrupted
-/// partials — the counterpart to the model-context [`read_transcript`], which
-/// collapses the log into the reduced context.
-///
-/// `meta` reflects the newest `_meta` line (cumulative totals stay current).
-pub fn read_transcript_display(path: &Path) -> Result<DisplaySessionTranscript> {
-    let lines = read_jsonl_lines(path)?;
-
-    let mut meta: Option<TranscriptMeta> = None;
-    let mut records: Vec<DisplayRecord> = Vec::new();
-    let mut seen_first = false;
-
-    for (line_no, line) in lines.iter().enumerate() {
-        let Some(line) = line else {
-            if !seen_first {
-                anyhow::bail!(
-                    "first non-empty line of {} is not valid UTF-8",
-                    path.display()
-                );
-            }
-            tracing::warn!(
-                "[transcript] display: skipping invalid UTF-8 record line {} in {}",
-                line_no + 1,
-                path.display()
-            );
-            continue;
         };
-        let line = line.trim();
         if line.is_empty() {
             continue;
         }
+
         if !seen_first {
             seen_first = true;
-            let ml: MetaLine = serde_json::from_str(line).map_err(|err| {
+            let header: MetaLine = serde_json::from_str(line).map_err(|error| {
                 anyhow::anyhow!(
-                    "first non-empty line of {} (line {}) is not a valid _meta object: {err}",
-                    path.display(),
-                    line_no + 1,
+                    "first non-empty transcript line (line {}) is not a valid _meta object: {error}",
+                    line_index + 1
                 )
             })?;
-            meta = Some(meta_from_payload(ml.meta));
+            meta = Some(meta_from_payload(header.meta));
             continue;
         }
+
         match classify_line(line) {
-            Ok(LineKind::Meta(ml)) => meta = Some(meta_from_payload(ml.meta)),
-            // Request state, not a displayable record.
-            Ok(LineKind::Tools(_)) => {}
-            Ok(LineKind::Compaction(cl)) => {
-                let replacement = cl
+            Ok(LineKind::Meta(header)) => meta = Some(meta_from_payload(header.meta)),
+            Ok(LineKind::Compaction(compaction)) => {
+                messages = compaction
+                    .replacement
+                    .iter()
+                    .cloned()
+                    .map(message_from_line)
+                    .collect();
+                let replacement = compaction
                     .replacement
                     .into_iter()
                     .map(display_message_from_line)
                     .collect();
                 records.push(DisplayRecord::Compaction(CompactionMarker {
                     replacement,
-                    ts: cl.ts,
-                    request_id: cl.request_id,
+                    ts: compaction.ts,
+                    request_id: compaction.request_id,
                 }));
             }
-            Ok(LineKind::Message(ml)) => {
-                records.push(DisplayRecord::Message(Box::new(display_message_from_line(
-                    ml,
-                ))));
+            Ok(LineKind::Tools(declarations)) => tools = Some(declarations.tools),
+            Ok(LineKind::Message(message)) => {
+                if !message.interrupted {
+                    messages.push(message_from_line(message.clone()));
+                }
+                records.push(DisplayRecord::Message(Box::new(
+                    display_message_from_line(message),
+                )));
             }
-            Err(err) => {
-                tracing::warn!(
-                    "[transcript] display: skipping malformed/unknown record line {} in {}: {err}",
-                    line_no + 1,
-                    path.display()
-                );
-            }
+            Err(error) => tracing::warn!(
+                line = line_index + 1,
+                %error,
+                "[transcript] skipping malformed or unknown record"
+            ),
         }
     }
 
-    let meta = meta.with_context(|| {
-        format!(
-            "missing _meta header line in jsonl transcript {}",
-            path.display()
-        )
-    })?;
+    let meta = meta.context("missing _meta header line in JSONL transcript")?;
+    Ok(DecodedTranscript {
+        session: SessionTranscript {
+            meta: meta.clone(),
+            messages,
+            tools,
+        },
+        display: DisplaySessionTranscript { meta, records },
+    })
+}
 
-    tracing::debug!(
-        "[transcript] display-loaded {} record(s) from {}",
-        records.len(),
-        path.display()
-    );
+#[cfg(test)]
+use super::legacy_md::read_transcript_legacy_md;
+#[cfg(test)]
+use std::fs;
+#[cfg(test)]
+use std::path::Path;
 
-    Ok(DisplaySessionTranscript { meta, records })
+/// Read a session transcript from a path. The production host owns this I/O;
+/// this wrapper remains test-only for compatibility tests of the old reader.
+#[cfg(test)]
+pub fn read_transcript(path: &Path) -> Result<SessionTranscript> {
+    if path.extension().and_then(|extension| extension.to_str()) == Some("md") {
+        return read_transcript_legacy_md(path);
+    }
+    let jsonl = if path.exists() {
+        path.to_path_buf()
+    } else {
+        let markdown = path.with_extension("md");
+        if markdown.exists() {
+            return read_transcript_legacy_md(&markdown);
+        }
+        path.to_path_buf()
+    };
+    Ok(decode_transcript_jsonl(&fs::read(jsonl)?)?.session)
+}
+
+/// Test-only path wrapper; production callers should read bytes themselves
+/// and call [`decode_transcript_jsonl`].
+#[cfg(test)]
+pub fn read_transcript_display(path: &Path) -> Result<DisplaySessionTranscript> {
+    Ok(decode_transcript_jsonl(&fs::read(path)?)?.display)
 }
