@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use super::COUNTERS;
 use super::repo::{Repo, RetryPolicy};
-use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{Result, StorageError};
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{
+    ExpectedDocument, Precondition, ReadCheck, Result, StorageError, WriteOp, WriteResult,
+};
 
 /// The largest value every driver can store (`i64::MAX`).
 const MAX_VALUE: u64 = i64::MAX as u64;
@@ -28,6 +30,7 @@ struct Body {
 #[derive(Debug, Clone)]
 pub struct Counters {
     repo: Repo<Body>,
+    docs: Arc<dyn DocumentStore>,
 }
 
 impl Counters {
@@ -41,6 +44,7 @@ impl Counters {
     pub fn new(docs: &Arc<dyn DocumentStore>) -> Self {
         Self {
             repo: Repo::new(docs, COUNTERS).expect("tsd.counters is a valid collection"),
+            docs: Arc::clone(docs),
         }
     }
 
@@ -111,6 +115,57 @@ impl Counters {
             Some((body, _)) => Ok(body.value),
             None => self.peek(owner, name).await,
         }
+    }
+
+    /// Raise a counter in the same checked atomic batch as related owner rows.
+    ///
+    /// The counter dependency is read before assembling the supplied batch,
+    /// then its exact version is checked at the batch's atomic validation
+    /// point. A conflict commits none of the supplied writes. The caller may
+    /// retry the complete plan after a conflict.
+    ///
+    /// This is useful when imported numeric IDs must become unavailable for
+    /// future allocation in the very same commit that inserts those IDs.
+    ///
+    /// # Errors
+    /// A storage error, an invalid counter value, or a failed batch check.
+    pub async fn set_at_least_with_batch(
+        &self,
+        owner: &str,
+        name: &str,
+        minimum: u64,
+        mut checks: Vec<ReadCheck>,
+        mut writes: Vec<WriteOp>,
+    ) -> Result<Vec<WriteResult>> {
+        if minimum > MAX_VALUE {
+            return Err(StorageError::invalid_input("counter value out of range"));
+        }
+        let id = id(owner, name)?;
+        let found = self.docs.get(COUNTERS, &id).await?;
+        let current = found
+            .as_ref()
+            .map(|record| serde_json::from_value::<Body>(record.doc.clone()))
+            .transpose()?
+            .map_or(0, |body| body.value);
+        let expected = found.as_ref().map_or(ExpectedDocument::Absent, |record| {
+            ExpectedDocument::Version(record.version)
+        });
+        checks.push(ReadCheck {
+            collection: COUNTERS.into(),
+            id: id.clone(),
+            expected,
+        });
+        if minimum > current {
+            writes.push(WriteOp::Put {
+                collection: COUNTERS.into(),
+                id,
+                doc: serde_json::to_value(Body { value: minimum })?,
+                precondition: found.map_or(Precondition::Absent, |record| {
+                    Precondition::Version(record.version)
+                }),
+            });
+        }
+        self.docs.atomic_batch_checked(checks, writes).await
     }
 }
 

@@ -18,6 +18,7 @@ use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
+use super::legacy_import::{LegacyDatabaseReport, LegacySessionImport};
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
 use crate::retention::RetentionReport;
@@ -34,6 +35,19 @@ use crate::retention::RetentionReport;
 /// synchronous. Callback parameters are shared safely across awaited operations.
 #[async_trait::async_trait]
 pub trait RunLedgerStore: Send + Sync {
+    /// Import host-decoded rows from the former session database in one
+    /// checked owner commit.
+    ///
+    /// Exact retries are no-ops. A pre-existing row with different contents,
+    /// invalid foreign key, or a concurrently changed dependency refuses the
+    /// whole batch before any family is partially inserted. Message/tool-call
+    /// IDs and run-event sequences are preserved, and their allocators advance
+    /// in the same commit.
+    async fn import_legacy_batch(
+        &self,
+        batch: LegacySessionImport,
+    ) -> Result<LegacyDatabaseReport>;
+
     /// Inserts a new [`AgentRun`] or merges fields into an existing one with the
     /// same id, returning the row as stored.
     ///
