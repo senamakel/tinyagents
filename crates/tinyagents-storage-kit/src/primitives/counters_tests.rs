@@ -1,5 +1,5 @@
 use super::*;
-use tinystoragedrivers_api::{DocumentStore, StorageBackend};
+use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
 use tinystoragedrivers_types::{CollectionSpec, ErrorKind, Precondition, ReadCheck, WriteOp};
 
