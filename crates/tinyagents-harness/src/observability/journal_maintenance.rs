@@ -22,6 +22,8 @@ pub struct JournalMaintenanceReport {
     pub backfilled: usize,
     /// Expired sealed journals successfully deleted.
     pub deleted: usize,
+    /// Eligible journals that changed before their conditional deletion.
+    pub conflicts: usize,
 }
 
 /// Reconcile harness journals using host-supplied time and retention policy.
@@ -87,13 +89,16 @@ pub async fn maintain_run_journals(
             continue;
         };
         let retention_ms = i64::try_from(retention_ms).unwrap_or(i64::MAX);
-        if sealed_ms.saturating_add(retention_ms) < now_ms
-            && streams
+        if sealed_ms.saturating_add(retention_ms) < now_ms {
+            if streams
                 .delete_sealed_stream(&name, sealed_ms)
                 .await
                 .map_err(map_error)?
-        {
-            report.deleted += 1;
+            {
+                report.deleted += 1;
+            } else {
+                report.conflicts += 1;
+            }
         }
     }
 
