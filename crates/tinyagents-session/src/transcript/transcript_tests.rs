@@ -492,3 +492,41 @@ fn role_content_only_json_deserializes_to_a_bare_row() {
         serde_json::from_str(r#"{"role":"assistant","content":"hello"}"#).unwrap();
     assert_eq!(row, TranscriptMessage::assistant("hello"));
 }
+
+#[test]
+fn in_memory_jsonl_decoder_returns_model_and_display_views_from_same_records() {
+    let rows = [
+        r#"{"_meta":{"agent":"agent","dispatcher":"native","created":"now","updated":"now","turn_count":1,"input_tokens":0,"output_tokens":0,"cached_input_tokens":0,"charged_amount_usd":0.0}}"#,
+        r#"{"kind":"tools","tools":[{"name":"lookup"}]}"#,
+        r#"{"role":"user","content":"question","request_id":"req-1"}"#,
+        r#"{"role":"assistant","content":"partial","request_id":"req-1","interrupted":true}"#,
+        r#"{"kind":"compaction","replacement":[{"role":"assistant","content":"condensed","request_id":"req-2"}],"request_id":"req-2"}"#,
+        "{malformed later record",
+    ];
+    let decoded = decode_transcript_jsonl(rows.join("\n").as_bytes()).unwrap();
+
+    assert_eq!(decoded.session.messages.len(), 1);
+    assert_eq!(decoded.session.messages[0].content, "condensed");
+    assert_eq!(
+        decoded.session.tools,
+        Some(serde_json::json!([{"name": "lookup"}]))
+    );
+    assert_eq!(decoded.display.records.len(), 3);
+    assert!(matches!(
+        &decoded.display.records[1],
+        DisplayRecord::Message(message)
+            if message.interrupted && message.request_id.as_deref() == Some("req-1")
+    ));
+    assert!(matches!(
+        &decoded.display.records[2],
+        DisplayRecord::Compaction(marker)
+            if marker.request_id.as_deref() == Some("req-2")
+    ));
+}
+
+#[test]
+fn in_memory_jsonl_decoder_rejects_a_missing_or_invalid_header() {
+    for input in [b"".as_slice(), b"not json\n{}"] {
+        assert!(decode_transcript_jsonl(input).is_err());
+    }
+}
