@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::COUNTERS;
 use super::repo::{Repo, RetryPolicy};
-use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
     ExpectedDocument, Precondition, ReadCheck, Result, StorageError, WriteOp, WriteResult,
 };
@@ -134,8 +134,8 @@ impl Counters {
         owner: &str,
         name: &str,
         minimum: u64,
-        mut checks: Vec<ReadCheck>,
-        mut writes: Vec<WriteOp>,
+        checks: Vec<ReadCheck>,
+        writes: Vec<WriteOp>,
     ) -> Result<Vec<WriteResult>> {
         self.set_many_at_least_with_batch(&[(owner, name, minimum)], checks, writes)
             .await
