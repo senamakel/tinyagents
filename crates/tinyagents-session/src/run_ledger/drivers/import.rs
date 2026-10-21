@@ -7,17 +7,16 @@
 use super::dto::Stored;
 use super::events::EventHead;
 use super::history::{
-    MESSAGE_COUNTER, message_fts_id, message_fts_row, message_id, session_fts_id,
+    MESSAGE_COUNTER, TOOL_CALL_COUNTER, message_fts_id, message_fts_row, message_id, session_fts_id,
     session_fts_row, tool_call_id, tool_fts_id, tool_fts_row,
 };
 use super::storage::{
     AGENTS, CAS_ATTEMPTS, EFFECTS, EVENT_HEADS, EVENTS, HIST_FTS, HIST_MESSAGES,
-    HIST_SESSIONS, HIST_TOOL_CALLS, MEMBERS, TASKS, TEAMS, TELEMETRY, TOOL_CALL_COUNTER,
+    HIST_SESSIONS, HIST_TOOL_CALLS, MEMBERS, TASKS, TEAMS, TELEMETRY,
     WORKFLOWS, decode, encode, key, put_op,
 };
 use super::*;
 use crate::run_ledger::legacy_import::{ImportCounts, LegacyDatabaseReport, LegacySessionImport};
-use crate::types::{SessionMessage, SessionRecord, SessionToolCall};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use tinyagents_storage_kit::{
     Counters, ErrorKind, ExpectedDocument, Precondition, ReadCheck, StorageError, WriteOp,
