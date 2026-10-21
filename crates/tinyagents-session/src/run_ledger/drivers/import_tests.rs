@@ -82,6 +82,41 @@ fn fixture_batch() -> LegacySessionImport {
     }
 }
 
+async fn assert_invalid_import_has_no_partial_rows(batch: LegacySessionImport) {
+    let backend = Arc::new(MemoryStorage::new());
+    let ledger = ledger(backend.as_ref());
+    ledger.declare().await.unwrap();
+
+    assert!(ledger.import_legacy_batch(batch).await.is_err());
+
+    let docs = ledger.scoped.documents();
+    assert!(
+        docs.get(
+            super::storage::HIST_SESSIONS,
+            &super::storage::key(&["session-legacy"]).unwrap(),
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert!(
+        docs.get(
+            super::storage::HIST_MESSAGES,
+            &super::history::message_id(41).unwrap(),
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        Counters::new(docs)
+            .peek("history", "messages")
+            .await
+            .unwrap(),
+        0
+    );
+}
+
 #[tokio::test]
 async fn imports_preserve_explicit_history_ids_events_and_advance_counters_atomically() {
     let backend = Arc::new(MemoryStorage::new());
@@ -354,4 +389,85 @@ async fn imports_all_run_ledger_families_in_the_same_typed_batch() {
         .unwrap()
         .unwrap();
     assert_eq!(lease.doc["holder"], "legacy-driver");
+}
+
+#[tokio::test]
+async fn rejects_cross_session_tool_message_reference_before_writing_any_rows() {
+    let mut batch = fixture_batch();
+    let mut other = batch.sessions[0].clone();
+    other.id = "other-session".into();
+    batch.sessions.push(other);
+    batch.tool_calls.push(SessionToolCall {
+        id: 74,
+        session_id: "other-session".into(),
+        message_id: Some(41),
+        tool_name: "foreign-session-tool".into(),
+        tool_input: None,
+        tool_output: None,
+        status: "ok".into(),
+        duration_ms: None,
+        created_at: instant(1_700_000_001_000),
+    });
+
+    assert_invalid_import_has_no_partial_rows(batch).await;
+}
+
+#[tokio::test]
+async fn rejects_cross_team_task_member_reference_before_writing_any_rows() {
+    let at = instant(1_700_000_000_123);
+    let mut batch = fixture_batch();
+    batch.teams = vec![
+        AgentTeam {
+            id: "team-a".into(),
+            parent_thread_id: None,
+            lead_agent_id: "agent-a".into(),
+            status: AgentTeamStatus::Active,
+            summary: None,
+            created_at: at,
+            updated_at: at,
+            closed_at: None,
+        },
+        AgentTeam {
+            id: "team-b".into(),
+            parent_thread_id: None,
+            lead_agent_id: "agent-b".into(),
+            status: AgentTeamStatus::Active,
+            summary: None,
+            created_at: at,
+            updated_at: at,
+            closed_at: None,
+        },
+    ];
+    batch.members.push(AgentTeamMember {
+        id: "member-a".into(),
+        team_id: "team-a".into(),
+        name: "Member A".into(),
+        agent_id: None,
+        member_status: AgentTeamMemberStatus::Idle,
+        current_task_id: None,
+        worker_thread_id: None,
+        run_id: None,
+        created_at: at,
+        updated_at: at,
+    });
+    batch.tasks.push(AgentTeamTask {
+        id: "task-b".into(),
+        team_id: "team-b".into(),
+        title: "Task B".into(),
+        objective: None,
+        status: AgentTeamTaskStatus::InProgress,
+        owner_member_id: Some("member-a".into()),
+        claimed_by_member_id: None,
+        claim_token: None,
+        depends_on: Vec::new(),
+        gate_status: "pending".into(),
+        gate_reason: None,
+        evidence: Vec::new(),
+        source_run_id: None,
+        order_index: 0,
+        created_at: at,
+        updated_at: at,
+    });
+
+    assert_invalid_import_has_no_partial_rows(batch).await;
 }
