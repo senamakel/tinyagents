@@ -43,10 +43,8 @@ pub trait RunLedgerStore: Send + Sync {
     /// whole batch before any family is partially inserted. Message/tool-call
     /// IDs and run-event sequences are preserved, and their allocators advance
     /// in the same commit.
-    async fn import_legacy_batch(
-        &self,
-        batch: LegacySessionImport,
-    ) -> Result<LegacyDatabaseReport>;
+    async fn import_legacy_batch(&self, batch: LegacySessionImport)
+    -> Result<LegacyDatabaseReport>;
 
     /// Inserts a new [`AgentRun`] or merges fields into an existing one with the
     /// same id, returning the row as stored.

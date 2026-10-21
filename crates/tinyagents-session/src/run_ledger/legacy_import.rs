@@ -52,16 +52,6 @@ pub struct ImportCounts {
     pub already_present: usize,
 }
 
-impl ImportCounts {
-    pub(super) fn new(read: usize, imported: usize) -> Self {
-        Self {
-            read,
-            imported,
-            already_present: read.saturating_sub(imported),
-        }
-    }
-}
-
 /// Per-family result of an idempotent typed database import.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LegacyDatabaseReport {

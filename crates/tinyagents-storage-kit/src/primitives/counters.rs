@@ -158,7 +158,9 @@ impl Counters {
             }
             let id = id(owner, name)?;
             if !seen.insert(id.clone()) {
-                return Err(StorageError::invalid_input("duplicate counter in atomic update"));
+                return Err(StorageError::invalid_input(
+                    "duplicate counter in atomic update",
+                ));
             }
             let found = self.docs.get(COUNTERS, &id).await?;
             let current = found
