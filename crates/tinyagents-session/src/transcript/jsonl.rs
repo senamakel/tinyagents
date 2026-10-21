@@ -5,7 +5,6 @@
 use super::display::{metadata_with_background, split_background};
 #[cfg(test)]
 use super::types::TRANSCRIPT_SCHEMA_VERSION;
-#[cfg(test)]
 use super::types::TranscriptMeta;
 use super::types::{BackgroundOrigin, DisplayMessage, MessageUsage, TurnUsage};
 use super::types::{ToolFailure, TranscriptMessage, TranscriptPart, TranscriptToolCall};
