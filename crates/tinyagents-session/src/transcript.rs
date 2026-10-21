@@ -106,7 +106,7 @@ pub use history::{
     TruncateCut,
 };
 pub(crate) use jsonl::stamped_rows;
-pub use reader::{DecodedTranscript, decode_transcript_jsonl};
+pub use reader::{DecodedTranscript, decode_transcript_jsonl, rewrite_first_system_message_jsonl};
 #[cfg(test)]
 pub(crate) use reader::{read_transcript, read_transcript_display};
 pub use session::{SessionRef, session_stem};
