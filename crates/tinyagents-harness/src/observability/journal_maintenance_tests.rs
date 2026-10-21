@@ -297,6 +297,7 @@ async fn changed_sealed_incarnation_is_not_counted_as_deleted() {
         .unwrap();
 
     assert_eq!(report.deleted, 0);
+    assert_eq!(report.conflicts, 1);
     assert!(
         streams
             .info("harness.journal/changed")
