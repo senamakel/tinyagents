@@ -76,6 +76,11 @@ fn conflict(message: &'static str) -> StorageError {
 fn validate_batch(batch: &LegacySessionImport) -> std::result::Result<(), StorageError> {
     let session_ids: HashSet<&str> = batch.sessions.iter().map(|row| row.id.as_str()).collect();
     let message_ids: HashSet<i64> = batch.messages.iter().map(|row| row.id).collect();
+    let message_sessions: HashMap<i64, &str> = batch
+        .messages
+        .iter()
+        .map(|row| (row.id, row.session_id.as_str()))
+        .collect();
     let tool_ids: HashSet<i64> = batch.tool_calls.iter().map(|row| row.id).collect();
     let agent_ids: HashSet<&str> = batch.agent_runs.iter().map(|row| row.id.as_str()).collect();
     let workflow_ids: HashSet<&str> = batch
@@ -85,6 +90,11 @@ fn validate_batch(batch: &LegacySessionImport) -> std::result::Result<(), Storag
         .collect();
     let team_ids: HashSet<&str> = batch.teams.iter().map(|row| row.id.as_str()).collect();
     let member_ids: HashSet<&str> = batch.members.iter().map(|row| row.id.as_str()).collect();
+    let member_teams: HashMap<&str, &str> = batch
+        .members
+        .iter()
+        .map(|row| (row.id.as_str(), row.team_id.as_str()))
+        .collect();
 
     if session_ids.len() != batch.sessions.len()
         || message_ids.len() != batch.messages.len()
@@ -106,7 +116,9 @@ fn validate_batch(batch: &LegacySessionImport) -> std::result::Result<(), Storag
     for row in &batch.tool_calls {
         if row.id <= 0
             || !session_ids.contains(row.session_id.as_str())
-            || row.message_id.is_some_and(|id| !message_ids.contains(&id))
+            || row.message_id.is_some_and(|id| {
+                message_sessions.get(&id).copied() != Some(row.session_id.as_str())
+            })
         {
             return Err(StorageError::invalid_input(
                 "legacy tool call has invalid references",
@@ -129,14 +141,14 @@ fn validate_batch(batch: &LegacySessionImport) -> std::result::Result<(), Storag
     }
     for row in &batch.tasks {
         if !team_ids.contains(row.team_id.as_str())
-            || row
-                .owner_member_id
-                .as_deref()
-                .is_some_and(|id| !member_ids.contains(id))
-            || row
-                .claimed_by_member_id
-                .as_deref()
-                .is_some_and(|id| !member_ids.contains(id))
+            || row.owner_member_id.as_deref().is_some_and(|id| {
+                !member_ids.contains(id)
+                    || member_teams.get(id).copied() != Some(row.team_id.as_str())
+            })
+            || row.claimed_by_member_id.as_deref().is_some_and(|id| {
+                !member_ids.contains(id)
+                    || member_teams.get(id).copied() != Some(row.team_id.as_str())
+            })
         {
             return Err(StorageError::invalid_input(
                 "legacy task has invalid team or member",
@@ -144,7 +156,7 @@ fn validate_batch(batch: &LegacySessionImport) -> std::result::Result<(), Storag
         }
     }
     // Agent/workflow relationships may refer to rows outside the imported
-    // slice, so their existence is checked against the destination snapshot.
+    // slice, so this batch preserves those references without validating them.
     let _ = workflow_ids;
     Ok(())
 }
