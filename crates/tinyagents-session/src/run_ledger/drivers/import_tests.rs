@@ -172,3 +172,27 @@ async fn conflicting_existing_row_refuses_the_whole_import_before_counters_advan
         .is_none()
     );
 }
+
+#[tokio::test]
+async fn concurrent_identical_imports_reconcile_after_one_checked_commit() {
+    let backend = Arc::new(MemoryStorage::new());
+    let ledger = Arc::new(ledger(backend.as_ref()));
+    let batch = fixture_batch();
+    let (left, right) = tokio::join!(
+        ledger.import_legacy_batch(batch.clone()),
+        ledger.import_legacy_batch(batch),
+    );
+    let left = left.unwrap();
+    let right = right.unwrap();
+    assert_eq!(left.messages.imported + right.messages.imported, 1);
+    assert_eq!(
+        left.messages.already_present + right.messages.already_present,
+        1
+    );
+    assert_eq!(left.tool_calls.imported + right.tool_calls.imported, 1);
+    assert_eq!(left.events.imported + right.events.imported, 1);
+
+    let counters = Counters::new(ledger.scoped.documents());
+    assert_eq!(counters.peek("history", "messages").await.unwrap(), 41);
+    assert_eq!(counters.peek("history", "tool_calls").await.unwrap(), 73);
+}
