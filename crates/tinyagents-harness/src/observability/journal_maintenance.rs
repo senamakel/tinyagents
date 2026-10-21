@@ -50,7 +50,7 @@ pub async fn maintain_run_journals(
         .list_active()
         .await?
         .into_iter()
-        .filter(|status| is_active(status))
+        .filter(is_active)
         .map(|status| status.run_id.as_str().to_owned())
         .collect();
 
