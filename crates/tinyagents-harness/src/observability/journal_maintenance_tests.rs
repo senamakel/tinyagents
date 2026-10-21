@@ -23,9 +23,9 @@ async fn status(store: &dyn HarnessStatusStore, state: ExecutionStatus) -> Strin
     let run_id = mint_run_id();
     let mut status = HarnessRunStatus::new(run_id.clone(), ComponentId::new("test".to_owned()));
     match state {
-        ExecutionStatus::Pending => {}
+        ExecutionStatus::Completed => status.mark_completed(),
         ExecutionStatus::Running => status.mark_running(HarnessPhase::Model),
-        other => panic!("expected pending or running status, got {other:?}"),
+        other => panic!("expected completed or running status, got {other:?}"),
     }
     store.put_status(status).await.unwrap();
     run_id.as_str().to_owned()
@@ -45,7 +45,7 @@ async fn journal(streams: &dyn StreamStore, run_id: &str) {
 async fn backfills_only_inactive_journals_and_is_idempotent() {
     let (status_store, streams) = setup();
     let active = status(&status_store, ExecutionStatus::Running).await;
-    let inactive = status(&status_store, ExecutionStatus::Pending).await;
+    let inactive = status(&status_store, ExecutionStatus::Completed).await;
     journal(streams.as_ref(), &active).await;
     journal(streams.as_ref(), "not-active").await;
     let now_ms = 10_000;
