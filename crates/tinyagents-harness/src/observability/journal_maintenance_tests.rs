@@ -5,9 +5,14 @@ use crate::error::{Result, TinyAgentsError};
 use crate::events::HarnessRunStatus;
 use crate::ids::{ComponentId, ExecutionStatus, HarnessPhase};
 use crate::observability::{DriverStatusStore, HarnessStatusStore, mint_run_id};
+use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 use tinyagents_storage_kit::{Scope, StorageBackend, StreamStore};
-use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
+use tinystoragedrivers_types::{
+    Capabilities, ErrorKind, Result as StorageResult, SealOutcome, StreamEntry, StreamInfo,
+};
 
 fn setup() -> (DriverStatusStore, Arc<dyn StreamStore>) {
     let scoped = MemoryBackend::new()
@@ -54,7 +59,7 @@ async fn backfills_only_inactive_journals_and_is_idempotent() {
     let first = maintain_run_journals(&status_store, streams.as_ref(), 0, now_ms, true)
         .await
         .unwrap();
-    assert_eq!(first.backfilled, 1);
+    assert_eq!(first.backfilled, 2);
     assert_eq!(
         streams
             .info(&format!("harness.journal/{active}"))
@@ -203,4 +208,100 @@ async fn status_enumeration_failures_are_propagated() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("status listing failed"));
+}
+
+#[tokio::test]
+async fn stream_listing_failures_are_propagated() {
+    let (status_store, streams) = setup();
+    let faults = FaultPlan::new();
+    faults.fail_operation_nth("streams.streams", 1, ErrorKind::Backend);
+    let streams: Arc<dyn StreamStore> = Arc::new(Failing::with_plan(streams, faults));
+
+    let error = maintain_run_journals(&status_store, streams.as_ref(), 0, 0, true)
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("injected failure for streams.streams")
+    );
+}
+
+#[derive(Debug)]
+struct RefusingConditionalDelete {
+    inner: Arc<dyn StreamStore>,
+}
+
+#[async_trait]
+impl StreamStore for RefusingConditionalDelete {
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    async fn append(&self, stream: &str, value: Value) -> StorageResult<u64> {
+        self.inner.append(stream, value).await
+    }
+
+    async fn append_batch(&self, stream: &str, values: Vec<Value>) -> StorageResult<u64> {
+        self.inner.append_batch(stream, values).await
+    }
+
+    async fn read_window(
+        &self,
+        stream: &str,
+        from: u64,
+        limit: usize,
+    ) -> StorageResult<Vec<StreamEntry>> {
+        self.inner.read_window(stream, from, limit).await
+    }
+
+    async fn len(&self, stream: &str) -> StorageResult<u64> {
+        self.inner.len(stream).await
+    }
+
+    async fn truncate_before(&self, stream: &str, offset: u64) -> StorageResult<u64> {
+        self.inner.truncate_before(stream, offset).await
+    }
+
+    async fn delete_stream(&self, stream: &str) -> StorageResult<bool> {
+        self.inner.delete_stream(stream).await
+    }
+
+    async fn streams(&self, prefix: &str) -> StorageResult<Vec<String>> {
+        self.inner.streams(prefix).await
+    }
+
+    async fn seal(&self, stream: &str) -> StorageResult<SealOutcome> {
+        self.inner.seal(stream).await
+    }
+
+    async fn delete_sealed_stream(&self, _stream: &str, _sealed_ms: i64) -> StorageResult<bool> {
+        Ok(false)
+    }
+
+    async fn info(&self, stream: &str) -> StorageResult<Option<StreamInfo>> {
+        self.inner.info(stream).await
+    }
+}
+
+#[tokio::test]
+async fn changed_sealed_incarnation_is_not_counted_as_deleted() {
+    let (status_store, streams) = setup();
+    journal(streams.as_ref(), "changed").await;
+    streams.seal("harness.journal/changed").await.unwrap();
+    let streams: Arc<dyn StreamStore> = Arc::new(RefusingConditionalDelete { inner: streams });
+
+    let report = maintain_run_journals(&status_store, streams.as_ref(), 1, i64::MAX, false)
+        .await
+        .unwrap();
+
+    assert_eq!(report.deleted, 0);
+    assert!(
+        streams
+            .info("harness.journal/changed")
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
