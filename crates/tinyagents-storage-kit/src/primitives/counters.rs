@@ -143,7 +143,7 @@ impl Counters {
 
     /// Atomically advance several counters with related writes.
     ///
-    /// This is the multi-counter form of [`set_at_least_with_batch`]. It is
+    /// This is the multi-counter form of [`Self::set_at_least_with_batch`]. It is
     /// intended for imports which preserve IDs from more than one sequence.
     pub async fn set_many_at_least_with_batch(
         &self,
