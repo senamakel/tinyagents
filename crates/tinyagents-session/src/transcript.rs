@@ -40,6 +40,10 @@
 //!
 //! ## Classic JSONL format (read by the legacy import only)
 //!
+//! Hosts that read classic JSONL files can pass the bytes to
+//! [`decode_transcript_jsonl`] to obtain model replay and display history from
+//! one source snapshot. The decoder has no filesystem or path-discovery logic.
+//!
 //! **Line 1 (meta):**
 //! ```json
 //! {"_meta":{"agent":"code_executor","dispatcher":"native","created":"...","updated":"...","turn_count":3,"input_tokens":5000,"output_tokens":1200,"cached_input_tokens":3500,"charged_amount_usd":0.0045,"thread_id":"thr_abc123"}}
