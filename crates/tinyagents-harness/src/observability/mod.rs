@@ -33,6 +33,7 @@ mod worker;
 
 pub mod reaper;
 pub mod replay;
+pub mod journal_maintenance;
 pub mod status;
 pub(crate) mod status_record;
 pub mod trace_export;
