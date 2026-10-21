@@ -47,6 +47,7 @@ async fn backfills_only_inactive_journals_and_is_idempotent() {
     let active = status(&status_store, ExecutionStatus::Running).await;
     let inactive = status(&status_store, ExecutionStatus::Completed).await;
     journal(streams.as_ref(), &active).await;
+    journal(streams.as_ref(), &inactive).await;
     journal(streams.as_ref(), "not-active").await;
     let now_ms = 10_000;
 
