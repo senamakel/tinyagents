@@ -29,6 +29,13 @@ struct Desired {
     family: Family,
 }
 
+type ImportPlan = (
+    Vec<Desired>,
+    LegacyDatabaseReport,
+    [u64; 2],
+    BTreeMap<String, Option<u64>>,
+);
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum Family {
     Session,
@@ -142,17 +149,7 @@ fn validate_batch(batch: &LegacySessionImport) -> std::result::Result<(), Storag
     Ok(())
 }
 
-fn desired_rows(
-    batch: LegacySessionImport,
-) -> std::result::Result<
-    (
-        Vec<Desired>,
-        LegacyDatabaseReport,
-        [u64; 2],
-        BTreeMap<String, Option<u64>>,
-    ),
-    StorageError,
-> {
+fn desired_rows(batch: LegacySessionImport) -> std::result::Result<ImportPlan, StorageError> {
     validate_batch(&batch)?;
     let maxima = [
         batch
@@ -292,16 +289,16 @@ fn desired_rows(
         )?;
     }
     for row in batch.workflow_runs {
-        if let (Some(holder), Some(expires)) = (&row.lease_owner, row.lease_expires_at) {
-            if expires.timestamp_millis() > now().timestamp_millis() {
-                let id = key(&[LEDGER_OWNER, &workflow_lease_key(&row.id)?])?;
-                rows.push(Desired {
-                    collection: tinyagents_storage_kit::primitives::LEASES,
-                    id,
-                    doc: serde_json::json!({"holder": holder, "epoch": 1, "expires_ms": expires.timestamp_millis()}),
-                    family: Family::Lease,
-                });
-            }
+        if let (Some(holder), Some(expires)) = (&row.lease_owner, row.lease_expires_at)
+            && expires.timestamp_millis() > now().timestamp_millis()
+        {
+            let id = key(&[LEDGER_OWNER, &workflow_lease_key(&row.id)?])?;
+            rows.push(Desired {
+                collection: tinyagents_storage_kit::primitives::LEASES,
+                id,
+                doc: serde_json::json!({"holder": holder, "epoch": 1, "expires_ms": expires.timestamp_millis()}),
+                family: Family::Lease,
+            });
         }
         add(
             &mut rows,
@@ -429,7 +426,7 @@ pub(super) async fn import_batch(
             }
         }
         writes.extend(head_writes);
-        let counter_writes = Counters::new(&docs)
+        let counter_writes = Counters::new(docs)
             .set_many_at_least_with_batch(
                 &[
                     (super::storage::HISTORY_OWNER, MESSAGE_COUNTER, maxima[0]),

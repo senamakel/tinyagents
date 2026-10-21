@@ -165,7 +165,7 @@ async fn conflicting_existing_row_refuses_the_whole_import_before_counters_advan
 
     batch.messages[0].id = 99;
     assert!(ledger.import_legacy_batch(batch).await.is_err());
-    let counter = Counters::new(&docs);
+    let counter = Counters::new(docs);
     assert_eq!(counter.peek("history", "messages").await.unwrap(), 0);
     assert_eq!(counter.peek("history", "tool_calls").await.unwrap(), 0);
     assert!(
