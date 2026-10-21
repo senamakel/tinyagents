@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use super::COUNTERS;
 use super::repo::{Repo, RetryPolicy};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{Result, StorageError};
+use tinystoragedrivers_types::{
+    ExpectedDocument, Precondition, ReadCheck, Result, StorageError, WriteOp, WriteResult,
+};
 
 /// The largest value every driver can store (`i64::MAX`).
 const MAX_VALUE: u64 = i64::MAX as u64;
@@ -28,6 +30,7 @@ struct Body {
 #[derive(Debug, Clone)]
 pub struct Counters {
     repo: Repo<Body>,
+    docs: Arc<dyn DocumentStore>,
 }
 
 impl Counters {
@@ -41,6 +44,7 @@ impl Counters {
     pub fn new(docs: &Arc<dyn DocumentStore>) -> Self {
         Self {
             repo: Repo::new(docs, COUNTERS).expect("tsd.counters is a valid collection"),
+            docs: Arc::clone(docs),
         }
     }
 
@@ -112,6 +116,78 @@ impl Counters {
             None => self.peek(owner, name).await,
         }
     }
+
+    /// Raise a counter in the same checked atomic batch as related owner rows.
+    ///
+    /// The counter dependency is read before assembling the supplied batch,
+    /// then its exact version is checked at the batch's atomic validation
+    /// point. A conflict commits none of the supplied writes. The caller may
+    /// retry the complete plan after a conflict.
+    ///
+    /// This is useful when imported numeric IDs must become unavailable for
+    /// future allocation in the very same commit that inserts those IDs.
+    ///
+    /// # Errors
+    /// A storage error, an invalid counter value, or a failed batch check.
+    pub async fn set_at_least_with_batch(
+        &self,
+        owner: &str,
+        name: &str,
+        minimum: u64,
+        checks: Vec<ReadCheck>,
+        writes: Vec<WriteOp>,
+    ) -> Result<Vec<WriteResult>> {
+        self.set_many_at_least_with_batch(&[(owner, name, minimum)], checks, writes)
+            .await
+    }
+
+    /// Atomically advance several counters with related writes.
+    ///
+    /// This is the multi-counter form of [`Self::set_at_least_with_batch`]. It is
+    /// intended for imports which preserve IDs from more than one sequence.
+    pub async fn set_many_at_least_with_batch(
+        &self,
+        updates: &[(&str, &str, u64)],
+        mut checks: Vec<ReadCheck>,
+        mut writes: Vec<WriteOp>,
+    ) -> Result<Vec<WriteResult>> {
+        let mut seen = std::collections::HashSet::new();
+        for (owner, name, minimum) in updates {
+            if *minimum > MAX_VALUE {
+                return Err(StorageError::invalid_input("counter value out of range"));
+            }
+            let id = id(owner, name)?;
+            if !seen.insert(id.clone()) {
+                return Err(StorageError::invalid_input(
+                    "duplicate counter in atomic update",
+                ));
+            }
+            let found = self.docs.get(COUNTERS, &id).await?;
+            let current = found
+                .as_ref()
+                .map(|record| serde_json::from_value::<Body>(record.doc.clone()))
+                .transpose()?
+                .map_or(0, |body| body.value);
+            checks.push(ReadCheck {
+                collection: COUNTERS.into(),
+                id: id.clone(),
+                expected: found.as_ref().map_or(ExpectedDocument::Absent, |record| {
+                    ExpectedDocument::Version(record.version)
+                }),
+            });
+            if *minimum > current {
+                writes.push(WriteOp::Put {
+                    collection: COUNTERS.into(),
+                    id,
+                    doc: serde_json::to_value(Body { value: *minimum })?,
+                    precondition: found.map_or(Precondition::Absent, |record| {
+                        Precondition::Version(record.version)
+                    }),
+                });
+            }
+        }
+        self.docs.atomic_batch_checked(checks, writes).await
+    }
 }
 
 fn id(owner: &str, name: &str) -> Result<String> {
@@ -121,3 +197,7 @@ fn id(owner: &str, name: &str) -> Result<String> {
 fn unreachable_declined() -> StorageError {
     StorageError::backend("counter update declined unexpectedly")
 }
+
+#[cfg(test)]
+#[path = "counters_tests.rs"]
+mod tests;

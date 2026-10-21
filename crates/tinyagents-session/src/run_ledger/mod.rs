@@ -13,6 +13,7 @@ pub mod command_center;
 pub mod drivers;
 pub mod error;
 pub mod history;
+pub mod legacy_import;
 pub mod port;
 pub mod recovery;
 mod status_map;
@@ -25,6 +26,7 @@ pub use history::{
     MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
     SessionStart,
 };
+pub use legacy_import::{ImportCounts, LegacyDatabaseReport, LegacySessionImport};
 pub use port::RunLedgerStore;
 
 pub use recovery::{
