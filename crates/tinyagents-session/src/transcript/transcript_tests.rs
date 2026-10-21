@@ -501,12 +501,16 @@ fn in_memory_jsonl_decoder_returns_model_and_display_views_from_same_records() {
         r#"{"role":"user","content":"question","request_id":"req-1"}"#,
         r#"{"role":"assistant","content":"partial","request_id":"req-1","interrupted":true}"#,
         r#"{"kind":"compaction","replacement":[{"role":"assistant","content":"condensed","request_id":"req-2"}],"request_id":"req-2"}"#,
+        r#"{"_meta":{"agent":"agent","dispatcher":"native","created":"now","updated":"later","turn_count":2,"input_tokens":0,"output_tokens":0,"cached_input_tokens":0,"charged_amount_usd":0.0}}"#,
         "{malformed later record",
     ];
-    let decoded = decode_transcript_jsonl(rows.join("\n").as_bytes()).unwrap();
+    let mut source = rows.join("\n").into_bytes();
+    source.extend_from_slice(b"\n\xff");
+    let decoded = decode_transcript_jsonl(&source).unwrap();
 
     assert_eq!(decoded.session.messages.len(), 1);
     assert_eq!(decoded.session.messages[0].content, "condensed");
+    assert_eq!(decoded.session.meta.turn_count, 2);
     assert_eq!(
         decoded.session.tools,
         Some(serde_json::json!([{"name": "lookup"}]))
@@ -526,7 +530,7 @@ fn in_memory_jsonl_decoder_returns_model_and_display_views_from_same_records() {
 
 #[test]
 fn in_memory_jsonl_decoder_rejects_a_missing_or_invalid_header() {
-    for input in [b"".as_slice(), b"not json\n{}"] {
+    for input in [b"".as_slice(), b"not json\n{}", b"\xff"] {
         assert!(decode_transcript_jsonl(input).is_err());
     }
 }

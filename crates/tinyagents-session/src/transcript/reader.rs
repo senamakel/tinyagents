@@ -9,8 +9,8 @@ use super::jsonl::{
     meta_from_payload,
 };
 use super::types::{
-    CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionTranscript, TranscriptMeta,
-    TranscriptMessage,
+    CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionTranscript,
+    TranscriptMessage, TranscriptMeta,
 };
 use anyhow::{Context, Result};
 
@@ -100,9 +100,9 @@ pub fn decode_transcript_jsonl(bytes: &[u8]) -> Result<DecodedTranscript> {
                 if !message.interrupted {
                     messages.push(message_from_line(message.clone()));
                 }
-                records.push(DisplayRecord::Message(Box::new(
-                    display_message_from_line(message),
-                )));
+                records.push(DisplayRecord::Message(Box::new(display_message_from_line(
+                    message,
+                ))));
             }
             Err(error) => tracing::warn!(
                 line = line_index + 1,

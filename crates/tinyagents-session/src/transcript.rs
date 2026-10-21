@@ -81,7 +81,6 @@ mod legacy_md;
 #[cfg(test)]
 mod markdown;
 mod paths;
-#[cfg(test)]
 mod reader;
 mod session;
 pub mod spend;
@@ -103,6 +102,7 @@ pub use history::{
     TruncateCut,
 };
 pub(crate) use jsonl::stamped_rows;
+pub use reader::{DecodedTranscript, decode_transcript_jsonl};
 #[cfg(test)]
 pub(crate) use reader::{read_transcript, read_transcript_display};
 pub use session::{SessionRef, session_stem};
