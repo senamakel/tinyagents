@@ -137,33 +137,52 @@ impl Counters {
         mut checks: Vec<ReadCheck>,
         mut writes: Vec<WriteOp>,
     ) -> Result<Vec<WriteResult>> {
-        if minimum > MAX_VALUE {
-            return Err(StorageError::invalid_input("counter value out of range"));
-        }
-        let id = id(owner, name)?;
-        let found = self.docs.get(COUNTERS, &id).await?;
-        let current = found
-            .as_ref()
-            .map(|record| serde_json::from_value::<Body>(record.doc.clone()))
-            .transpose()?
-            .map_or(0, |body| body.value);
-        let expected = found.as_ref().map_or(ExpectedDocument::Absent, |record| {
-            ExpectedDocument::Version(record.version)
-        });
-        checks.push(ReadCheck {
-            collection: COUNTERS.into(),
-            id: id.clone(),
-            expected,
-        });
-        if minimum > current {
-            writes.push(WriteOp::Put {
+        self.set_many_at_least_with_batch(&[(owner, name, minimum)], checks, writes)
+            .await
+    }
+
+    /// Atomically advance several counters with related writes.
+    ///
+    /// This is the multi-counter form of [`set_at_least_with_batch`]. It is
+    /// intended for imports which preserve IDs from more than one sequence.
+    pub async fn set_many_at_least_with_batch(
+        &self,
+        updates: &[(&str, &str, u64)],
+        mut checks: Vec<ReadCheck>,
+        mut writes: Vec<WriteOp>,
+    ) -> Result<Vec<WriteResult>> {
+        let mut seen = std::collections::HashSet::new();
+        for (owner, name, minimum) in updates {
+            if *minimum > MAX_VALUE {
+                return Err(StorageError::invalid_input("counter value out of range"));
+            }
+            let id = id(owner, name)?;
+            if !seen.insert(id.clone()) {
+                return Err(StorageError::invalid_input("duplicate counter in atomic update"));
+            }
+            let found = self.docs.get(COUNTERS, &id).await?;
+            let current = found
+                .as_ref()
+                .map(|record| serde_json::from_value::<Body>(record.doc.clone()))
+                .transpose()?
+                .map_or(0, |body| body.value);
+            checks.push(ReadCheck {
                 collection: COUNTERS.into(),
-                id,
-                doc: serde_json::to_value(Body { value: minimum })?,
-                precondition: found.map_or(Precondition::Absent, |record| {
-                    Precondition::Version(record.version)
+                id: id.clone(),
+                expected: found.as_ref().map_or(ExpectedDocument::Absent, |record| {
+                    ExpectedDocument::Version(record.version)
                 }),
             });
+            if *minimum > current {
+                writes.push(WriteOp::Put {
+                    collection: COUNTERS.into(),
+                    id,
+                    doc: serde_json::to_value(Body { value: *minimum })?,
+                    precondition: found.map_or(Precondition::Absent, |record| {
+                        Precondition::Version(record.version)
+                    }),
+                });
+            }
         }
         self.docs.atomic_batch_checked(checks, writes).await
     }

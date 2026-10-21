@@ -11,6 +11,7 @@ mod effects;
 mod events;
 mod history;
 mod history_retention;
+mod import;
 mod legacy_state;
 mod retention;
 mod schema;
@@ -259,6 +260,13 @@ fn apply_workflow(
 
 #[async_trait::async_trait]
 impl RunLedgerStore for DriverRunLedger {
+    async fn import_legacy_batch(
+        &self,
+        batch: super::legacy_import::LegacySessionImport,
+    ) -> Result<super::legacy_import::LegacyDatabaseReport> {
+        import::import_batch(self, batch).await
+    }
+
     /// Implement [`RunLedgerStore::upsert_agent_run`] without a weaker fallback.
     async fn upsert_agent_run(&self, upsert: AgentRunUpsert) -> Result<AgentRun> {
         self.upsert_agent(upsert).await
