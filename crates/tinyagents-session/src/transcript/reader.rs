@@ -123,6 +123,137 @@ pub fn decode_transcript_jsonl(bytes: &[u8]) -> Result<DecodedTranscript> {
     })
 }
 
+/// Rewrites the first non-interrupted system message in the transcript's
+/// final model context, without rebuilding or dropping any other JSONL rows.
+///
+/// Hosts that perform content migrations can supply a small transform for the
+/// message content while leaving file discovery and I/O on the host side. The
+/// transform is called at most once. Its result is committed only when it
+/// returns `true` and changes the content. All bytes outside the target record
+/// remain unchanged; fields within the target record other than `content` are
+/// retained when that record is serialized again. A compaction resets the
+/// model context, so the target is selected from the latest valid compaction
+/// replacement followed by subsequent non-interrupted messages.
+///
+/// The same first-line validation and later-line skip policy as
+/// [`decode_transcript_jsonl`] applies. The output is identical to `bytes` when
+/// no target exists or the transform declines to change it.
+///
+/// # Errors
+/// Returns an error when the JSONL header is missing or invalid.
+pub fn rewrite_first_system_message_jsonl(
+    bytes: &[u8],
+    mut rewrite: impl FnMut(&mut String) -> bool,
+) -> Result<(Vec<u8>, bool)> {
+    // Reuse the decoder as the authority for header validity and malformed
+    // later-line policy, then locate the raw record that contributes the first
+    // system message to the final model context.
+    decode_transcript_jsonl(bytes)?;
+
+    enum Target {
+        Message(usize),
+        CompactionReplacement(usize, usize),
+    }
+
+    let lines = bytes
+        .split_inclusive(|byte| *byte == b'\n')
+        .collect::<Vec<_>>();
+    let mut target = None;
+    let mut seen_header = false;
+
+    for (line_index, raw_line) in lines.iter().enumerate() {
+        let line = raw_line.strip_suffix(b"\n").unwrap_or(raw_line);
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !seen_header {
+            seen_header = true;
+            continue;
+        }
+
+        match classify_line(line) {
+            Ok(LineKind::Compaction(compaction)) => {
+                // A later valid compaction supersedes every preceding model
+                // message, including a previously selected system message.
+                target = None;
+                let replacement_index = compaction
+                    .replacement
+                    .iter()
+                    .enumerate()
+                    .find(|(_, message)| message.role == "system" && !message.interrupted)
+                    .map(|(index, _)| index);
+                if let Some(replacement_index) = replacement_index {
+                    target = Some(Target::CompactionReplacement(line_index, replacement_index));
+                }
+            }
+            Ok(LineKind::Message(message)) => {
+                if target.is_none() && message.role == "system" && !message.interrupted {
+                    target = Some(Target::Message(line_index));
+                }
+            }
+            Ok(LineKind::Meta(_) | LineKind::Tools(_)) | Err(_) => {}
+        }
+    }
+
+    let Some(target) = target else {
+        return Ok((bytes.to_vec(), false));
+    };
+    let (line_index, replacement_index) = match target {
+        Target::Message(line_index) => (line_index, None),
+        Target::CompactionReplacement(line_index, replacement_index) => {
+            (line_index, Some(replacement_index))
+        }
+    };
+
+    let raw_line = lines[line_index];
+    let line_without_newline = raw_line.strip_suffix(b"\n").unwrap_or(raw_line);
+    let parsed = std::str::from_utf8(line_without_newline)
+        .context("selected transcript message is not valid UTF-8")?;
+    let mut value = serde_json::from_str::<serde_json::Value>(parsed.trim())?;
+    let message = match replacement_index {
+        Some(index) => value
+            .get_mut("replacement")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|replacement| replacement.get_mut(index)),
+        None => Some(&mut value),
+    };
+    let Some(message) = message else {
+        return Ok((bytes.to_vec(), false));
+    };
+    let Some(content) = message.get("content").and_then(serde_json::Value::as_str) else {
+        return Ok((bytes.to_vec(), false));
+    };
+    let original = content.to_owned();
+    let mut updated = original.clone();
+    if !rewrite(&mut updated) || updated == original {
+        return Ok((bytes.to_vec(), false));
+    }
+    message["content"] = serde_json::Value::String(updated);
+
+    let mut output = Vec::with_capacity(bytes.len());
+    for (index, raw_line) in lines.iter().enumerate() {
+        if index == line_index {
+            output.extend_from_slice(&serde_json::to_vec(&value)?);
+            if raw_line.ends_with(b"\r\n") {
+                output.extend_from_slice(b"\r\n");
+            } else if raw_line.ends_with(b"\n") {
+                output.push(b'\n');
+            }
+        } else {
+            output.extend_from_slice(raw_line);
+        }
+    }
+    Ok((output, true))
+}
+
+#[cfg(test)]
+#[path = "reader_tests.rs"]
+mod tests;
+
 #[cfg(test)]
 use super::legacy_md::read_transcript_legacy_md;
 #[cfg(test)]
