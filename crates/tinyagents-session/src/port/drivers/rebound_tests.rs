@@ -74,15 +74,18 @@ fn registry_keeps_independent_initial_backends_until_explicit_rebind() {
         inner: MemoryStorage::new(),
         name: "second",
     });
-    let first = RebindableSessionStores::new_in(
-        &registry,
-        Arc::clone(&first_backend),
-        false,
-    )
-    .unwrap();
+    let first =
+        RebindableSessionStores::new_in(&registry, Arc::clone(&first_backend), false).unwrap();
     let second = RebindableSessionStores::new_in(&registry, second_backend, false).unwrap();
 
-    assert!(first.for_agent("agent").transcripts.destination_key().unwrap().starts_with("first://"));
+    assert!(
+        first
+            .for_agent("agent")
+            .transcripts
+            .destination_key()
+            .unwrap()
+            .starts_with("first://")
+    );
     assert!(
         second
             .for_agent("agent")
