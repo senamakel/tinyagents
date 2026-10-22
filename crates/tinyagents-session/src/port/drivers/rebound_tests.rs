@@ -34,6 +34,8 @@ async fn registry_rebind_failure_keeps_every_provider_on_its_original_backend() 
             .await
             .unwrap();
     }
+    drop(alice_fresh);
+    drop(bob_fresh);
 
     let candidate: Arc<dyn StorageBackend> = Arc::new(RejectBobBackend {
         inner: MemoryStorage::new(),
