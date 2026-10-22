@@ -4,7 +4,82 @@ use crate::testkit::conformance::{
 };
 use crate::transcript::{SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn};
 use serde_json::Value;
-use tinystoragedrivers_core::MemoryStorage;
+use tinystoragedrivers_core::{Capabilities, MemoryStorage, ScopedStorage, Scope};
+
+#[tokio::test]
+async fn registry_rebind_failure_keeps_every_provider_on_its_original_backend() {
+    let registry = SessionStoreRegistry::default();
+    let original: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let alice = RebindableSessionStores::new_in_tenant(
+        &registry,
+        Arc::clone(&original),
+        Scope::tenant("alice").unwrap(),
+        false,
+    )
+    .unwrap();
+    let bob = RebindableSessionStores::new_in_tenant(
+        &registry,
+        Arc::clone(&original),
+        Scope::tenant("bob").unwrap(),
+        false,
+    )
+    .unwrap();
+    let alice_live = alice.for_agent("agent");
+    let bob_live = bob.for_agent("agent");
+    for live in [&alice_live, &bob_live] {
+        live.kv
+            .put("marker", "backend", serde_json::json!("original"))
+            .await
+            .unwrap();
+    }
+
+    let candidate: Arc<dyn StorageBackend> = Arc::new(RejectBobBackend {
+        inner: MemoryStorage::new(),
+    });
+    assert!(registry.rebind(candidate).is_err());
+
+    for live in [&alice_live, &bob_live] {
+        assert_eq!(
+            live.kv.get("marker", "backend").await.unwrap(),
+            Some(serde_json::json!("original")),
+            "existing live handle must remain on the original backend"
+        );
+    }
+    for provider in [&alice, &bob] {
+        assert_eq!(
+            provider
+                .for_agent("fresh-agent")
+                .kv
+                .get("marker", "backend")
+                .await
+                .unwrap(),
+            Some(serde_json::json!("original")),
+            "provider current backend must remain original"
+        );
+    }
+}
+
+#[derive(Debug)]
+struct RejectBobBackend {
+    inner: MemoryStorage,
+}
+
+impl StorageBackend for RejectBobBackend {
+    fn driver(&self) -> &'static str {
+        self.inner.driver()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn for_scope(&self, scope: &Scope) -> std::result::Result<ScopedStorage, StorageError> {
+        if scope.as_str().starts_with("u:bob") {
+            return Err(StorageError::invalid_input("injected bob scope failure"));
+        }
+        self.inner.for_scope(scope)
+    }
+}
 
 #[tokio::test]
 async fn rebound_provider_passes_full_session_store_conformance() {
