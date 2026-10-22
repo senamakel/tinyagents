@@ -55,12 +55,8 @@ impl SessionStoreRegistry {
         backend: Arc<dyn StorageBackend>,
     ) -> std::result::Result<usize, StorageError> {
         let stores = self.live();
-        let mut prepared = Vec::with_capacity(stores.len());
         for store in &stores {
-            prepared.push(store.prepare_rebind(Arc::clone(&backend))?);
-        }
-        for rebind in prepared {
-            rebind.commit();
+            store.rebind(Arc::clone(&backend))?;
         }
         Ok(stores.len())
     }
