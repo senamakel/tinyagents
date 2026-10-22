@@ -404,6 +404,47 @@ struct GateBackend {
     gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
+#[tokio::test]
+async fn provider_registered_after_rebind_uses_registry_current_backend() {
+    let registry = Arc::new(SessionStoreRegistry::default());
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let initial: Arc<dyn StorageBackend> = Arc::new(GateBackend {
+        inner: MemoryStorage::new(),
+        gate: Mutex::new(Some((entered_tx, release_rx))),
+    });
+    let constructor_registry = Arc::clone(&registry);
+    let constructor = std::thread::spawn(move || {
+        RebindableSessionStores::new_in(&constructor_registry, initial, false).unwrap()
+    });
+    entered_rx.recv().unwrap();
+
+    let candidate: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let candidate_stores = DriverSessionStores::new(Arc::clone(&candidate), Scope::local())
+        .unwrap()
+        .for_agent("agent");
+    candidate_stores
+        .kv
+        .put("marker", "backend", serde_json::json!("candidate"))
+        .await
+        .unwrap();
+
+    assert_eq!(registry.rebind(candidate).unwrap(), 0);
+    release_tx.send(()).unwrap();
+    let provider = constructor.join().unwrap();
+
+    assert_eq!(
+        provider
+            .for_agent("agent")
+            .kv
+            .get("marker", "backend")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("candidate")),
+        "a provider registered after rebind must adopt the registry's current backend"
+    );
+}
+
 #[async_trait::async_trait]
 impl StorageBackend for GateBackend {
     fn driver(&self) -> &'static str {
