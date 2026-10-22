@@ -36,15 +36,6 @@ impl SessionStoreRegistry {
         live.push(Arc::downgrade(stores));
     }
 
-    fn live(&self) -> Vec<Arc<RebindableSessionStores>> {
-        self.live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter_map(Weak::upgrade)
-            .collect()
-    }
-
     /// Rebinds every provider registered here, returning the number moved.
     ///
     /// Every provider prepares its new backend and live agent handles before
@@ -54,13 +45,21 @@ impl SessionStoreRegistry {
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> std::result::Result<usize, StorageError> {
-        let stores = self.live();
-        let mut prepared = Vec::with_capacity(stores.len());
-        for store in &stores {
-            prepared.push(store.prepare_rebind(Arc::clone(&backend))?);
-        }
-        for rebind in prepared {
-            rebind.commit();
+        // Keep registrations stable across the batch: otherwise a provider
+        // could be registered after the snapshot and remain on the old
+        // backend when this call returns.
+        let mut registered = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        registered.retain(|weak| weak.strong_count() > 0);
+        let stores = registered
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        let prepared = stores
+            .iter()
+            .map(|store| store.prepare_rebind(Arc::clone(&backend)))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for provider in prepared {
+            provider.commit();
         }
         Ok(stores.len())
     }
