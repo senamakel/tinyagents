@@ -47,8 +47,6 @@ impl SessionStoreRegistry {
             if !Arc::ptr_eq(current_backend, &initial_backend) {
                 stores.rebind(Arc::clone(current_backend))?;
             }
-        } else {
-            state.current_backend = Some(initial_backend);
         }
         state.live.push(Arc::downgrade(stores));
         Ok(())
