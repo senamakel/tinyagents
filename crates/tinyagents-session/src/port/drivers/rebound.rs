@@ -26,14 +26,32 @@ use crate::turn_state::TurnLifecycle;
 /// stores without moving unrelated providers.
 #[derive(Default)]
 pub struct SessionStoreRegistry {
-    live: Mutex<Vec<Weak<RebindableSessionStores>>>,
+    state: Mutex<SessionStoreRegistryState>,
+}
+
+#[derive(Default)]
+struct SessionStoreRegistryState {
+    live: Vec<Weak<RebindableSessionStores>>,
+    current_backend: Option<Arc<dyn StorageBackend>>,
 }
 
 impl SessionStoreRegistry {
-    fn register(&self, stores: &Arc<RebindableSessionStores>) {
-        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        live.retain(|weak| weak.strong_count() > 0);
-        live.push(Arc::downgrade(stores));
+    fn register(
+        &self,
+        stores: &Arc<RebindableSessionStores>,
+        initial_backend: Arc<dyn StorageBackend>,
+    ) -> Result<(), StorageError> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.live.retain(|weak| weak.strong_count() > 0);
+        if let Some(current_backend) = &state.current_backend {
+            if !Arc::ptr_eq(current_backend, &initial_backend) {
+                stores.rebind(Arc::clone(current_backend))?;
+            }
+        } else {
+            state.current_backend = Some(initial_backend);
+        }
+        state.live.push(Arc::downgrade(stores));
+        Ok(())
     }
 
     /// Rebinds every provider registered here, returning the number moved.
@@ -48,9 +66,10 @@ impl SessionStoreRegistry {
         // Keep registrations stable across the batch: otherwise a provider
         // could be registered after the snapshot and remain on the old
         // backend when this call returns.
-        let mut registered = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        registered.retain(|weak| weak.strong_count() > 0);
-        let stores = registered
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.live.retain(|weak| weak.strong_count() > 0);
+        let stores = state
+            .live
             .iter()
             .filter_map(Weak::upgrade)
             .collect::<Vec<_>>();
@@ -61,6 +80,7 @@ impl SessionStoreRegistry {
         for provider in prepared {
             provider.commit();
         }
+        state.current_backend = Some(backend);
         Ok(stores.len())
     }
 }
@@ -109,16 +129,25 @@ impl RebindableSessionStores {
         tenant: Scope,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
+        let initial_backend = Arc::clone(&backend);
+        let this = Self::new_unregistered(backend, tenant, recover_on_open)?;
+        registry.register(&this, initial_backend)?;
+        Ok(this)
+    }
+
+    fn new_unregistered(
+        backend: Arc<dyn StorageBackend>,
+        tenant: Scope,
+        recover_on_open: bool,
+    ) -> std::result::Result<Arc<Self>, StorageError> {
         let driver =
             DriverSessionStores::new(backend, tenant.clone())?.recover_on_open(recover_on_open);
-        let this = Arc::new(Self {
+        Ok(Arc::new(Self {
             current: RwLock::new(Arc::new(driver)),
             live: Mutex::new(HashMap::new()),
             recover_on_open,
             tenant,
-        });
-        registry.register(&this);
-        Ok(this)
+        }))
     }
 
     fn current(&self) -> Arc<DriverSessionStores> {

@@ -406,19 +406,11 @@ struct GateBackend {
 
 #[tokio::test]
 async fn provider_registered_after_rebind_uses_registry_current_backend() {
-    let registry = Arc::new(SessionStoreRegistry::default());
-    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let initial: Arc<dyn StorageBackend> = Arc::new(GateBackend {
-        inner: MemoryStorage::new(),
-        gate: Mutex::new(Some((entered_tx, release_rx))),
-    });
-    let constructor_registry = Arc::clone(&registry);
-    let constructor = std::thread::spawn(move || {
-        RebindableSessionStores::new_in(&constructor_registry, initial, false).unwrap()
-    });
-    entered_rx.recv().unwrap();
-
+    let registry = SessionStoreRegistry::default();
+    let initial: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let provider =
+        RebindableSessionStores::new_unregistered(Arc::clone(&initial), Scope::local(), false)
+            .unwrap();
     let candidate: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let candidate_stores = DriverSessionStores::new(Arc::clone(&candidate), Scope::local())
         .unwrap()
@@ -429,9 +421,23 @@ async fn provider_registered_after_rebind_uses_registry_current_backend() {
         .await
         .unwrap();
 
-    assert_eq!(registry.rebind(candidate).unwrap(), 0);
-    release_tx.send(()).unwrap();
-    let provider = constructor.join().unwrap();
+    assert_eq!(registry.rebind(Arc::clone(&candidate)).unwrap(), 0);
+    let bob = RebindableSessionStores::new_in_tenant(
+        &registry,
+        Arc::clone(&candidate),
+        Scope::tenant("bob").unwrap(),
+        false,
+    )
+    .unwrap();
+    let _bob_live = bob.for_agent("agent");
+    assert!(
+        registry
+            .rebind(Arc::new(RejectBobBackend {
+                inner: MemoryStorage::new(),
+            }))
+            .is_err()
+    );
+    registry.register(&provider, Arc::clone(&initial)).unwrap();
 
     assert_eq!(
         provider
