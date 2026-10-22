@@ -110,7 +110,14 @@ impl StorageBackend for NamedBackend {
     }
 
     fn for_scope(&self, scope: &Scope) -> std::result::Result<ScopedStorage, StorageError> {
-        self.inner.for_scope(scope)
+        let scoped = self.inner.for_scope(scope)?;
+        Ok(ScopedStorage::new(
+            scope.clone(),
+            self.name,
+            Arc::clone(scoped.documents()),
+            Arc::clone(scoped.streams()),
+            Arc::clone(scoped.blobs()),
+        ))
     }
 }
 
