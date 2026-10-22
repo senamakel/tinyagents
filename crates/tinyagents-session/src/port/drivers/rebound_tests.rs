@@ -63,6 +63,57 @@ async fn registry_rebind_failure_keeps_every_provider_on_its_original_backend() 
     }
 }
 
+#[test]
+fn registry_keeps_independent_initial_backends_until_explicit_rebind() {
+    let registry = SessionStoreRegistry::default();
+    let first_backend: Arc<dyn StorageBackend> = Arc::new(NamedBackend {
+        inner: MemoryStorage::new(),
+        name: "first",
+    });
+    let second_backend: Arc<dyn StorageBackend> = Arc::new(NamedBackend {
+        inner: MemoryStorage::new(),
+        name: "second",
+    });
+    let first = RebindableSessionStores::new_in(
+        &registry,
+        Arc::clone(&first_backend),
+        false,
+    )
+    .unwrap();
+    let second = RebindableSessionStores::new_in(&registry, second_backend, false).unwrap();
+
+    assert!(first.for_agent("agent").transcripts.destination_key().unwrap().starts_with("first://"));
+    assert!(
+        second
+            .for_agent("agent")
+            .transcripts
+            .destination_key()
+            .unwrap()
+            .starts_with("second://"),
+        "registration alone must not rebind a provider to another provider's initial backend"
+    );
+}
+
+#[derive(Debug)]
+struct NamedBackend {
+    inner: MemoryStorage,
+    name: &'static str,
+}
+
+impl StorageBackend for NamedBackend {
+    fn driver(&self) -> &'static str {
+        self.name
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn for_scope(&self, scope: &Scope) -> std::result::Result<ScopedStorage, StorageError> {
+        self.inner.for_scope(scope)
+    }
+}
+
 #[derive(Debug)]
 struct RejectBobBackend {
     inner: MemoryStorage,
