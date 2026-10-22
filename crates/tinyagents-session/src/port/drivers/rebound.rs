@@ -43,10 +43,10 @@ impl SessionStoreRegistry {
     ) -> Result<(), StorageError> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.live.retain(|weak| weak.strong_count() > 0);
-        if let Some(current_backend) = &state.current_backend {
-            if !Arc::ptr_eq(current_backend, &initial_backend) {
-                stores.rebind(Arc::clone(current_backend))?;
-            }
+        if let Some(current_backend) = &state.current_backend
+            && !Arc::ptr_eq(current_backend, &initial_backend)
+        {
+            stores.rebind(Arc::clone(current_backend))?;
         }
         state.live.push(Arc::downgrade(stores));
         Ok(())
