@@ -4,7 +4,7 @@ use crate::testkit::conformance::{
 };
 use crate::transcript::{SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn};
 use serde_json::Value;
-use tinystoragedrivers_core::{Capabilities, MemoryStorage, ScopedStorage, Scope};
+use tinystoragedrivers_core::{Capabilities, MemoryStorage, Scope, ScopedStorage};
 
 #[tokio::test]
 async fn registry_rebind_failure_keeps_every_provider_on_its_original_backend() {
