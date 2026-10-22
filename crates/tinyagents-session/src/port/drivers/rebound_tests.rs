@@ -26,7 +26,9 @@ async fn registry_rebind_failure_keeps_every_provider_on_its_original_backend() 
     .unwrap();
     let alice_live = alice.for_agent("agent");
     let bob_live = bob.for_agent("agent");
-    for live in [&alice_live, &bob_live] {
+    let alice_fresh = alice.for_agent("fresh-agent");
+    let bob_fresh = bob.for_agent("fresh-agent");
+    for live in [&alice_live, &bob_live, &alice_fresh, &bob_fresh] {
         live.kv
             .put("marker", "backend", serde_json::json!("original"))
             .await
