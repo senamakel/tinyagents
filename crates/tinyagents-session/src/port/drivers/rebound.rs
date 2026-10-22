@@ -6,7 +6,7 @@
 //! cloned `AgentStores` follow the new backend after `rebind` completes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, Weak};
 
 use serde_json::Value;
 use tinyagents_harness::Result as HarnessResult;
@@ -46,13 +46,21 @@ impl SessionStoreRegistry {
     }
 
     /// Rebinds every provider registered here, returning the number moved.
+    ///
+    /// Every provider prepares its new backend and live agent handles before
+    /// any provider publishes them. If preparation fails, all providers keep
+    /// their current backend and live handles.
     pub fn rebind(
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> std::result::Result<usize, StorageError> {
         let stores = self.live();
+        let mut prepared = Vec::with_capacity(stores.len());
         for store in &stores {
-            store.rebind(Arc::clone(&backend))?;
+            prepared.push(store.prepare_rebind(Arc::clone(&backend))?);
+        }
+        for rebind in prepared {
+            rebind.commit();
         }
         Ok(stores.len())
     }
@@ -126,9 +134,18 @@ impl RebindableSessionStores {
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> std::result::Result<(), StorageError> {
+        self.prepare_rebind(backend)?.commit();
+        Ok(())
+    }
+
+    fn prepare_rebind(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Result<PreparedRebind<'_>, StorageError> {
         // Serialize publication with agent registration so a concurrent
-        // `for_agent` cannot attach to the old provider after this registry
-        // snapshot. This synchronous lock is never held over async I/O.
+        // `for_agent` cannot attach to the old provider after the batch
+        // snapshot. The guard remains held through commit. This synchronous
+        // lock is never held over async I/O.
         let mut live_registry = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live_registry.retain(|_, weak| weak.strong_count() > 0);
         let next = Arc::new(
@@ -151,14 +168,35 @@ impl RebindableSessionStores {
                     .map(|stores| (Arc::clone(binding), stores))
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        for (binding, stores) in replacements {
+        Ok(PreparedRebind {
+            provider: self,
+            _live_registry: live_registry,
+            next,
+            replacements,
+        })
+    }
+}
+
+struct PreparedRebind<'a> {
+    provider: &'a RebindableSessionStores,
+    _live_registry: MutexGuard<'a, HashMap<String, Weak<LiveAgentStores>>>,
+    next: Arc<DriverSessionStores>,
+    replacements: Vec<(Arc<LiveAgentStores>, AgentStores)>,
+}
+
+impl PreparedRebind<'_> {
+    fn commit(self) {
+        for (binding, stores) in self.replacements {
             *binding
                 .current
                 .write()
                 .unwrap_or_else(PoisonError::into_inner) = stores;
         }
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
-        Ok(())
+        *self
+            .provider
+            .current
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = self.next;
     }
 }
 
