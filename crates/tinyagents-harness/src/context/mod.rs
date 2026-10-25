@@ -444,7 +444,7 @@ impl<Ctx> RunContext<Ctx> {
     /// child-specific keys.
     ///
     /// This keeps the child's `Ctx` type identical to the parent's, which is
-    /// what makes propagating [`Self::host_authority`] sound: the type-erased
+    /// what makes propagating `Self::host_authority` sound: the type-erased
     /// authority installed by a hosted invocation is keyed to the exact
     /// `(State, Ctx)` pair it was constructed for, and this method is the only
     /// place that carries it forward. A recursive call that needs a

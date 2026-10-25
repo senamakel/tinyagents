@@ -39,7 +39,7 @@ pub const WEB_BUDGET_EXHAUSTED_INSTRUCTION: &str = "The direct web research budg
 /// Consecutive failed web calls after which web access looks blocked.
 const BLOCKED_AFTER_FAILURES: usize = 2;
 
-/// The one-time note sent after [`BLOCKED_AFTER_FAILURES`] failed web calls in a
+/// The one-time note sent after `BLOCKED_AFTER_FAILURES` failed web calls in a
 /// row (a blocked network, an offline sandbox).
 pub const WEB_BLOCKED_NOTE: &str = "Web access looks blocked: the last web calls failed. Do not keep retrying web tools; continue the task with your other tools and the information already available.";
 

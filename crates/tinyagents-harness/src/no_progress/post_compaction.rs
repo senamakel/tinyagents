@@ -40,7 +40,7 @@ impl PostCompactionGuard {
     }
 
     /// Records one successful call; `repeating` says whether the pair had
-    /// already recurred [`REPEATING_AT`] times. Before a compaction only
+    /// already recurred `REPEATING_AT` times. Before a compaction only
     /// repeating pairs are remembered. Returns `true` when the guard is armed
     /// and this call repeats a remembered pair (and disarms, so one compaction
     /// flags at most one repeat).

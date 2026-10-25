@@ -22,7 +22,7 @@ pub type SchemaTransform<Ctx> =
     Arc<dyn Fn(&RunContext<Ctx>, Vec<ToolSchema>) -> Vec<ToolSchema> + Send + Sync>;
 
 /// [`ToolSet`] adaptor that applies a caller-supplied, per-step
-/// [`SchemaTransform`] to an inner toolset's declared schemas.
+/// `SchemaTransform` to an inner toolset's declared schemas.
 ///
 /// This is the same seam [`crate::tool::SchemaPreparation`] occupies for
 /// provider projection, generalised to a caller-supplied closure that is

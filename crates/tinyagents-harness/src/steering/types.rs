@@ -24,7 +24,7 @@ use tinyinference_llm::message::Message;
 /// Every [`SteeringHandle`] clone shares one underlying queue (so an
 /// orchestrator can hand a single handle to a deeply nested tree and still
 /// reach any run in it), but each level of the tree only *drains* the entries
-/// addressed to itself — see [`SteeringHandle::for_child`]. Without this, a
+/// addressed to itself — see `SteeringHandle::for_child`. Without this, a
 /// command meant for the orchestrating run could be consumed by whichever
 /// sub-agent happened to reach a checkpoint first.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,7 +302,7 @@ pub struct PauseState {
 /// A plain `clone()` is a bare alias: it shares this handle's identity
 /// (`run_id`/`is_root`) as well as its queue, so it drains exactly the same
 /// commands this handle would. When a run spawns a child,
-/// [`crate::context::RunContext::child`] calls [`SteeringHandle::for_child`]
+/// [`crate::context::RunContext::child`] calls `SteeringHandle::for_child`
 /// (not `clone`) so the child only drains commands addressed to it or to
 /// [`SteeringTarget::All`] — see that method's docs.
 #[derive(Clone)]

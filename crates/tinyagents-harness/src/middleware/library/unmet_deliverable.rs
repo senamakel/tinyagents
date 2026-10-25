@@ -86,7 +86,7 @@ fn has_extension(segment: &str) -> bool {
 }
 
 /// Absolute paths with a file extension that `text` names, in order, deduped
-/// and capped at [`MAX_CANDIDATES`].
+/// and capped at `MAX_CANDIDATES`.
 ///
 /// Absolute only: a relative token in prose ("see config/settings.yml") is far
 /// more often a reference than a deliverable, and a relative path cannot be

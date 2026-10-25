@@ -35,7 +35,7 @@ fn normalize(model: &str) -> String {
 /// Match order: exact canonical id → id with a leading `vendor/` segment
 /// stripped → longest canonical id that the request extends with a snapshot
 /// decoration only (`gpt-5.4-mini-2026-05-01`, `claude-sonnet-4-5-20250929`,
-/// `gemini-2.5-pro-preview-06-05`; see [`is_decorated_id`]). Returns `None`
+/// `gemini-2.5-pro-preview-06-05`; see `is_decorated_id`). Returns `None`
 /// for unknown models — callers should fall back to a tier estimate.
 ///
 /// Any other suffix names a different model, not a snapshot of a listed one:

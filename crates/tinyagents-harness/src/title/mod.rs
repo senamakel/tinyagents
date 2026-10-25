@@ -115,7 +115,7 @@ pub fn collapse_whitespace(input: &str) -> String {
 /// Rules applied (in order):
 /// - split on anything that is not alphanumeric (punctuation, quotes, markdown,
 ///   and whitespace all become word breaks)
-/// - drop [`FILLER_WORDS`], unless that would leave nothing
+/// - drop `FILLER_WORDS`, unless that would leave nothing
 /// - keep the first [`THREAD_TITLE_MAX_WORDS`] words, and stop early rather
 ///   than exceed [`THREAD_TITLE_MAX_CHARS`]
 ///

@@ -2417,7 +2417,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Reconciles unresolved tool-effect-ledger rows (B5) before resuming a
     /// run from durable transcript `messages`.
     ///
-    /// A crash between [`Self::record_tool_effect_started`] and the matching
+    /// A crash between `Self::record_tool_effect_started` and the matching
     /// settle write (or between the settle write and the tool result being
     /// folded into `messages`) leaves a `started` row a resumed run must
     /// resolve one way or another before it can safely feed `messages` back
@@ -2456,7 +2456,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// mistake: any call id in it is skipped even if its ledger row is
     /// (unexpectedly) still `started` — e.g. the `Deferred` settle write
     /// above failed and was only logged (settle writes are best-effort, see
-    /// [`Self::record_tool_effect_settled`]). [`AgentHarness::resume_deferred`]
+    /// `Self::record_tool_effect_settled`). [`AgentHarness::resume_deferred`]
     /// passes the ids `results` is about to answer; any other caller — a host
     /// reconciling a genuine crash, where no `results` exists at all — passes
     /// an empty set.
