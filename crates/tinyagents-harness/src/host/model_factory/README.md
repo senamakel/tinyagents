@@ -11,6 +11,8 @@ stable description of each requested route.
 `ModelBuildRequest` values, plus the `ModelBuildGate` and `ModelFactory`
 contracts. Hosts implement the gate to authorize each construction request and
 the async factory to return a model with its resolved provider/model route.
+Both adapters are `Sync`, and factory futures are `Send`, so turn assembly can
+run inside the host's sendable task boundaries.
 
 `assembly.rs` owns `TurnModelSetBuilder` and `TurnModelSet`. It builds the
 primary route, independently builds workload tiers (omitting unavailable or
