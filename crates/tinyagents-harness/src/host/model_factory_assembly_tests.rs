@@ -199,7 +199,7 @@ async fn denied_primary_never_calls_factory_and_failed_primary_is_fatal() {
     assert!(
         TurnModelSet::<()>::builder(&factory, &gate, "chat")
             .build()
-        .await
+            .await
             .is_err()
     );
     assert!(factory.requests.borrow().is_empty());
@@ -209,7 +209,7 @@ async fn denied_primary_never_calls_factory_and_failed_primary_is_fatal() {
     assert!(
         TurnModelSet::<()>::builder(&factory, &gate, "chat")
             .build()
-        .await
+            .await
             .is_err()
     );
 }
@@ -225,7 +225,7 @@ async fn denied_or_failed_summary_is_fatal_after_primary_build() {
         TurnModelSet::<()>::builder(&factory, &gate, "chat")
             .without_workload_tiers()
             .build()
-        .await
+            .await
             .is_err()
     );
     assert_eq!(factory.requests.borrow().len(), 1);
@@ -236,7 +236,7 @@ async fn denied_or_failed_summary_is_fatal_after_primary_build() {
         TurnModelSet::<()>::builder(&factory, &gate, "chat")
             .without_workload_tiers()
             .build()
-        .await
+            .await
             .is_err()
     );
 }
@@ -316,7 +316,8 @@ async fn shared_workload_options_forward_to_every_default_tier_with_route_overri
 }
 
 #[tokio::test]
-async fn default_workload_matching_primary_alias_is_skipped_but_other_alias_with_same_pin_is_kept() {
+async fn default_workload_matching_primary_alias_is_skipped_but_other_alias_with_same_pin_is_kept()
+{
     let context = NonCloneContext {
         primary_provider_override: None,
     };
