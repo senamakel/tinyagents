@@ -73,11 +73,13 @@ impl<'a> RecordingFactory<'a> {
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl ModelFactory<()> for RecordingFactory<'_> {
-    fn build(
+    async fn build(
         &self,
         request: &ModelBuildRequest,
     ) -> Result<(Arc<dyn ChatModel<()>>, ResolvedModelRoute)> {
+        tokio::task::yield_now().await;
         self.requests.borrow_mut().push(request.clone());
         if (self.fail_primary && request.purpose == ModelPurpose::Primary)
             || (self.fail_summary && request.purpose == ModelPurpose::Summarization)

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tinyinference_llm::model::{ChatModel, ResolvedModelRoute};
 
@@ -64,9 +65,10 @@ pub trait ModelBuildGate {
 }
 
 /// Host implementation that selects and constructs a provider model.
+#[async_trait(?Send)]
 pub trait ModelFactory<State: Send + Sync> {
     /// Construct a model and report the concrete route selected by the host.
-    fn build(
+    async fn build(
         &self,
         request: &ModelBuildRequest,
     ) -> Result<(Arc<dyn ChatModel<State>>, ResolvedModelRoute)>;
