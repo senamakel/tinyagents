@@ -51,6 +51,6 @@ fn marker_rendering_keeps_tool_only_turns_and_bounds_arguments() {
     let rendered = render_message_for_summary_with(&message, ToolRendering::Markers)
         .expect("tool-only assistant turn is retained");
     assert!(rendered.starts_with("[used search: "));
-    assert!(rendered.ends_with('…]'));
+    assert!(rendered.ends_with("…]"));
     assert_eq!(rendered.split_once(": ").unwrap().1.chars().count(), 120);
 }

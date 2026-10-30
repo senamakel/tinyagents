@@ -763,7 +763,6 @@ impl TranscriptHistory for DriverTranscriptHistory {
                 ..Entry::default()
             }))
         })
-        .map(|installed| installed.is_some())
     }
 
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
