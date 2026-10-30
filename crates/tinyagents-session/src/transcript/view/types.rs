@@ -86,6 +86,8 @@ pub enum DisplayItem {
     UserMessage {
         content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        extra_metadata: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         display_content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
@@ -99,6 +101,8 @@ pub enum DisplayItem {
     /// step within a multi-iteration turn (not the final answer bubble).
     AssistantMessage {
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_metadata: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "is_false")]
         interim: bool,
         #[serde(skip_serializing_if = "Option::is_none")]

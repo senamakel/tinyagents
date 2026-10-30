@@ -136,6 +136,14 @@ impl DriverConversationStore {
                 if let Some(extra) = patch.extra_metadata.clone() {
                     message.extra_metadata = extra;
                 }
+                if let Some(merge) = patch.merge_extra_metadata.clone() {
+                    match (&mut message.extra_metadata, merge) {
+                        (Value::Object(current), Value::Object(additional)) => {
+                            current.extend(additional);
+                        }
+                        (current, replacement) => *current = replacement,
+                    }
+                }
                 let updated = message.clone();
                 Ok(Some((messages, updated)))
             })

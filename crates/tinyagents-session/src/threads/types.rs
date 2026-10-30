@@ -102,6 +102,10 @@ pub struct ThreadMessagePatch {
     /// untouched.
     #[serde(default)]
     pub extra_metadata: Option<Value>,
+    /// Shallow-merges keys into an existing object-valued `extraMetadata`.
+    /// Non-object values are replaced by the supplied value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_extra_metadata: Option<Value>,
 }
 
 /// A single match returned by

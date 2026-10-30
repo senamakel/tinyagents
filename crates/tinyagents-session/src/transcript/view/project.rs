@@ -286,6 +286,7 @@ impl Projector {
                 }
                 self.items.push(DisplayItem::UserMessage {
                     content: raw,
+                    extra_metadata: msg.message.extra_metadata.clone(),
                     display_content: sanitized,
                     request_id: msg.request_id.clone(),
                     ts: msg.ts.clone(),
@@ -299,6 +300,7 @@ impl Projector {
                 );
                 self.items.push(DisplayItem::AssistantMessage {
                     content: msg.message.content.clone(),
+                    extra_metadata: msg.message.extra_metadata.clone(),
                     interim: false,
                     request_id: msg.request_id.clone(),
                     model: msg.turn_usage.as_ref().map(|tu| tu.model.clone()),
@@ -384,6 +386,7 @@ impl Projector {
         if !visible_content.trim().is_empty() {
             self.items.push(DisplayItem::AssistantMessage {
                 content: visible_content,
+                extra_metadata: msg.message.extra_metadata.clone(),
                 interim,
                 request_id: msg.request_id.clone(),
                 model: msg.turn_usage.as_ref().map(|tu| tu.model.clone()),

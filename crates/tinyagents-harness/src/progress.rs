@@ -463,6 +463,13 @@ pub struct SubagentUsage {
     pub cost_source: crate::cost::CostSource,
 }
 
+impl SubagentUsage {
+    /// Token and monetary cost represented by this subagent usage snapshot.
+    pub fn cost(&self) -> crate::cost::CostTally {
+        crate::cost::CostTally::from_usd(self.charged_amount_usd, self.cost_source)
+    }
+}
+
 fn unknown_cost_source() -> crate::cost::CostSource {
     crate::cost::CostSource::Unknown
 }
