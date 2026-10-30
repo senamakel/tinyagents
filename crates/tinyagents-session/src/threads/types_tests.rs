@@ -41,18 +41,22 @@ fn conversation_message_patch_defaults_to_no_changes() {
     );
     assert!(patch_with_metadata.merge_extra_metadata.is_none());
 
-    let merge: ThreadMessagePatch = serde_json::from_value(
-        json!({"mergeExtraMetadata": {"savedFlowId": "flow-1"}}),
-    )
-    .unwrap();
-    assert_eq!(merge.merge_extra_metadata, Some(json!({"savedFlowId":"flow-1"})));
+    let merge: ThreadMessagePatch =
+        serde_json::from_value(json!({"mergeExtraMetadata": {"savedFlowId": "flow-1"}})).unwrap();
+    assert_eq!(
+        merge.merge_extra_metadata,
+        Some(json!({"savedFlowId":"flow-1"}))
+    );
 }
 
 #[test]
 fn metadata_merge_preserves_existing_keys_and_replaces_non_objects() {
     let mut current = json!({"source":"chat", "nested":{"old":true}});
     merge_extra_metadata(&mut current, json!({"savedFlowId":"flow-1"}));
-    assert_eq!(current, json!({"source":"chat", "nested":{"old":true}, "savedFlowId":"flow-1"}));
+    assert_eq!(
+        current,
+        json!({"source":"chat", "nested":{"old":true}, "savedFlowId":"flow-1"})
+    );
 
     merge_extra_metadata(&mut current, json!("legacy"));
     assert_eq!(current, json!("legacy"));

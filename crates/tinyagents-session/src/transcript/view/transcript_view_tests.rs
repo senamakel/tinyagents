@@ -74,7 +74,10 @@ fn projects_turn_with_tools_reasoning_and_sanitization() {
                 "datetime prefix stripped into displayContent"
             );
             assert_eq!(request_id.as_deref(), Some("req-1"));
-            assert_eq!(extra_metadata.as_ref(), Some(&serde_json::json!({"source":"web"})));
+            assert_eq!(
+                extra_metadata.as_ref(),
+                Some(&serde_json::json!({"source":"web"}))
+            );
         }
         other => panic!("expected userMessage, got {other:?}"),
     }
@@ -104,7 +107,10 @@ fn projects_turn_with_tools_reasoning_and_sanitization() {
                 Some("2026-07-21T09:00:01Z"),
                 "assistantMessage carries the underlying record's ts"
             );
-            assert_eq!(extra_metadata.as_ref(), Some(&serde_json::json!({"turn":1})));
+            assert_eq!(
+                extra_metadata.as_ref(),
+                Some(&serde_json::json!({"turn":1}))
+            );
         }
         other => panic!("expected interim assistantMessage, got {other:?}"),
     }

@@ -13,9 +13,9 @@ fn context_compacting_is_a_progress_event() {
 
 #[test]
 fn subagent_usage_exposes_its_known_cost() {
-    let usage = super::progress::SubagentUsage {
+    let usage = super::SubagentUsage {
         charged_amount_usd: 0.25,
-        cost_source: crate::cost::CostSource::Provider,
+        cost_source: crate::cost::CostSource::Charged,
         ..Default::default()
     };
 
