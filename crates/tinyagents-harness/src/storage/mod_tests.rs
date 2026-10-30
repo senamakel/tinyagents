@@ -74,6 +74,13 @@ fn the_schema_composes_and_names_everything_the_harness_owns() {
 }
 
 #[tokio::test]
+async fn migrate_storage_initializes_a_scope_for_host_boot_callers() {
+    let storage = scoped();
+    let initialized = migrate_storage(storage.clone()).await.unwrap();
+    assert_eq!(initialized.scope(), storage.scope());
+}
+
+#[tokio::test]
 async fn run_status_moves_to_a_bare_snake_case_document_under_its_run_id() {
     let storage = scoped();
     put_v1(
