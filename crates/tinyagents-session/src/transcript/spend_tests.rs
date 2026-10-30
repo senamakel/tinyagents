@@ -26,6 +26,7 @@ pub(super) fn meta(agent: &str, agent_type: &str, thread_id: Option<&str>) -> Tr
         updated: "2026-09-22T01:00:00Z".into(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         // Every fixture leaves the denormalised `_meta` rollups at zero: that is
         // exactly what is on disk for every root transcript written since
         // `33566d382`, and the aggregate must not depend on them.

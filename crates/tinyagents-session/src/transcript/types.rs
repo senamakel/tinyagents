@@ -689,6 +689,11 @@ pub struct TranscriptMeta {
     /// generation. `None` on older transcripts that predate this boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix_message_count: Option<usize>,
+    /// Explicitly marks a successor generation as an intentionally reset
+    /// model context. Unlike `None` on legacy transcripts, this suppresses
+    /// prompt-boundary recovery from the sealed parent.
+    #[serde(default)]
+    pub prefix_reset: bool,
     /// Cumulative input tokens across all provider calls this session.
     pub input_tokens: u64,
     /// Cumulative output tokens across all provider calls this session.

@@ -16,6 +16,7 @@ fn test_meta(thread_id: &str) -> TranscriptMeta {
         updated: "2026-01-01T00:00:00Z".to_string(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

@@ -104,6 +104,8 @@ pub(super) struct MetaPayload {
     pub(super) turn_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) prefix_message_count: Option<usize>,
+    #[serde(default)]
+    pub(super) prefix_reset: bool,
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
     pub(super) cached_input_tokens: u64,
@@ -295,6 +297,7 @@ fn meta_payload_from(meta: &TranscriptMeta) -> MetaPayload {
         updated: meta.updated.clone(),
         turn_count: meta.turn_count,
         prefix_message_count: meta.prefix_message_count,
+        prefix_reset: meta.prefix_reset,
         input_tokens: meta.input_tokens,
         output_tokens: meta.output_tokens,
         cached_input_tokens: meta.cached_input_tokens,
@@ -751,6 +754,7 @@ pub(super) fn meta_from_payload(mp: MetaPayload) -> TranscriptMeta {
         updated: mp.updated,
         turn_count: mp.turn_count,
         prefix_message_count: mp.prefix_message_count,
+        prefix_reset: mp.prefix_reset,
         input_tokens: mp.input_tokens,
         output_tokens: mp.output_tokens,
         cached_input_tokens: mp.cached_input_tokens,

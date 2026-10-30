@@ -14,6 +14,7 @@ fn in_memory_transcript_starts_empty() {
         updated: "2026-01-01T00:00:00Z".into(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,

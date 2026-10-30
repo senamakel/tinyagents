@@ -103,6 +103,7 @@ fn seed_root_transcript(
         updated: "2026-07-21T00:00:00Z".into(),
         turn_count: 1,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
