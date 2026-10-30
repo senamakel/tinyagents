@@ -14,7 +14,7 @@ use tinyinference_llm::usage::Usage;
 use super::{
     DEFAULT_SUMMARIZE_KEEP_LAST, DEFAULT_SUMMARIZE_THRESHOLD_FRACTION,
     FaultTolerantCachingSummarizer, ModelSummarizer, SummarizationPolicy, Summarizer,
-    SummaryRecord, SummaryRequest, summarization_policy, summarization_policy_with,
+    SummaryRecord, SummaryRequest, ToolRendering, summarization_policy, summarization_policy_with,
 };
 use crate::error::{Result, TinyAgentsError};
 use crate::testkit::ScriptedModel;
@@ -139,6 +139,27 @@ async fn model_summarizer_renders_structured_messages_and_prior_summary() {
         record.provenance.original_token_estimate,
         crate::token_estimation::estimate_slice_tokens(&messages)
     );
+}
+
+#[tokio::test]
+async fn model_summarizer_can_omit_tool_output_and_bound_summary_tokens() {
+    let model = Arc::new(ScriptedModel::replies(vec!["summary"]));
+    let summarizer = ModelSummarizer::new(model.clone(), "m")
+        .with_tool_rendering(ToolRendering::Markers)
+        .with_max_output_tokens(256);
+
+    summarizer
+        .summarize(&tool_call_messages(json!({"query": "open issues"})))
+        .await
+        .unwrap();
+
+    let request = &model.requests()[0];
+    let transcript = request.messages[1].text();
+    assert!(transcript.contains("[used lookup: {\"query\":\"open issues\"}]"));
+    assert!(!transcript.contains("<tool_result"));
+    assert!(!transcript.contains("{\"matches\":2}"));
+    assert!(!transcript.contains("lookup-1"));
+    assert_eq!(request.max_tokens, Some(256));
 }
 
 struct CountingFailing(Arc<AtomicUsize>);
