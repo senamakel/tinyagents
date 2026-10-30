@@ -26,6 +26,7 @@ fn meta(turn_count: usize, input_tokens: u64, output_tokens: u64) -> TranscriptM
         updated: format!("2026-09-19T10:00:0{turn_count}Z"),
         turn_count,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens,
         output_tokens,
         cached_input_tokens: 3,

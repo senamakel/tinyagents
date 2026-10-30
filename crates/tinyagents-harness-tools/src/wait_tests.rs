@@ -84,6 +84,17 @@ fn wait_loop_tick_omits_an_absent_loop_key() {
     );
 }
 
+#[test]
+fn timeout_policy_covers_the_requested_wait_with_grace() {
+    use tinytools::{Tool, ToolTimeout};
+
+    let args = json!({"message": "poll", "duration_secs": 4});
+    assert_eq!(
+        WaitTool::new().timeout_policy(&args),
+        ToolTimeout::Millis(5_000)
+    );
+}
+
 #[tokio::test]
 async fn wait_execute_returns_callback_message() {
     let res = WaitTool::new()

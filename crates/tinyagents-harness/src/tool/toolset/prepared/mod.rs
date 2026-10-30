@@ -27,7 +27,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> PreparedToolSet<State, Ctx> {
 
     /// Convenience constructor: keeps only the schemas a per-schema
     /// predicate accepts, ignoring `ctx`. Built on
-    /// [`retain_matching_schemas`], the same retain logic
+    /// `retain_matching_schemas`, the same retain logic
     /// [`crate::middleware::library::DynamicToolSelectionMiddleware`] uses.
     pub fn filtering(
         inner: Arc<dyn ToolSet<State, Ctx>>,

@@ -112,6 +112,11 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
             }
             let item = stream.as_mut().poll_next(cx);
             if let std::task::Poll::Ready(Some(item)) = &item {
+                if super::response_facts::is_output(item)
+                    && let Some(guard) = guard.as_mut()
+                {
+                    guard.note_output();
+                }
                 let outcome = match item {
                     ModelStreamItem::Completed(response) => {
                         Some(dispatch_outcome(Some(response), true))
@@ -207,6 +212,9 @@ fn dispatch_outcome(response: Option<&ModelResponse>, succeeded: bool) -> Physic
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
         finish_reason: response.and_then(|response| response.finish_reason.clone()),
+        served_by: response.and_then(super::response_facts::served_by),
+        response_id: response.and_then(super::response_facts::response_id),
+        first_output: None,
     }
 }
 

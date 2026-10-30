@@ -62,12 +62,25 @@ fn usage_details(span: &TraceSpan) -> Option<Value> {
         .get("gen_ai.usage.cached_input_tokens")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    Some(json!({
+    let reasoning = span
+        .attributes
+        .get("gen_ai.usage.reasoning_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    // Langfuse stores flat usage details unchanged, so the buckets must not
+    // overlap: cache reads come out of input, and reasoning (which providers
+    // count inside output) comes out of output under Langfuse's
+    // `output_reasoning_tokens`.
+    let mut details = json!({
         "input": input.saturating_sub(cached),
         "cache_read_input_tokens": cached,
-        "output": output,
+        "output": output.saturating_sub(reasoning),
         "total": input.saturating_add(output),
-    }))
+    });
+    if reasoning > 0 {
+        details["output_reasoning_tokens"] = json!(reasoning.min(output));
+    }
+    Some(details)
 }
 
 fn message_content(payload: &Value) -> String {

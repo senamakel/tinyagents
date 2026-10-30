@@ -27,16 +27,26 @@ including fork isolation for parallel runs, and must check a session back in
 after every successful checkout. The runner persists a deterministic reply
 id before emitting exactly one terminal event.
 
-The idle guard defaults to 900 seconds and resets on progress. Hosts signal
-`WorkStarted` and `WorkFinished` around model or tool work so a quiet but
-healthy request is not treated as idle. The optional wall deadline remains a
-separate total ceiling. Either guard cancels child work and asks the
-`Summarizer` for a bounded grounded close before classifying the turn as failed.
+The idle guard defaults to 900 seconds and resets on progress. Hosts can use
+`WorkTracker` to fold `AgentProgress` into `WorkStarted` and `WorkFinished`
+signals around model or tool work, so a quiet but healthy request is not
+treated as idle. The optional wall deadline remains a separate total ceiling.
+Either guard cancels child work and asks the `Summarizer` for a bounded
+grounded close before classifying the turn as failed.
 
 `AgentProgress` is the canonical channel-independent progress vocabulary.
 Hosts translate it to their own event wire format; this module does not define
 channel event names or transport payloads.
 
+`TurnRequest<P>` is itself a [`QueuedMessage`](crate::run_queue::QueuedMessage)
+for every payload that implements `RequeuePayload`, so a turn's run queue can be
+handed straight to the steering forwarder. A steer the forwarder recovers and
+pushes back is rebuilt from a bare id, text and thread label; the runner
+restores the scope and thread when it dispatches that item as a fresh turn and
+lets the payload adopt the metadata of the turn that was running.
+`TurnRunnerConfig::cancel_grace` keeps a cancelled host run polled, with its own
+cancellation token already fired, for a bounded time so the host can hand back
+and persist the rounds it completed. It defaults to zero (drop at once).
 ## Host progress and failure adapters
 
 Use one `WorkTracker` for each active turn when converting `AgentProgress` to

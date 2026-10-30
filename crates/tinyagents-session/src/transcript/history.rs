@@ -138,8 +138,8 @@ pub trait TranscriptHistory: TranscriptRead {
     /// never been written. Returns `true` when this call installed the import
     /// and `false` when a competing or earlier turn already owns the session.
     ///
-    /// Store implementations must make the empty check and write atomic. The
-    /// default refuses the operation so a storage backend cannot silently
+    /// Store implementations must make the empty check and write atomic.
+    /// The default refuses the operation so a storage backend cannot silently
     /// provide a racy import.
     fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
         if messages.is_empty() {

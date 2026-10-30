@@ -23,6 +23,7 @@ fn in_memory_transcript_starts_empty() {
         task_id: None,
         session_id: None,
         parent_session_id: None,
+        prefix_reset: false,
     };
 
     let transcript = locator.open_stem("fixture", meta).expect("bind transcript");

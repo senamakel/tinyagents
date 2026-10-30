@@ -795,3 +795,7 @@ pub enum RunTransition {
     /// No run has this id.
     NotFound,
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

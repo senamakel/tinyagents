@@ -49,7 +49,7 @@ storage-drivers = []
 
 [dev-dependencies]
 tinystoragedrivers-connect = { workspace = true }
-tinystoragedrivers-document = { version = "2.1.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456" }
+tinystoragedrivers-document = { version = "2.1.2", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb" }
 tinystoragedrivers-testkit = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }

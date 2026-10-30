@@ -104,7 +104,7 @@ pub(super) struct MetaPayload {
     pub(super) turn_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) prefix_message_count: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub(super) prefix_reset: bool,
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,

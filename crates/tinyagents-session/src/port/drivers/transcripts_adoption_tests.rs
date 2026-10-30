@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use super::super::{leases_spec, reservation::RESERVATION_TTL_MS};
 use crate::port::drivers::transcripts::tests::meta;
+use crate::testkit::MemoryStorage;
 use crate::transcript::TranscriptMessage;
 use crate::transcript::test_locator::conditioned_driver_locator;
-use tinyagents_storage_kit::Blocking;
 use tinyagents_storage_kit::primitives::Leases;
+use tinyagents_storage_kit::{Blocking, DocumentStore, Scope};
 
 const THREAD: &str = "t";
 
@@ -56,6 +57,117 @@ fn contents(locator: &dyn TranscriptLocator, session: &SessionRef) -> Vec<String
         .into_iter()
         .map(|message| message.content)
         .collect()
+}
+
+#[test]
+fn supplied_history_is_adopted_once_and_existing_sessions_are_unchanged() {
+    let locator = locator();
+    let session = SessionRef::scoped("relay-thread", "orchestrator");
+    let prior = vec![
+        TranscriptMessage::user("legacy question"),
+        TranscriptMessage::assistant("legacy answer"),
+    ];
+    assert!(
+        locator
+            .adopt_messages_if_absent(&session, meta("relay-thread"), &prior)
+            .unwrap()
+    );
+    assert!(
+        !locator
+            .adopt_messages_if_absent(&session, meta("relay-thread"), &prior)
+            .unwrap()
+    );
+    assert_eq!(
+        contents(&locator, &session),
+        vec!["legacy question", "legacy answer"]
+    );
+
+    let later = vec![TranscriptMessage::user("current turn")];
+    locator
+        .open_session(&session, meta("relay-thread"))
+        .unwrap()
+        .replace(&later)
+        .unwrap();
+    assert!(
+        !locator
+            .adopt_messages_if_absent(&session, meta("relay-thread"), &prior)
+            .unwrap()
+    );
+    assert_eq!(contents(&locator, &session), vec!["current turn"]);
+}
+
+#[test]
+fn empty_import_does_not_reserve_a_session() {
+    let locator = locator();
+    let session = SessionRef::scoped("relay-empty", "orchestrator");
+
+    assert!(
+        !locator
+            .adopt_messages_if_absent(&session, meta("relay-empty"), &[])
+            .unwrap()
+    );
+    assert!(locator.read_session_transcript(&session).is_none());
+}
+
+#[test]
+fn competing_imports_commit_one_complete_history() {
+    let storage = MemoryStorage::new();
+    let docs: Arc<dyn DocumentStore> = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
+    let locators = [
+        Arc::new(DriverTranscriptLocator::new(
+            Arc::clone(&docs),
+            Blocking::new().unwrap(),
+            "memory://adoption-a",
+        )),
+        Arc::new(DriverTranscriptLocator::new(
+            Arc::clone(&docs),
+            Blocking::new().unwrap(),
+            "memory://adoption-b",
+        )),
+    ];
+    let session = SessionRef::scoped("relay-race", "orchestrator");
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let histories = [
+        vec![TranscriptMessage::user("first import")],
+        vec![
+            TranscriptMessage::user("second import"),
+            TranscriptMessage::assistant("second answer"),
+        ],
+    ];
+    let results = std::thread::scope(|scope| {
+        let handles = histories
+            .into_iter()
+            .zip(locators)
+            .map(|(messages, locator)| {
+                let barrier = Arc::clone(&barrier);
+                let session = session.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    locator
+                        .adopt_messages_if_absent(&session, meta("relay-race"), &messages)
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(results.iter().filter(|adopted| **adopted).count(), 1);
+
+    let locator =
+        DriverTranscriptLocator::new(docs, Blocking::new().unwrap(), "memory://adoption-read");
+    let persisted = contents(&locator, &session);
+    assert!(
+        persisted == vec!["first import"] || persisted == vec!["second import", "second answer"],
+        "a competing import must not leave a partial or mixed transcript: {persisted:?}"
+    );
 }
 
 #[test]

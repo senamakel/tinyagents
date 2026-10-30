@@ -1,8 +1,8 @@
 use super::*;
 use serde_json::{Value, json};
 use tinyagents_storage_kit::{
-    Filter, MigrateOptions, Precondition, Registry, Scope, ScopedStorage, StorageBackend,
-    WriteOptions,
+    DocumentStoreExt, Filter, MIGRATIONS_COLLECTION, MigrateOptions, Precondition, Query, Registry,
+    Scope, ScopedStorage, StorageBackend, WriteOptions,
 };
 use tinystoragedrivers_testkit::MemoryBackend;
 
@@ -74,13 +74,6 @@ fn the_schema_composes_and_names_everything_the_harness_owns() {
 }
 
 #[tokio::test]
-async fn migrate_storage_initializes_a_scope_for_host_boot_callers() {
-    let storage = scoped();
-    let initialized = migrate_storage(storage.clone()).await.unwrap();
-    assert_eq!(initialized.scope(), storage.scope());
-}
-
-#[tokio::test]
 async fn run_status_moves_to_a_bare_snake_case_document_under_its_run_id() {
     let storage = scoped();
     put_v1(
@@ -145,6 +138,52 @@ async fn run_status_moves_to_a_bare_snake_case_document_under_its_run_id() {
         .await
         .unwrap();
     assert_eq!(left, 0, "the v1 rows are removed");
+}
+
+#[tokio::test]
+async fn remigration_reads_v1_rows_copied_after_the_first_open() {
+    let storage = scoped();
+    open_storage(storage.clone()).await.unwrap();
+    put_v1(
+        &storage,
+        "harness_run_status",
+        "late-row",
+        json!({
+            "runId": "run.late", "rootRunId": "run.late", "threadId": "thread-late",
+            "active": false,
+            "record": {
+                "run_id": "run.late", "root_run_id": "run.late", "thread_id": "thread-late",
+                "component": "model", "status": "completed", "current_phase": "model",
+                "model_calls": 1, "tool_calls": 0, "active_tool_calls": [],
+                "usage": {}, "cost": {}, "started_at": 1_700_000_000_u64,
+                "updated_at": 1_700_000_010_u64, "metadata": {}
+            }
+        }),
+    )
+    .await;
+
+    let docs = storage.documents();
+    let progress = docs
+        .query_all(MIGRATIONS_COLLECTION, &Query::all())
+        .await
+        .unwrap();
+    for row in progress
+        .into_iter()
+        .filter(|row| row.doc.get("owner").and_then(Value::as_str) == Some("harness"))
+    {
+        docs.delete(MIGRATIONS_COLLECTION, &row.id, Precondition::None)
+            .await
+            .unwrap();
+    }
+
+    migrate_storage(storage.clone()).await.unwrap();
+
+    let migrated = docs
+        .get("harness.run_status", "run.late")
+        .await
+        .unwrap()
+        .expect("the copied v1 row is visible after remigration");
+    assert_eq!(migrated.doc["run_id"], "run.late");
 }
 
 #[tokio::test]

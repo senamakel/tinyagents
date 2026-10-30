@@ -29,7 +29,7 @@ const MAX_COMMAND_CHARS: usize = 200;
 impl TaskLedger {
     /// Folds the facts in `messages` into this ledger (which may carry facts
     /// from earlier checkpoints). Files keep most-recent order; commands keep
-    /// the most recent [`MAX_COMMANDS`].
+    /// the most recent `MAX_COMMANDS`.
     pub fn absorb(&mut self, messages: &[Message]) {
         if self.original_task.is_none() {
             self.original_task = messages

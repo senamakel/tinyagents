@@ -8,7 +8,7 @@ use tinytools::ToolSpec;
 /// Mirrors Pydantic AI's `defer_loading`/deferred-tools model
 /// (`docs/runtime-comparison/pydantic-ai.md` §3.4, `pi.md` §4.1's
 /// transcript-carried tool-loadout changes). It advertises
-/// [`Self::schemas`] to the model like any other toolset, but never runs one
+/// `Self::schemas` to the model like any other toolset, but never runs one
 /// of them locally.
 ///
 /// # Host-integration contract

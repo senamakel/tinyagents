@@ -18,6 +18,40 @@ use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
 use tinyinference_llm::tool::{ToolCall, ToolFormat, ToolSchema};
 use tinytools::{SandboxMode, ToolAccess, ToolPolicy, ToolResult, ToolRuntime, ToolSideEffects};
 
+#[cfg(feature = "json-schema")]
+fn schema_string_values<'a>(
+    root: &'a serde_json::Value,
+    mut schema: &'a serde_json::Value,
+) -> Vec<String> {
+    while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let pointer = reference.strip_prefix('#').expect("local schema reference");
+        schema = root.pointer(pointer).expect("schema reference resolves");
+    }
+
+    let mut values: Vec<String> =
+        if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            values
+                .iter()
+                .map(|value| value.as_str().expect("string enum value").to_owned())
+                .collect()
+        } else {
+            schema
+                .get("oneOf")
+                .and_then(serde_json::Value::as_array)
+                .expect("string enum or oneOf schema")
+                .iter()
+                .map(|variant| {
+                    variant["const"]
+                        .as_str()
+                        .expect("string oneOf const")
+                        .to_owned()
+                })
+                .collect()
+        };
+    values.sort();
+    values
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn ctx_with_recorder() -> (RunContext, Arc<RecordingListener>) {
@@ -2083,4 +2117,27 @@ async fn run_mode_handle_set_takes_effect_immediately_on_shared_clones() {
         .run_before_tool(&mut ctx, &(), &mut call)
         .await
         .expect_err("plan mode now denies the same call");
+}
+
+#[cfg(feature = "json-schema")]
+#[test]
+fn run_mode_schema_and_serde_use_the_wire_discriminants() {
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<RunMode>(),
+    )
+    .unwrap();
+    let mode_values = schema_string_values(&schema, &schema);
+    assert_eq!(mode_values, vec!["build".to_owned(), "plan".to_owned()]);
+    assert_eq!(
+        serde_json::to_value(RunMode::Build).unwrap(),
+        json!("build")
+    );
+    assert_eq!(serde_json::to_value(RunMode::Plan).unwrap(), json!("plan"));
+    assert_eq!(
+        serde_json::from_value::<RunMode>(json!("plan")).unwrap(),
+        RunMode::Plan
+    );
 }

@@ -272,7 +272,6 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
     }
 
     fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
-        let messages = normalized_rows(messages);
         if messages.is_empty() {
             return Ok(false);
         }
@@ -285,7 +284,7 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
         if state.written {
             return Ok(false);
         }
-        state.messages = messages;
+        state.messages = normalized_rows(messages);
         state.written = true;
         Ok(true)
     }

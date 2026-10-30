@@ -32,6 +32,7 @@ fn conversation_thread_serde_uses_camel_case_and_defaults_labels() {
 fn conversation_message_patch_defaults_to_no_changes() {
     let patch: ThreadMessagePatch = serde_json::from_value(json!({})).unwrap();
     assert!(patch.extra_metadata.is_none());
+    assert!(patch.merge_extra_metadata.is_none());
 
     let patch_with_metadata: ThreadMessagePatch =
         serde_json::from_value(json!({"extraMetadata": {"source": "mock"}})).unwrap();
@@ -41,25 +42,12 @@ fn conversation_message_patch_defaults_to_no_changes() {
     );
     assert!(patch_with_metadata.merge_extra_metadata.is_none());
 
-    let merge: ThreadMessagePatch =
-        serde_json::from_value(json!({"mergeExtraMetadata": {"savedFlowId": "flow-1"}})).unwrap();
+    let merge_patch: ThreadMessagePatch =
+        serde_json::from_value(json!({"mergeExtraMetadata": {"channelActivity": {}}})).unwrap();
     assert_eq!(
-        merge.merge_extra_metadata,
-        Some(json!({"savedFlowId":"flow-1"}))
+        merge_patch.merge_extra_metadata,
+        Some(json!({"channelActivity": {}}))
     );
-}
-
-#[test]
-fn metadata_merge_preserves_existing_keys_and_replaces_non_objects() {
-    let mut current = json!({"source":"chat", "nested":{"old":true}});
-    merge_extra_metadata(&mut current, json!({"savedFlowId":"flow-1"}));
-    assert_eq!(
-        current,
-        json!({"source":"chat", "nested":{"old":true}, "savedFlowId":"flow-1"})
-    );
-
-    merge_extra_metadata(&mut current, json!("legacy"));
-    assert_eq!(current, json!("legacy"));
 }
 
 #[test]
@@ -97,12 +85,19 @@ fn run_reply_id_is_deterministic_and_recognised_as_such() {
 
 #[test]
 fn client_generated_ids_are_not_deterministic() {
-    // These are UUID-fresh per message, so they can never be re-presented and
-    // must keep the constant-time append path.
+    // User ids are not transcript-correlated assistant replies. The user:
+    // prefix is a separate append-idempotency contract.
     assert!(!is_deterministic_message_id(
         "user:5f1d0c3e-1f8b-4c1a-9c2e-2a7b6d4e8f90"
     ));
     assert!(!is_deterministic_message_id(
         "assistant:5f1d0c3e-1f8b-4c1a-9c2e-2a7b6d4e8f90"
     ));
+}
+
+#[test]
+fn queued_user_request_ids_are_append_idempotency_keys() {
+    assert!(is_idempotent_message_id("agent:run-7"));
+    assert!(is_idempotent_message_id("user:request-7"));
+    assert!(!is_idempotent_message_id("ui:message-7"));
 }

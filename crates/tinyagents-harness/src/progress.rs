@@ -464,7 +464,8 @@ pub struct SubagentUsage {
 }
 
 impl SubagentUsage {
-    /// Token and monetary cost represented by this subagent usage snapshot.
+    /// The run's token and monetary cost as a tally, for folding into a parent's.
+    #[must_use]
     pub fn cost(&self) -> crate::cost::CostTally {
         crate::cost::CostTally {
             known_usd: self.charged_amount_usd,

@@ -21,7 +21,7 @@ impl ToolAllowlistMiddleware {
 
     /// Returns `true` if `name` is on the allowlist.
     ///
-    /// Delegates to [`crate::tool::toolset::tool_name_allowed`] — the exact
+    /// Delegates to `crate::tool::toolset::tool_name_allowed` — the exact
     /// membership test [`crate::tool::toolset::FilteredToolSet::allowing`]
     /// uses — so this middleware and its `ToolSet` counterpart cannot drift
     /// (`docs/runtime-comparison/pydantic-ai.md` §4).

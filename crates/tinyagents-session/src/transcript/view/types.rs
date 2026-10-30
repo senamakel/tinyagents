@@ -86,8 +86,6 @@ pub enum DisplayItem {
     UserMessage {
         content: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        extra_metadata: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         display_content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
@@ -96,13 +94,14 @@ pub enum DisplayItem {
         /// before timestamps were persisted — never backfilled.
         #[serde(skip_serializing_if = "Option::is_none")]
         ts: Option<String>,
+        /// Opaque metadata persisted on the host's user-message row.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_metadata: Option<serde_json::Value>,
     },
     /// An assistant answer. `interim: true` marks a non-terminal tool-calling
     /// step within a multi-iteration turn (not the final answer bubble).
     AssistantMessage {
         content: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        extra_metadata: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "is_false")]
         interim: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +112,9 @@ pub enum DisplayItem {
         iteration: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         ts: Option<String>,
+        /// Opaque metadata persisted on the host's assistant-message row.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_metadata: Option<serde_json::Value>,
     },
     /// The model's reasoning/thinking that preceded an assistant message.
     /// `iteration` is the model call it belongs to — the same value as the

@@ -334,7 +334,7 @@ async fn a_migrated_conversation_reads_recovers_its_intent_and_moves_to_canonica
     // A rewrite opens a fresh incarnation whose stream carries the thread id.
     let patch = ThreadMessagePatch {
         extra_metadata: Some(json!({"edited": true})),
-        ..Default::default()
+        merge_extra_metadata: None,
     };
     store.update_message(id, "m1", patch).await.unwrap();
     let streams = storage

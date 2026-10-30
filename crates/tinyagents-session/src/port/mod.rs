@@ -120,6 +120,10 @@ pub trait SessionStoreProvider: Send + Sync {
 
     /// Opens stores whose scoped storage remains pinned to this provider's
     /// current binding for the lifetime of the returned handle.
+    ///
+    /// The default refuses with [`SessionStoreLeaseError::Unsupported`]. A
+    /// provider whose handles stay bound to one backend overrides it and builds
+    /// the lease with [`SessionStoreLease::pinned`], which spells out the promise.
     fn lease_for_agent(
         &self,
         _agent_id: &str,

@@ -3,6 +3,40 @@
 use super::prompt::*;
 use super::types::*;
 
+#[cfg(feature = "json-schema")]
+fn schema_string_values<'a>(
+    root: &'a serde_json::Value,
+    mut schema: &'a serde_json::Value,
+) -> Vec<String> {
+    while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let pointer = reference.strip_prefix('#').expect("local schema reference");
+        schema = root.pointer(pointer).expect("schema reference resolves");
+    }
+
+    let mut values: Vec<String> =
+        if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            values
+                .iter()
+                .map(|value| value.as_str().expect("string enum value").to_owned())
+                .collect()
+        } else {
+            schema
+                .get("oneOf")
+                .and_then(serde_json::Value::as_array)
+                .expect("string enum or oneOf schema")
+                .iter()
+                .map(|variant| {
+                    variant["const"]
+                        .as_str()
+                        .expect("string oneOf const")
+                        .to_owned()
+                })
+                .collect()
+        };
+    values.sort();
+    values
+}
+
 fn goal(status: ThreadGoalStatus, token_budget: Option<u64>, tokens_used: u64) -> ThreadGoal {
     ThreadGoal {
         thread_id: "t".into(),
@@ -24,6 +58,50 @@ fn status_strings_match_serialized() {
     assert_eq!(ThreadGoalStatus::Paused.as_str(), "paused");
     assert_eq!(ThreadGoalStatus::BudgetLimited.as_str(), "budget_limited");
     assert_eq!(ThreadGoalStatus::Complete.as_str(), "complete");
+}
+
+#[cfg(feature = "json-schema")]
+#[test]
+fn public_goal_schema_uses_the_serialized_camel_case_record() {
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<ThreadGoal>(),
+    )
+    .unwrap();
+    let properties = &schema["properties"];
+    for field in [
+        "threadId",
+        "goalId",
+        "objective",
+        "status",
+        "tokenBudget",
+        "tokensUsed",
+        "timeUsedSeconds",
+        "timeUsedSubsecNanos",
+        "createdAtMs",
+        "updatedAtMs",
+    ] {
+        assert!(properties.get(field).is_some(), "missing {field}: {schema}");
+    }
+    let status_values = schema_string_values(&schema, &properties["status"]);
+    let mut expected_status_values = vec![
+        "active".to_owned(),
+        "paused".to_owned(),
+        "budget_limited".to_owned(),
+        "complete".to_owned(),
+    ];
+    expected_status_values.sort();
+    assert_eq!(status_values, expected_status_values);
+    for (status, serialized) in [
+        (ThreadGoalStatus::Active, "active"),
+        (ThreadGoalStatus::Paused, "paused"),
+        (ThreadGoalStatus::BudgetLimited, "budget_limited"),
+        (ThreadGoalStatus::Complete, "complete"),
+    ] {
+        assert_eq!(serde_json::to_value(status).unwrap(), serialized);
+    }
 }
 
 #[test]

@@ -36,3 +36,35 @@ fn snapshot_written_before_optional_fields_still_loads() {
     assert_eq!(state.lifecycle, TurnLifecycle::Interrupted);
     assert!(state.transcript.is_empty());
 }
+
+#[test]
+fn turn_state_json_schema_tracks_the_serialized_wire_names() {
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<TurnState>(),
+    )
+    .unwrap();
+    let properties = schema["properties"].as_object().unwrap();
+    for field in [
+        "threadId",
+        "requestId",
+        "maxIterations",
+        "toolTimeline",
+        "transcript",
+        "startedAt",
+        "updatedAt",
+    ] {
+        assert!(properties.contains_key(field), "schema is missing {field}");
+    }
+    let required = schema["required"].as_array().unwrap();
+    for field in ["threadId", "streamingText", "thinking", "toolTimeline"] {
+        assert!(required.iter().any(|required| required == field));
+    }
+    assert!(!required.iter().any(|required| required == "transcript"));
+    let subagent = &schema["$defs"]["SubagentActivity"];
+    let subagent_required = subagent["required"].as_array().unwrap();
+    assert!(subagent_required.iter().any(|field| field == "toolCalls"));
+    assert!(!subagent_required.iter().any(|field| field == "transcript"));
+}

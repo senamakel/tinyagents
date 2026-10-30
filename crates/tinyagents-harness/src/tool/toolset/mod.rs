@@ -173,7 +173,7 @@ where
 
 /// Bridges one [`ToolSet`]-owned tool into the [`crate::tool::ToolDispatch`]
 /// the agent loop's admission path already speaks, so a name only a toolset
-/// chain exposes (not [`crate::tool::ToolRegistry::model_dispatch`]) can be
+/// chain exposes (not `crate::tool::ToolRegistry::model_dispatch`) can be
 /// admitted and executed through the exact same call path as a directly
 /// registered tool — timeout policy, injected-argument handling, schema
 /// validation, and every other admission step in `agent_loop/tools.rs` apply

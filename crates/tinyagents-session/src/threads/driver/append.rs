@@ -101,7 +101,7 @@ impl DriverConversationStore {
         thread_id: &str,
         message: &ThreadMessage,
     ) -> ConversationResult<Option<ThreadMessage>> {
-        if !is_deterministic_message_id(&message.id)
+        if !is_idempotent_message_id(&message.id)
             && message
                 .extra_metadata
                 .get("scope")
@@ -174,6 +174,11 @@ impl DriverConversationStore {
             }
             let stream = thread.stream()?;
             if thread.visible_end != offset {
+                // A concurrent retry with the same idempotency key may have
+                // committed this exact intent after the check above.
+                if self.committed(intent).await? {
+                    return intent.message();
+                }
                 return Err(StorageError::serialization(
                     "conversation append prefix is inconsistent",
                 )

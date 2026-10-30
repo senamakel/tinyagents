@@ -419,9 +419,87 @@ fn finishing_a_dispatch_does_not_emit_a_second_cancelled_terminal_on_drop() {
         usage: None,
         answered_model: None,
         finish_reason: None,
+        served_by: None,
+        response_id: None,
+        first_output: None,
     });
 
     let outcomes = recorder.0.lock().unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Succeeded);
+}
+
+#[tokio::test]
+async fn dispatch_stream_reports_who_served_it_and_when_output_began() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let mut response = ModelResponse::assistant("done");
+    response.message.id = Some("gen-42".into());
+    response.raw = Some(serde_json::json!({"provider": "DeepInfra"}));
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::MessageDelta(tinyinference_llm::MessageDelta {
+                reasoning: "thinking".into(),
+                ..Default::default()
+            }),
+            ModelStreamItem::Completed(response),
+        ]),
+        observer,
+    );
+    let stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+    let _: Vec<_> = stream.collect().await;
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].served_by.as_deref(), Some("DeepInfra"));
+    assert_eq!(outcomes[0].response_id.as_deref(), Some("gen-42"));
+    let first_output = outcomes[0].first_output.expect("reasoning is output");
+    assert!(first_output <= outcomes[0].duration);
+}
+
+#[tokio::test]
+async fn a_stream_without_output_reports_no_first_output() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::MessageDelta(Default::default()),
+            ModelStreamItem::UsageDelta(Usage::new(1, 0)),
+            ModelStreamItem::Completed(ModelResponse::assistant("")),
+        ]),
+        observer,
+    );
+    let stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+    let _: Vec<_> = stream.collect().await;
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes[0].first_output, None);
+    assert_eq!(outcomes[0].served_by, None);
+    assert_eq!(outcomes[0].response_id, None);
+}
+
+#[test]
+fn a_cancelled_dispatch_keeps_its_first_output_time() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let mut guard =
+        PhysicalDispatchGuard::new(observer.on_start(&PhysicalDispatchMetadata::default()));
+    guard.note_output();
+    let first = guard.first_output;
+    guard.note_output();
+    assert_eq!(guard.first_output, first, "the first time is kept");
+    drop(guard);
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Cancelled);
+    assert_eq!(outcomes[0].first_output, first);
+    assert!(first.is_some());
 }

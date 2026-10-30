@@ -36,12 +36,14 @@ pub struct ModelSummarizer {
 #[serde(rename_all = "snake_case")]
 pub enum ToolRendering {
     /// Every tool call with its id and arguments, and every tool result, in
-    /// the tagged form of [`render_message_for_summary`](super::render_message_for_summary).
+    /// the tagged form of
+    /// [`render_message_for_summary`](super::render_message_for_summary).
     #[default]
     Full,
-    /// Keep the conversation while reducing tool calls to short markers and
-    /// omitting tool results. Useful when summaries should preserve what the
-    /// agent did without copying large tool output into the summarizer prompt.
+    /// The conversation only: each tool call becomes one
+    /// `[used <name>: <arguments>]` line with its arguments cut short, and tool
+    /// results are left out. For small summarization models that should see
+    /// what was said and done, not the tools' output.
     Markers,
 }
 

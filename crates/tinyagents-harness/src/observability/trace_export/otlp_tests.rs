@@ -102,6 +102,40 @@ fn otlp_has_one_root_with_readable_io_and_call_only_usage() {
 }
 
 #[test]
+fn reasoning_tokens_are_their_own_usage_bucket() {
+    let root = span("root", None, SpanKind::Turn, "agent.turn");
+    let mut generation = span("call", Some("root"), SpanKind::Generation, "llm.reply");
+    for (key, value) in [
+        ("gen_ai.usage.input_tokens", 100),
+        ("gen_ai.usage.cached_input_tokens", 60),
+        ("gen_ai.usage.output_tokens", 20),
+        ("gen_ai.usage.reasoning_tokens", 7),
+    ] {
+        generation.attributes.insert(key.into(), json!(value));
+    }
+    let payloads = otlp_requests(&[root, generation], "production", &BRAND);
+    let call = payloads[0]["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "llm.reply")
+        .unwrap();
+    // Langfuse stores flat usage details unchanged, so the buckets must not
+    // overlap: reasoning is taken out of output as cache reads are out of input.
+    assert_eq!(
+        serde_json::from_str::<Value>(attr(call, "langfuse.observation.usage_details").unwrap())
+            .unwrap(),
+        json!({
+            "cache_read_input_tokens": 60,
+            "input": 40,
+            "output": 13,
+            "output_reasoning_tokens": 7,
+            "total": 120
+        })
+    );
+}
+
+#[test]
 fn repeated_internal_searches_become_one_summary() {
     let root = span("root", None, SpanKind::Turn, "agent.turn");
     let searches: Vec<_> = (0..240)

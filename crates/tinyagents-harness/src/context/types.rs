@@ -545,6 +545,12 @@ pub struct RunContext<Ctx = ()> {
     /// discarding a response would also discard output a consumer already
     /// received as deltas.
     pub call_streamed: bool,
+    /// When the model call most recently dispatched by the agent loop first
+    /// streamed output (text, reasoning or a tool call), in the attempt that
+    /// produced its result. Cleared when the loop's innermost model call
+    /// begins, and `None` for a buffered call. The turn observer reads it to
+    /// report a call's time to first token.
+    pub(crate) call_first_output_at: Option<std::time::Instant>,
     /// Identifies the current shape of the prompt prefix: `0` until a
     /// middleware that rewrites it (a compaction, a truncation) calls
     /// [`RunContext::mark_prompt_prefix_changed`], then a process-unique

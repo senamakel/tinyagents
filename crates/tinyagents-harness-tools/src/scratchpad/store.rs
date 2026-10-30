@@ -1,5 +1,5 @@
 //! Persistence for the per-thread scratchpad, on the harness
-//! [`Store`](tinyagents_harness::store::Store).
+//! [`Store`].
 //!
 //! One serialized [`Scratchpad`] per thread under [`SCRATCHPAD_NAMESPACE`],
 //! keyed by the hex-encoded thread id, written `load → apply → put` under a

@@ -28,6 +28,7 @@ mod journal_entry;
 #[cfg(feature = "langfuse")]
 mod langfuse;
 mod profile;
+pub(crate) mod response_facts;
 mod supplemental;
 mod types;
 mod worker;

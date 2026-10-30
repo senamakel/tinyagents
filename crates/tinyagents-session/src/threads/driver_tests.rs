@@ -299,6 +299,82 @@ async fn conflicting_metadata_edits_reread_version_and_preserve_both_fields() {
     assert_eq!(row.labels, vec!["tasks"]);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn concurrent_message_metadata_merges_retry_against_latest_row() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let backend = MemoryStorage::new();
+    let base = scoped(&backend, "profile");
+    seed(&base, "one", &["hello"]).await;
+    base.update_message(
+        "one",
+        "message:0",
+        ThreadMessagePatch {
+            extra_metadata: Some(json!({"voice": {"transcript": "spoken"}})),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let scope = Scope::new("profile").unwrap();
+    let ports = backend.for_scope(&scope).unwrap();
+    let docs = Arc::new(fixtures::ConflictingDocs {
+        inner: ports.documents().clone(),
+        attempts: AtomicUsize::new(0),
+        barrier: tokio::sync::Barrier::new(2),
+        refuse_get: false,
+    });
+    let storage = tinystoragedrivers_api::Storage::new(
+        docs.clone(),
+        ports.streams().clone(),
+        ports.kv().clone(),
+        ports.blobs().clone(),
+        ports.queues().clone(),
+        ports.secrets().clone(),
+    );
+    let store = DriverConversationStore::new(ScopedStorage::new(storage, scope));
+    let (reaction, receipt) = tokio::join!(
+        store.update_message(
+            "one",
+            "message:0",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"reactions": {"reaction-key": {"value": "👍"}}}
+                })),
+                ..Default::default()
+            },
+        ),
+        store.update_message(
+            "one",
+            "message:0",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"readReceipts": {"receipt-key": {"actorId": "reader"}}}
+                })),
+                ..Default::default()
+            },
+        ),
+    );
+    reaction.unwrap();
+    receipt.unwrap();
+    assert!(
+        docs.attempts.load(Ordering::SeqCst) >= 3,
+        "fixture must force one metadata rewrite to retry after a CAS conflict"
+    );
+
+    let messages = store.get_messages("one").await.unwrap();
+    let message = &messages[0];
+    assert_eq!(message.extra_metadata["voice"]["transcript"], "spoken");
+    assert_eq!(
+        message.extra_metadata["channelActivity"]["reactions"]["reaction-key"]["value"],
+        "👍"
+    );
+    assert_eq!(
+        message.extra_metadata["channelActivity"]["readReceipts"]["receipt-key"]["actorId"],
+        "reader"
+    );
+}
+
 fn instrumented_streams(
     store: &DriverConversationStore,
     pause_first: bool,

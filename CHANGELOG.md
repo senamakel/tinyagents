@@ -13,6 +13,22 @@ during the 2.x migration are no longer part of the TinyAgents workspace.
 The unreleased entries below describe the changes accumulated before this
 major release.
 
+## Unreleased: model observations report who served a call and its first token
+
+**Breaking.** `TurnObservation::Model` and `TurnObservation::ModelDispatch`
+gain `served_by`, `response_id` and `first_token_ms`, and
+`PhysicalDispatchOutcome` gains `served_by`, `response_id` and
+`first_output`. Code that builds these values must set the new fields; code
+that matches them with `..` is unaffected. `served_by` is a routing gateway's
+top-level `provider` (OpenRouter's upstream provider), `response_id` is the
+provider's response id (`gen-…` on OpenRouter) and `first_token_ms` is the
+time to the first streamed text, reasoning or tool-call output. See
+`docs/modules/harness/observability.md`.
+
+OTLP export (`otlp_requests`) now splits a generation's reasoning tokens
+(`gen_ai.usage.reasoning_tokens`) out of `output` into Langfuse's
+`output_reasoning_tokens` usage bucket. `total` is unchanged.
+
 ## Unreleased: `AgentProgress::ContextCompacting`
 
 **Breaking.** Added `AgentProgress::ContextCompacting` to the public

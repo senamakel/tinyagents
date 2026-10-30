@@ -7,6 +7,7 @@
 //! owned.
 
 mod types;
+mod work_tracker;
 
 #[cfg(test)]
 pub(crate) use types::ActiveTurn;
@@ -15,8 +16,9 @@ pub use types::{
     EventSink, FailureClassification, FailureClassifier, IngressDecision, IngressPolicy,
     IngressStage, LiveTurn, QueueDisposition, ReplyStore, RequeuePayload, ScopeKey, Summarizer,
     TerminalEvent, TurnHost, TurnQueueItem, TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig,
-    TurnRunnerError, TurnSession, TurnSignal, WorkTracker, deterministic_reply_id,
+    TurnRunnerError, TurnSession, TurnSignal, deterministic_reply_id,
 };
+pub use work_tracker::WorkTracker;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

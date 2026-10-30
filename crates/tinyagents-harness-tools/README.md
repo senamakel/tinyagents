@@ -11,7 +11,8 @@ feature enables the generic job and message tools and brings in
 `tinyagents-orchestration` and its task registry dependencies. Time,
 clarification, plan-exit, per-call binding, and thread-lock support are
 available without optional features. The `state-block` feature enables the
-run-state middleware and its required `goals` and `todos` modules.
+run-state middleware and its required `goals` and `todos` modules. The
+`json-schema` feature enables schema derives on tool-owned data types.
 
 The opt-in `fs`, `net`, and `exec` features expose the standard tool families
 under `tinyagents_harness_tools::{fs,net,exec}`. The `media` feature exposes
@@ -49,6 +50,10 @@ default set.
 - The crate root exports `CurrentTimeTool`, `ResolveTimeTool`,
   `AskClarificationTool`, `PlanExitTool`, `WaitTool`, `WaitLoopTool`, and the
   `per_call` binding adapter.
+
+`WaitTool` and `WaitLoopTool` provide bounded delayed callback ticks for
+orchestrator-controlled polling. They return the caller's callback message
+without owning scheduling state.
 
 Subagent registry policy stays in `tinyagents-orchestration`; this crate owns
 the reusable tool declarations. The harness owns tool registration,

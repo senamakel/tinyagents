@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     future::Future,
     hash::Hash,
     sync::{Arc, Weak},
@@ -257,49 +257,6 @@ pub trait RequeuePayload: Sized {
     fn restore_thread_id(&mut self, _thread_id: &str) {}
 }
 
-/// Folds progress events into balanced work-liveness signals for the runner.
-///
-/// A turn is considered busy while a model iteration or tool call is active.
-/// Overlapping work emits one `WorkStarted` transition and one `WorkFinished`
-/// transition when the last item settles. Duplicate start/completion events
-/// do not produce unbalanced signals.
-#[derive(Debug, Default)]
-pub struct WorkTracker {
-    active: HashSet<String>,
-}
-
-impl WorkTracker {
-    /// Record an event and return a signal only when busy/idle state changes.
-    pub fn observe(&mut self, event: &AgentProgress) -> Option<TurnSignal> {
-        let was_active = !self.active.is_empty();
-        match event {
-            AgentProgress::IterationStarted { iteration, .. } => {
-                self.active.insert(format!("model:{iteration}"));
-            }
-            AgentProgress::ModelCallCompleted {
-                iteration,
-                subagent_task_id: None,
-                ..
-            } => {
-                self.active.remove(&format!("model:{iteration}"));
-            }
-            AgentProgress::ToolCallStarted { call_id, .. } => {
-                self.active.insert(format!("tool:{call_id}"));
-            }
-            AgentProgress::ToolCallCompleted { call_id, .. } => {
-                self.active.remove(&format!("tool:{call_id}"));
-            }
-            AgentProgress::TurnCompleted { .. } => self.active.clear(),
-            _ => {}
-        }
-        match (was_active, !self.active.is_empty()) {
-            (false, true) => Some(TurnSignal::WorkStarted),
-            (true, false) => Some(TurnSignal::WorkFinished),
-            _ => None,
-        }
-    }
-}
-
 #[async_trait]
 pub trait TurnHost<P = serde_json::Value, Q = TurnRequest<P>>: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
@@ -407,6 +364,11 @@ pub struct TurnRunnerConfig {
     pub idle_timeout: Duration,
     pub deadline: Option<Duration>,
     pub close_timeout: Duration,
+    /// How long a cancelled host run keeps being polled, with its own
+    /// cancellation token already fired, before it is dropped. A host uses the
+    /// window to hand back and persist the rounds it completed. Zero drops the
+    /// run immediately.
+    pub cancel_grace: Duration,
 }
 
 impl Default for TurnRunnerConfig {
@@ -415,6 +377,7 @@ impl Default for TurnRunnerConfig {
             idle_timeout: Duration::from_secs(900),
             deadline: None,
             close_timeout: Duration::from_secs(60),
+            cancel_grace: Duration::ZERO,
         }
     }
 }
@@ -1344,6 +1307,17 @@ where
                 _ = cancellation.cancelled() => {
                     task_cancellation.cancel();
                     self.host.cancel_children(request).await;
+                    if !self.config.cancel_grace.is_zero() {
+                        // Let the host unwind with its token fired; its result
+                        // is discarded either way.
+                        let unwound = tokio::time::timeout(self.config.cancel_grace, &mut run).await;
+                        tracing::debug!(
+                            thread_id = %request.thread_id,
+                            request_id = %request.request_id,
+                            unwound = unwound.is_ok(),
+                            "turn runner: cancelled run left its grace window"
+                        );
+                    }
                     return Err("turn cancelled".into());
                 }
                 _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {

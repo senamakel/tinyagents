@@ -35,6 +35,9 @@ use super::ToolRendering;
 /// row counts) intact, which is what a later turn usually needs to refer back
 /// to.
 const MAX_RENDERED_PAYLOAD_CHARS: usize = 2_000;
+
+/// Most characters of a tool call's arguments shown in a
+/// [`ToolRendering::Markers`] line, the ellipsis included.
 const MARKER_ARGUMENT_CHARS: usize = 120;
 
 /// The role label used when rendering a message for summarization.
@@ -151,12 +154,19 @@ pub fn render_message_for_summary(message: &Message) -> String {
     format!("{}: {}", role_label(message), parts.join(" "))
 }
 
-/// Render one message for summarization using the selected tool policy.
+/// Renders a single message for a summary transcript in the given
+/// [`ToolRendering`] mode, or `None` when the mode leaves the message out.
 ///
-/// `Full` matches [`render_message_for_summary`] exactly. `Markers` keeps
-/// ordinary conversation content, renders each assistant tool call as a
-/// bounded `[used name: arguments]` line, and omits tool-result messages.
-/// Assistant turns with neither prose nor calls are omitted in marker mode.
+/// [`ToolRendering::Full`] is exactly [`render_message_for_summary`].
+/// [`ToolRendering::Markers`] renders system, user, assistant and custom
+/// content the same way, but:
+///
+/// - each assistant tool call becomes its own line,
+///   `[used <name>: <arguments>]`, without its call id and with the arguments'
+///   JSON cut to 120 characters (an ellipsis marks the cut);
+/// - an assistant turn that only called tools is just those lines;
+/// - a tool result ([`Message::Tool`]) is omitted: `None`;
+/// - so is an assistant turn with neither prose nor tool calls.
 pub fn render_message_for_summary_with(
     message: &Message,
     rendering: ToolRendering,
@@ -182,6 +192,9 @@ pub fn render_message_for_summary_with(
     }
 }
 
+/// Cuts `text` to at most `max_chars` characters, the last of them an
+/// ellipsis when anything was dropped. Counts characters, so a cut never
+/// splits one.
 fn shorten(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();

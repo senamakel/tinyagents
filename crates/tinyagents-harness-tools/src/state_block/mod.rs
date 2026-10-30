@@ -16,7 +16,7 @@
 //!   and those of its last finished task ([`crate::scratchpad`]), written
 //!   through the `todo` tool's note arguments;
 //! - **the ledger**: facts derived from the run's own tool calls with no model
-//!   involved ([`ledger`]): the last few failed calls with their exit code and
+//!   involved (`ledger`): the last few failed calls with their exit code and
 //!   first stderr line, executables a shell reported missing, and files
 //!   written by write/edit tools. Facts correct themselves: a later success of
 //!   the same command clears its failure, and a later successful command that

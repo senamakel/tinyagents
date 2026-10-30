@@ -137,13 +137,37 @@ impl DriverConversationStore {
                     message.extra_metadata = extra;
                 }
                 if let Some(merge) = patch.merge_extra_metadata.clone() {
-                    super::super::types::merge_extra_metadata(&mut message.extra_metadata, merge);
+                    Self::merge_json_patch(&mut message.extra_metadata, merge);
                 }
                 let updated = message.clone();
                 Ok(Some((messages, updated)))
             })
             .await?;
         updated.ok_or_else(|| StorageError::not_found("conversation message not found").into())
+    }
+
+    /// Apply an RFC 7396-style JSON merge patch to a message metadata value.
+    /// Called inside `rewrite`'s CAS retry so each retry uses the current row.
+    fn merge_json_patch(target: &mut serde_json::Value, patch: serde_json::Value) {
+        match patch {
+            serde_json::Value::Object(patch) => {
+                if !target.is_object() {
+                    *target = serde_json::json!({});
+                }
+                let target = target.as_object_mut().expect("object established");
+                for (key, value) in patch {
+                    if value.is_null() {
+                        target.remove(&key);
+                    } else {
+                        Self::merge_json_patch(
+                            target.entry(key).or_insert(serde_json::Value::Null),
+                            value,
+                        );
+                    }
+                }
+            }
+            replacement => *target = replacement,
+        }
     }
 
     pub(super) async fn delete_messages_from_native(

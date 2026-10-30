@@ -52,8 +52,18 @@ pub enum TurnObservation {
         answered_model: Option<String>,
         /// Provider finish reason.
         finish_reason: Option<String>,
+        /// Upstream provider that served the call, when a routing gateway
+        /// reports it (OpenRouter's top-level `provider`, e.g. `"DeepInfra"`).
+        served_by: Option<String>,
+        /// Provider's id for the response (`chatcmpl-…`, OpenRouter's
+        /// `gen-…`, `msg_…`), to look the call up with the provider.
+        response_id: Option<String>,
         /// Wall-clock time in milliseconds.
         duration_ms: u64,
+        /// Milliseconds from the call's start to the first streamed output
+        /// (text, reasoning or a tool call) of the attempt that produced the
+        /// result. `None` for a buffered call or one that streamed nothing.
+        first_token_ms: Option<u64>,
         /// Whether the pipeline failed.
         failed: bool,
         /// Provider usage.
@@ -75,8 +85,18 @@ pub enum TurnObservation {
         answered_model: Option<String>,
         /// Provider finish reason.
         finish_reason: Option<String>,
+        /// Upstream provider that served the call, when a routing gateway
+        /// reports it (OpenRouter's top-level `provider`, e.g. `"DeepInfra"`).
+        served_by: Option<String>,
+        /// Provider's id for the response (`chatcmpl-…`, OpenRouter's
+        /// `gen-…`, `msg_…`), to look the call up with the provider.
+        response_id: Option<String>,
         /// Wall-clock time in milliseconds.
         duration_ms: u64,
+        /// Milliseconds from the invocation's start to its first streamed
+        /// output (text, reasoning or a tool call). `None` for a buffered call
+        /// or a stream that produced no output.
+        first_token_ms: Option<u64>,
         /// Terminal outcome label.
         status: PhysicalDispatchStatus,
         /// Whether the provider reported a refusal response.
@@ -282,7 +302,10 @@ impl PhysicalDispatchTerminal for DispatchTerminal {
             requested_model: self.metadata.requested_model,
             answered_model: outcome.answered_model,
             finish_reason: outcome.finish_reason,
-            duration_ms: outcome.duration.as_millis().min(u128::from(u64::MAX)) as u64,
+            served_by: outcome.served_by,
+            response_id: outcome.response_id,
+            duration_ms: millis(outcome.duration),
+            first_token_ms: outcome.first_output.map(millis),
             status: outcome.status,
             refused: outcome.refused,
             usage,
@@ -381,13 +404,22 @@ impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for ObserverScope {
         } else {
             None
         };
+        // A time before `started` belongs to an earlier call, left behind when
+        // a wrap middleware answered this one without reaching the model.
+        let first_token_ms = ctx
+            .call_first_output_at
+            .and_then(|at| at.checked_duration_since(started))
+            .map(millis);
         self.observer.on_event(&TurnObservation::Model {
             run_id,
             call_id,
             requested_model,
             answered_model,
             finish_reason: response.and_then(|response| response.finish_reason.clone()),
-            duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            served_by: response.and_then(super::response_facts::served_by),
+            response_id: response.and_then(super::response_facts::response_id),
+            duration_ms: millis(started.elapsed()),
+            first_token_ms,
             failed: result.is_err(),
             usage,
             input,
@@ -396,6 +428,11 @@ impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for ObserverScope {
         result
     }
 }
+/// `duration` in whole milliseconds, saturating at `u64::MAX`.
+fn millis(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
 /// Existing TinyAgents exporter; this module adds no transport implementation.
 ///
 /// Traces go out as OTLP: build requests from `TraceSpan`s with

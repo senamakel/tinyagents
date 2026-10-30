@@ -69,5 +69,14 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
   `x-langfuse-ingestion-version: 4`); Langfuse Cloud removes the legacy
   `/api/public/ingestion` trace path on 2026-11-16. v4 duplicates a span id it
   receives twice instead of merging, so export each finished span once.
+- A generation's `langfuse.observation.usage_details` are flat, and Langfuse
+  stores them unchanged, so the buckets do not overlap: `input` excludes
+  `cache_read_input_tokens` (from `gen_ai.usage.cached_input_tokens`), and
+  `output` excludes `output_reasoning_tokens` (from
+  `gen_ai.usage.reasoning_tokens`). `total` is input plus output. A
+  `gen_ai.response.first_token_unix_ms` attribute becomes
+  `langfuse.observation.completion_start_time`, from which Langfuse derives
+  time to first token. Any other non-usage attribute becomes
+  `langfuse.observation.metadata.<key>` with dots replaced by underscores.
 - Callers decide whether content capture is on at all; these helpers do not
   redact secrets. Run them on events that already passed a `RedactingSink`.

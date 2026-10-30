@@ -2,6 +2,40 @@
 
 use super::types::*;
 
+#[cfg(feature = "json-schema")]
+fn schema_string_values<'a>(
+    root: &'a serde_json::Value,
+    mut schema: &'a serde_json::Value,
+) -> Vec<String> {
+    while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
+        let pointer = reference.strip_prefix('#').expect("local schema reference");
+        schema = root.pointer(pointer).expect("schema reference resolves");
+    }
+
+    let mut values: Vec<String> =
+        if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            values
+                .iter()
+                .map(|value| value.as_str().expect("string enum value").to_owned())
+                .collect()
+        } else {
+            schema
+                .get("oneOf")
+                .and_then(serde_json::Value::as_array)
+                .expect("string enum or oneOf schema")
+                .iter()
+                .map(|variant| {
+                    variant["const"]
+                        .as_str()
+                        .expect("string oneOf const")
+                        .to_owned()
+                })
+                .collect()
+        };
+    values.sort();
+    values
+}
+
 fn item(content: &str, status: TodoStatus) -> TodoItem {
     TodoItem::with_status(content, status)
 }
@@ -23,6 +57,35 @@ fn status_strings_match_serialized() {
             serde_json::Value::String(status.as_str().to_string())
         );
     }
+}
+
+#[cfg(feature = "json-schema")]
+#[test]
+fn public_todo_schema_matches_the_serialized_item_shape() {
+    let schema = serde_json::to_value(
+        schemars::generate::SchemaSettings::draft2020_12()
+            .for_serialize()
+            .into_generator()
+            .into_root_schema_for::<TodoItem>(),
+    )
+    .unwrap();
+    let properties = &schema["properties"];
+    assert!(properties.get("content").is_some());
+    assert!(properties.get("status").is_some());
+    assert!(properties.get("reason").is_some());
+    let status_values = schema_string_values(&schema, &properties["status"]);
+    let mut expected_status_values = vec![
+        "pending".to_owned(),
+        "in_progress".to_owned(),
+        "completed".to_owned(),
+        "cancelled".to_owned(),
+    ];
+    expected_status_values.sort();
+    assert_eq!(status_values, expected_status_values);
+    assert_eq!(
+        serde_json::to_value(TodoItem::new("ship it")).unwrap(),
+        serde_json::json!({"content": "ship it", "status": "pending"})
+    );
 }
 
 #[test]

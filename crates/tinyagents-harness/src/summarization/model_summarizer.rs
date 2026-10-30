@@ -65,8 +65,9 @@ impl ModelSummarizer {
         self
     }
 
-    /// Cap the summary's length by setting the request's `max_tokens`.
-    /// Unset by default, leaving the provider's own default in force.
+    /// Cap the summary's length: the request carries `max_tokens` set to
+    /// `max_output_tokens`. Unset by default, which leaves the provider's own
+    /// default in force.
     #[must_use]
     pub fn with_max_output_tokens(mut self, max_output_tokens: u32) -> Self {
         self.max_output_tokens = Some(max_output_tokens);
@@ -388,6 +389,13 @@ Produce exactly these sections (write \"None\" when a section is empty):\n\
 \n\
 ## Goal\n\
 What the user is ultimately trying to accomplish.\n\
+\n\
+## About the User\n\
+Every fact the user shared about themselves (name, places, people, preferences, routines), \
+stated as they gave it.\n\
+\n\
+## Commitments\n\
+What the assistant promised or scheduled (reminders, follow-ups, deadlines), with when.\n\
 \n\
 ## Completed Actions\n\
 Numbered list of what has already been done, with key results/outputs.\n\

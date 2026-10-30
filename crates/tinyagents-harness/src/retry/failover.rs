@@ -121,7 +121,7 @@ impl FailoverReason {
     }
 }
 
-/// The failover table. Pure; see the [module docs](self) for the rationale.
+/// The failover table. Pure; see the module docs for the rationale.
 pub fn decide(reason: FailoverReason, state: FailoverState) -> FailoverDecision {
     use FailoverReason::*;
     match reason {

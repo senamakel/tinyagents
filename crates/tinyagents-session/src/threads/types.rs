@@ -102,18 +102,12 @@ pub struct ThreadMessagePatch {
     /// untouched.
     #[serde(default)]
     pub extra_metadata: Option<Value>,
-    /// Shallow-merges keys into an existing object-valued `extraMetadata`.
-    /// Non-object values are replaced by the supplied value.
+    /// Recursively merges a JSON Merge Patch into the latest `extraMetadata`.
+    /// Object members are merged, arrays/scalars are replaced, and `null`
+    /// removes an object member. Applied inside the driver's compare-and-swap
+    /// retry so concurrent patches are not based on a stale host-side read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_extra_metadata: Option<Value>,
-}
-
-/// Applies a shallow metadata merge, replacing non-object values as a whole.
-pub(crate) fn merge_extra_metadata(current: &mut Value, additional: Value) {
-    match (current, additional) {
-        (Value::Object(current), Value::Object(additional)) => current.extend(additional),
-        (current, replacement) => *current = replacement,
-    }
 }
 
 /// A single match returned by
@@ -136,13 +130,22 @@ pub struct CrossThreadHit {
     pub score: f64,
 }
 
-/// Prefix of the message ids the core mints **deterministically** rather than
-/// from a fresh UUID.
+/// Prefix of the assistant reply ids the core mints from a request id.
 ///
-/// Only such an id can be presented to the store twice by two different
-/// writers, so it is also the marker
-/// [`is_deterministic_message_id`] keys the store's idempotency lookup on.
+/// [`is_deterministic_message_id`] identifies this assistant-only format for
+/// transcript correlation. The append retry contract is broader and is
+/// defined by [`is_idempotent_message_id`].
 pub const DETERMINISTIC_MESSAGE_ID_PREFIX: &str = "agent:";
+
+/// Whether a message id marks an append that may be retried safely.
+///
+/// Agent replies use `agent:<request-id>` and user rows submitted through a
+/// queued/hosted path use `user:<request-id>`. Both identifiers are stable
+/// across retries; ordinary UI ids and provider-specific sender ids remain
+/// outside this contract unless their message carries `scope: channel`.
+pub fn is_idempotent_message_id(id: &str) -> bool {
+    id.starts_with(DETERMINISTIC_MESSAGE_ID_PREFIX) || id.starts_with("user:")
+}
 
 /// The id an autonomous run's closing reply is stored under.
 ///
@@ -155,15 +158,11 @@ pub fn run_reply_message_id(run_id: &str) -> String {
     format!("{DETERMINISTIC_MESSAGE_ID_PREFIX}{run_id}")
 }
 
-/// Whether `id` is one the core mints deterministically, i.e. one a second
-/// writer can legitimately present again.
+/// Whether `id` is an assistant reply id minted from a run/request id.
 ///
-/// This is what buys back the constant-time append path: every other id in the
-/// store is UUID-fresh by construction (`user:<uuid>`, `<sender>:<uuid>`), can
-/// never be re-presented, and so must not pay for a duplicate lookup. The
-/// `agent:<uuid>` ids the subagent/worker-thread writers mint do match — they
-/// pay for a lookup they can never hit, which is one cheap scan of a
-/// two-message worker transcript.
+/// This predicate is used for transcript correlation by
+/// [`reply_run_id`]. Use [`is_idempotent_message_id`] to check the broader
+/// append retry contract.
 pub fn is_deterministic_message_id(id: &str) -> bool {
     id.starts_with(DETERMINISTIC_MESSAGE_ID_PREFIX)
 }

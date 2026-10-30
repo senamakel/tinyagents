@@ -1,6 +1,6 @@
 //! Best-effort durable observation of one agent turn's progress stream.
 //!
-//! The ledger writes each [`AgentProgress`](tinyagents_harness::progress::AgentProgress)
+//! The ledger writes each [`AgentProgress`]
 //! as an append-only run event and keeps the run status aligned with turn
 //! completion. It also preserves subagent task-to-parent-call correlation for
 //! host projections whose later lifecycle events omit the parent call id.

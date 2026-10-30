@@ -113,9 +113,9 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
     assert_eq!(
         specs[1].indexes,
         vec![
-            IndexSpec::new("by_thread", ["thread_id", "created_ms"]),
-            IndexSpec::new("by_agent_name", ["agent_name", "created_ms"]),
-            IndexSpec::new("by_agent_id", ["agent_id", "created_ms"]),
+            IndexSpec::new("by_thread_created", ["thread_id", "created_ms"]),
+            IndexSpec::new("by_agent_name_created", ["agent_name", "created_ms"]),
+            IndexSpec::new("by_agent_id_created", ["agent_id", "created_ms"]),
         ]
     );
     assert_eq!(specs[2].name, "session.turn_states");
@@ -131,6 +131,33 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
         assert!(spec.ttl_field.is_none());
         assert!(spec.search.is_none());
     }
+}
+
+#[tokio::test]
+async fn preparation_admits_a_store_declared_by_the_metadata_ordered_release() {
+    use tinystoragedrivers_types::{CollectionSpec, IndexSpec};
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let scoped = backend
+        .for_scope(&Scope::new("declared-before-created-ms").unwrap())
+        .unwrap();
+    // What releases that ordered transcripts by record metadata persisted.
+    scoped
+        .documents()
+        .ensure_collection(
+            &CollectionSpec::new("session.transcripts")
+                .index(IndexSpec::new("by_thread", ["thread_id", "_created_ms"]))
+                .index(IndexSpec::new(
+                    "by_agent_name",
+                    ["agent_name", "_created_ms"],
+                ))
+                .index(IndexSpec::new("by_agent_id", ["agent_id", "_created_ms"])),
+        )
+        .await
+        .unwrap();
+
+    DriverSessionStores::prepare_schema(scoped.documents().as_ref())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

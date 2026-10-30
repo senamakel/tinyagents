@@ -27,11 +27,11 @@ reqwest = { version = "0.12", default-features = false }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
-tinystoragedrivers-api = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", version = "2.1.0", optional = true }
-tinystoragedrivers-connect = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", version = "2.1.0", features = ["mongodb"], optional = true }
-tinystoragedrivers-document = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", version = "2.1.0", default-features = false, features = ["mongodb"], optional = true }
-tinystoragedrivers-testkit = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", version = "2.1.0", optional = true }
-tinystoragedrivers-types = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "05eaada962decbab33bafa4763d2bd1a67f6b456", version = "2.1.0", optional = true }
+tinystoragedrivers-api = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb", version = "2.1.2", optional = true }
+tinystoragedrivers-connect = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb", version = "2.1.2", features = ["mongodb"], optional = true }
+tinystoragedrivers-document = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb", version = "2.1.2", default-features = false, features = ["mongodb"], optional = true }
+tinystoragedrivers-testkit = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb", version = "2.1.2", optional = true }
+tinystoragedrivers-types = { git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb", version = "2.1.2", optional = true }
 tinyagents-session = { path = "../../crates/tinyagents-session", features = ["storage-drivers", "testkit"], optional = true }
 tinyagents-storage-kit = { path = "../../crates/tinyagents-storage-kit", optional = true }
 

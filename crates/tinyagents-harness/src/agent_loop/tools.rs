@@ -869,7 +869,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             });
             status.set_last_event(record.id);
             return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
-                detail,
+                unparseable_tool_call_message(&call.name, &detail),
             )));
         }
 
@@ -2342,6 +2342,21 @@ fn repeated_truncated_tool_call_message(tool_name: &str) -> String {
     )
 }
 
+/// The corrective for a call whose arguments the provider could not parse and
+/// relaxed-JSON repair could not fix. A bare parse error ("expected `,` or `]`
+/// at line 1 column 911") gave the model nothing to act on: production traces
+/// show it re-sending the same large inline document until the failure breaker
+/// halted the run.
+fn unparseable_tool_call_message(tool_name: &str, detail: &str) -> String {
+    format!(
+        "Tool call `{tool_name}` was not run: its arguments are not valid JSON ({detail}). \
+         Re-send it as well-formed JSON that matches the tool's argument schema. If the \
+         arguments carry a large document, do not inline it again: build it in smaller \
+         incremental calls (for example with an editing tool that returns a handle or id) and \
+         pass that reference instead."
+    )
+}
+
 /// Appends a batch's follow-up user messages (B2) after its last tool row,
 /// in the calls' original order.
 ///
@@ -2417,7 +2432,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Reconciles unresolved tool-effect-ledger rows (B5) before resuming a
     /// run from durable transcript `messages`.
     ///
-    /// A crash between [`Self::record_tool_effect_started`] and the matching
+    /// A crash between `Self::record_tool_effect_started` and the matching
     /// settle write (or between the settle write and the tool result being
     /// folded into `messages`) leaves a `started` row a resumed run must
     /// resolve one way or another before it can safely feed `messages` back
@@ -2456,7 +2471,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// mistake: any call id in it is skipped even if its ledger row is
     /// (unexpectedly) still `started` — e.g. the `Deferred` settle write
     /// above failed and was only logged (settle writes are best-effort, see
-    /// [`Self::record_tool_effect_settled`]). [`AgentHarness::resume_deferred`]
+    /// `Self::record_tool_effect_settled`). [`AgentHarness::resume_deferred`]
     /// passes the ids `results` is about to answer; any other caller — a host
     /// reconciling a genuine crash, where no `results` exists at all — passes
     /// an empty set.

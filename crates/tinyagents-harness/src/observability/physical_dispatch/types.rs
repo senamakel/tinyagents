@@ -25,6 +25,15 @@ pub struct PhysicalDispatchOutcome {
     pub answered_model: Option<String>,
     /// Provider finish reason.
     pub finish_reason: Option<String>,
+    /// Upstream provider that served the call, when a routing gateway reports
+    /// it (OpenRouter's top-level `provider`).
+    pub served_by: Option<String>,
+    /// Provider's id for the response (`chatcmpl-…`, `gen-…`, `msg_…`).
+    pub response_id: Option<String>,
+    /// Time from the invocation's start to its first streamed output (text,
+    /// reasoning or a tool call). `None` for a buffered call or a stream that
+    /// produced no output.
+    pub first_output: Option<Duration>,
 }
 
 /// Terminal state of a physical provider invocation.
@@ -72,6 +81,7 @@ pub struct PhysicalDispatchGuard {
     terminal: Option<Box<dyn PhysicalDispatchTerminal>>,
     started: Instant,
     usage: Option<PhysicalDispatchUsage>,
+    pub(super) first_output: Option<Duration>,
 }
 
 impl PhysicalDispatchGuard {
@@ -81,6 +91,15 @@ impl PhysicalDispatchGuard {
             terminal: Some(terminal),
             started: Instant::now(),
             usage: None,
+            first_output: None,
+        }
+    }
+
+    /// Record that the stream produced its first output now. Later calls keep
+    /// the first time.
+    pub fn note_output(&mut self) {
+        if self.first_output.is_none() {
+            self.first_output = Some(self.started.elapsed());
         }
     }
 
@@ -92,6 +111,9 @@ impl PhysicalDispatchGuard {
     /// Finish with a provider result. Dropping an unfinished guard reports cancellation.
     pub fn finish(mut self, mut outcome: PhysicalDispatchOutcome) {
         outcome.duration = self.started.elapsed();
+        if outcome.first_output.is_none() {
+            outcome.first_output = self.first_output;
+        }
         if outcome.usage.is_none() {
             outcome.usage = self.usage.take();
         }
@@ -111,6 +133,9 @@ impl Drop for PhysicalDispatchGuard {
                 usage: self.usage.take(),
                 answered_model: None,
                 finish_reason: None,
+                served_by: None,
+                response_id: None,
+                first_output: self.first_output,
             });
         }
     }

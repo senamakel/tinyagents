@@ -431,7 +431,7 @@ impl SteeringHandle {
 /// - When `ctx` has no [`SteeringHandle`], returns
 ///   [`SteeringOutcome::Continue`] without emitting anything.
 /// - Only commands addressed to this run are drained: see
-///   [`SteeringHandle::drain`] and [`SteeringHandle::for_child`]. Commands
+///   [`SteeringHandle::drain`] and `SteeringHandle::for_child`. Commands
 ///   addressed to a different run stay queued for it.
 /// - Each command is checked **individually** against the run's
 ///   [`SteeringPolicy`]. A disallowed command is rejected on its own — an

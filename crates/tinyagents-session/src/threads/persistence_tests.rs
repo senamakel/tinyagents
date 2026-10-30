@@ -70,6 +70,46 @@ async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_user_request_id_appends_are_idempotent() {
+    let store = memory_store().await;
+    for round in 0..32 {
+        let thread_id = format!("thread-{round}");
+        store.ensure_thread(thread(&thread_id)).await.unwrap();
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+        let mut writers = Vec::new();
+        for _ in 0..8 {
+            let store = store.clone();
+            let barrier = barrier.clone();
+            let thread_id = thread_id.clone();
+            writers.push(tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .append_message(
+                        &thread_id,
+                        ThreadMessage {
+                            sender: "user".into(),
+                            ..message("user:request-1", "queued prompt")
+                        },
+                    )
+                    .await
+            }));
+        }
+        let mut result = None;
+        for writer in writers {
+            let row = writer.await.unwrap().unwrap();
+            assert_eq!(row.id, "user:request-1");
+            assert_eq!(row.content, "queued prompt");
+            assert_eq!(result.get_or_insert(row.clone()), &row);
+        }
+        let messages = store.get_messages(&thread_id).await.unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "user:request-1");
+        assert_eq!(messages[0].content, "queued prompt");
+        assert_eq!(messages[0].sender, "user");
+    }
+}
+
 #[tokio::test]
 async fn memory_store_preserves_title_labels_and_metadata_patch() {
     let store = memory_store().await;
@@ -128,6 +168,92 @@ async fn memory_store_preserves_title_labels_and_metadata_patch() {
             .working_dir
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn concurrent_metadata_merge_patches_preserve_each_other_and_existing_metadata() {
+    let store = memory_store().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    store
+        .append_message(
+            "one",
+            ThreadMessage {
+                extra_metadata: json!({"voice": {"transcript": "spoken"}}),
+                ..message("user:receipt", "hello")
+            },
+        )
+        .await
+        .unwrap();
+
+    let (reaction, receipt) = tokio::join!(
+        store.update_message(
+            "one",
+            "user:receipt",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"reactions": {"actor-reaction": {"value": "👍"}}}
+                })),
+                ..Default::default()
+            },
+        ),
+        store.update_message(
+            "one",
+            "user:receipt",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"readReceipts": {"reader": {"timestamp": "2026-10-20T00:00:00Z"}}}
+                })),
+                ..Default::default()
+            },
+        ),
+    );
+    reaction.unwrap();
+    receipt.unwrap();
+
+    let stored = store.get_messages("one").await.unwrap();
+    let metadata = &stored[0].extra_metadata;
+    assert_eq!(metadata["voice"]["transcript"], "spoken");
+    assert_eq!(
+        metadata["channelActivity"]["reactions"]["actor-reaction"]["value"],
+        "👍"
+    );
+    assert_eq!(
+        metadata["channelActivity"]["readReceipts"]["reader"]["timestamp"],
+        "2026-10-20T00:00:00Z"
+    );
+}
+
+#[tokio::test]
+async fn metadata_merge_patch_null_removes_only_the_named_member() {
+    let store = memory_store().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    store
+        .append_message(
+            "one",
+            ThreadMessage {
+                extra_metadata: json!({"channelActivity": {"reactions": {"gone": {}, "kept": {}}}}),
+                ..message("user:receipt", "hello")
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .update_message(
+            "one",
+            "user:receipt",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"reactions": {"gone": null}}
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let messages = store.get_messages("one").await.unwrap();
+    let reactions = &messages[0].extra_metadata["channelActivity"]["reactions"];
+    assert!(reactions.get("gone").is_none());
+    assert!(reactions.get("kept").is_some());
 }
 
 #[tokio::test]

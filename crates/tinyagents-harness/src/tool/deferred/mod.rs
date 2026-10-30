@@ -1,5 +1,5 @@
 //! Deferred tool calls: the typed, resumable "the loop paused on a tool"
-//! output (A2). See [`types`] for the vocabulary and the agent-loop docs for
+//! output (A2). See `types` for the vocabulary and the agent-loop docs for
 //! how the loop produces and consumes it.
 
 mod types;

@@ -1455,6 +1455,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut armed_window = first_event_timeout;
         let mut deadline = first_event_deadline;
         let mut saw_output = false;
+        let mut saw_first_output = false;
         // Set when an output event arrives; the deadline is advanced at the top
         // of the next iteration so time spent in delta middleware does not eat
         // the provider's idle budget.
@@ -1519,15 +1520,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // consumed by the scrubber, yet it is plainly producing tokens.
             // A delta with no payload (empty text, no reasoning, no call)
             // proves nothing and never counts.
-            let raw_delta_is_output = match &item {
-                ModelStreamItem::MessageDelta(delta) => {
-                    !delta.text.is_empty()
-                        || !delta.reasoning.is_empty()
-                        || delta.tool_call.is_some()
-                }
-                ModelStreamItem::ToolCallDelta(_) => true,
-                _ => false,
-            };
+            let raw_delta_is_output = crate::observability::response_facts::is_output(&item);
+            // This attempt's first output is the call's first token: a retry
+            // replaces an earlier attempt's time, so the time belongs to the
+            // attempt whose response the call returns.
+            if raw_delta_is_output && !saw_first_output {
+                saw_first_output = true;
+                ctx.call_first_output_at = Some(std::time::Instant::now());
+            }
             // Scrub tool-call markup from visible text before anything else
             // sees it; a delta the scrubber empties carries nothing to emit.
             if let (Some(scrubber), ModelStreamItem::MessageDelta(delta)) =
@@ -2106,6 +2106,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
             // attempt, and that answer attempted no call.
             self.shape.recovery.dropped.reset();
             ctx.call_streamed = self.shape.streaming;
+            ctx.call_first_output_at = None;
             let result = self
                 .harness
                 .invoke_model_with_retry(state, ctx, &request, &self.call_id, binding, &self.shape)

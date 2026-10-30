@@ -101,7 +101,7 @@ fn select_tier(pricing: &ModelPricing, input_tokens: u64) -> Option<&PriceTier> 
 /// non-cached/non-reasoning remainder only.
 ///
 /// When `pricing` declares [`ModelPricing::tiers`], the tier matching this
-/// call's `usage.input_tokens` (see [`select_tier`]) supplies the input,
+/// call's `usage.input_tokens` (see `select_tier`) supplies the input,
 /// output, cache-read, and cache-write rates, falling back to the flat
 /// [`ModelPricing`] fields for any rate the tier leaves unset. Reasoning
 /// tokens are always priced at the flat

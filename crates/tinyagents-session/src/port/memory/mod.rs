@@ -336,6 +336,26 @@ impl TranscriptLocator for InMemoryTranscriptLocator {
             .map(|(_, history)| history as Arc<dyn TranscriptRead>)
     }
 
+    /// An exact lookup that never registers a stem. The trait default probes
+    /// through [`Self::open_stem`], which would leave an empty handle behind
+    /// for every generation asked about, and `begin_generation` would then
+    /// find its own successor "already exists". Only a written transcript
+    /// counts, as in the persistent locators.
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        let stem = session_stem(session);
+        let history = self
+            .stems
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(known, _, _)| known == &stem)
+            .map(|(_, _, history)| history.clone())?;
+        match history.read_session() {
+            Ok(Some(_)) => Some(history as Arc<dyn TranscriptRead>),
+            _ => None,
+        }
+    }
+
     fn open_stem(
         &self,
         stem: &str,
