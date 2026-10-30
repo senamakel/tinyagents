@@ -119,6 +119,8 @@ fn unknown_jsonl_records_are_ignored() {
     let header = serde_json::json!({"_meta": {"agent": "agent", "dispatcher": "native", "created": "", "updated": "", "turn_count": 0, "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0, "charged_amount_usd": 0.0}});
     std::fs::write(&path, format!("{header}\n{{\"kind\":\"future\",\"payload\":true}}\n{{\"role\":\"user\",\"content\":\"hello\"}}\n")).unwrap();
     let loaded = read_transcript(&path).unwrap();
+    assert!(!loaded.meta.prefix_reset, "old metadata defaults to no reset");
+    assert_eq!(loaded.meta.prefix_message_count, None);
     assert_eq!(
         loaded.messages,
         vec![TranscriptMessage {

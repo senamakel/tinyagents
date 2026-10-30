@@ -91,7 +91,14 @@ loop.
   reachable via `summarization::pairing::*`.
 
 ### Rendering
-- `render_message_for_summary(&Message) -> String`.
+- `render_message_for_summary(&Message) -> String` preserves the full tool
+  calls and results.
+- `render_message_for_summary_with(&Message, ToolRendering) -> Option<String>`
+  supports `Full` and `Markers`; marker mode keeps calls as bounded lines and
+  omits tool-result payloads.
+- `ModelSummarizer::with_tool_rendering` selects the transcript mode and
+  `with_max_output_tokens` sets the provider request's `max_tokens` cap. Full
+  rendering and the provider default output cap remain the defaults.
 
 ## Files
 
@@ -100,7 +107,7 @@ loop.
 | `mod.rs` | `estimate_tokens`, `Summarizer for ConcatSummarizer`, `SummarizationPolicy` impls; wires the submodules together. |
 | `types.rs` | All public struct/enum/trait definitions. |
 | `pairing.rs` | Tool-call-pairing-safe cut-point repair. |
-| `render.rs` | `render_message_for_summary`. |
+| `render.rs` | `render_message_for_summary`, `render_message_for_summary_with`. |
 | `trim.rs` | `trim_messages`/`trim_messages_with`/`trim_messages_to_token_budget_with`. |
 | `compaction.rs` | `find_cut_point`, `summarize_with_split`, `OverflowClassifier`, `CompactionContext`/`CompactionDecision`. |
 | `response_overflow.rs` | `detect_response_overflow`, `ResponseOverflowDetection`: overflow read from a successful response (usage above the window, zero-output `length` stop, opt-in short `length` stop). |
