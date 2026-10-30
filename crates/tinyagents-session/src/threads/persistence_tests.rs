@@ -94,6 +94,7 @@ async fn memory_store_preserves_title_labels_and_metadata_patch() {
             "agent:x",
             ThreadMessagePatch {
                 extra_metadata: Some(json!({"success": true})),
+                ..Default::default()
             },
         )
         .await
@@ -285,6 +286,7 @@ async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_work
             "b",
             ThreadMessagePatch {
                 extra_metadata: Some(json!({"k": 1})),
+                ..Default::default()
             },
         )
         .await
