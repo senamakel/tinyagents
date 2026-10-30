@@ -140,6 +140,17 @@ pub async fn open_storage(
     Ok(storage)
 }
 
+/// Compatibility name for initializing the harness-owned collections and
+/// applying their migrations for a scoped backend.
+///
+/// This is equivalent to [`open_storage`]; it returns the same scope after
+/// initialization so callers may continue using the established boot API.
+pub async fn migrate_storage(
+    storage: ScopedStorage,
+) -> tinyagents_storage_kit::error::Result<ScopedStorage> {
+    open_storage(storage).await
+}
+
 const BLOB_STEP_IDS: [&str; 5] = [
     "attachment_blobs_v2",
     "tool_result_blobs_v2",

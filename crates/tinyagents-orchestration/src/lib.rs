@@ -15,6 +15,7 @@
 
 pub mod steering;
 pub mod subagent;
+pub mod run_progress_ledger;
 
 #[cfg(test)]
 #[path = "lib_boundary_tests.rs"]
