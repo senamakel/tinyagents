@@ -26,6 +26,10 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
     hooks: Arc<dyn SessionHooks<C>>,
+    /// Prefix configured when this session instance was constructed. A reset
+    /// discovered through another live instance clears the old frozen prefix
+    /// but keeps this current host configuration available to its hooks.
+    configured_prefix: PrefixSnapshot,
     post_commit_sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
     identity_config: Option<IdentityConfig<C>>,
     established_identity: Option<crate::SessionIdentity>,
@@ -67,6 +71,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         target: Option<TranscriptTarget>,
         identity_config: Option<IdentityConfig<C>>,
     ) -> Self {
+        let configured_prefix = prefix.frozen();
         Self {
             driver,
             codec,
@@ -75,8 +80,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             identity_config,
             established_identity: None,
             identity: None,
-            history: prefix.messages().to_vec(),
-            prefix: prefix.frozen(),
+            history: configured_prefix.messages().to_vec(),
+            prefix: configured_prefix.clone(),
+            configured_prefix,
             default_tools,
             persisted: Vec::new(),
             reconcile_prior: Vec::new(),
@@ -381,8 +387,39 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
+        // An explicit history reset suppresses prompt-boundary recovery from
+        // the sealed parent. The marker distinguishes it from an ordinary
+        // empty successor whose legacy prompt still needs to be inferred.
+        let reset_head = transcript.meta.prefix_reset && recorded_boundary.is_none();
+        let changed_head = self
+            .transcript
+            .as_ref()
+            .is_some_and(|bound| bound.path() != read.path());
+        if changed_head {
+            // Another live Session instance may have advanced this identity to
+            // a new generation. Rebuild cached transcript state from that head
+            // instead of retaining the old handle's turn count or tool belt.
+            // An explicit reset head is unfrozen and starts with this instance's
+            // configured prefix; a committed successor below restores its
+            // authoritative persisted prefix (including an explicit Some(0)).
+            if reset_head || recorded_boundary.is_some() {
+                self.prefix = if reset_head {
+                    self.configured_prefix.clone()
+                } else {
+                    PrefixSnapshot::default()
+                };
+            }
+            self.history = self.prefix.messages().to_vec();
+            self.persisted.clear();
+            self.persisted_prefix_len = None;
+            self.recorded_tools = None;
+            self.recorded_tools_json = None;
+            self.committed_turns = 0;
+            self.transcript = None;
+        }
         let mut recovered_boundary = None;
-        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
+        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head && !reset_head
+        {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
@@ -648,6 +685,77 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             loaded: true,
             history,
         })
+    }
+
+    /// Starts a fresh model context for the bound durable session.
+    ///
+    /// The current generation is sealed and retained as the parent of an
+    /// empty successor. Repeating this operation on an empty or absent
+    /// session is a no-op, so it never manufactures a timestamped identity or
+    /// an unbounded chain of empty generations.
+    pub async fn reset_history(&mut self) -> Result<bool, RuntimeError> {
+        let Some(target) = self.target.as_ref() else {
+            return Ok(false);
+        };
+        let Some(bound) = target.session.as_ref() else {
+            return Ok(false);
+        };
+
+        // Generation locks are keyed by the first generation, so resetting a
+        // current head serializes with turns bound to either the root or head.
+        let root = bound.first_generation();
+        let _turn = lock_session_turn(target.locator.as_ref(), &root).await;
+        let head = target.locator.head_generation(bound);
+        let Some(read) = target.locator.read_session_transcript(&head) else {
+            return Ok(false);
+        };
+        let transcript = read
+            .read_session()
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        let Some(transcript) = transcript else {
+            return Ok(false);
+        };
+        if transcript.messages.is_empty()
+            && transcript.meta.prefix_message_count.is_none()
+            && transcript.tools.is_none()
+            && transcript.meta.turn_count == 0
+        {
+            return Ok(false);
+        }
+
+        let mut seed = transcript.meta.clone();
+        seed.turn_count = 0;
+        seed.prefix_message_count = None;
+        seed.prefix_reset = true;
+        seed.session_id = None;
+        seed.parent_session_id = None;
+        let (successor, handle) = target
+            .locator
+            .begin_generation_from_baseline(&head, seed, &transcript.messages)
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        // Generation allocation reserves the successor but leaves it
+        // unwritten. Persist an explicit empty context now so a process restart
+        // before the next user turn still resolves the successor as the head.
+        handle
+            .replace(&[])
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+
+        let target = self.target.as_mut().expect("target was checked above");
+        target.session = Some(successor.clone());
+        target.meta.session_id = Some(successor.session_id());
+        target.meta.parent_session_id = successor.parent_session_id();
+        target.meta.turn_count = 0;
+        target.meta.prefix_message_count = None;
+        target.meta.prefix_reset = true;
+        self.transcript = Some(handle);
+        self.prefix = PrefixSnapshot::default();
+        self.history.clear();
+        self.persisted.clear();
+        self.persisted_prefix_len = None;
+        self.recorded_tools = None;
+        self.recorded_tools_json = None;
+        self.committed_turns = 0;
+        Ok(true)
     }
 
     /// Runs one user turn: wraps `input` in a [`SessionTurnRequest`] and drives
@@ -1042,6 +1150,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             history: &self.history,
             raw_history: &self.persisted,
             prefix: &self.prefix,
+            prefix_is_frozen: self.persisted_prefix_len.is_some()
+                || !self.prefix.messages().is_empty(),
             transcript_target: self.target.as_ref(),
             committed_turns: self.committed_turns,
             resumed,
@@ -1179,6 +1289,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         meta.turn_count += 1;
         meta.prefix_message_count = Some(prefix_len);
+        meta.prefix_reset = false;
         meta.updated = chrono::Utc::now().to_rfc3339();
         // Record every ordinary turn's declarations. Comparing against this
         // session's cached snapshot is unsafe when another live Session has

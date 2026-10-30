@@ -236,6 +236,11 @@ pub struct SessionStateView<'a> {
     pub history: &'a [Message],
     pub raw_history: &'a [TranscriptMessage],
     pub prefix: &'a PrefixSnapshot,
+    /// Whether the loaded transcript already has an authoritative prefix.
+    /// A durable transcript can contain imported conversation rows before its
+    /// first model turn; such a session is resumed for history purposes but
+    /// still needs the host to prepare and commit its initial prompt.
+    pub prefix_is_frozen: bool,
     pub transcript_target: Option<&'a TranscriptTarget>,
     pub committed_turns: usize,
     /// `true` only when this call loaded and decoded a durable transcript
