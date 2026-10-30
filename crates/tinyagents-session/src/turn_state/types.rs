@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// progress signal arrives. `Interrupted` is stamped at startup on
 /// any snapshot that survived a process restart — there is no live
 /// driver to resume it, so the UI should surface a retry affordance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnLifecycle {
     Started,
@@ -29,7 +29,7 @@ pub enum TurnLifecycle {
 }
 
 /// High-level phase the agent is in within an iteration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnPhase {
     Thinking,
@@ -38,7 +38,7 @@ pub enum TurnPhase {
 }
 
 /// Per-tool entry shown in the live timeline UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolTimelineStatus {
     Running,
@@ -54,7 +54,7 @@ pub enum ToolTimelineStatus {
 /// settled/reloaded turn keeps its "why + what to do next" copy across a thread
 /// switch or a cold boot. Absent on successful rows and on snapshots written
 /// before this field.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedToolFailure {
     /// Stable failure-class variant name, e.g. `"Timeout"`, `"Denied"`.
@@ -74,7 +74,7 @@ pub struct PersistedToolFailure {
 /// Field names use camelCase on the wire so a snapshot can be applied
 /// directly to `chatRuntimeSlice.toolTimelineByThread` without a
 /// translation layer in the UI.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolTimelineEntry {
     pub id: String,
@@ -112,7 +112,7 @@ pub struct ToolTimelineEntry {
 }
 
 /// Live sub-agent activity nested under a `subagent:*` timeline row.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentActivity {
     pub task_id: String,
@@ -164,7 +164,7 @@ pub struct SubagentActivity {
 }
 
 /// One child tool call performed by a running sub-agent.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentToolCall {
     pub call_id: String,
@@ -221,7 +221,7 @@ pub struct SubagentToolCall {
 /// union 1:1 (order = push order; no `seq` is needed because each sub-agent's
 /// transcript is built as a single ordered list). Persisting these lets the
 /// inline "Agentic task insights" thoughts survive a settled turn / reload.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 // `rename_all` renames the variant tags; `rename_all_fields` renames the
 // fields *inside* the struct variants (call_id → callId, …) — without the
 // latter the FE would read `undefined` for camelCase fields.
@@ -272,7 +272,7 @@ pub enum SubagentTranscriptItem {
 /// (round alone can't order narration vs thinking within one round). Tool
 /// items hold only a `call_id` pointer into [`TurnState::tool_timeline`] so
 /// the row's status/label live in exactly one place.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 // `rename_all_fields` is required so the `ToolCall.call_id` field serializes as
 // `callId` (the FE reads camelCase) — `rename_all` alone only renames variants.
 #[serde(
@@ -314,7 +314,7 @@ pub enum TranscriptItem {
 /// "View processing" panel can replay the finished turn's transcript); a
 /// non-terminal snapshot surviving startup is marked
 /// [`TurnLifecycle::Interrupted`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnState {
     pub thread_id: String,

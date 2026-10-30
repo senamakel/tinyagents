@@ -130,7 +130,7 @@ pub struct ModelFallbackMiddleware {
 
 /// What a [`RateLimitMiddleware`] does when the token bucket has insufficient
 /// capacity for a call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, schemars::JsonSchema)]
 pub enum RateLimitBehavior {
     /// Fail immediately: a temporarily empty bucket that can refill returns
     /// [`TinyAgentsError::RateLimited`][crate::error::TinyAgentsError::RateLimited],
@@ -197,7 +197,7 @@ pub struct ToolAllowlistMiddleware {
 /// (for example `0.9`) emits an
 /// [`AgentEvent::BudgetWarning`][crate::events::AgentEvent::BudgetWarning]
 /// once cumulative usage/cost crosses that fraction of any set limit.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, schemars::JsonSchema)]
 pub struct BudgetLimits {
     /// Maximum cumulative input tokens.
     pub max_input_tokens: Option<u64>,
@@ -220,13 +220,13 @@ pub struct BudgetLimits {
 /// Cloning a [`BudgetTracker`] shares the same underlying accumulator, so
 /// handing the same tracker to a parent harness and every sub-agent harness
 /// makes a single budget roll up across an entire recursive run tree.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, schemars::JsonSchema)]
 pub struct BudgetTracker {
     pub(crate) inner: Arc<Mutex<BudgetSpend>>,
 }
 
 /// A point-in-time snapshot of accumulated budget spend.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, schemars::JsonSchema)]
 pub struct BudgetSpend {
     /// Accumulated token usage.
     pub usage: tinyinference_llm::usage::UsageTotals,
@@ -389,7 +389,7 @@ pub struct DynamicToolSelectionMiddleware {
 /// predicate sees only the [`ToolSchema`] and therefore cannot vary exposure by
 /// recursion depth, run tags (security tier / background vs interactive), or the
 /// model being called.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, schemars::JsonSchema)]
 pub struct ToolSelectionContext {
     /// The current run id.
     pub run_id: String,
@@ -438,7 +438,7 @@ pub struct ContextualToolSelectionMiddleware {
 pub type ApprovalFn = Arc<dyn Fn(&ToolCall) -> bool + Send + Sync>;
 
 /// What an approval callback decided about one flagged [`ToolCall`] (A2).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, schemars::JsonSchema)]
 pub enum ApprovalOutcome {
     /// Run the call now.
     Allow,
@@ -562,7 +562,7 @@ pub struct RedactionMiddleware {
 // ── TracingMiddleware ─────────────────────────────────────────────────────────
 
 /// A structured begin/end record captured by [`TracingMiddleware`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, schemars::JsonSchema)]
 pub struct PhaseTrace {
     /// The lifecycle phase, for example `"agent"`, `"model"`, or `"tool"`.
     pub phase: &'static str,
@@ -571,7 +571,7 @@ pub struct PhaseTrace {
 }
 
 /// Whether a [`PhaseTrace`] marks the beginning or end of a phase.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, schemars::JsonSchema)]
 pub enum TraceBoundary {
     /// The phase is starting (a `before_*`/`on_*` hook fired).
     Begin,
@@ -608,7 +608,7 @@ pub struct TracingMiddleware {
 }
 
 /// Per-phase begin counts captured by [`TracingMiddleware`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, schemars::JsonSchema)]
 pub struct TraceCounts {
     /// Number of `before_agent` begins.
     pub agent: usize,
@@ -637,7 +637,7 @@ pub struct TraceCounts {
 /// the middleware's allowlist, which stay available in either mode so a host
 /// can keep read-only tools and a handful of plan-mode-specific tools (e.g.
 /// `plan_exit`, `request_plan_review`, `todo`) reachable while planning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, schemars::JsonSchema)]
 pub enum RunMode {
     /// Every registered tool may be exposed and executed. The default.
     #[default]
@@ -653,7 +653,7 @@ pub enum RunMode {
 /// [`PlanModeMiddleware`] holds another to read it. [`Self::set`] takes
 /// effect on the very next tool exposure or execution check — no run restart
 /// is required, so a host can switch modes mid-run, between turns.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, schemars::JsonSchema)]
 pub struct RunModeHandle(pub(crate) Arc<std::sync::atomic::AtomicU8>);
 
 impl RunModeHandle {
