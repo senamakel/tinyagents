@@ -12,6 +12,7 @@
 //! belonged to it are removed after the swap, best effort.
 use super::pending::APPENDS;
 use super::*;
+use serde_json::Value;
 use std::future::Future;
 
 /// Messages written per stream append while copying a log.
