@@ -61,16 +61,20 @@ fn in_memory_session_adopts_imported_history_only_while_empty() {
     };
     let imported = vec![crate::transcript::TranscriptMessage::user("old history")];
 
-    assert!(locator
-        .adopt_messages_if_absent(&session, seed.clone(), &imported)
-        .expect("first adoption succeeds"));
-    assert!(!locator
-        .adopt_messages_if_absent(
-            &session,
-            seed,
-            &[crate::transcript::TranscriptMessage::user("new turn")],
-        )
-        .expect("later adoption is ignored"));
+    assert!(
+        locator
+            .adopt_messages_if_absent(&session, seed.clone(), &imported)
+            .expect("first adoption succeeds")
+    );
+    assert!(
+        !locator
+            .adopt_messages_if_absent(
+                &session,
+                seed,
+                &[crate::transcript::TranscriptMessage::user("new turn")],
+            )
+            .expect("later adoption is ignored")
+    );
     let transcript = locator
         .read_session_transcript(&session)
         .expect("adopted session exists")

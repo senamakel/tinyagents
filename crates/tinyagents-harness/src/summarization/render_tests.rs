@@ -30,14 +30,21 @@ fn full_rendering_is_the_existing_lossless_summary_format() {
 fn marker_rendering_keeps_calls_but_omits_tool_results() {
     let message = assistant(
         Some("checking"),
-        vec![ToolCall::new("call-1", "search", json!({"query": "weather"}))],
+        vec![ToolCall::new(
+            "call-1",
+            "search",
+            json!({"query": "weather"}),
+        )],
     );
     assert_eq!(
         render_message_for_summary_with(&message, ToolRendering::Markers).as_deref(),
         Some("assistant: checking\n[used search: {\"query\":\"weather\"}]")
     );
     assert_eq!(
-        render_message_for_summary_with(&Message::tool("call-1", "private payload"), ToolRendering::Markers),
+        render_message_for_summary_with(
+            &Message::tool("call-1", "private payload"),
+            ToolRendering::Markers
+        ),
         None
     );
 }
@@ -46,7 +53,11 @@ fn marker_rendering_keeps_calls_but_omits_tool_results() {
 fn marker_rendering_keeps_tool_only_turns_and_bounds_arguments() {
     let message = assistant(
         None,
-        vec![ToolCall::new("call-1", "search", json!({"query": "é".repeat(200)}))],
+        vec![ToolCall::new(
+            "call-1",
+            "search",
+            json!({"query": "é".repeat(200)}),
+        )],
     );
     let rendered = render_message_for_summary_with(&message, ToolRendering::Markers)
         .expect("tool-only assistant turn is retained");

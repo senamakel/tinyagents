@@ -212,9 +212,15 @@ fn imported_messages_are_adopted_once_without_replacing_a_written_session() {
             .adopt_messages_if_absent(&session, meta("imported-thread"), &imported)
             .unwrap()
     );
-    assert!(!locator
-        .adopt_messages_if_absent(&session, meta("imported-thread"), &[TranscriptMessage::user("new")])
-        .unwrap());
+    assert!(
+        !locator
+            .adopt_messages_if_absent(
+                &session,
+                meta("imported-thread"),
+                &[TranscriptMessage::user("new")]
+            )
+            .unwrap()
+    );
     assert_eq!(contents(&locator, &session), vec!["legacy context"]);
 }
 
