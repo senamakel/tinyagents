@@ -466,7 +466,10 @@ pub struct SubagentUsage {
 impl SubagentUsage {
     /// Token and monetary cost represented by this subagent usage snapshot.
     pub fn cost(&self) -> crate::cost::CostTally {
-        crate::cost::CostTally::from_usd(self.charged_amount_usd, self.cost_source)
+        crate::cost::CostTally {
+            known_usd: self.charged_amount_usd,
+            source: self.cost_source,
+        }
     }
 }
 
