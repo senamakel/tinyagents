@@ -147,3 +147,7 @@ pub fn render_message_for_summary(message: &Message) -> String {
 
     format!("{}: {}", role_label(message), parts.join(" "))
 }
+
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod tests;

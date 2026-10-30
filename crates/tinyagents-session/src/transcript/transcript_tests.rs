@@ -52,6 +52,20 @@ fn frozen_prefix_count_round_trips_in_meta() {
 }
 
 #[test]
+fn intentional_prefix_reset_is_distinct_from_legacy_missing_boundary() {
+    let dir = tempdir().unwrap();
+    let path = resolve_keyed_transcript_path(dir.path(), "prefix-reset").unwrap();
+    let mut seed = meta();
+    seed.prefix_message_count = None;
+    seed.prefix_reset = true;
+    write_transcript(&path, &[], &seed, None).unwrap();
+
+    let restored = read_transcript(&path).unwrap().meta;
+    assert!(restored.prefix_reset);
+    assert_eq!(restored.prefix_message_count, None);
+}
+
+#[test]
 fn jsonl_round_trip_keeps_raw_tool_arguments_and_provider_extension() {
     let dir = tempdir().unwrap();
     let path = resolve_keyed_transcript_path(dir.path(), "session").unwrap();
