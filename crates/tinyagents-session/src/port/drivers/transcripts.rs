@@ -746,6 +746,26 @@ impl TranscriptHistory for DriverTranscriptHistory {
         .map(|_| ())
     }
 
+    fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
+        let messages = normalized(messages.to_vec());
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        self.commit(move |replay, seed| {
+            if replay.written {
+                return Ok(None);
+            }
+            anyhow::ensure!(!replay.sealed, "transcript generation is sealed");
+            Ok(Some(Entry {
+                written: true,
+                meta: Some(seed.clone()),
+                set: Some(messages.clone()),
+                ..Entry::default()
+            }))
+        })
+        .map(|installed| installed.is_some())
+    }
+
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
         let messages = normalized(messages.to_vec());
         self.commit(move |replay, seed| {

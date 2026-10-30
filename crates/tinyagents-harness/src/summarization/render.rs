@@ -25,6 +25,8 @@
 
 use tinyinference_llm::message::{ContentBlock, Message};
 
+use super::ToolRendering;
+
 /// Maximum characters rendered for a single tool-call argument blob or tool
 /// result body before it is elided.
 ///
@@ -33,6 +35,7 @@ use tinyinference_llm::message::{ContentBlock, Message};
 /// row counts) intact, which is what a later turn usually needs to refer back
 /// to.
 const MAX_RENDERED_PAYLOAD_CHARS: usize = 2_000;
+const MARKER_ARGUMENT_CHARS: usize = 120;
 
 /// The role label used when rendering a message for summarization.
 fn role_label(message: &Message) -> &'static str {
@@ -146,6 +149,46 @@ pub fn render_message_for_summary(message: &Message) -> String {
     }
 
     format!("{}: {}", role_label(message), parts.join(" "))
+}
+
+/// Render one message for summarization using the selected tool policy.
+///
+/// `Full` matches [`render_message_for_summary`] exactly. `Markers` keeps
+/// ordinary conversation content, renders each assistant tool call as a
+/// bounded `[used name: arguments]` line, and omits tool-result messages.
+/// Assistant turns with neither prose nor calls are omitted in marker mode.
+pub fn render_message_for_summary_with(
+    message: &Message,
+    rendering: ToolRendering,
+) -> Option<String> {
+    match (rendering, message) {
+        (ToolRendering::Full, _) => Some(render_message_for_summary(message)),
+        (ToolRendering::Markers, Message::Tool(_)) => None,
+        (ToolRendering::Markers, Message::Assistant(assistant)) => {
+            let parts = render_content(&assistant.content);
+            let prose = (!parts.is_empty())
+                .then(|| format!("{}: {}", role_label(message), parts.join(" ")));
+            let markers = assistant.tool_calls.iter().map(|call| {
+                format!(
+                    "[used {}: {}]",
+                    call.name,
+                    shorten(&call.arguments.to_string(), MARKER_ARGUMENT_CHARS)
+                )
+            });
+            let lines = prose.into_iter().chain(markers).collect::<Vec<_>>();
+            (!lines.is_empty()).then(|| lines.join("\n"))
+        }
+        (ToolRendering::Markers, _) => Some(render_message_for_summary(message)),
+    }
+}
+
+fn shorten(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut kept: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    kept.push('…');
+    kept
 }
 
 #[cfg(test)]

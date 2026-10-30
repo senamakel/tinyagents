@@ -271,6 +271,25 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
         Ok(())
     }
 
+    fn adopt_if_empty(&self, messages: &[TranscriptMessage]) -> anyhow::Result<bool> {
+        let messages = normalized_rows(messages);
+        if messages.is_empty() {
+            return Ok(false);
+        }
+        let _gate = self
+            .generation_gate
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(!state.sealed, "transcript generation is sealed");
+        if state.written {
+            return Ok(false);
+        }
+        state.messages = messages;
+        state.written = true;
+        Ok(true)
+    }
+
     fn replace(&self, messages: &[TranscriptMessage]) -> anyhow::Result<()> {
         let _gate = self
             .generation_gate
