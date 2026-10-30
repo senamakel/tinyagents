@@ -108,6 +108,14 @@ pub struct ThreadMessagePatch {
     pub merge_extra_metadata: Option<Value>,
 }
 
+/// Applies a shallow metadata merge, replacing non-object values as a whole.
+pub(crate) fn merge_extra_metadata(current: &mut Value, additional: Value) {
+    match (current, additional) {
+        (Value::Object(current), Value::Object(additional)) => current.extend(additional),
+        (current, replacement) => *current = replacement,
+    }
+}
+
 /// A single match returned by
 /// [`ConversationPersistence::search_cross_thread_messages`](super::ConversationPersistence::search_cross_thread_messages).
 /// Carries the source `thread_id` so the caller can render provenance into the

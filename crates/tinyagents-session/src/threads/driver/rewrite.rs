@@ -12,7 +12,6 @@
 //! belonged to it are removed after the swap, best effort.
 use super::pending::APPENDS;
 use super::*;
-use serde_json::Value;
 use std::future::Future;
 
 /// Messages written per stream append while copying a log.
@@ -138,12 +137,7 @@ impl DriverConversationStore {
                     message.extra_metadata = extra;
                 }
                 if let Some(merge) = patch.merge_extra_metadata.clone() {
-                    match (&mut message.extra_metadata, merge) {
-                        (Value::Object(current), Value::Object(additional)) => {
-                            current.extend(additional);
-                        }
-                        (current, replacement) => *current = replacement,
-                    }
+                    super::super::types::merge_extra_metadata(&mut message.extra_metadata, merge);
                 }
                 let updated = message.clone();
                 Ok(Some((messages, updated)))

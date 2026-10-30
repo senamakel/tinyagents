@@ -37,8 +37,8 @@ fn write_raw_at(path: &Path, thread_id: &str, body: &[&str]) {
 fn full_turn_body() -> Vec<&'static str> {
     vec![
         r#"{"role":"system","content":"[tool-policy preamble] you may use tools ..."}"#,
-        r#"{"role":"user","content":"Current Date & Time: 2026-07-21 09:00:00 UTC\n\nWhat's the weather in NYC?","request_id":"req-1"}"#,
-        r#"{"role":"assistant","content":"Let me check.","provider":"anthropic","model":"claude-x","usage":{"input":10,"output":5,"cached_input":0,"cost_usd":0.001},"ts":"2026-07-21T09:00:01Z","reasoning_content":"I should call the weather tool.","tool_calls":[{"id":"call-1","name":"get_weather","arguments":"{\"city\":\"NYC\"}"}],"iteration":1,"request_id":"req-1"}"#,
+        r#"{"role":"user","content":"Current Date & Time: 2026-07-21 09:00:00 UTC\n\nWhat's the weather in NYC?","request_id":"req-1","extra_metadata":{"source":"web"}}"#,
+        r#"{"role":"assistant","content":"Let me check.","provider":"anthropic","model":"claude-x","usage":{"input":10,"output":5,"cached_input":0,"cost_usd":0.001},"ts":"2026-07-21T09:00:01Z","reasoning_content":"I should call the weather tool.","tool_calls":[{"id":"call-1","name":"get_weather","arguments":"{\"city\":\"NYC\"}"}],"iteration":1,"request_id":"req-1","extra_metadata":{"turn":1}}"#,
         r#"{"role":"tool","content":"72F and sunny","id":"call-1","request_id":"req-1"}"#,
         r#"{"role":"assistant","content":"It's 72F and sunny in NYC.","provider":"anthropic","model":"claude-x","usage":{"input":20,"output":8,"cached_input":0,"cost_usd":0.002},"ts":"2026-07-21T09:00:02Z","iteration":2,"request_id":"req-1"}"#,
     ]
@@ -64,6 +64,7 @@ fn projects_turn_with_tools_reasoning_and_sanitization() {
             content,
             display_content,
             request_id,
+            extra_metadata,
             ..
         } => {
             assert!(content.starts_with("Current Date & Time:"), "raw kept");
@@ -73,6 +74,7 @@ fn projects_turn_with_tools_reasoning_and_sanitization() {
                 "datetime prefix stripped into displayContent"
             );
             assert_eq!(request_id.as_deref(), Some("req-1"));
+            assert_eq!(extra_metadata.as_ref(), Some(&serde_json::json!({"source":"web"})));
         }
         other => panic!("expected userMessage, got {other:?}"),
     }
@@ -92,6 +94,7 @@ fn projects_turn_with_tools_reasoning_and_sanitization() {
             content,
             interim,
             ts,
+            extra_metadata,
             ..
         } => {
             assert_eq!(content, "Let me check.");
@@ -101,6 +104,7 @@ fn projects_turn_with_tools_reasoning_and_sanitization() {
                 Some("2026-07-21T09:00:01Z"),
                 "assistantMessage carries the underlying record's ts"
             );
+            assert_eq!(extra_metadata.as_ref(), Some(&serde_json::json!({"turn":1})));
         }
         other => panic!("expected interim assistantMessage, got {other:?}"),
     }
